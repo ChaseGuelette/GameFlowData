@@ -1,0 +1,71 @@
+Database Structure Changes:
+
+Primary Key Constraints:
+
+all_teams_misc_stats: Primary key on TEAM_ID
+all_players_misc_stats: Primary key on PLAYER_ID
+2024-25_historic_game_data: Composite primary key on (TEAM_ID, GAME_DATE)
+all_player_game_stats: Composite primary key on (PLAYER_ID, GAME_DATE)
+all_players_advanced_stats: Primary key on PLAYER_ID
+all_players_estimated_stats: Primary key on PLAYER_ID
+
+
+Foreign Key Constraints:
+
+all_players_misc_stats → all_teams_misc_stats via TEAM_ID (RESTRICT)
+all_player_game_stats → all_players_misc_stats via PLAYER_ID (CASCADE)
+all_player_game_stats → all_teams_misc_stats via TEAM_ID (RESTRICT)
+2024-25_historic_game_data → all_teams_misc_stats via TEAM_ID (RESTRICT)
+all_players_advanced_stats → all_teams_misc_stats via TEAM_ID (RESTRICT)
+all_players_estimated_stats → all_teams_misc_stats via TEAM_ID (RESTRICT)
+
+
+Indexes Added:
+
+idx_players_team_id on all_players_misc_stats(TEAM_ID)
+idx_player_games_team_date on all_player_game_stats(TEAM_ID, GAME_DATE)
+idx_historic_games_team on 2024-25_historic_game_data(TEAM_ID)
+idx_advanced_player_team_id on all_players_advanced_stats(TEAM_ID)
+idx_estimated_player_team_id on all_players_estimated_stats(TEAM_ID)
+
+
+Column Modifications:
+
+Added TEAM_ID INTEGER to all_player_game_stats
+Renamed Player_ID to PLAYER_ID in all_player_game_stats
+
+
+
+Update Script Changes:
+
+Team Stats Updates:
+
+Changed from DELETE + INSERT to UPSERT pattern
+Uses temporary tables for staging data
+Maintains referential integrity with foreign keys
+
+
+Player Stats Updates:
+
+Implemented UPSERT pattern for misc, advanced, and estimated stats
+Maintains foreign key relationships
+Preserves historical data integrity
+
+
+Game Data Updates:
+
+Daily team game data uses date-scoped deletions
+Player game stats uses player-and-date-scoped deletions
+Both maintain referential integrity while allowing updates
+
+
+
+Key Implementation Notes:
+
+Time-series data (games) uses date-scoped updates
+Reference data (teams, players) uses UPSERT pattern
+All foreign keys use RESTRICT deletion policy except player game stats
+Indexes support foreign key relationships and common queries
+All tables maintain proper referential integrity
+
+This structure ensures data consistency while allowing efficient updates and maintains relationships between all tables in the database.

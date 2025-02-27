@@ -1,0 +1,66 @@
+-- DELETE FROM 
+-- "all_players_misc_stats"
+-- where "PLAYER_ID" = 200782
+
+-- select 
+-- *
+-- from 
+-- "all_teams_misc_stats"
+
+-- Alter table "all_players_misc_stats"
+-- 	add constraint fk_team_player
+-- 	foreign key ("TEAM_ID")
+-- 	references "all_teams_misc_stats"("TEAM_ID");
+
+--Done:
+-- ALTER TABLE "all_player_game_stats" 
+--     RENAME COLUMN "Player_ID" TO "PLAYER_ID";
+
+-- ALTER TABLE "all_teams_misc_stats"
+--     ADD CONSTRAINT pk_teams PRIMARY KEY ("TEAM_ID");
+
+-- ALTER TABLE "all_players_misc_stats"
+--     ADD CONSTRAINT pk_players PRIMARY KEY ("PLAYER_ID");
+
+-- ALTER TABLE "2024-25_historic_game_data"
+--     ADD CONSTRAINT pk_historic_games PRIMARY KEY ("TEAM_ID", "GAME_DATE");
+
+-- ALTER TABLE "all_player_game_stats"
+--     ADD CONSTRAINT pk_player_games PRIMARY KEY ("PLAYER_ID", "GAME_DATE");
+
+-- ALTER TABLE "all_player_game_stats"
+-- ADD COLUMN "TEAM_ID" INTEGER;
+
+
+
+-- CREATE INDEX idx_players_team_id ON "all_players_misc_stats" ("TEAM_ID");
+-- CREATE INDEX idx_player_games_team_date ON "all_player_game_stats" ("TEAM_ID", "GAME_DATE");
+-- CREATE INDEX idx_historic_games_team ON "2024-25_historic_game_data" ("TEAM_ID");
+
+
+-- Team-Player relationship
+-- ALTER TABLE "all_players_misc_stats"
+--     ADD CONSTRAINT fk_player_team 
+--     FOREIGN KEY ("TEAM_ID") 
+--     REFERENCES "all_teams_misc_stats" ("TEAM_ID")
+--     ON DELETE RESTRICT;  -- Prevent deletion of teams with active players
+
+-- -- Player game stats relationships
+-- ALTER TABLE "all_player_game_stats"
+--     ADD CONSTRAINT fk_player_game_player 
+--     FOREIGN KEY ("PLAYER_ID") 
+--     REFERENCES "all_players_misc_stats" ("PLAYER_ID")
+--     ON DELETE CASCADE;  -- If player is deleted, delete their game stats
+
+-- ALTER TABLE "all_player_game_stats"
+--     ADD CONSTRAINT fk_player_game_team 
+--     FOREIGN KEY ("TEAM_ID") 
+--     REFERENCES "all_teams_misc_stats" ("TEAM_ID")
+--     ON DELETE RESTRICT;  -- Prevent deletion of teams with game records
+
+-- -- Team game relationship
+-- ALTER TABLE "2024-25_historic_game_data"
+--     ADD CONSTRAINT fk_historic_game_team 
+--     FOREIGN KEY ("TEAM_ID") 
+--     REFERENCES "all_teams_misc_stats" ("TEAM_ID")
+--     ON DELETE RESTRICT;  -- Prevent deletion of teams with game records
