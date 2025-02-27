@@ -6,9 +6,19 @@ from dailyTeamGameData import update_daily_team_game_data
 from adv_est_playerStats import update_advanced_player_stats, update_estimated_player_stats
 from clutchMetrics import all_player_clutch_stats
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 def main():
     # Create engine once and pass it to all functions
-    engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
+    #load_dotenv() 
+
+    engine = create_engine(DATABASE_URL)
+
     print("entering main")
     try:
         print("Starting data update process...") 
