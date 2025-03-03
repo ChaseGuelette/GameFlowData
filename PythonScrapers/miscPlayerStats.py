@@ -13,7 +13,14 @@ from nba_api.stats.endpoints import playercareerstats
 
 
 #start by creating an engine to add each dataframe to the sql database
-engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL)
 
 
 def update_misc_player_stats(engine):

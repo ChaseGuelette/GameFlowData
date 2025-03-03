@@ -10,7 +10,14 @@ import json
 from nba_api.stats.endpoints import leaguegamefinder
 
 # Create engine
-engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL)
 
 def update_daily_team_game_data(engine):
     

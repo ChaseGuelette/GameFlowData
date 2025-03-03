@@ -103,7 +103,7 @@ def update_advanced_player_stats(engine):
                     "OFF_RATING" = EXCLUDED."OFF_RATING",
                     "sp_work_OFF_RATING" = EXCLUDED."sp_work_OFF_RATING",
                     "E_DEF_RATING" = EXCLUDED."E_DEF_RATING",
-                    "DEF_RATING" = EXCLUDED."DEF_RATING",
+                    "DEF_RATING" = EXCLDED."DEF_RATING",
                     "sp_work_DEF_RATING" = EXCLUDED."sp_work_DEF_RATING",
                     "E_NET_RATING" = EXCLUDED."E_NET_RATING",
                     "NET_RATING" = EXCLUDED."NET_RATING",

@@ -5,7 +5,14 @@ import pandas as pd
 from nba_api.stats.endpoints import leaguedashteamstats
 
 #create our engine for creating sql entries - this wont work right now 
-engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL)
 
 def update_misc_team_stats(engine):
     #grab dataframe for teams

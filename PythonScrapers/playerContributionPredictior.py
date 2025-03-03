@@ -2,13 +2,19 @@
 from sqlalchemy import create_engine, text
 import pandas as pd
 import math
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 def calculate_recent_scores(player_data):
     player_id = player_data['PLAYER_ID']
     name = player_data['PLAYER_NAME']
         
     #create our engine for creating sql entries - this wont work right now 
-    engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
+    engine = create_engine(DATABASE_URL)
         
     with engine.connect() as conn:
         with conn.begin():
@@ -220,7 +226,7 @@ def calculate_player_metrics(star_players, key_rotation_players):
 
 def get_team_player_scores(teamName):
     #create our engine for creating sql entries - this wont work right now 
-    engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
+    engine = create_engine(DATABASE_URL)
     
     team_name = teamName
     
