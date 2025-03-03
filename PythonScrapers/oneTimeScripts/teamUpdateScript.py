@@ -1,6 +1,10 @@
 from nba_api.stats.static import teams
 import pandas as pd
 from sqlalchemy import create_engine, text
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 
 def parse_team_from_matchup(matchup, is_home):
@@ -56,5 +60,7 @@ def update_team_ids(engine):
     print("Update complete!")
 
 
-engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL)
 update_team_ids(engine)

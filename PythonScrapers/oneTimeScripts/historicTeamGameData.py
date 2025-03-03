@@ -8,7 +8,14 @@ import time
 import json
 
 #create our engine for pushing to sql database
-engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL)
 
 #define seasons to gather data for 
 seasons = ['2022-23', '2023-24', '2024-25']

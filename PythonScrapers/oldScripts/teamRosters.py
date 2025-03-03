@@ -10,16 +10,17 @@ from nba_api.stats.static import teams
 from nba_api.stats.endpoints import commonteamroster
 from nba_api.stats.endpoints import playercareerstats
 
-username = 'sp3mqfz959'
-password = '46ss+ryCxjyL3KdaQ0'
-proxy = f"http://{username}:{password}@gate.smartproxy.com:10001"
 
 #start by creating an engine to add each dataframe to the sql database
-#local engine:
-#engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
-#remote engine:
-engine = create_engine('postgresql://postgres@localhost:5432/nba_data')
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL)
 #now I iterate through a list of all of the NBA teams
 # get_teams returns a list of 30 dictionaries, each an NBA team.
 nba_teams = teams.get_teams()

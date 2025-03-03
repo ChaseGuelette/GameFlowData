@@ -11,36 +11,15 @@ from nba_api.stats.static import teams
 from nba_api.stats.endpoints import commonteamroster
 from nba_api.stats.endpoints import playercareerstats
 
-
-
-# url = 'https://ipv4.icanhazip.com'
-# proxy_auth = 'LksbLc71bllcVMWb:UWV4Hnu9uTI47tbL'
-# proxy = 'geo.iproyal.com:12321'  # Remove 'http://' prefix
-
-# proxies = {
-#     'http': f'http://{proxy_auth}@{proxy}',
-#     'https': f'http://{proxy_auth}@{proxy}'  # Changed to https://
-# }
-
-hostname = 'geo.iproyal.com'
-port = '12321'
-username = 'LksbLc71bllcVMWb'
-password = 'UWV4Hnu9uTI47tbL'
-
-proxy_dict = {
-    "http": f"http://{username}:{password}@{hostname}:{port}",
-    "https": f"http://{username}:{password}@{hostname}:{port}"
-}
-
-# try:
-#     response = requests.get(url, proxies=proxies, timeout=10)
-#     print(response.text)
-# except requests.exceptions.RequestException as e:
-#     print(f"Error: {e}")
-
-
 #start by creating an engine to add each dataframe to the sql database
-engine = create_engine('postgresql://chase:yourpassword@localhost:5433/TeamData')
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL)
 
 #now I iterate through a list of all of the NBA teams
 # get_teams returns a list of 30 dictionaries, each an NBA team.
