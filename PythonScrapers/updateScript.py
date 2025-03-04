@@ -38,8 +38,8 @@ def main():
         print("\n5. Updating player clutch data...")
         all_player_clutch_stats(engine)
 
-        print("\n6. Updating player misc stats...")
-        update_misc_player_stats(engine)
+        # print("\n6. Updating player misc stats...")
+        # update_misc_player_stats(engine)
         
         print("\n7. Updating player game stats...")
         update_player_game_stats(engine)     
