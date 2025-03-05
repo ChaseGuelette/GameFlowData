@@ -85,7 +85,7 @@ def update_team_names(engine):
     team_dict = {team['id']: team['full_name'] for team in nba_teams}
     print("Got teams")
     
-    query = "SELECT * FROM all_player_game_stats"
+    query = "SELECT * FROM all_player_game_stats_2024-25"
     with engine.connect() as conn:
         print("Fetching games from database...")
         games_df = pd.read_sql(query, conn)
@@ -97,7 +97,7 @@ def update_team_names(engine):
         with conn.begin():
             for index, row in games_df.iterrows():
                 update_query = text("""
-                    UPDATE all_player_game_stats
+                    UPDATE all_player_game_stats_2024-25
                     SET "TEAM_NAME" = :team_name
                     WHERE "PLAYER_ID" = :player_id
                     AND "GAME_DATE" = :game_date
@@ -132,7 +132,7 @@ def update_player_game_stats(engine):
                     with conn.begin():
                         # Delete recent records for this player
                         delete_query = text("""
-                            DELETE FROM "all_player_game_stats"
+                            DELETE FROM "all_player_game_stats_2024-25"
                             WHERE "PLAYER_ID" = :player_id
                             AND "GAME_DATE"::date >= :cutoff_date
                         """)
@@ -143,7 +143,7 @@ def update_player_game_stats(engine):
                                      "cutoff_date": cutoff_date})
                                                 
                         # Append new records
-                        recent_games.to_sql('all_player_game_stats', 
+                        recent_games.to_sql('all_player_game_stats_2024-25', 
                                           conn, 
                                           if_exists='append', 
                                           index=False)
