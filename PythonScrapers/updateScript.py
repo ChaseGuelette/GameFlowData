@@ -44,7 +44,7 @@ def main():
         update_daily_team_game_data(engine)
 
         
-        print("\n1. Updating player game stats...")
+        print("\n3. Updating player game stats...")
         update_player_game_stats(engine)     
         
         print("\nAll updates completed successfully!")
