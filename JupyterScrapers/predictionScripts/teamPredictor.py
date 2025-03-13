@@ -778,7 +778,7 @@ def get_historical_matchups(engine, date, goodTeam, badTeam):
     >>>     print(f"Game ID: {game['GAME_ID']}")
     >>>     print(f"{game['T1_TEAM_NAME']} vs {game['T2_TEAM_NAME']}")"
 """
-def calculate_historic_matchups(engine, date, goodTeam, badTeam, avg_games=3, weighted=False):
+def calculate_historical_matchups(engine, date, goodTeam, badTeam, avg_games=3, weighted=False):
     matchups_df = get_historical_matchups(engine, date, goodTeam, badTeam)
 
     # Initializing cumulative stats
@@ -833,13 +833,13 @@ def calculate_historic_matchups(engine, date, goodTeam, badTeam, avg_games=3, we
         'pie_diff': total_pie_diff }
 
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
-pd.set_option('display.max_columns', 58)
+# DATABASE_URL = os.getenv("DATABASE_URL")
+# engine = create_engine(DATABASE_URL)
+# pd.set_option('display.max_columns', 58)
 
-calculate_historic_matchups(engine, '2025-1-20', 'Atlanta Hawks', 'Detroit Pistons', 3, True)
+# calculate_historic_matchups(engine, '2025-1-20', 'Atlanta Hawks', 'Detroit Pistons', 3, True)
 
-teamNetRating, seasonFourFactors = calculate_net_four(engine, '2025-01-20', 'Atlanta Hawks')
+# teamNetRating, seasonFourFactors = calculate_net_four(engine, '2025-01-20', 'Atlanta Hawks')
 
-recentFormScore = calculate_recent_form_scores(engine, '2024-12-12', 'Atlanta Hawks')
-print(f"This is the recent form Score: {recentFormScore}")
+# recentFormScore = calculate_recent_form_scores(engine, '2024-12-12', 'Atlanta Hawks')
+# print(f"This is the recent form Score: {recentFormScore}")
