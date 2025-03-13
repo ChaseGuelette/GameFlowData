@@ -11,23 +11,23 @@ seasonStartDates = {
     '2024-25' : '10/22/2024'
 }
 
+"""
+Identifies which NBA season a date falls into.
+NBA seasons typically run from October to June of the following year.
 
-def identify_nba_season(date_str):
-    """
-    Identifies which NBA season a date falls into.
-    NBA seasons typically run from October to June of the following year.
+Args:
+    date_str (str): Date string in various formats:
+        - 'YYYY-MM-DD'
+        - 'MM-DD-YYYY'
+        - 'YYYY/MM/DD'
+        - 'MM/DD/YYYY'
     
-    Args:
-        date_str (str): Date string in various formats:
-            - 'YYYY-MM-DD'
-            - 'MM-DD-YYYY'
-            - 'YYYY/MM/DD'
-            - 'MM/DD/YYYY'
-        
-    Returns:
-        str: Season identifier in format 'YYYY-YY' (e.g., '2024-25')
-        None: If the date doesn't fall within any of the listed seasons
-    """
+Returns:
+    str: Season identifier in format 'YYYY-YY' (e.g., '2024-25')
+    None: If the date doesn't fall within any of the listed seasons
+"""
+def identify_nba_season(date_str):
+
     # Available seasons
     years_list = ['2024-25', '2023-24', '2022-23', '2021-22', '2020-21', '2019-20']
     
@@ -76,6 +76,67 @@ def identify_nba_season(date_str):
         # For dates outside our predefined ranges
         return season
 
+"""
+    Calculate a player's recent performance score based on their last 5 and 10 games.
+    
+    This function retrieves game statistics for a player from a database and calculates
+    a composite performance score using various basketball metrics including net rating,
+    true shooting percentage, usage rate, turnover rate, and minutes per game.
+    
+    Parameters:
+    -----------
+    player_data : dict
+        Dictionary containing player information with at minimum the keys:
+        - 'PLAYER_ID' : int or str, the unique identifier for the player
+        - 'PLAYER_NAME' : str, the name of the player
+    
+    year : str
+        The season year in format 'YYYY-YY' (e.g., '2024-25')
+    
+    date : str
+        The cutoff date in 'MM/DD/YYYY' format to retrieve games before this date
+    
+    engine : SQLAlchemy Engine
+        Database connection engine to execute SQL queries
+    
+    Returns:
+    --------
+    float
+        The calculated performance score representing the player's recent form.
+        Higher values indicate better recent performance.
+    
+    Notes:
+    ------
+    The performance score is calculated using these metrics with the following weights:
+    - 10-game composite (60% of final score):
+      - Net Rating: 40%
+      - True Shooting %: 20%
+      - Usage Rate: 15%
+      - Turnover Rate: 10%
+      - Minutes Per Game: 15%
+    
+    - 5-game composite (40% of final score):
+      - Same metrics and weights as 10-game composite
+    
+    Performance metrics are calculated as follows:
+    - Possessions = 0.96 * AVG_FGA + 0.44 * AVG_FTA - AVG_OREB + AVG_TOV
+    - Offensive Rating = AVG_PTS / possessions
+    - Defensive Rating = (AVG_PTS - AVG_PLUS_MINUS) / possessions
+    - Net Rating = offensive_rating - defensive_rating
+    - True Shooting % = AVG_PTS / (2 * (AVG_FGA + 0.44 * AVG_FTA))
+    - Usage Rate = (AVG_FGA + 0.44 * AVG_FTA + AVG_TOV) / AVG_MIN
+    - Turnover Rate = AVG_TOV / (AVG_FGA + 0.44 * AVG_FTA + AVG_TOV)
+    - Minutes Per Game = AVG_MIN / GAMES_PLAYED
+    
+    Example:
+    --------
+    >>> player = {'PLAYER_ID': 1627936, 'PLAYER_NAME': 'Jaylen Brown'}
+    >>> date = '03/01/2025'
+    >>> year = '2024-25'
+    >>> score = calculate_recent_scores(player, year, date, db_engine)
+    >>> print(f"{player['PLAYER_NAME']}'s score: {score:.2f}")
+    Jaylen Brown's score: 18.45
+"""
 def calculate_recent_scores(player_data, year, date, engine):
     player_id = player_data['PLAYER_ID']
     name = player_data['PLAYER_NAME']
@@ -188,6 +249,98 @@ def calculate_recent_scores(player_data, year, date, engine):
     # print()
     return finalScore
 
+
+"""
+    Calculate comprehensive player performance metrics combining primary stats, secondary stats,
+    clutch performance, and recent game performance for NBA players.
+    
+    This function evaluates player performance using a weighted scoring system that considers
+    various basketball metrics and returns a sorted DataFrame of all players with their
+    calculated scores and contribution breakdowns.
+    
+    Parameters:
+    -----------
+    engine : SQLAlchemy Engine
+        Database connection engine to execute SQL queries
+    
+    year : str
+        The season year in format 'YYYY-YY' (e.g., '2024-25')
+    
+    date : str
+        The cutoff date in 'MM/DD/YYYY' format used for recent performance calculations
+    
+    star_players : pandas.DataFrame
+        DataFrame containing statistics for team star players with columns including:
+        'PLAYER_ID', 'PLAYER_NAME', 'TEAM_ID', 'PIE', 'E_USG_PCT', 'NET_RATING', 
+        'TS_PCT', 'E_TOV_PCT', 'MIN', 'CLUTCH_SCORE_PCT', 'CLUTCH_USAGE_RATE', 
+        'CLUTCH_NET_RATING'
+    
+    key_rotation_players : pandas.DataFrame
+        DataFrame containing statistics for key rotation players with the same
+        columns as star_players
+    
+    Returns:
+    --------
+    pandas.DataFrame
+        A DataFrame containing calculated performance metrics for all players with columns:
+        - 'PLAYER_NAME': Player name
+        - 'PLAYER_ID': Player ID
+        - 'SCORE': Overall calculated performance score
+        - 'PRIMARY_CONTRIBUTION': Score contribution from primary stats
+        - 'SECONDARY_CONTRIBUTION': Score contribution from secondary stats
+        - 'CLUTCH_CONTRIBUTION': Score contribution from clutch performance
+        - 'RECENT_CONTRIBUTION': Score contribution from recent games
+        - 'CATEGORY': Player classification ('Star', 'Rotation', or 'Loser')
+        
+        The DataFrame is sorted by 'SCORE' in descending order.
+    
+    Notes:
+    ------
+    The function calculates player scores using four component metrics:
+    
+    1. Primary Score - Based on Player Impact Estimate (PIE), Usage Rate, and Net Rating
+       Weights:
+       - PIE: 17.5%
+       - Usage Rate: 12.5%
+       - Net Rating: 10% (adjusted based on games played)
+    
+    2. Secondary Score - Based on True Shooting, Turnover Rate, and Minutes
+       Weights:
+       - True Shooting %: 12.5%
+       - Turnover Rate: 5%
+       - Minutes: 15%
+    
+    3. Clutch Score - Based on clutch scoring, usage, and net rating
+       Weights:
+       - Clutch Scoring %: 50%
+       - Clutch Usage Rate: 25%
+       - Clutch Net Rating: 25%
+       (All clutch metrics are scaled based on games played)
+    
+    4. Recent Score - Based on performance in recent games
+       (Calculated by the calculate_recent_scores function)
+    
+    The final score is a weighted combination of these components:
+    - Primary + Secondary: 50%
+    - Clutch: 30%
+    - Recent: 20%
+    
+    Player categories are determined by minutes played:
+    - Star: > 25 minutes
+    - Rotation: 15-25 minutes
+    - Loser: < 15 minutes
+    
+    Example:
+    --------
+    >>> from sqlalchemy import create_engine
+    >>> engine = create_engine('postgresql://user:password@localhost:5432/nba_database')
+    >>> year = '2024-25'
+    >>> date = '03/01/2025'
+    >>> star_players_df = pd.read_sql("SELECT * FROM player_stats WHERE MIN > 25", engine)
+    >>> rotation_players_df = pd.read_sql("SELECT * FROM player_stats WHERE MIN BETWEEN 15 AND 25", engine)
+    >>> player_metrics = calculate_player_metrics(engine, year, date, star_players_df, rotation_players_df)
+    >>> print(player_metrics[['PLAYER_NAME', 'SCORE', 'CATEGORY']].head())
+"""
 def calculate_player_metrics(engine, year, date, star_players, key_rotation_players):
     primary_weights = {
         'PIE' : 0.175,
@@ -304,6 +457,64 @@ def calculate_player_metrics(engine, year, date, star_players, key_rotation_play
     
     return allScores
 
+"""
+    Retrieve and calculate performance scores for players on a specific NBA team up to a given date.
+    
+    This function fetches advanced and clutch statistics for players on the specified team,
+    categorizes them based on minutes played, and calculates comprehensive performance scores
+    using the calculate_player_metrics function.
+    
+    Parameters:
+    -----------
+    engine : SQLAlchemy Engine
+        Database connection engine to execute SQL queries
+    
+    teamName : str
+        The name of the NBA team to analyze (e.g., 'Boston Celtics')
+    
+    date : str
+        The cutoff date in 'MM/DD/YYYY' format to retrieve stats up to
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        A DataFrame containing calculated performance metrics for the team's players with columns:
+        - 'PLAYER_NAME': Player name
+        - 'PLAYER_ID': Player ID
+        - 'SCORE': Overall calculated performance score
+        - 'PRIMARY_CONTRIBUTION': Score contribution from primary stats
+        - 'SECONDARY_CONTRIBUTION': Score contribution from secondary stats
+        - 'CLUTCH_CONTRIBUTION': Score contribution from clutch performance
+        - 'RECENT_CONTRIBUTION': Score contribution from recent games
+        - 'CATEGORY': Player classification ('Star', 'Rotation', or 'Loser')
+        
+        The DataFrame is sorted by 'SCORE' in descending order.
+    
+    Notes:
+    ------
+    The function performs the following operations:
+    1. Identifies the current NBA season based on the provided date
+    2. Retrieves the season's start date from a predefined dictionary
+    3. Executes a SQL query to fetch:
+       - Advanced player statistics (PIE, TS%, NET_RATING, etc.)
+       - Clutch performance statistics
+    4. Categorizes players based on minutes played:
+       - Star players: > 30 minutes per game
+       - Key rotation players: 15-30 minutes per game
+    5. Passes these categorized players to calculate_player_metrics to compute performance scores
+    
+    The advanced statistics are retrieved from the "advanced_player_stats_by_date" table,
+    and clutch statistics from the "advanced_player_clutch_stats_by_date" table.
+    Only data between the season start date and the specified cutoff date is considered.
+    
+    Example:
+    --------
+    >>> from sqlalchemy import create_engine
+    >>> engine = create_engine('postgresql://user:password@localhost:5432/nba_database')
+    >>> date = '03/01/2025'
+    >>> celtics_scores = get_team_player_scores(engine, 'Boston Celtics', date)
+    >>> print(celtics_scores[['PLAYER_NAME', 'SCORE', 'CATEGORY']].head())
+"""
 def get_team_player_scores(engine, teamName, date):
     year = identify_nba_season(date)
     

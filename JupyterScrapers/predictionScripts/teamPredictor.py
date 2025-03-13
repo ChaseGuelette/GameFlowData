@@ -11,8 +11,7 @@ load_dotenv()
 
 yearsList = ['2024-25', '2023-24', '2022-23', '2021-22', '2020-21', '2019-20']
 
-def identify_nba_season(date_str):
-    """
+"""
     Identifies which NBA season a date falls into.
     NBA seasons typically run from October to June of the following year.
     
@@ -22,7 +21,8 @@ def identify_nba_season(date_str):
     Returns:
         str: Season identifier in format 'YYYY-YY' (e.g., '2024-25')
         None: If the date doesn't fall within any of the listed seasons
-    """
+"""
+def identify_nba_season(date_str):
     # Available seasons
     years_list = ['2024-25', '2023-24', '2022-23', '2021-22', '2020-21', '2019-20']
     
@@ -73,10 +73,63 @@ def identify_nba_season(date_str):
                 
         return None
     
-#function for recent form
-#offensive and defensice ratings 
-#rolling averages for the last 5, 10, 15 game windows 
-#@params : teamName= 'Atlanta Hawks', date = '2025-02-20'
+"""
+    Calculate a team's recent form score based on their performance in the last 15 games.
+    
+    This function analyzes a team's recent performance by calculating rolling averages
+    of net rating and the four factors (shooting, turnovers, rebounding, free throws)
+    across 5-game and 10-game windows, then combines them into a weighted recent form score.
+    
+    Parameters:
+    -----------
+    engine : SQLAlchemy Engine
+        Database connection engine to execute SQL queries
+    
+    date : str
+        The cutoff date in format 'YYYY-MM-DD' or 'MM/DD/YYYY' to retrieve games before
+    
+    teamName : str
+        The name of the NBA team to analyze (e.g., 'Atlanta Hawks')
+    
+    Returns:
+    --------
+    float
+        The calculated recent form score representing the team's performance in recent games.
+        Higher values indicate better recent performance.
+    
+    Notes:
+    ------
+    The function calculates two primary components:
+    
+    1. Net Rating Score (75% of final score)
+       - Calculates average net rating over 5-game and 10-game windows
+       - Weights: 5-game (40%), 10-game (60%)
+    
+    2. Four Factors Score (25% of final score)
+       Components with weights:
+       - Effective Field Goal % (60%)
+       - Turnover % (-25%, negative impact)
+       - Rebounding % (20%, combined offensive and defensive)
+       - Free Throw % (15%)
+       
+    Each Four Factors component is also calculated using weighted 5-game (40%) 
+    and 10-game (60%) averages.
+    
+    The function retrieves game data from two tables:
+    - "{year}_historic_game_data" - Basic game information and free throw percentage
+    - "{year}_team_advanced_game_data" - Advanced statistics including net rating and four factors
+    
+    The NBA season year is automatically identified based on the provided date.
+    
+    Example:
+    --------
+    >>> from sqlalchemy import create_engine
+    >>> engine = create_engine('postgresql://user:password@localhost:5432/nba_database')
+    >>> date = '2025-02-20'
+    >>> hawks_form = calculate_recent_form_scores(engine, date, 'Atlanta Hawks')
+    >>> print(f"Atlanta Hawks recent form score: {hawks_form:.2f}")
+    Atlanta Hawks recent form score: 3.85
+"""
 def calculate_recent_form_scores(engine, date, teamName):
     year = identify_nba_season(date)
     #print(year)
@@ -216,13 +269,64 @@ def calculate_recent_form_scores(engine, date, teamName):
     recentFormScore = (0.75 * recentNet) + (0.25 * recentFour)
     
     return recentFormScore
+
+"""
+    Calculate a team's season-long Net Rating and Four Factors metrics.
     
-
-
-#function for 4 factors 
-#offensive and defensice ratings 
-#rolling averages for the last 5, 10, 15 game windows 
-#@params : teamName= 'Atlanta Hawks', date = '2025-02-20'
+    This function retrieves all games for a specified team up to a given date and calculates
+    the average Net Rating and Four Factors score across those games. Unlike the 
+    calculate_recent_form_scores function, this calculates averages across all games in the
+    season rather than using weighted recent windows.
+    
+    Parameters:
+    -----------
+    engine : SQLAlchemy Engine
+        Database connection engine to execute SQL queries
+    
+    date : str
+        The cutoff date in format 'YYYY-MM-DD' or 'MM/DD/YYYY' to retrieve games before
+    
+    teamName : str
+        The name of the NBA team to analyze (e.g., 'Atlanta Hawks')
+    
+    Returns:
+    --------
+    tuple : (float, float)
+        A tuple containing two values:
+        - seasonNetRating : Average Net Rating across all games
+        - seasonFourFactors : Calculated Four Factors score across all games
+        
+        Higher values for both metrics indicate better team performance.
+    
+    Notes:
+    ------
+    The function calculates two primary components:
+    
+    1. Net Rating
+       - Simple average of Net Rating across all games in the season up to the specified date
+    
+    2. Four Factors Score
+       Components with weights:
+       - Effective Field Goal % (60%)
+       - Turnover % (-25%, negative impact)
+       - Rebounding % (20%, combined offensive and defensive)
+       - Free Throw % (15%)
+    
+    The function retrieves game data from two tables:
+    - "{year}_historic_game_data" - Basic game information and free throw percentage
+    - "{year}_team_advanced_game_data" - Advanced statistics including net rating and four factors
+    
+    The NBA season year is automatically identified based on the provided date.
+    
+    Example:
+    --------
+    >>> from sqlalchemy import create_engine
+    >>> engine = create_engine('postgresql://user:password@localhost:5432/nba_database')
+    >>> date = '2025-02-20'
+    >>> net_rating, four_factors = calculate_net_four(engine, date, 'Atlanta Hawks')
+    >>> print(f"Atlanta Hawks season metrics - Net Rating: {net_rating:.2f}, Four Factors: {four_factors:.2f}")
+    Atlanta Hawks season metrics - Net Rating: 2.75, Four Factors: 3.12
+"""
 def calculate_net_four(engine, date, teamName):
     year = identify_nba_season(date)
 
@@ -299,7 +403,45 @@ def calculate_net_four(engine, date, teamName):
     
     return seasonNetRating, seasonFourFactors
     
-
+"""
+    Generate a SQL query to retrieve detailed game information for a matchup between two teams.
+    
+    This function creates a parameterized SQL query that joins a team's advanced game data 
+    with itself to return statistics for both teams in a specific matchup. The query prefixes
+    all columns with T1_ for the first team and T2_ for the second team for clear distinction.
+    
+    Parameters:
+    -----------
+    year : str
+        The NBA season year in format 'YYYY-YY' (e.g., '2024-25') used to determine 
+        the database table name
+    
+    Returns:
+    --------
+    sqlalchemy.sql.elements.TextClause
+        A parameterized SQL query that can be executed with parameters:
+        - badAbv : Team abbreviation for the first team (e.g., 'DET')
+        - goodAbv : Team abbreviation for the second team (e.g., 'ATL')
+    
+    Notes:
+    ------
+    The query returns a comprehensive set of advanced metrics for both teams including:
+    - Team identification (ID, name, abbreviation, city)
+    - Offensive metrics (offensive rating, effective field goal %, true shooting %)
+    - Defensive metrics (defensive rating)
+    - Efficiency metrics (net rating, assist %, turnover %)
+    - Rebounding metrics (offensive rebound %, defensive rebound %, total rebound %)
+    - Pace metrics (possessions, pace)
+    - Overall impact metrics (PIE - Player Impact Estimate)
+    
+    The query uses the table named "{year}_team_advanced_game_data" and requires two
+    parameters when executed:
+    - badAbv: The abbreviation of the first team
+    - goodAbv: The abbreviation of the second team
+    
+    The function name suggests the first team might be performing worse than the second,
+    but the query simply distinguishes them as T1 and T2 in the results.
+"""
 def get_game_info_query(year):
     tableName = f"{year}_team_advanced_game_data"
     return text(f"""
@@ -387,9 +529,70 @@ def get_game_id_query(year):
                 and "GAME_ID" = :gameId
             """)
     
-#yearsList = ['2024-25', '2023-24', '2022-23', '2021-22', '2020-21', '2019-20']
 
-#historic head to head matchups 
+"""
+    Retrieve historical matchup data between two NBA teams up to a specified date.
+    
+    This function searches for recent head-to-head games between the specified teams,
+    looking across the current season and potentially previous seasons if needed to find
+    at least 3 matchups (or as many as are available). It returns detailed advanced statistics
+    for each matchup found.
+    
+    Parameters:
+    -----------
+    engine : SQLAlchemy Engine
+        Database connection engine to execute SQL queries
+    
+    date : str
+        The cutoff date in format 'YYYY-MM-DD' to retrieve games before
+    
+    goodTeam : str
+        The full name of the first NBA team (e.g., 'Atlanta Hawks')
+    
+    badTeam : str
+        The full name of the second NBA team (e.g., 'Detroit Pistons')
+    
+    Returns:
+    --------
+    pandas.DataFrame
+        A DataFrame containing detailed advanced statistics for the most recent head-to-head
+        matchups between the specified teams, with a maximum of 3 games. Each row represents
+        one game with columns prefixed with T1_ for the first team (badTeam) and T2_ for the
+        second team (goodTeam).
+    
+    Notes:
+    ------
+    The function performs the following operations:
+    
+    1. Identifies the current NBA season based on the provided date
+    2. Converts team names to their abbreviations using a mapping
+    3. Searches for matchups in the current season's data
+    4. If fewer than 3 games are found, looks in the previous season's data
+    5. Collects up to 3 of the most recent games before the cutoff date
+    
+    The function searches across seasons from 2019-20 through 2024-25, starting with
+    the current season determined by the provided date.
+    
+    Team abbreviation mappings include special cases for:
+    - Brooklyn Nets (BRK)
+    - Phoenix Suns (PHO)
+    - Charlotte Hornets (CHO)
+    
+    The function uses two helper functions:
+    - get_game_info_query: To retrieve advanced game statistics
+    - get_game_id_query: To retrieve game dates and IDs
+    
+    Example:
+    --------
+    >>> from sqlalchemy import create_engine
+    >>> engine = create_engine('postgresql://user:password@localhost:5432/nba_database')
+    >>> date = '2025-02-20'
+    >>> matchups = get_historical_matchups(engine, date, 'Atlanta Hawks', 'Detroit Pistons')
+    >>> print(f"Found {len(matchups)} historical matchups")
+    >>> for i, game in matchups.iterrows():
+    >>>     print(f"Game ID: {game['GAME_ID']}")
+    >>>     print(f"{game['T1_TEAM_NAME']} vs {game['T2_TEAM_NAME']}")"
+"""
 def get_historical_matchups(engine, date, goodTeam, badTeam):
     
     yearsList = ['2024-25', '2023-24', '2022-23', '2021-22', '2020-21', '2019-20']
@@ -511,6 +714,70 @@ def get_historical_matchups(engine, date, goodTeam, badTeam):
     print(len(final_valid_games_df))
     return final_valid_games_df
 
+
+"""
+    Retrieve historical matchup data between two NBA teams up to a specified date.
+    
+    This function searches for recent head-to-head games between the specified teams,
+    looking across the current season and potentially previous seasons if needed to find
+    at least 3 matchups (or as many as are available). It returns detailed advanced statistics
+    for each matchup found.
+    
+    Parameters:
+    -----------
+    engine : SQLAlchemy Engine
+        Database connection engine to execute SQL queries
+    
+    date : str
+        The cutoff date in format 'YYYY-MM-DD' to retrieve games before
+    
+    goodTeam : str
+        The full name of the first NBA team (e.g., 'Atlanta Hawks')
+    
+    badTeam : str
+        The full name of the second NBA team (e.g., 'Detroit Pistons')
+    
+    Returns:
+    --------
+    pandas.DataFrame
+        A DataFrame containing detailed advanced statistics for the most recent head-to-head
+        matchups between the specified teams, with a maximum of 3 games. Each row represents
+        one game with columns prefixed with T1_ for the first team (badTeam) and T2_ for the
+        second team (goodTeam).
+    
+    Notes:
+    ------
+    The function performs the following operations:
+    
+    1. Identifies the current NBA season based on the provided date
+    2. Converts team names to their abbreviations using a mapping
+    3. Searches for matchups in the current season's data
+    4. If fewer than 3 games are found, looks in the previous season's data
+    5. Collects up to 3 of the most recent games before the cutoff date
+    
+    The function searches across seasons from 2019-20 through 2024-25, starting with
+    the current season determined by the provided date.
+    
+    Team abbreviation mappings include special cases for:
+    - Brooklyn Nets (BRK)
+    - Phoenix Suns (PHO)
+    - Charlotte Hornets (CHO)
+    
+    The function uses two helper functions:
+    - get_game_info_query: To retrieve advanced game statistics
+    - get_game_id_query: To retrieve game dates and IDs
+    
+    Example:
+    --------
+    >>> from sqlalchemy import create_engine
+    >>> engine = create_engine('postgresql://user:password@localhost:5432/nba_database')
+    >>> date = '2025-02-20'
+    >>> matchups = get_historical_matchups(engine, date, 'Atlanta Hawks', 'Detroit Pistons')
+    >>> print(f"Found {len(matchups)} historical matchups")
+    >>> for i, game in matchups.iterrows():
+    >>>     print(f"Game ID: {game['GAME_ID']}")
+    >>>     print(f"{game['T1_TEAM_NAME']} vs {game['T2_TEAM_NAME']}")"
+"""
 def calculate_historic_matchups(engine, date, goodTeam, badTeam, avg_games=3, weighted=False):
     matchups_df = get_historical_matchups(engine, date, goodTeam, badTeam)
 
