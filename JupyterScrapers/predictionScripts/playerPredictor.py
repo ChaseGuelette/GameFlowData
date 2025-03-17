@@ -94,7 +94,7 @@ def identify_nba_season(date_str):
         The season year in format 'YYYY-YY' (e.g., '2024-25')
     
     date : str
-        The cutoff date in 'MM/DD/YYYY' format to retrieve games before this date
+        The cutoff date in 'YYYY-MM-DD' format to retrieve games before this date
     
     engine : SQLAlchemy Engine
         Database connection engine to execute SQL queries
@@ -139,17 +139,17 @@ def identify_nba_season(date_str):
 """
 def calculate_recent_scores(player_data, year, date, engine):
     player_id = player_data['PLAYER_ID']
-    name = player_data['PLAYER_NAME']
+    player_name = player_data['PLAYER_NAME']
     
     with engine.connect() as conn:
         with conn.begin():
             query10 = text(f"""
                 WITH recent_games AS (
                     SELECT *
-                    FROM "all_player_game_stats_2024-25"
+                    FROM "all_player_game_stats_{year}"
                     WHERE "PLAYER_ID" = :player_id
-                    AND TO_DATE("GAME_DATE", 'MON DD, YYYY') < TO_DATE(:date, 'YYYY-MM-DD')
-                    ORDER BY TO_DATE("GAME_DATE", 'MON DD, YYYY') DESC
+                    AND TO_DATE("GAME_DATE", 'YYYY-MM-DD') < TO_DATE(:date, 'YYYY-MM-DD')
+                    ORDER BY TO_DATE("GAME_DATE", 'YYYY-MM-DD') DESC
                     LIMIT 10
                 )
                 SELECT
@@ -161,8 +161,8 @@ def calculate_recent_scores(player_data, year, date, engine):
                     AVG("FTA") as "AVG_FTA",
                     AVG("TOV") as "AVG_TOV",
                     AVG("OREB") as "AVG_OREB",
-                    MAX(TO_DATE("GAME_DATE", 'MON DD, YYYY')) as "LATEST_GAME_DATE",
-                    MIN(TO_DATE("GAME_DATE", 'MON DD, YYYY')) as "EARLIEST_GAME_DATE",
+                    MAX(TO_DATE("GAME_DATE", 'YYYY-MM-DD')) as "LATEST_GAME_DATE",
+                    MIN(TO_DATE("GAME_DATE", 'YYYY-MM-DD')) as "EARLIEST_GAME_DATE",
                     COUNT(*) as "GAMES_PLAYED"
                 FROM recent_games
                 GROUP BY "PLAYER_ID"
@@ -170,10 +170,10 @@ def calculate_recent_scores(player_data, year, date, engine):
             query5 = text(f"""
                 WITH recent_games AS (
                     SELECT *
-                    FROM "all_player_game_stats_2024-25"
+                    FROM "all_player_game_stats_{year}"
                     WHERE "PLAYER_ID" = :player_id
-                    AND TO_DATE("GAME_DATE", 'MON DD, YYYY') < TO_DATE(:date, 'YYYY-MM-DD')
-                    ORDER BY TO_DATE("GAME_DATE", 'MON DD, YYYY') DESC
+                    AND TO_DATE("GAME_DATE", 'YYYY-MM-DD') < TO_DATE(:date, 'YYYY-MM-DD')
+                    ORDER BY TO_DATE("GAME_DATE", 'YYYY-MM-DD') DESC
                     LIMIT 5
                 )
                 SELECT
@@ -194,60 +194,154 @@ def calculate_recent_scores(player_data, year, date, engine):
             recent_games = pd.read_sql_query(query10, engine, params={'player_id': player_id, 'date' : date})
             more_recent_games = pd.read_sql_query(query5, engine, params={'player_id': player_id, 'date' : date})
 
-    #now that we have the recent games for this player, calculate net rating
-    possessions = 0.96 * recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0] - recent_games['AVG_OREB'].values[0] + recent_games['AVG_TOV'].values[0]
-
-    offensive_rating = (recent_games['AVG_PTS'].values[0] / possessions) 
-    defensive_rating = (recent_games['AVG_PTS'].values[0] - recent_games['AVG_PLUS_MINUS'].values[0]) / possessions
-    net_ratingTen = offensive_rating - defensive_rating
-
-    #-----------------------------
-    possessionsFive = 0.96 * more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0] - more_recent_games['AVG_OREB'].values[0] + more_recent_games['AVG_TOV'].values[0]
-
-    offensive_ratingFive = (more_recent_games['AVG_PTS'].values[0] / possessionsFive) 
-    defensive_ratingFive = (more_recent_games['AVG_PTS'].values[0] - more_recent_games['AVG_PLUS_MINUS'].values[0]) / possessionsFive
-    net_ratingFive= offensive_ratingFive - defensive_ratingFive
-
-    #calculate true shooting pct
-    true_shootingTen = recent_games['AVG_PTS'].values[0] /  (2 * (recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0]))
-    #-----------------------------
-    true_shootingFive = more_recent_games['AVG_PTS'].values[0] /  (2 * (more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0]))
-    
-    #calculate usage rate
-    usage_rateTen = ((recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0] + recent_games['AVG_TOV'].values[0]) / recent_games['AVG_MIN'].values[0])
-    #-----------------------------
-    usage_rateFive = ((more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0] + more_recent_games['AVG_TOV'].values[0]) / more_recent_games['AVG_MIN'].values[0])
-
-    #calculate turnover rate
-    turnover_rateTen = (recent_games['AVG_TOV'].values[0] / (recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0] + recent_games['AVG_TOV'].values[0]))
-    #-----------------------------
-    turnover_rateFive = (more_recent_games['AVG_TOV'].values[0] / (more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0] + more_recent_games['AVG_TOV'].values[0]))
-
-    #calculate minutes per game
-    minutes_per_gameTen = recent_games['AVG_MIN'].values[0] / recent_games['GAMES_PLAYED'].values[0]
-    #-----------------------------
-    minutes_per_gameFive = more_recent_games['AVG_MIN'].values[0] / more_recent_games['GAMES_PLAYED'].values[0]
-
-    # print(net_ratingTen)
-    # print(true_shootingTen)
-    # print(usage_rateTen)
-    # print(turnover_rateTen)
-    # print(minutes_per_gameTen)
-    # print()
-    recentFormTen = (0.4 * net_ratingTen) + (0.2 * true_shootingTen) + (0.15 * usage_rateTen) + (0.1 * turnover_rateTen) + (0.15 * minutes_per_gameTen)
-
-    # print(net_ratingFive)
-    # print(true_shootingFive)
-    # print(usage_rateFive)
-    # print(turnover_rateFive)
-    # print(minutes_per_gameFive)
-    # print()
-    recentFormFive = (0.4 * net_ratingFive) + (0.2 * true_shootingFive) + (0.15 * usage_rateFive) + (0.1 * turnover_rateFive) + (0.15 * minutes_per_gameFive)
-
-    finalScore = (0.6 * recentFormTen) + (0.4 * recentFormFive)
-    # print(finalScore)
-    # print()
-    return finalScore
+    try:
+        # Check if DataFrames are empty
+        if recent_games.empty or more_recent_games.empty:
+            print(f"Warning: Missing game data for player {player_name}")
+            return 0  # Return default score
+        
+        # Make sure all required columns exist
+        required_columns = ['AVG_FGA', 'AVG_FTA', 'AVG_OREB', 'AVG_TOV', 'AVG_PTS', 
+                            'AVG_PLUS_MINUS', 'AVG_MIN', 'GAMES_PLAYED']
+        
+        for df_name, df in [("recent_games", recent_games), ("more_recent_games", more_recent_games)]:
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            if missing_cols:
+                print(f"Warning: Missing columns in {df_name} for player {player_name}: {missing_cols}")
+                return 0  # Return default score
+        
+        try:
+            # Calculate possessions for 10-game span
+            possessions = 0.96 * recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0] - recent_games['AVG_OREB'].values[0] + recent_games['AVG_TOV'].values[0]
+            
+            # Guard against zero or negative possessions
+            if possessions <= 0:
+                print(f"Warning: Invalid possessions value ({possessions}) for player {player_name}")
+                possessions = 1  # Set a small default value
+                
+            # Calculate ratings
+            offensive_rating = (recent_games['AVG_PTS'].values[0] / possessions) 
+            defensive_rating = (recent_games['AVG_PTS'].values[0] - recent_games['AVG_PLUS_MINUS'].values[0]) / possessions
+            net_ratingTen = offensive_rating - defensive_rating
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 10-game metrics for player {player_name}: {e}")
+            net_ratingTen = 0  # Default value
+            
+        try:
+            # Calculate possessions for 5-game span
+            possessionsFive = 0.96 * more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0] - more_recent_games['AVG_OREB'].values[0] + more_recent_games['AVG_TOV'].values[0]
+            
+            # Guard against zero or negative possessions
+            if possessionsFive <= 0:
+                print(f"Warning: Invalid possessions value ({possessionsFive}) for player {player_name} (5-game)")
+                possessionsFive = 1  # Set a small default value
+                
+            # Calculate ratings for 5-game span
+            offensive_ratingFive = (more_recent_games['AVG_PTS'].values[0] / possessionsFive) 
+            defensive_ratingFive = (more_recent_games['AVG_PTS'].values[0] - more_recent_games['AVG_PLUS_MINUS'].values[0]) / possessionsFive
+            net_ratingFive = offensive_ratingFive - defensive_ratingFive
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 5-game metrics for player {player_name}: {e}")
+            net_ratingFive = 0  # Default value
+            
+        try:
+            # Calculate true shooting percentages
+            denominator = 2 * (recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0])
+            if denominator <= 0:
+                print(f"Warning: Invalid denominator for TS% calculation for player {player_name}")
+                true_shootingTen = 0
+            else:
+                true_shootingTen = recent_games['AVG_PTS'].values[0] / denominator
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 10-game TS% for player {player_name}: {e}")
+            true_shootingTen = 0
+            
+        try:
+            denominator = 2 * (more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0])
+            if denominator <= 0:
+                print(f"Warning: Invalid denominator for TS% calculation for player {player_name} (5-game)")
+                true_shootingFive = 0
+            else:
+                true_shootingFive = more_recent_games['AVG_PTS'].values[0] / denominator
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 5-game TS% for player {player_name}: {e}")
+            true_shootingFive = 0
+            
+        try:
+            # Calculate usage rates
+            if recent_games['AVG_MIN'].values[0] <= 0:
+                print(f"Warning: Zero minutes played for player {player_name}")
+                usage_rateTen = 0
+            else:
+                usage_rateTen = ((recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0] + recent_games['AVG_TOV'].values[0]) / recent_games['AVG_MIN'].values[0])
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 10-game usage rate for player {player_name}: {e}")
+            usage_rateTen = 0
+            
+        try:
+            if more_recent_games['AVG_MIN'].values[0] <= 0:
+                print(f"Warning: Zero minutes played for player {player_name} (5-game)")
+                usage_rateFive = 0
+            else:
+                usage_rateFive = ((more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0] + more_recent_games['AVG_TOV'].values[0]) / more_recent_games['AVG_MIN'].values[0])
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 5-game usage rate for player {player_name}: {e}")
+            usage_rateFive = 0
+            
+        try:
+            # Calculate turnover rates
+            denominator = (recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0] + recent_games['AVG_TOV'].values[0])
+            if denominator <= 0:
+                print(f"Warning: Invalid denominator for TOV% calculation for player {player_name}")
+                turnover_rateTen = 0
+            else:
+                turnover_rateTen = (recent_games['AVG_TOV'].values[0] / denominator)
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 10-game turnover rate for player {player_name}: {e}")
+            turnover_rateTen = 0
+            
+        try:
+            denominator = (more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0] + more_recent_games['AVG_TOV'].values[0])
+            if denominator <= 0:
+                print(f"Warning: Invalid denominator for TOV% calculation for player {player_name} (5-game)")
+                turnover_rateFive = 0
+            else:
+                turnover_rateFive = (more_recent_games['AVG_TOV'].values[0] / denominator)
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 5-game turnover rate for player {player_name}: {e}")
+            turnover_rateFive = 0
+            
+        try:
+            # Calculate minutes per game
+            if recent_games['GAMES_PLAYED'].values[0] <= 0:
+                print(f"Warning: Zero games played for player {player_name}")
+                minutes_per_gameTen = 0
+            else:
+                minutes_per_gameTen = recent_games['AVG_MIN'].values[0] / recent_games['GAMES_PLAYED'].values[0]
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 10-game minutes per game for player {player_name}: {e}")
+            minutes_per_gameTen = 0
+            
+        try:
+            if more_recent_games['GAMES_PLAYED'].values[0] <= 0:
+                print(f"Warning: Zero games played for player {player_name} (5-game)")
+                minutes_per_gameFive = 0
+            else:
+                minutes_per_gameFive = more_recent_games['AVG_MIN'].values[0] / more_recent_games['GAMES_PLAYED'].values[0]
+        except (IndexError, KeyError, ZeroDivisionError) as e:
+            print(f"Error calculating 5-game minutes per game for player {player_name}: {e}")
+            minutes_per_gameFive = 0
+            
+        # Calculate final scores
+        recentFormTen = (0.4 * net_ratingTen) + (0.2 * true_shootingTen) + (0.15 * usage_rateTen) + (0.1 * turnover_rateTen) + (0.15 * minutes_per_gameTen)
+        recentFormFive = (0.4 * net_ratingFive) + (0.2 * true_shootingFive) + (0.15 * usage_rateFive) + (0.1 * turnover_rateFive) + (0.15 * minutes_per_gameFive)
+        
+        finalScore = (0.6 * recentFormTen) + (0.4 * recentFormFive)
+        return finalScore
+        
+    except Exception as e:
+        print(f"Unexpected error calculating metrics for player {player_name}: {e}")
+        return 0 
 
 
 """
