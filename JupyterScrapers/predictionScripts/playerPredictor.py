@@ -185,8 +185,8 @@ def calculate_recent_scores(player_data, year, date, engine):
                     AVG("FTA") as "AVG_FTA",
                     AVG("TOV") as "AVG_TOV",
                     AVG("OREB") as "AVG_OREB",
-                    MAX(TO_DATE("GAME_DATE", 'MON DD, YYYY')) as "LATEST_GAME_DATE",
-                    MIN(TO_DATE("GAME_DATE", 'MON DD, YYYY')) as "EARLIEST_GAME_DATE",
+                    MAX(TO_DATE("GAME_DATE", 'YYYY-MM-DD')) as "LATEST_GAME_DATE",
+                    MIN(TO_DATE("GAME_DATE", 'YYYY-MM-DD')) as "EARLIEST_GAME_DATE",
                     COUNT(*) as "GAMES_PLAYED"
                 FROM recent_games
                 GROUP BY "PLAYER_ID"
@@ -540,8 +540,8 @@ def get_team_player_scores(engine, teamName, date):
                         AVG(NULLIF(ps."E_TOV_PCT", '')::NUMERIC) AS "E_TOV_PCT",
                         AVG(NULLIF(ps."MIN", '')::NUMERIC) AS "MIN"
                     FROM "advanced_player_stats_by_date" ps
-                    WHERE TO_DATE(ps."DATE_TO", 'MM/DD/YYYY') < TO_DATE(:date, 'YYYY-MM-DD')
-                    AND TO_DATE(ps."DATE_FROM", 'MM/DD/YYYY') > TO_DATE(:seasonStartDate, 'YYYY-MM-DD')
+                    WHERE TO_DATE(ps."DATE_TO", 'YYYY-MM-DD') < TO_DATE(:date, 'YYYY-MM-DD')
+                    AND TO_DATE(ps."DATE_FROM", 'YYYY-MM-DD') > TO_DATE(:seasonStartDate, 'YYYY-MM-DD')
                     GROUP BY ps."PLAYER_ID", ps."PLAYER_NAME", ps."TEAM_ID"
                 ),
                 player_clutch_stats AS (
@@ -553,8 +553,8 @@ def get_team_player_scores(engine, teamName, date):
                         AVG(NULLIF(pc."CLUTCH_USAGE_RATE", '')::NUMERIC) AS "CLUTCH_USAGE_RATE",
                         AVG(NULLIF(pc."CLUTCH_NET_RATING", '')::NUMERIC) AS "CLUTCH_NET_RATING"
                     FROM "advanced_player_clutch_stats_by_date" pc
-                    WHERE TO_DATE(pc."DATE_TO", 'MM/DD/YYYY') < TO_DATE(:date, 'MM/DD/YYYY')
-                    AND TO_DATE(pc."DATE_FROM", 'MM/DD/YYYY') > TO_DATE(:seasonStartDate, 'MM/DD/YYYY')
+                    WHERE TO_DATE(pc."DATE_TO", 'YYYY-MM-DD') < TO_DATE(:date, 'YYYY-MM-DD')
+                    AND TO_DATE(pc."DATE_FROM", 'YYYY-MM-DD') > TO_DATE(:seasonStartDate, 'YYYY-MM-DD')
                     GROUP BY pc."PLAYER_ID", pc."PLAYER_NAME"
                 )
                 SELECT
