@@ -4,11 +4,11 @@ import pandas as pd
 import math
 
 seasonStartDates = {
-    '2020-21' : '12/22/2020',
-    '2021-22' : '10/19/2021',
-    '2022-23' : '10/18/2022',
-    '2023-24' : '10/24/2023',
-    '2024-25' : '10/22/2024'
+    '2020-21' : '2020-12-22',
+    '2021-22' : '2021-10-19',
+    '2022-23' : '2022-10-18',
+    '2023-24' : '2023-10-24',
+    '2024-25' : '2024-10-22'
 }
 
 """
@@ -148,7 +148,7 @@ def calculate_recent_scores(player_data, year, date, engine):
                     SELECT *
                     FROM "all_player_game_stats_2024-25"
                     WHERE "PLAYER_ID" = :player_id
-                    AND TO_DATE("GAME_DATE", 'MON DD, YYYY') < TO_DATE(:date, 'MM/DD/YYYY')
+                    AND TO_DATE("GAME_DATE", 'MON DD, YYYY') < TO_DATE(:date, 'YYYY-MM-DD')
                     ORDER BY TO_DATE("GAME_DATE", 'MON DD, YYYY') DESC
                     LIMIT 10
                 )
@@ -172,7 +172,7 @@ def calculate_recent_scores(player_data, year, date, engine):
                     SELECT *
                     FROM "all_player_game_stats_2024-25"
                     WHERE "PLAYER_ID" = :player_id
-                    AND TO_DATE("GAME_DATE", 'MON DD, YYYY') < TO_DATE(:date, 'MM/DD/YYYY')
+                    AND TO_DATE("GAME_DATE", 'MON DD, YYYY') < TO_DATE(:date, 'YYYY-MM-DD')
                     ORDER BY TO_DATE("GAME_DATE", 'MON DD, YYYY') DESC
                     LIMIT 5
                 )
@@ -540,8 +540,8 @@ def get_team_player_scores(engine, teamName, date):
                         AVG(NULLIF(ps."E_TOV_PCT", '')::NUMERIC) AS "E_TOV_PCT",
                         AVG(NULLIF(ps."MIN", '')::NUMERIC) AS "MIN"
                     FROM "advanced_player_stats_by_date" ps
-                    WHERE TO_DATE(ps."DATE_TO", 'MM/DD/YYYY') < TO_DATE(:date, 'MM/DD/YYYY')
-                    AND TO_DATE(ps."DATE_FROM", 'MM/DD/YYYY') > TO_DATE(:seasonStartDate, 'MM/DD/YYYY')
+                    WHERE TO_DATE(ps."DATE_TO", 'MM/DD/YYYY') < TO_DATE(:date, 'YYYY-MM-DD')
+                    AND TO_DATE(ps."DATE_FROM", 'MM/DD/YYYY') > TO_DATE(:seasonStartDate, 'YYYY-MM-DD')
                     GROUP BY ps."PLAYER_ID", ps."PLAYER_NAME", ps."TEAM_ID"
                 ),
                 player_clutch_stats AS (
