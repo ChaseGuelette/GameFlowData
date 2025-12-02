@@ -40,6 +40,7 @@ for team in nba_teams:
     
     print(f"[{team_count}/{len(nba_teams)}] Processing team: {team_name} (ID: {team_id})")
     
+    
     try:
         # Check if the team was active that season
         print(f"  Fetching season history for {team_name}...")
