@@ -20,3 +20,99 @@
 2026-01-10 19:03:43,040 [INFO] PHASE 2: Linking raw_game_lines_staging
 2026-01-10 19:03:43,040 [INFO] ============================================================
 2026-01-10 19:04:12,572 [INFO] Date range to process: 2020-07-30 22:30:00+00:00 to 2025-04-20 00:30:00+00:00
+2026-01-10 19:48:40,881 [ERROR] Error: (psycopg2.errors.QueryCanceled) canceling statement due to statement timeout
+
+[SQL: 
+                UPDATE raw_game_lines_staging
+                SET 
+                    nba_game_id = %(game_id)s,
+                    nba_home_team_id = %(home_id)s,
+                    nba_away_team_id = %(away_id)s
+                WHERE home_team = %(home_team)s
+                  AND (commence_time AT TIME ZONE 'America/New_York')::date = %(game_date)s
+                  AND nba_game_id IS NULL
+                ]
+[parameters: {'game_id': '0022000195', 'home_id': 1610612757, 'away_id': 1610612737, 'home_team': 'Portland Trail Blazers', 'game_date': datetime.date(2021, 1, 16)}]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+Traceback (most recent call last):
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        cursor, str_statement, effective_parameters, context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py", line 951, in do_execute
+    cursor.execute(statement, parameters)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+psycopg2.errors.QueryCanceled: canceling statement due to statement timeout
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Chase\Projects\GameFlowData\JupyterScrapers\oneTimeScripts\nba_data_linker.py", line 831, in main
+    if args.phase in ['2', 'all']:
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Chase\Projects\GameFlowData\JupyterScrapers\oneTimeScripts\nba_data_linker.py", line 440, in link_game_lines
+    for update in updates:
+                 ^^^^^^^^^
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1419, in execute
+    return meth(
+        self,
+        distilled_parameters,
+        execution_options or NO_OPTIONS,
+    )
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\sql\elements.py", line 526, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self, distilled_params, execution_options
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+        dialect,
+    ...<8 lines>...
+        cache_hit=cache_hit,
+    )
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        dialect, context, statement, parameters
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        e, str_statement, effective_parameters, cursor, context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        cursor, str_statement, effective_parameters, context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Chase\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py", line 951, in do_execute
+    cursor.execute(statement, parameters)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+sqlalchemy.exc.OperationalError: (psycopg2.errors.QueryCanceled) canceling statement due to statement timeout
+
+[SQL: 
+                UPDATE raw_game_lines_staging
+                SET 
+                    nba_game_id = %(game_id)s,
+                    nba_home_team_id = %(home_id)s,
+                    nba_away_team_id = %(away_id)s
+                WHERE home_team = %(home_team)s
+                  AND (commence_time AT TIME ZONE 'America/New_York')::date = %(game_date)s
+                  AND nba_game_id IS NULL
+                ]
+[parameters: {'game_id': '0022000195', 'home_id': 1610612757, 'away_id': 1610612737, 'home_team': 'Portland Trail Blazers', 'game_date': datetime.date(2021, 1, 16)}]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
