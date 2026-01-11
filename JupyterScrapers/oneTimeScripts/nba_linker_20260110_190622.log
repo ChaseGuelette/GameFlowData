@@ -1,0 +1,23 @@
+2026-01-10 19:06:22,795 [INFO] ============================================================
+2026-01-10 19:06:22,795 [INFO] NBA Data Linker Starting
+2026-01-10 19:06:22,795 [INFO] ============================================================
+2026-01-10 19:06:22,796 [INFO] Phase: all, Chunk size: 50000, Dry run: False
+2026-01-10 19:06:23,533 [INFO] Database connection verified [OK]
+2026-01-10 19:06:23,533 [INFO] Building team lookup table...
+2026-01-10 19:06:25,506 [INFO] Team lookup built: 52 entries (including aliases)
+2026-01-10 19:06:25,506 [INFO] Building player lookup table...
+2026-01-10 19:06:25,615 [WARNING] Found 5 normalized name collisions:
+2026-01-10 19:06:25,615 [WARNING]   'chris johnson': [(202419, 'Chris Johnson')]
+2026-01-10 19:06:25,616 [WARNING]   'mike james': [(1628455, 'Mike James')]
+2026-01-10 19:06:25,616 [WARNING]   'tony mitchell': [(203183, 'Tony Mitchell')]
+2026-01-10 19:06:25,616 [WARNING]   'chris wright': [(203203, 'Chris Wright')]
+2026-01-10 19:06:25,616 [WARNING]   'chris smith': [(1630607, 'Chris Smith')]
+2026-01-10 19:06:25,616 [INFO] Player lookup built: 1970 unique normalized names
+2026-01-10 19:06:25,616 [INFO] Building game lookup from team_game_stats...
+2026-01-10 19:06:25,976 [INFO] Game lookup built: 31975 home team/date combinations
+2026-01-10 19:06:25,976 [INFO] Building game lookup for player props...
+2026-01-10 19:06:26,223 [INFO] Props game lookup built: 51439 combinations
+2026-01-10 19:06:26,223 [INFO] ============================================================
+2026-01-10 19:06:26,223 [INFO] PHASE 2: Linking raw_game_lines_staging
+2026-01-10 19:06:26,223 [INFO] ============================================================
+2026-01-10 19:06:47,911 [INFO] Date range to process: 2020-08-01 00:00:00+00:00 to 2025-04-20 00:30:00+00:00
