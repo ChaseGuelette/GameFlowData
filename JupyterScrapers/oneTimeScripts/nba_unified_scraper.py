@@ -16,6 +16,7 @@ Examples:
     python nba_unified_scraper.py                              # Scrape current regular season (2024-25)
     python nba_unified_scraper.py --season 2023-24            # Scrape specific regular season
     python nba_unified_scraper.py --season-type Playoffs      # Scrape current playoffs
+    python nba_unified_scraper.py --season-type PlayIn        # Scrape current play-in tournament
     python nba_unified_scraper.py --season 2023-24 --season-type Playoffs  # Scrape 2023-24 playoffs
     python nba_unified_scraper.py --skip-advanced             # Only fetch basic team stats
 """
@@ -215,7 +216,7 @@ def scrape_team_game_stats(engine, seasons: List[str], season_type: str = 'Regul
     Args:
         engine: Database engine
         seasons: List of seasons to scrape (e.g., ['2024-25'])
-        season_type: 'Regular Season' or 'Playoffs' (default: 'Regular Season')
+        season_type: 'Regular Season', 'Playoffs', or 'PlayIn' (default: 'Regular Season')
     
     Returns:
         Number of new games added.
@@ -623,8 +624,8 @@ def main():
         '--season-type',
         type=str,
         default='Regular Season',
-        choices=['Regular Season', 'Playoffs'],
-        help='Season type to scrape: Regular Season or Playoffs (default: Regular Season)'
+        choices=['Regular Season', 'Playoffs', 'PlayIn'],
+        help='Season type to scrape: Regular Season, Playoffs, or PlayIn (default: Regular Season)'
     )
     parser.add_argument(
         '--skip-team',

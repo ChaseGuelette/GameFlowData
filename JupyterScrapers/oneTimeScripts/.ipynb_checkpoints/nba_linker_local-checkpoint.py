@@ -558,82 +558,84 @@ def init_mappings():
     print("Example: Shai Gilgeous-Alexander,1628983")
 
 def upload_results():
-    """Upload matched results back to database."""
+    """Upload matched results back to database using chunked updates to avoid timeouts."""
     engine = get_engine()
-    
+    CHUNK_SIZE = 50000  # Adjust based on DB performance
+
+    def chunked_update(df, temp_table_name, update_sql, description):
+        if df.empty:
+            return
+        
+        print(f"Uploading {description} ({len(df):,} rows)...")
+        
+        # Split the dataframe into smaller chunks
+        for i in range(0, len(df), CHUNK_SIZE):
+            chunk = df.iloc[i : i + CHUNK_SIZE]
+            
+            with engine.begin() as conn:
+                # 1. Upload chunk to temp table
+                chunk.to_sql(temp_table_name, conn, if_exists='replace', index=False)
+                
+                # 2. Add an index to the temp table to make the join faster
+                conn.execute(text(f"CREATE INDEX idx_{temp_table_name}_id ON {temp_table_name}(staging_id)"))
+                
+                # 3. Execute the update
+                result = conn.execute(text(update_sql))
+                
+                # 4. Cleanup
+                conn.execute(text(f"DROP TABLE IF EXISTS {temp_table_name}"))
+                
+                print(f"  Processed rows {i:,} to {min(i + CHUNK_SIZE, len(df)):,}... Updated {result.rowcount:,} rows")
+
     # ========================================
-    # Upload game lines updates
+    # 1. Game Lines Updates
     # ========================================
     game_lines_file = DATA_DIR / "game_lines_updates.csv"
     if game_lines_file.exists():
-        print("Uploading game lines updates...")
-        df = pd.read_csv(game_lines_file)
-        df = df[df['nba_game_id'].notna()]
+        df_lines = pd.read_csv(game_lines_file)
+        df_lines = df_lines[df_lines['nba_game_id'].notna()]
         
-        if len(df) > 0:
-            # Create temp table and bulk update
-            with engine.begin() as conn:
-                # Upload to temp table
-                df.to_sql('temp_game_lines_updates', conn, if_exists='replace', index=False)
-                
-                # Bulk update
-                result = conn.execute(text("""
-                    UPDATE raw_game_lines_staging r
-                    SET nba_game_id = t.nba_game_id,
-                        nba_home_team_id = t.nba_home_team_id::bigint,
-                        nba_away_team_id = t.nba_away_team_id::bigint
-                    FROM temp_game_lines_updates t
-                    WHERE r.staging_id = t.staging_id
-                """))
-                print(f"  Updated {result.rowcount:,} rows")
-                
-                conn.execute(text("DROP TABLE IF EXISTS temp_game_lines_updates"))
-    
+        sql = """
+            UPDATE raw_game_lines_staging r
+            SET nba_game_id = t.nba_game_id,
+                nba_home_team_id = t.nba_home_team_id::bigint,
+                nba_away_team_id = t.nba_away_team_id::bigint
+            FROM temp_game_lines_updates t
+            WHERE r.staging_id = t.staging_id
+        """
+        chunked_update(df_lines, 'temp_game_lines_updates', sql, "game lines")
+
     # ========================================
-    # Upload player props game updates
+    # 2. Player Props Game ID Updates
     # ========================================
     props_game_file = DATA_DIR / "props_game_updates.csv"
     if props_game_file.exists():
-        print("Uploading player props game updates...")
-        df = pd.read_csv(props_game_file)
+        df_props_game = pd.read_csv(props_game_file)
         
-        if len(df) > 0:
-            with engine.begin() as conn:
-                df.to_sql('temp_props_game_updates', conn, if_exists='replace', index=False)
-                
-                result = conn.execute(text("""
-                    UPDATE raw_player_props_combined r
-                    SET game_id = t.game_id
-                    FROM temp_props_game_updates t
-                    WHERE r.staging_id = t.staging_id
-                """))
-                print(f"  Updated {result.rowcount:,} rows")
-                
-                conn.execute(text("DROP TABLE IF EXISTS temp_props_game_updates"))
-    
+        sql = """
+            UPDATE raw_player_props_combined r
+            SET game_id = t.game_id
+            FROM temp_props_game_updates t
+            WHERE r.staging_id = t.staging_id
+        """
+        chunked_update(df_props_game, 'temp_props_game_updates', sql, "player props game_ids")
+
     # ========================================
-    # Upload player props player/team updates
+    # 3. Player Props Player/Team Updates
     # ========================================
     props_full_file = DATA_DIR / "props_full_updates.csv"
     if props_full_file.exists():
-        print("Uploading player props player/team updates...")
-        df = pd.read_csv(props_full_file)
+        df_props_full = pd.read_csv(props_full_file)
         
-        if len(df) > 0:
-            with engine.begin() as conn:
-                df.to_sql('temp_props_player_updates', conn, if_exists='replace', index=False)
-                
-                result = conn.execute(text("""
-                    UPDATE raw_player_props_combined r
-                    SET player_id = t.player_id::bigint,
-                        team_id = t.team_id::bigint
-                    FROM temp_props_player_updates t
-                    WHERE r.staging_id = t.staging_id
-                """))
-                print(f"  Updated {result.rowcount:,} rows")
-                
-                conn.execute(text("DROP TABLE IF EXISTS temp_props_player_updates"))
-    
+        sql = """
+            UPDATE raw_player_props_combined r
+            SET player_id = t.player_id::bigint,
+                team_id = t.team_id::bigint
+            FROM temp_props_player_updates t
+            WHERE r.staging_id = t.staging_id
+        """
+        chunked_update(df_props_full, 'temp_props_player_updates', sql, "player props player/team info")
+
     print("\n[OK] Upload complete!")
 
 # ============================================================================

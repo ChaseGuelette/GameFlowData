@@ -8,3 +8,6 @@ databaseSchema.txt
 /KeyContextTextFiles
 
 /.ipynb_checkpoints
+
+# Ignore large data CSVs
+JupyterScrapers/oneTimeScripts/linker_data/*.csv
