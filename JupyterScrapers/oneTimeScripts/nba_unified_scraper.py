@@ -10,12 +10,14 @@ Tables updated:
 - player_game_advanced_stats: Player advanced metrics per game
 
 Usage:
-    python nba_unified_scraper.py [--season YYYY-YY] [--skip-team] [--skip-advanced]
+    python nba_unified_scraper.py [--season YYYY-YY] [--season-type TYPE] [--skip-team] [--skip-advanced]
     
 Examples:
-    python nba_unified_scraper.py                     # Scrape current season (2024-25)
-    python nba_unified_scraper.py --season 2023-24   # Scrape specific season
-    python nba_unified_scraper.py --skip-advanced    # Only fetch basic team stats
+    python nba_unified_scraper.py                              # Scrape current regular season (2024-25)
+    python nba_unified_scraper.py --season 2023-24            # Scrape specific regular season
+    python nba_unified_scraper.py --season-type Playoffs      # Scrape current playoffs
+    python nba_unified_scraper.py --season 2023-24 --season-type Playoffs  # Scrape 2023-24 playoffs
+    python nba_unified_scraper.py --skip-advanced             # Only fetch basic team stats
 """
 
 import argparse
@@ -206,13 +208,20 @@ def get_team_abbreviation_map(engine) -> dict:
     return abbrev_map
 
 
-def scrape_team_game_stats(engine, seasons: List[str]) -> int:
+def scrape_team_game_stats(engine, seasons: List[str], season_type: str = 'Regular Season') -> int:
     """
     Scrape basic team game stats from NBA API.
-    Returns number of new games added.
+    
+    Args:
+        engine: Database engine
+        seasons: List of seasons to scrape (e.g., ['2024-25'])
+        season_type: 'Regular Season' or 'Playoffs' (default: 'Regular Season')
+    
+    Returns:
+        Number of new games added.
     """
     print("\n" + "="*60)
-    print("STEP 1: Fetching Team Game Stats (Basic)")
+    print(f"STEP 1: Fetching Team Game Stats ({season_type})")
     print("="*60)
     
     existing_game_ids = get_existing_game_ids(engine)
@@ -224,11 +233,11 @@ def scrape_team_game_stats(engine, seasons: List[str]) -> int:
     
     for season in seasons:
         try:
-            print(f"\nFetching games for {season}...")
+            print(f"\nFetching {season_type} games for {season}...")
             game_finder = leaguegamefinder.LeagueGameFinder(
                 season_nullable=season,
                 league_id_nullable='00',
-                season_type_nullable='Regular Season'
+                season_type_nullable=season_type
             )
             
             games_df = game_finder.get_data_frames()[0]
@@ -611,6 +620,13 @@ def main():
         help=f'Season to scrape (default: {DEFAULT_SEASON})'
     )
     parser.add_argument(
+        '--season-type',
+        type=str,
+        default='Regular Season',
+        choices=['Regular Season', 'Playoffs'],
+        help='Season type to scrape: Regular Season or Playoffs (default: Regular Season)'
+    )
+    parser.add_argument(
         '--skip-team',
         action='store_true',
         help='Skip team game stats scraping'
@@ -633,6 +649,7 @@ def main():
     print("NBA UNIFIED STATS SCRAPER")
     print("="*60)
     print(f"Season: {args.season}")
+    print(f"Season Type: {args.season_type}")
     print(f"Skip Team Stats: {args.skip_team}")
     print(f"Skip Advanced Stats: {args.skip_advanced}")
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -651,7 +668,7 @@ def main():
     # Step 1: Team Game Stats
     new_games = 0
     if not args.skip_team:
-        new_games = scrape_team_game_stats(engine, seasons)
+        new_games = scrape_team_game_stats(engine, seasons, args.season_type)
     else:
         print("\n⏭️  Skipping team game stats (--skip-team)")
     
