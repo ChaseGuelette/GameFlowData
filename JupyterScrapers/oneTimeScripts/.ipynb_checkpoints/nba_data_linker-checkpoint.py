@@ -41,7 +41,7 @@ from tqdm import tqdm
 # CONFIGURATION
 # ============================================================================
 
-CHUNK_SIZE_DEFAULT = 50000  # Rows per batch update
+CHUNK_SIZE_DEFAULT = 2000  # Small chunks for Supabase free tier
 EASTERN = pytz.timezone('America/New_York')
 UTC = pytz.UTC
 
@@ -154,12 +154,19 @@ def get_engine():
     if not database_url:
         raise ValueError("DATABASE_URL not found in environment. Check your .env file.")
     
+    # For Supabase Transaction Mode (port 6543):
+    # - Disable prepared statements (PgBouncer doesn't support them)
+    # - Use smaller pool to avoid hogging connections
     engine = create_engine(
         database_url,
-        pool_size=5,
-        max_overflow=10,
+        pool_size=2,
+        max_overflow=0,
         pool_timeout=30,
-        pool_recycle=1800
+        pool_recycle=1800,
+        connect_args={
+            "prepare_threshold": None,  # REQUIRED for port 6543
+            "connect_timeout": 30
+        }
     )
     
     # Verify connection
@@ -298,42 +305,27 @@ def build_game_lookup(engine) -> dict:
     """
     logger.info("Building game lookup from team_game_stats...")
     
-    # Get home games (matchup contains 'vs.')
-    query = """
-    SELECT 
-        tgs_home.game_id,
-        tgs_home.team_name as home_team,
-        tgs_home.team_id as home_team_id,
-        tgs_home.team_game_date,
-        tgs_away.team_id as away_team_id,
-        tgs_away.team_name as away_team
-    FROM team_game_stats tgs_home
-    JOIN team_game_stats tgs_away 
-        ON tgs_home.game_id = tgs_away.game_id 
-        AND tgs_home.team_id != tgs_away.team_id
-    WHERE tgs_home.team_matchup LIKE '%vs.%'
-    """
+    # Dead simple query - no WHERE, no JOIN
+    query = "SELECT game_id, team_name, team_id, team_game_date, team_matchup, opponent_id FROM team_game_stats"
     
     game_lookup = {}
     
     with engine.connect() as conn:
         result = conn.execute(text(query))
         for row in result:
-            game_id, home_team, home_team_id, game_date, away_team_id, away_team = row
+            game_id, team_name, team_id, game_date, matchup, opponent_id = row
             
-            # Parse date (it's stored as text like '2024-01-15')
-            if game_date:
-                date_str = str(game_date)[:10]  # Get just YYYY-MM-DD
+            # Home games have 'vs.' in matchup
+            if game_date and matchup and 'vs.' in matchup:
+                date_str = str(game_date)[:10]
                 
-                # Store with canonical home team name
-                key = (home_team, date_str)
-                game_lookup[key] = (game_id, home_team_id, away_team_id)
+                key = (team_name, date_str)
+                game_lookup[key] = (game_id, team_id, opponent_id)
                 
-                # Also store with aliases
+                # Add aliases
                 for alias, canonical in TEAM_NAME_ALIASES.items():
-                    if canonical == home_team:
-                        alias_key = (alias, date_str)
-                        game_lookup[alias_key] = (game_id, home_team_id, away_team_id)
+                    if canonical == team_name:
+                        game_lookup[(alias, date_str)] = (game_id, team_id, opponent_id)
     
     logger.info(f"Game lookup built: {len(game_lookup)} home team/date combinations")
     return game_lookup
@@ -341,113 +333,102 @@ def build_game_lookup(engine) -> dict:
 def link_game_lines(engine, game_lookup: dict, chunk_size: int, dry_run: bool = False):
     """
     Link raw_game_lines_staging to NBA game IDs.
-    Processes in monthly chunks.
+    Uses staging_id batching to avoid expensive WHERE clause computations.
     """
     logger.info("=" * 60)
     logger.info("PHASE 2: Linking raw_game_lines_staging")
     logger.info("=" * 60)
     
-    min_date, max_date = get_game_lines_date_range(engine)
+    # Get ID range (full table - we filter NULLs in batches)
+    range_query = """
+    SELECT MIN(staging_id), MAX(staging_id)
+    FROM raw_game_lines_staging
+    """
     
-    if not min_date or not max_date:
-        logger.info("No unlinked game lines found.")
+    with engine.connect() as conn:
+        result = conn.execute(text(range_query)).fetchone()
+        min_id, max_id = result[0], result[1]
+    
+    if not min_id or not max_id:
+        logger.info("No game lines found.")
         return
     
-    logger.info(f"Date range to process: {min_date} to {max_date}")
-    
-    # Calculate total months for progress bar
-    current_start = min_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    months = []
-    while current_start <= max_date:
-        months.append(current_start)
-        if current_start.month == 12:
-            current_start = current_start.replace(year=current_start.year + 1, month=1)
-        else:
-            current_start = current_start.replace(month=current_start.month + 1)
+    logger.info(f"Processing staging_id {min_id} to {max_id}")
     
     total_updated = 0
-    total_unmatched = 0
     unmatched_games = set()
     
-    # Process month by month with progress bar
-    with tqdm(months, desc="Phase 2: Game Lines", unit="month", 
-              bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} months [{elapsed}<{remaining}, {rate_fmt}]') as pbar:
-        for current_start in pbar:
-            # Calculate month end
-            if current_start.month == 12:
-                current_end = current_start.replace(year=current_start.year + 1, month=1)
-            else:
-                current_end = current_start.replace(month=current_start.month + 1)
-            
-            pbar.set_postfix({'month': current_start.strftime('%Y-%m'), 'updated': f'{total_updated:,}'})
-            
-            # Get unique games for this month
-            unique_query = """
-            SELECT DISTINCT 
-                home_team,
-                (commence_time AT TIME ZONE 'America/New_York')::date as game_date
+    # Process in batches by staging_id
+    current_min = min_id
+    total_batches = (max_id - min_id) // chunk_size + 1
+    
+    with tqdm(total=total_batches, desc="Phase 2: Game Lines", unit="batch",
+              bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} batches [{elapsed}<{remaining}]') as pbar:
+        
+        while current_min <= max_id:
+            # Fetch batch of unlinked rows
+            fetch_query = """
+            SELECT staging_id, home_team, 
+                   (commence_time AT TIME ZONE 'America/New_York')::date as game_date
             FROM raw_game_lines_staging
-            WHERE nba_game_id IS NULL
-              AND commence_time >= :start_date
-              AND commence_time < :end_date
+            WHERE staging_id >= :min_id 
+              AND staging_id < :max_id
+              AND nba_game_id IS NULL
               AND home_team IS NOT NULL
             """
             
+            batch_max = current_min + chunk_size
             updates = []
-            month_unmatched = 0
             
             with engine.connect() as conn:
-                result = conn.execute(text(unique_query), {
-                    "start_date": current_start,
-                    "end_date": current_end
+                result = conn.execute(text(fetch_query), {
+                    "min_id": current_min,
+                    "max_id": batch_max
                 })
                 
+                rows_in_batch = 0
                 for row in result:
-                    home_team, game_date = row[0], row[1]
+                    rows_in_batch += 1
+                    staging_id, home_team, game_date = row
                     date_str = str(game_date)
                     
-                    # Try to find match
+                    # Normalize and lookup
                     normalized_home = normalize_team_name(home_team)
                     key = (normalized_home, date_str)
                     
                     if key in game_lookup:
                         game_id, home_id, away_id = game_lookup[key]
                         updates.append({
-                            "home_team": home_team,
-                            "game_date": game_date,
+                            "staging_id": staging_id,
                             "game_id": game_id,
                             "home_id": home_id,
                             "away_id": away_id
                         })
                     else:
-                        month_unmatched += 1
                         unmatched_games.add((home_team, date_str))
             
-            # Apply updates
+            # Batch update by staging_id (fast, indexed primary key)
             if updates and not dry_run:
                 update_query = """
                 UPDATE raw_game_lines_staging
-                SET 
-                    nba_game_id = :game_id,
+                SET nba_game_id = :game_id,
                     nba_home_team_id = :home_id,
                     nba_away_team_id = :away_id
-                WHERE home_team = :home_team
-                  AND (commence_time AT TIME ZONE 'America/New_York')::date = :game_date
-                  AND nba_game_id IS NULL
+                WHERE staging_id = :staging_id
                 """
                 
                 with engine.begin() as conn:
-                    for update in updates:
-                        result = conn.execute(text(update_query), update)
-                        total_updated += result.rowcount
+                    conn.execute(text(update_query), updates)
+                    total_updated += len(updates)
             
-            total_unmatched += month_unmatched
+            pbar.update(1)
+            pbar.set_postfix({'updated': f'{total_updated:,}', 'unmatched': len(unmatched_games)})
+            
+            current_min = batch_max
     
-    # Report unmatched
     logger.info(f"\nPHASE 2 COMPLETE: {total_updated:,} rows updated, {len(unmatched_games)} unique games unmatched")
     
     if unmatched_games:
-        # Write unmatched to CSV
         unmatched_file = "unmatched_game_lines.csv"
         with open(unmatched_file, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -478,40 +459,40 @@ def get_props_date_range(engine) -> tuple[datetime, datetime]:
 def build_props_game_lookup(engine) -> dict:
     """
     Build game lookup for player props.
-    Since props have both home and away teams, we need to match on both.
     Key: (home_team, away_team, game_date_str)
     Value: game_id
     """
     logger.info("Building game lookup for player props...")
     
-    query = """
-    SELECT 
-        tgs_home.game_id,
-        tgs_home.team_name as home_team,
-        tgs_away.team_name as away_team,
-        tgs_home.team_game_date
-    FROM team_game_stats tgs_home
-    JOIN team_game_stats tgs_away 
-        ON tgs_home.game_id = tgs_away.game_id 
-        AND tgs_home.team_id != tgs_away.team_id
-    WHERE tgs_home.team_matchup LIKE '%vs.%'
-    """
+    # First get team_id -> team_name mapping
+    teams_query = "SELECT team_id, team_name FROM teams"
+    team_names = {}
+    with engine.connect() as conn:
+        result = conn.execute(text(teams_query))
+        for row in result:
+            team_names[row[0]] = row[1]
+    
+    logger.info(f"  Loaded {len(team_names)} teams")
+    
+    # Now get all games - no WHERE clause
+    games_query = "SELECT game_id, team_name, team_game_date, team_matchup, opponent_id FROM team_game_stats"
     
     game_lookup = {}
     
     with engine.connect() as conn:
-        result = conn.execute(text(query))
+        result = conn.execute(text(games_query))
         for row in result:
-            game_id, home_team, away_team, game_date = row
+            game_id, home_team, game_date, matchup, opponent_id = row
             
-            if game_date:
+            # Home games have 'vs.' in matchup
+            if game_date and matchup and 'vs.' in matchup and opponent_id in team_names:
                 date_str = str(game_date)[:10]
+                away_team = team_names[opponent_id]
                 
-                # Store with original names
                 key = (home_team, away_team, date_str)
                 game_lookup[key] = game_id
                 
-                # Store with all alias combinations
+                # Add aliases
                 home_variants = [home_team] + [a for a, c in TEAM_NAME_ALIASES.items() if c == home_team]
                 away_variants = [away_team] + [a for a, c in TEAM_NAME_ALIASES.items() if c == away_team]
                 
@@ -525,100 +506,95 @@ def build_props_game_lookup(engine) -> dict:
 def link_player_props_games(engine, game_lookup: dict, chunk_size: int, dry_run: bool = False):
     """
     Link raw_player_props_combined to game IDs.
+    Uses staging_id batching to avoid expensive WHERE clause computations.
     """
     logger.info("=" * 60)
     logger.info("PHASE 3: Linking player props to games")
     logger.info("=" * 60)
     
-    min_date, max_date = get_props_date_range(engine)
+    # Get ID range (full table - we filter NULLs in batches)
+    range_query = """
+    SELECT MIN(staging_id), MAX(staging_id)
+    FROM raw_player_props_combined
+    """
     
-    if not min_date or not max_date:
-        logger.info("No unlinked player props found.")
+    with engine.connect() as conn:
+        result = conn.execute(text(range_query)).fetchone()
+        min_id, max_id = result[0], result[1]
+    
+    if not min_id or not max_id:
+        logger.info("No player props found.")
         return
     
-    logger.info(f"Date range to process: {min_date} to {max_date}")
-    
-    # Calculate total months for progress bar
-    current_start = min_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    months = []
-    while current_start <= max_date:
-        months.append(current_start)
-        if current_start.month == 12:
-            current_start = current_start.replace(year=current_start.year + 1, month=1)
-        else:
-            current_start = current_start.replace(month=current_start.month + 1)
+    logger.info(f"Processing staging_id {min_id} to {max_id}")
     
     total_updated = 0
     unmatched_games = set()
     
-    # Process month by month with progress bar
-    with tqdm(months, desc="Phase 3: Props→Games", unit="month",
-              bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} months [{elapsed}<{remaining}, {rate_fmt}]') as pbar:
-        for current_start in pbar:
-            if current_start.month == 12:
-                current_end = current_start.replace(year=current_start.year + 1, month=1)
-            else:
-                current_end = current_start.replace(month=current_start.month + 1)
-            
-            pbar.set_postfix({'month': current_start.strftime('%Y-%m'), 'updated': f'{total_updated:,}'})
-            
-            # Get unique game combinations for this month
-            unique_query = """
-            SELECT DISTINCT 
-                home_team,
-                away_team,
-                (commence_time AT TIME ZONE 'America/New_York')::date as game_date
+    # Process in batches by staging_id
+    current_min = min_id
+    total_batches = (max_id - min_id) // chunk_size + 1
+    
+    with tqdm(total=total_batches, desc="Phase 3: Props->Games", unit="batch",
+              bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} batches [{elapsed}<{remaining}]') as pbar:
+        
+        while current_min <= max_id:
+            # Fetch batch of unlinked rows
+            fetch_query = """
+            SELECT staging_id, home_team, away_team,
+                   (commence_time AT TIME ZONE 'America/New_York')::date as game_date
             FROM raw_player_props_combined
-            WHERE game_id IS NULL
-              AND commence_time >= :start_date
-              AND commence_time < :end_date
+            WHERE staging_id >= :min_id 
+              AND staging_id < :max_id
+              AND game_id IS NULL
               AND home_team IS NOT NULL
               AND away_team IS NOT NULL
             """
             
+            batch_max = current_min + chunk_size
             updates = []
             
             with engine.connect() as conn:
-                result = conn.execute(text(unique_query), {
-                    "start_date": current_start,
-                    "end_date": current_end
+                result = conn.execute(text(fetch_query), {
+                    "min_id": current_min,
+                    "max_id": batch_max
                 })
                 
+                rows_in_batch = 0
                 for row in result:
-                    home_team, away_team, game_date = row
+                    rows_in_batch += 1
+                    staging_id, home_team, away_team, game_date = row
                     date_str = str(game_date)
                     
-                    # Normalize team names
+                    # Normalize and lookup
                     norm_home = normalize_team_name(home_team)
                     norm_away = normalize_team_name(away_team)
-                    
                     key = (norm_home, norm_away, date_str)
                     
                     if key in game_lookup:
                         updates.append({
-                            "home_team": home_team,
-                            "away_team": away_team,
-                            "game_date": game_date,
+                            "staging_id": staging_id,
                             "game_id": game_lookup[key]
                         })
                     else:
                         unmatched_games.add((home_team, away_team, date_str))
             
-            # Apply updates
+            # Batch update by staging_id (fast, indexed primary key)
             if updates and not dry_run:
                 update_query = """
                 UPDATE raw_player_props_combined
                 SET game_id = :game_id
-                WHERE home_team = :home_team
-                  AND away_team = :away_team
-                  AND (commence_time AT TIME ZONE 'America/New_York')::date = :game_date
-                  AND game_id IS NULL
+                WHERE staging_id = :staging_id
                 """
                 
                 with engine.begin() as conn:
-                    for update in updates:
-                        result = conn.execute(text(update_query), update)
-                        total_updated += result.rowcount
+                    conn.execute(text(update_query), updates)
+                    total_updated += len(updates)
+            
+            pbar.update(1)
+            pbar.set_postfix({'updated': f'{total_updated:,}', 'unmatched': len(unmatched_games)})
+            
+            current_min = batch_max
     
     logger.info(f"\nPHASE 3 COMPLETE: {total_updated:,} rows updated, {len(unmatched_games)} unique games unmatched")
     
@@ -637,96 +613,101 @@ def link_player_props_games(engine, game_lookup: dict, chunk_size: int, dry_run:
 
 def link_players(engine, player_lookup: dict, chunk_size: int, dry_run: bool = False):
     """
-    Link raw_player_props_combined to player IDs.
-    Only processes rows that already have a game_id.
+    Link raw_player_props_combined to player IDs AND team IDs safely.
+    Uses staging_id batching to avoid massive table scans.
     """
     logger.info("=" * 60)
-    logger.info("PHASE 4: Linking players")
+    logger.info("PHASE 4: Linking players & teams (Batched)")
     logger.info("=" * 60)
+
+    # 1. Build a helper lookup for (player_id, game_id) -> team_id
+    logger.info("Building player->team history lookup...")
+    player_team_map = {}  # Key: (player_id, game_id), Value: team_id
     
-    # Get count of rows to process
-    count_query = """
-    SELECT COUNT(*) FROM raw_player_props_combined
-    WHERE game_id IS NOT NULL AND player_id IS NULL
-    """
+    stats_query = "SELECT player_id, game_id, team_id FROM player_game_stats"
     
     with engine.connect() as conn:
-        total_rows = conn.execute(text(count_query)).scalar()
-    
-    logger.info(f"Rows to process: {total_rows:,}")
-    
-    if total_rows == 0:
+        result = conn.execute(text(stats_query))
+        for row in result:
+            player_team_map[(row[0], row[1])] = row[2]
+            
+    logger.info(f"Loaded {len(player_team_map):,} player-game-team combinations")
+
+    # 2. Get ID range
+    range_query = "SELECT MIN(staging_id), MAX(staging_id) FROM raw_player_props_combined"
+    with engine.connect() as conn:
+        result = conn.execute(text(range_query)).fetchone()
+        min_id, max_id = result[0], result[1]
+
+    if not min_id or not max_id:
         logger.info("No rows to process.")
         return
-    
-    # Get unique player names that need matching
-    unique_players_query = """
-    SELECT DISTINCT api_player_name
-    FROM raw_player_props_combined
-    WHERE game_id IS NOT NULL 
-      AND player_id IS NULL
-      AND api_player_name IS NOT NULL
-    """
-    
-    player_matches = {}  # api_name -> player_id
+
+    logger.info(f"Processing staging_id {min_id} to {max_id}")
+
+    # 3. Process in batches
+    current_min = min_id
+    total_batches = (max_id - min_id) // chunk_size + 1
+    total_updated = 0
     unmatched_players = set()
-    
-    logger.info("Matching player names...")
-    with engine.connect() as conn:
-        result = conn.execute(text(unique_players_query))
-        all_names = [row[0] for row in result]
-        
-        for api_name in tqdm(all_names, desc="Phase 4a: Name matching", unit="player"):
-            normalized = normalize_player_name(api_name)
+
+    with tqdm(total=total_batches, desc="Phase 4: Linking Players", unit="batch",
+              bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} batches [{elapsed}<{remaining}]') as pbar:
+        while current_min <= max_id:
+            batch_max = current_min + chunk_size
             
-            if normalized in player_lookup:
-                player_matches[api_name] = player_lookup[normalized]
-            else:
-                unmatched_players.add(api_name)
+            # Fetch unlinked rows that have a game_id (from Phase 3)
+            fetch_query = """
+            SELECT staging_id, api_player_name, game_id
+            FROM raw_player_props_combined
+            WHERE staging_id >= :min_id 
+              AND staging_id < :max_id
+              AND game_id IS NOT NULL
+              AND player_id IS NULL
+            """
+            
+            updates = []
+            
+            with engine.connect() as conn:
+                result = conn.execute(text(fetch_query), {"min_id": current_min, "max_id": batch_max})
+                
+                for row in result:
+                    staging_id, api_name, game_id = row
+                    normalized = normalize_player_name(api_name)
+                    
+                    if normalized in player_lookup:
+                        p_id = player_lookup[normalized]
+                        
+                        # Look up team_id for this specific game
+                        t_id = player_team_map.get((p_id, game_id))
+                        
+                        updates.append({
+                            "staging_id": staging_id,
+                            "player_id": p_id,
+                            "team_id": t_id  # Might be None
+                        })
+                    else:
+                        unmatched_players.add(api_name)
+
+            # Bulk update by staging_id (fast, indexed)
+            if updates and not dry_run:
+                update_query = """
+                UPDATE raw_player_props_combined
+                SET player_id = :player_id,
+                    team_id = :team_id
+                WHERE staging_id = :staging_id
+                """
+                with engine.begin() as conn:
+                    conn.execute(text(update_query), updates)
+                    total_updated += len(updates)
+
+            pbar.update(1)
+            pbar.set_postfix({'updated': f'{total_updated:,}', 'unmatched': len(unmatched_players)})
+            current_min = batch_max
+
+    logger.info(f"\nPHASE 4 COMPLETE: {total_updated:,} rows updated, {len(unmatched_players)} unmatched players")
     
-    logger.info(f"Player matching: {len(player_matches):,} matched, {len(unmatched_players):,} unmatched")
-    
-    # Apply updates in batches
-    if player_matches and not dry_run:
-        # First, update player_id based on api_player_name
-        update_query = """
-        UPDATE raw_player_props_combined
-        SET player_id = :player_id
-        WHERE api_player_name = :api_name
-          AND game_id IS NOT NULL
-          AND player_id IS NULL
-        """
-        
-        total_updated = 0
-        with engine.begin() as conn:
-            for api_name, player_id in tqdm(player_matches.items(), 
-                                             desc="Phase 4b: Updating player_id", 
-                                             unit="player"):
-                result = conn.execute(text(update_query), {
-                    "api_name": api_name,
-                    "player_id": player_id
-                })
-                total_updated += result.rowcount
-        
-        logger.info(f"Updated player_id for {total_updated:,} rows")
-        
-        # Now update team_id based on player_game_stats
-        logger.info("Updating team_id from player_game_stats...")
-        team_update_query = """
-        UPDATE raw_player_props_combined rp
-        SET team_id = pgs.team_id
-        FROM player_game_stats pgs
-        WHERE rp.player_id = pgs.player_id
-          AND rp.game_id = pgs.game_id
-          AND rp.team_id IS NULL
-          AND rp.player_id IS NOT NULL
-        """
-        
-        with engine.begin() as conn:
-            result = conn.execute(text(team_update_query))
-            logger.info(f"Updated team_id for {result.rowcount:,} rows")
-    
-    # Report unmatched
+    # Export unmatched
     if unmatched_players:
         unmatched_file = "unmatched_players.csv"
         with open(unmatched_file, 'w', newline='') as f:
@@ -734,7 +715,6 @@ def link_players(engine, player_lookup: dict, chunk_size: int, dry_run: bool = F
             writer.writerow(['api_player_name', 'normalized_name'])
             for name in sorted(unmatched_players):
                 writer.writerow([name, normalize_player_name(name)])
-        logger.info(f"Unmatched players written to {unmatched_file}")
         logger.info(f"Unmatched players written to {unmatched_file}")
 
 # ============================================================================
@@ -746,41 +726,8 @@ def print_statistics(engine):
     logger.info("\n" + "=" * 60)
     logger.info("CURRENT STATISTICS")
     logger.info("=" * 60)
-    
-    # Game lines stats
-    game_lines_query = """
-    SELECT 
-        COUNT(*) as total,
-        COUNT(nba_game_id) as linked,
-        COUNT(*) - COUNT(nba_game_id) as unlinked
-    FROM raw_game_lines_staging
-    """
-    
-    with engine.connect() as conn:
-        result = conn.execute(text(game_lines_query)).fetchone()
-        logger.info(f"\nraw_game_lines_staging:")
-        logger.info(f"  Total rows:    {result[0]:>12,}")
-        logger.info(f"  Linked:        {result[1]:>12,} ({100*result[1]/result[0]:.1f}%)")
-        logger.info(f"  Unlinked:      {result[2]:>12,}")
-    
-    # Player props stats
-    props_query = """
-    SELECT 
-        COUNT(*) as total,
-        COUNT(game_id) as games_linked,
-        COUNT(player_id) as players_linked,
-        COUNT(team_id) as teams_linked
-    FROM raw_player_props_combined
-    """
-    
-    with engine.connect() as conn:
-        result = conn.execute(text(props_query)).fetchone()
-        total = result[0]
-        logger.info(f"\nraw_player_props_combined:")
-        logger.info(f"  Total rows:    {total:>12,}")
-        logger.info(f"  game_id:       {result[1]:>12,} ({100*result[1]/total:.1f}%)")
-        logger.info(f"  player_id:     {result[2]:>12,} ({100*result[2]/total:.1f}%)")
-        logger.info(f"  team_id:       {result[3]:>12,} ({100*result[3]/total:.1f}%)")
+    logger.info("(Run separate COUNT queries in Supabase dashboard for exact numbers)")
+    logger.info("Linking complete - check unmatched_*.csv files for any issues")
 
 # ============================================================================
 # MAIN
