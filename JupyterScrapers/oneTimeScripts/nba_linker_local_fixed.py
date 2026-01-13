@@ -558,38 +558,64 @@ def process_local():
     print("MATCHING TEAM_ID FROM PLAYER_GAME_STATS")
     print("="*60)
     
-    # Build (player_id, game_id) -> team_id lookup
-    pgs_lookup = {}
-    for _, row in player_game_stats.iterrows():
-        pgs_lookup[(row['player_id'], row['game_id'])] = row['team_id']
-    
-    # Load the player updates we just created
-    if (DATA_DIR / "props_player_updates.csv").exists():
-        player_updates = pd.read_csv(DATA_DIR / "props_player_updates.csv")
+    # 1. Check if the file exists immediately
+    updates_file = DATA_DIR / "props_player_updates.csv"
+    if not updates_file.exists():
+        print("Skipping Team ID match: props_player_updates.csv not found.")
+        print("Make sure the previous step (MATCHING PLAYERS) ran successfully.")
+    else:
+        # 2. Load the data
+        player_updates = pd.read_csv(updates_file)
         
-        # Merge with game_id
+        # 3. HELPER: Clean Game IDs
+        def clean_id(val):
+            if pd.isna(val) or str(val).strip() == "":
+                return None
+            try:
+                return str(int(float(val)))
+            except:
+                return str(val)
+
+        # 4. Build Lookup (player_id, clean_game_id) -> team_id
+        # Clean stats IDs first
+        player_game_stats['clean_game_id'] = player_game_stats['game_id'].apply(clean_id)
+        
+        pgs_lookup = {}
+        for _, row in player_game_stats.iterrows():
+            if pd.notna(row['player_id']) and row['clean_game_id']:
+                pgs_lookup[(int(row['player_id']), row['clean_game_id'])] = row['team_id']
+
+        # 5. Merge Game IDs if available
         if (DATA_DIR / "props_game_updates.csv").exists():
             game_updates = pd.read_csv(DATA_DIR / "props_game_updates.csv")
             player_updates = player_updates.merge(game_updates, on='staging_id', how='left')
         
-        # Also check original data
+        # 6. Fill missing Game IDs from original data
         orig_games = dict(zip(player_props['staging_id'], player_props['game_id']))
         player_updates['game_id'] = player_updates.apply(
             lambda r: r['game_id'] if pd.notna(r.get('game_id')) else orig_games.get(r['staging_id']),
             axis=1
         )
         
+        # 7. Clean IDs in the updates
+        player_updates['clean_game_id'] = player_updates['game_id'].apply(clean_id)
+        
+        # 8. Perform Match
         def get_team_id(row):
-            if pd.notna(row['player_id']) and pd.notna(row['game_id']):
-                return pgs_lookup.get((int(row['player_id']), row['game_id']))
+            if pd.notna(row['player_id']) and row['clean_game_id']:
+                return pgs_lookup.get((int(row['player_id']), row['clean_game_id']))
             return None
         
         tqdm.pandas(desc="Matching team_id")
         player_updates['team_id'] = player_updates.progress_apply(get_team_id, axis=1)
         
-        team_updates = player_updates[player_updates['team_id'].notna()][['staging_id', 'player_id', 'team_id']]
-        team_updates['team_id'] = team_updates['team_id'].astype(int)
-        print(f"Matched team_id: {len(team_updates):,}")
+        # 9. Filter Results (Keep row if EITHER Player ID or Team ID is found)
+        team_updates = player_updates[
+            (player_updates['player_id'].notna()) | (player_updates['team_id'].notna())
+        ][['staging_id', 'player_id', 'team_id']]
+        
+        print(f"Matched player_id: {len(team_updates[team_updates['player_id'].notna()]):,}")
+        print(f"Matched team_id:   {len(team_updates[team_updates['team_id'].notna()]):,}")
         
         team_updates.to_csv(DATA_DIR / "props_full_updates.csv", index=False)
         print(f"Saved to {DATA_DIR}/props_full_updates.csv")
