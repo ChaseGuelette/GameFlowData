@@ -624,8 +624,8 @@ def main():
         '--season-type',
         type=str,
         default='Regular Season',
-        choices=['Regular Season', 'Playoffs', 'PlayIn'],
-        help='Season type to scrape: Regular Season, Playoffs, or PlayIn (default: Regular Season)'
+        choices=['Regular Season', 'Playoffs', 'PlayIn', 'In-Season Tournament'],
+        help='Season type to scrape: Regular Season, Playoffs, PlayIn, In-Season Tournament (default: Regular Season)'
     )
     parser.add_argument(
         '--skip-team',
