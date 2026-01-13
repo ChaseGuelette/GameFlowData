@@ -39,6 +39,7 @@ from sqlalchemy import create_engine, text, inspect
 from nba_api.stats.endpoints import (
     leaguegamefinder,
     boxscoreadvancedv3,
+    boxscoretraditionalv3,
 )
 
 # =============================================================================
@@ -607,6 +608,152 @@ def scrape_advanced_stats(engine, limit: Optional[int] = None) -> Tuple[int, int
     
     return games_processed, games_failed
 
+# =============================================================================
+# Traditional Stats Scraper (Player Game Stats)
+# =============================================================================
+
+def transform_player_traditional_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Transform player traditional stats DataFrame for database."""
+    if df.empty:
+        return df
+        
+    # 1. Convert camelCase to snake_case (e.g. firstName -> first_name)
+    df = df.rename(columns={col: camel_to_snake(col) for col in df.columns})
+    
+    # 2. Rename person_id to player_id to match schema
+    if 'person_id' in df.columns:
+        df = df.rename(columns={'person_id': 'player_id'})
+        
+    # 3. Parse minutes
+    # Schema has 'min' as bigint, so we must round to nearest int.
+    # API gives "MM:SS", parse_minutes gives float. We round that float.
+    if 'minutes' in df.columns:
+        # Parse to float first (e.g. 34.5)
+        df['minutes'] = df['minutes'].apply(parse_minutes)
+        # Rename to 'min' immediately to match schema
+        df = df.rename(columns={'minutes': 'min'})
+        # Round and convert to integer (Handle NaNs just in case)
+        df['min'] = df['min'].fillna(0).round().astype(int)
+    
+    # 4. Add DNP flag (derived from comment or minutes)
+    df['did_not_play'] = df.apply(determine_dnp, axis=1)
+
+    return df
+
+def scrape_traditional_stats(engine, limit: Optional[int] = None) -> Tuple[int, int]:
+    """
+    Scrape traditional box scores for games missing them in 'player_game_stats'.
+    Uses BoxScoreTraditionalV3.
+    """
+    print("\n" + "="*60)
+    print("STEP 1.5: Fetching Traditional Player Stats (V3)")
+    print("="*60)
+
+    # 1. Find games that exist in team_stats but NOT in player_game_stats.
+    # We also fetch the context (date, matchup, wl, season) to merge later.
+    sql_missing = """
+    SELECT 
+        t.game_id, 
+        t.team_id, 
+        t.season_id, 
+        t.team_game_date as game_date, 
+        t.team_matchup as matchup, 
+        t.team_wl as wl
+    FROM team_game_stats t
+    LEFT JOIN player_game_stats p ON t.game_id = p.game_id AND t.team_id = p.team_id
+    WHERE p.game_id IS NULL
+    """
+    
+    # Fetch metadata for missing games
+    print("Finding missing games and fetching context info...")
+    metadata_df = pd.read_sql(sql_missing, engine)
+    
+    if metadata_df.empty:
+        print("\n✅ All games have traditional player stats!")
+        return 0, 0
+
+    # Get unique game IDs to iterate over
+    unique_game_ids = metadata_df['game_id'].unique()
+    
+    if limit:
+        unique_game_ids = unique_game_ids[:limit]
+        
+    total = len(unique_game_ids)
+    print(f"\nFound {total} games missing traditional player stats")
+    
+    games_processed = 0
+    games_failed = 0
+    
+    # DB Columns based on your schema
+    db_cols = [
+        'season_id', 'player_id', 'game_id', 'game_date', 'matchup', 'wl',
+        'min', 'fgm', 'fga', 'fg_pct', 'fg3m', 'fg3a', 'fg3_pct',
+        'ftm', 'fta', 'ft_pct', 'oreb', 'dreb', 'reb', 'ast', 'stl', 'blk',
+        'tov', 'pf', 'pts', 'plus_minus', 'video_available', 'team_id',
+        'comment', 'did_not_play'
+    ]
+    
+    for i, game_id in enumerate(unique_game_ids, 1):
+        try:
+            print(f"[{i}/{total}] Scraping Traditional {game_id}...", end="", flush=True)
+            
+            # Call API (V3)
+            box = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id)
+            player_df = box.player_stats.get_data_frame()
+            
+            if player_df.empty:
+                print(" ⚠️ Empty data")
+                continue
+                
+            # Transform (Renames cols, parses minutes, adds DNP)
+            player_df = transform_player_traditional_df(player_df)
+            
+            # --- Column Mappings for Schema ---
+            # 'turnovers' -> 'tov'
+            if 'turnovers' in player_df.columns:
+                player_df.rename(columns={'turnovers': 'tov'}, inplace=True)
+            elif 'turnover' in player_df.columns:
+                player_df.rename(columns={'turnover': 'tov'}, inplace=True)
+
+            # Ensure 'min' exists (handled in transform, but double check)
+            if 'minutes' in player_df.columns and 'min' not in player_df.columns:
+                 player_df.rename(columns={'minutes': 'min'}, inplace=True)
+
+            # --- Merge Metadata (game_date, wl, matchup, etc) ---
+            # We filter metadata_df for just this game to avoid large merges
+            game_meta = metadata_df[metadata_df['game_id'] == game_id]
+            
+            # Merge on team_id so players get their specific team's WL/Matchup
+            # (Inner join ensures we only keep players matching our known teams)
+            merged_df = pd.merge(player_df, game_meta, on=['game_id', 'team_id'], how='inner')
+            
+            if merged_df.empty:
+                print(" ⚠️ No matching team IDs found in metadata")
+                continue
+
+            # Ensure players exist in 'players' table
+            ensure_players_exist(engine, merged_df)
+            
+            # Select only valid columns
+            valid_cols = [c for c in db_cols if c in merged_df.columns]
+            final_df = merged_df[valid_cols]
+
+            # Save
+            final_df.to_sql('player_game_stats', engine, if_exists='append', index=False)
+            
+            print(" ✓ Saved")
+            games_processed += 1
+            
+            rate_limit_delay(i)
+            
+        except Exception as e:
+            print(f" ❌ Error: {e}")
+            games_failed += 1
+            # Don't sleep too long on error
+            time.sleep(1)
+            
+    return games_processed, games_failed
+
 
 # =============================================================================
 # Main Entry Point
@@ -625,12 +772,18 @@ def main():
         type=str,
         default='Regular Season',
         choices=['Regular Season', 'Playoffs', 'PlayIn', 'In-Season Tournament'],
-        help='Season type to scrape: Regular Season, Playoffs, PlayIn, In-Season Tournament (default: Regular Season)'
+        help='Season type to scrape (default: Regular Season)'
     )
     parser.add_argument(
         '--skip-team',
         action='store_true',
         help='Skip team game stats scraping'
+    )
+    # NEW ARGUMENT
+    parser.add_argument(
+        '--skip-traditional',
+        action='store_true',
+        help='Skip traditional player stats scraping'
     )
     parser.add_argument(
         '--skip-advanced',
@@ -641,7 +794,7 @@ def main():
         '--advanced-limit',
         type=int,
         default=None,
-        help='Limit number of games to scrape for advanced stats (useful for testing)'
+        help='Limit number of games to scrape for stats (useful for testing)'
     )
     
     args = parser.parse_args()
@@ -652,6 +805,7 @@ def main():
     print(f"Season: {args.season}")
     print(f"Season Type: {args.season_type}")
     print(f"Skip Team Stats: {args.skip_team}")
+    print(f"Skip Traditional Stats: {args.skip_traditional}")  # Diag
     print(f"Skip Advanced Stats: {args.skip_advanced}")
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
@@ -672,8 +826,17 @@ def main():
         new_games = scrape_team_game_stats(engine, seasons, args.season_type)
     else:
         print("\n⏭️  Skipping team game stats (--skip-team)")
+
+    # Step 2: Traditional Player Stats (NEW STEP)
+    trad_processed = 0
+    trad_failed = 0
+    if not args.skip_traditional:
+        # Re-using --advanced-limit for testing limits here too, or pass None
+        trad_processed, trad_failed = scrape_traditional_stats(engine, args.advanced_limit)
+    else:
+        print("\n⏭️  Skipping traditional player stats (--skip-traditional)")
     
-    # Step 2: Advanced Stats
+    # Step 3: Advanced Stats
     adv_processed = 0
     adv_failed = 0
     if not args.skip_advanced:
@@ -685,9 +848,9 @@ def main():
     print("\n" + "="*60)
     print("SUMMARY")
     print("="*60)
-    print(f"New team game records added: {new_games}")
-    print(f"Games with advanced stats updated: {adv_processed}")
-    print(f"Games failed: {adv_failed}")
+    print(f"New team game records added:      {new_games}")
+    print(f"Traditional stats updated:        {trad_processed} (Failed: {trad_failed})") # Diag
+    print(f"Advanced stats updated:           {adv_processed} (Failed: {adv_failed})")
     print(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
 
