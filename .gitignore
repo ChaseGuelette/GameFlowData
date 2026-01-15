@@ -1,15 +1,35 @@
+# --- Python Essentials ---
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# --- Environment & Config ---
 .env
-databaseSchema.txt
-
-/Passwords
-
-/Learning
-
-/KeyContextTextFiles
-
-/.ipynb_checkpoints
-
-# Ignore large data CSVs
-JupyterScrapers/oneTimeScripts/linker_data/*.csv
-
+.venv/
+venv/
+env/
 .mcp.json
+
+# --- Data (CRITICAL: Ignore all heavy data) ---
+# Ignore the entire data directory
+data/
+
+# Also ignore any rogue CSVs or DBs in the source code
+*.csv
+*.db
+*.sqlite
+*.sqlite3
+
+# If you have specific large JSON dumps, ignore them too
+*.json
+!package.json  # (Exception: if you use JS, don't ignore package.json)
+!.mcp.json     # (Exception: if you want to track your tool config)
+
+# --- IDE Settings ---
+.vscode/
+.idea/
+
+# --- Logs & OS Junk ---
+*.log
+.DS_Store
+Thumbs.db
