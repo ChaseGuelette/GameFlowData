@@ -567,14 +567,22 @@ def process_local():
         # 2. Load the data
         player_updates = pd.read_csv(updates_file)
         
-        # 3. HELPER: Clean Game IDs
+        # 3. HELPER: Clean Game IDs (PRESERVE LEADING ZEROS!)
         def clean_id(val):
             if pd.isna(val) or str(val).strip() == "":
                 return None
-            try:
-                return str(int(float(val)))
-            except:
-                return str(val)
+            # Keep as string to preserve leading zeros - NBA game IDs are 10-char strings
+            s = str(val).strip()
+            # If it looks like a float string (has decimal), convert carefully
+            if '.' in s:
+                try:
+                    s = str(int(float(s)))
+                except:
+                    pass
+            # Pad to 10 characters with leading zeros if needed
+            if s.isdigit() and len(s) < 10:
+                s = s.zfill(10)
+            return s
 
         # 4. Build Lookup (player_id, clean_game_id) -> team_id
         # Clean stats IDs first

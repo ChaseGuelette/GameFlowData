@@ -652,12 +652,12 @@ def scrape_traditional_stats(engine, limit: Optional[int] = None) -> Tuple[int, 
     # 1. Find games that exist in team_stats but NOT in player_game_stats.
     # We also fetch the context (date, matchup, wl, season) to merge later.
     sql_missing = """
-    SELECT 
-        t.game_id, 
-        t.team_id, 
-        t.season_id, 
-        t.team_game_date as game_date, 
-        t.team_matchup as matchup, 
+    SELECT
+        t.game_id,
+        t.team_id,
+        t.season_id,
+        t.game_date,
+        t.team_matchup as matchup,
         t.team_wl as wl
     FROM team_game_stats t
     LEFT JOIN player_game_stats p ON t.game_id = p.game_id AND t.team_id = p.team_id
@@ -694,63 +694,86 @@ def scrape_traditional_stats(engine, limit: Optional[int] = None) -> Tuple[int, 
     ]
     
     for i, game_id in enumerate(unique_game_ids, 1):
-        try:
-            print(f"[{i}/{total}] Scraping Traditional {game_id}...", end="", flush=True)
-            
-            # Call API (V3)
-            box = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id)
-            player_df = box.player_stats.get_data_frame()
-            
-            if player_df.empty:
-                print(" ⚠️ Empty data")
-                continue
-                
-            # Transform (Renames cols, parses minutes, adds DNP)
-            player_df = transform_player_traditional_df(player_df)
-            
-            # --- Column Mappings for Schema ---
-            # 'turnovers' -> 'tov'
-            if 'turnovers' in player_df.columns:
-                player_df.rename(columns={'turnovers': 'tov'}, inplace=True)
-            elif 'turnover' in player_df.columns:
-                player_df.rename(columns={'turnover': 'tov'}, inplace=True)
+        success = False
+        attempt = 0
 
-            # Ensure 'min' exists (handled in transform, but double check)
-            if 'minutes' in player_df.columns and 'min' not in player_df.columns:
-                 player_df.rename(columns={'minutes': 'min'}, inplace=True)
+        while attempt < MAX_RETRIES and not success:
+            attempt += 1
+            try:
+                print(f"[{i}/{total}] Scraping Traditional {game_id} (Try {attempt})... ", end="", flush=True)
 
-            # --- Merge Metadata (game_date, wl, matchup, etc) ---
-            # We filter metadata_df for just this game to avoid large merges
-            game_meta = metadata_df[metadata_df['game_id'] == game_id]
-            
-            # Merge on team_id so players get their specific team's WL/Matchup
-            # (Inner join ensures we only keep players matching our known teams)
-            merged_df = pd.merge(player_df, game_meta, on=['game_id', 'team_id'], how='inner')
-            
-            if merged_df.empty:
-                print(" ⚠️ No matching team IDs found in metadata")
-                continue
+                # Call API (V3)
+                box = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id)
+                player_df = box.player_stats.get_data_frame()
 
-            # Ensure players exist in 'players' table
-            ensure_players_exist(engine, merged_df)
-            
-            # Select only valid columns
-            valid_cols = [c for c in db_cols if c in merged_df.columns]
-            final_df = merged_df[valid_cols]
+                if player_df.empty:
+                    print("⚠️ Empty data (Skipping)")
+                    success = True  # Don't retry empty games - they likely don't exist yet
+                    break
 
-            # Save
-            final_df.to_sql('player_game_stats', engine, if_exists='append', index=False)
-            
-            print(" ✓ Saved")
-            games_processed += 1
-            
-            rate_limit_delay(i)
-            
-        except Exception as e:
-            print(f" ❌ Error: {e}")
+                # Transform (Renames cols, parses minutes, adds DNP)
+                player_df = transform_player_traditional_df(player_df)
+
+                # --- Column Mappings for Schema ---
+                # 'turnovers' -> 'tov'
+                if 'turnovers' in player_df.columns:
+                    player_df.rename(columns={'turnovers': 'tov'}, inplace=True)
+                elif 'turnover' in player_df.columns:
+                    player_df.rename(columns={'turnover': 'tov'}, inplace=True)
+
+                # Ensure 'min' exists (handled in transform, but double check)
+                if 'minutes' in player_df.columns and 'min' not in player_df.columns:
+                     player_df.rename(columns={'minutes': 'min'}, inplace=True)
+
+                # --- Merge Metadata (game_date, wl, matchup, etc) ---
+                # We filter metadata_df for just this game to avoid large merges
+                game_meta = metadata_df[metadata_df['game_id'] == game_id]
+
+                # Merge on team_id so players get their specific team's WL/Matchup
+                # (Inner join ensures we only keep players matching our known teams)
+                merged_df = pd.merge(player_df, game_meta, on=['game_id', 'team_id'], how='inner')
+
+                if merged_df.empty:
+                    print("⚠️ No matching team IDs found in metadata (Skipping)")
+                    success = True  # Don't retry - this is a data issue, not transient
+                    break
+
+                # Ensure players exist in 'players' table
+                ensure_players_exist(engine, merged_df)
+
+                # Select only valid columns
+                valid_cols = [c for c in db_cols if c in merged_df.columns]
+                final_df = merged_df[valid_cols]
+
+                # Save
+                final_df.to_sql('player_game_stats', engine, if_exists='append', index=False)
+
+                print("✓ Saved")
+                success = True
+                games_processed += 1
+
+                # Rate limiting
+                rate_limit_delay(i)
+
+            except (ReadTimeout, ConnectionError, ConnectionResetError, ChunkedEncodingError) as e:
+                print(f"\n🛑 CONNECTION BLOCKED: {e}")
+                print(f"💤 Sleeping for {BAN_COOLDOWN/60} minutes to reset...")
+                time.sleep(BAN_COOLDOWN)
+
+            except Exception as e:
+                error_str = str(e)
+                print(f"\n❌ Error: {e}")
+
+                if "duplicate key" in error_str or "UniqueViolation" in error_str:
+                    print("   (Game already exists, moving on)")
+                    success = True
+                    games_processed += 1
+                else:
+                    time.sleep(5)  # Brief pause before retry
+
+        if not success:
+            print(f"💀 Giving up on {game_id} after {MAX_RETRIES} attempts.")
             games_failed += 1
-            # Don't sleep too long on error
-            time.sleep(1)
             
     return games_processed, games_failed
 

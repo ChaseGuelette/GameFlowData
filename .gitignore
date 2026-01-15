@@ -11,3 +11,5 @@ databaseSchema.txt
 
 # Ignore large data CSVs
 JupyterScrapers/oneTimeScripts/linker_data/*.csv
+
+.mcp.json
