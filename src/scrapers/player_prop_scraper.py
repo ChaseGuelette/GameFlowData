@@ -68,7 +68,7 @@ class ScraperBot:
                     return response.json().get("data", [])
                 elif response.status_code == 429:
                     time.sleep(1)
-            except:
+            except Exception:
                 time.sleep(1)
         return []
 
