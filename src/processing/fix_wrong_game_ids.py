@@ -8,20 +8,14 @@ fuzzy date (±3 days) to find the correct game_id.
 Run: python fix_wrong_game_ids.py
 """
 
-import os
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from tqdm import tqdm
+from src.db.client import get_engine
 
 BATCH_SIZE = 1000
 
 def main():
-    load_dotenv()
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise ValueError("DATABASE_URL not found in .env")
-
-    engine = create_engine(database_url)
+    engine = get_engine()
 
     print("Finding props with wrong game_ids...")
 

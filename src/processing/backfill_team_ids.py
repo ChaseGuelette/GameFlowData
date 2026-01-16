@@ -7,20 +7,14 @@ the home/away team in team_game_stats for that game.
 Run: python backfill_team_ids.py
 """
 
-import os
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from tqdm import tqdm
+from src.db.client import get_engine
 
 BATCH_SIZE = 5000
 
 def main():
-    load_dotenv()
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise ValueError("DATABASE_URL not found in .env")
-
-    engine = create_engine(database_url)
+    engine = get_engine()
 
     print("Counting rows to backfill...")
     with engine.connect() as conn:

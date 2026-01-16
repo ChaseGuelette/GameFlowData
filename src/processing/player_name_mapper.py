@@ -10,26 +10,14 @@ Usage:
     python player_name_mapper.py apply      # Apply mappings to raw_player_props_combined
 """
 
-import os
 import sys
 import csv
 import argparse
 from difflib import SequenceMatcher
 from collections import defaultdict
 
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
-
-# ============================================================================
-# DATABASE
-# ============================================================================
-
-def get_engine():
-    load_dotenv()
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise ValueError("DATABASE_URL not found")
-    return create_engine(database_url)
+from sqlalchemy import text
+from src.db.client import get_engine
 
 # ============================================================================
 # FUZZY MATCHING

@@ -1,19 +1,10 @@
 import os
 import pandas as pd
-from dotenv import load_dotenv
-from sqlalchemy import create_engine
 from tqdm import tqdm
+from src.db.client import get_engine
 
-# Load credentials from .env file
-load_dotenv()
-
-# --- Configuration ---
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL not found! Check your .env file.")
-
-# Create Database Connection Pool (SQLAlchemy Engine)
-engine = create_engine(DATABASE_URL)
+# Get database engine from centralized client
+engine = get_engine()
 
 def download_csvs():
     # Create an exports directory if it doesn't exist

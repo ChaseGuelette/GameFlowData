@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
 from datetime import date

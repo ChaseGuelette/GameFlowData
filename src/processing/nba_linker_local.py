@@ -20,7 +20,6 @@ Requirements:
     pip install pandas sqlalchemy psycopg2-binary python-dotenv tqdm
 """
 
-import os
 import sys
 import argparse
 from datetime import datetime, timedelta
@@ -29,10 +28,10 @@ from difflib import SequenceMatcher
 from collections import defaultdict
 
 import pandas as pd
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from tqdm import tqdm
 import pytz
+from src.db.client import get_engine
 
 # ============================================================================
 # CONFIG
@@ -51,7 +50,7 @@ TEAM_NAME_ALIASES = {
     "LA Lakers": "Los Angeles Lakers",
     "L.A. Lakers": "Los Angeles Lakers",
     "LAL": "Los Angeles Lakers",
-    
+
     # Historical franchises
     "New Jersey Nets": "Brooklyn Nets",
     "Charlotte Bobcats": "Charlotte Hornets",
@@ -60,17 +59,6 @@ TEAM_NAME_ALIASES = {
     "Seattle SuperSonics": "Oklahoma City Thunder",
     "Vancouver Grizzlies": "Memphis Grizzlies",
 }
-
-# ============================================================================
-# DATABASE
-# ============================================================================
-
-def get_engine():
-    load_dotenv()
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise ValueError("DATABASE_URL not found")
-    return create_engine(database_url)
 
 # ============================================================================
 # STEP 1: DOWNLOAD

@@ -22,7 +22,6 @@ Examples:
 """
 
 import argparse
-import os
 import random
 import re
 import sys
@@ -31,9 +30,9 @@ from datetime import datetime
 from typing import Optional, Set, Tuple, List
 
 import pandas as pd
-from dotenv import load_dotenv
 from requests.exceptions import ReadTimeout, ConnectionError, ChunkedEncodingError
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import text, inspect
+from src.db.client import get_engine
 
 # NBA API imports
 from nba_api.stats.endpoints import (
@@ -155,27 +154,6 @@ def extract_opponent_id(matchup: str, team_id: int, team_abbrevs: dict) -> Optio
     opp_abbrev = parts[1].strip()
     
     return team_abbrevs.get(opp_abbrev)
-
-
-# =============================================================================
-# Database Connection
-# =============================================================================
-
-def get_engine():
-    """Create and return database engine."""
-    load_dotenv()
-    DATABASE_URL = os.getenv("DATABASE_URL")
-    
-    if not DATABASE_URL:
-        raise ValueError("DATABASE_URL not found in environment. Check your .env file.")
-    
-    engine = create_engine(DATABASE_URL)
-    
-    # Test connection
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-    
-    return engine
 
 
 # =============================================================================

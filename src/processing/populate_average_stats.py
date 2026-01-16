@@ -11,7 +11,6 @@ Usage:
   python populate_average_stats.py --table player    # Just player basic stats
 """
 
-import os
 import argparse
 import logging
 from datetime import datetime
@@ -19,16 +18,12 @@ from typing import Optional
 
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
+from sqlalchemy import text
+from src.db.client import get_engine
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL")  # postgresql://user:pass@host:port/db
 
 WINDOWS = {
     'l5': 5,
@@ -45,17 +40,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# DATABASE CONNECTION
-# ============================================================================
-
-def get_engine():
-    """Create SQLAlchemy engine."""
-    if not DATABASE_URL:
-        raise ValueError("DATABASE_URL environment variable not set")
-    return create_engine(DATABASE_URL)
 
 
 # ============================================================================
@@ -462,7 +446,7 @@ def fetch_team_game_stats(engine, season_id: Optional[str] = None) -> pd.DataFra
             team_id,
             game_id,
             season_id,
-            team_game_date::date as game_date,
+            game_date::date as game_date,
             team_pts, team_fgm, team_fga, team_fg_pct,
             team_fg3m, team_fg3a, team_fg3_pct,
             team_ftm, team_fta, team_ft_pct,
@@ -480,7 +464,7 @@ def fetch_team_game_stats(engine, season_id: Optional[str] = None) -> pd.DataFra
     if season_id:
         query += f" WHERE season_id = '{season_id}'"
     
-    query += " ORDER BY team_id, season_id, team_game_date"
+    query += " ORDER BY team_id, season_id, game_date"
     
     logger.info("Fetching team game stats...")
     df = pd.read_sql(query, engine)

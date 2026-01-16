@@ -1,10 +1,9 @@
+import warnings
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from tqdm import tqdm
-import warnings
-from dotenv import load_dotenv
-import os
+from src.db.client import get_engine
 
 warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
 
@@ -38,7 +37,7 @@ def backfill_team_allowed_by_position(engine, seasons: list[str]):
 def fetch_raw_allowed_stats(engine, seasons):
     query = text("""
         SELECT 
-            tgs.team_id, tgs.game_id, tgs.team_game_date::DATE as game_date, tgs.season_id,
+            tgs.team_id, tgs.game_id, tgs.game_date::DATE as game_date, tgs.season_id,
             COALESCE(ph.position_group, 'U') as position_group,
             
             -- Core Stats
@@ -65,11 +64,11 @@ def fetch_raw_allowed_stats(engine, seasons):
             ON pgs.game_id = adv.game_id AND pgs.player_id = adv.player_id
         LEFT JOIN LATERAL (
             SELECT position_group FROM player_position_history ph
-            WHERE ph.player_id = pgs.player_id AND ph.snapshot_date < tgs.team_game_date::DATE
+            WHERE ph.player_id = pgs.player_id AND ph.snapshot_date < tgs.game_date::DATE
             ORDER BY ph.snapshot_date DESC LIMIT 1
         ) ph ON TRUE
         WHERE tgs.season_id IN :seasons
-        GROUP BY tgs.team_id, tgs.game_id, tgs.team_game_date, tgs.season_id, ph.position_group
+        GROUP BY tgs.team_id, tgs.game_id, tgs.game_date, tgs.season_id, ph.position_group
     """)
     with engine.connect() as conn:
         return pd.read_sql(query, conn, params={'seasons': tuple(seasons)})
@@ -165,7 +164,6 @@ def batch_insert_to_db(engine, df, batch_size=2000):
             if batch: conn.execute(upsert, batch)
 
 if __name__ == "__main__":
-    load_dotenv()
-    engine = create_engine(os.getenv("DATABASE_URL"))
+    engine = get_engine()
     # Remember to TRUNCATE table if re-running!
     backfill_team_allowed_by_position(engine, seasons=['2018-19', '2019-20', '2020-21', '2021-22', '2022-23', '2023-24', '2024-25', '2025-26'])

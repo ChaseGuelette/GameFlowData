@@ -6,20 +6,14 @@ Run: python fix_game_ids.py
 This script updates game_ids that are missing leading zeros (8 chars → 10 chars).
 """
 
-import os
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from tqdm import tqdm
+from src.db.client import get_engine
 
 BATCH_SIZE = 5000  # Rows per batch
 
 def main():
-    load_dotenv()
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise ValueError("DATABASE_URL not found in .env")
-
-    engine = create_engine(database_url)
+    engine = get_engine()
 
     print("Counting rows to fix...")
     with engine.connect() as conn:

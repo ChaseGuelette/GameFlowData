@@ -1,9 +1,8 @@
-import pandas as pd
-from sqlalchemy import create_engine, text
-from tqdm import tqdm
-from dotenv import load_dotenv
-import os
 import datetime
+import pandas as pd
+from sqlalchemy import text
+from tqdm import tqdm
+from src.db.client import get_engine
 
 def get_season_start_date(snapshot_date_str):
     """
@@ -91,12 +90,12 @@ def calculate_and_insert_snapshot(engine, season_start_date, snapshot_date):
         JOIN LATERAL (
             SELECT position_group FROM player_position_history ph
             WHERE ph.player_id = pgs.player_id 
-              AND ph.snapshot_date < tgs.team_game_date::DATE
+              AND ph.snapshot_date < tgs.game_date::DATE
             ORDER BY ph.snapshot_date DESC LIMIT 1
         ) ph ON TRUE
 
-        WHERE tgs.team_game_date::DATE >= CAST(:season_start AS DATE)
-          AND tgs.team_game_date::DATE < CAST(:snap_date AS DATE)
+        WHERE tgs.game_date::DATE >= CAST(:season_start AS DATE)
+          AND tgs.game_date::DATE < CAST(:snap_date AS DATE)
           AND pgs.min > 0 
           AND adv.possessions > 0
           
@@ -121,10 +120,5 @@ def calculate_and_insert_snapshot(engine, season_start_date, snapshot_date):
         conn.execute(query, {'season_start': season_start_date, 'snap_date': snapshot_date})
 
 if __name__ == "__main__":
-    load_dotenv()
-    DATABASE_URL = os.getenv("DATABASE_URL")
-    if not DATABASE_URL:
-        raise ValueError("DATABASE_URL not found")
-        
-    engine = create_engine(DATABASE_URL)
+    engine = get_engine()
     backfill_league_priors(engine)
