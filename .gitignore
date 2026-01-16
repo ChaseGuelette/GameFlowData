@@ -44,3 +44,6 @@ Thumbs.db
 htmlcov/
 coverage.xml
 *.cover
+
+# Claude thinking files 
+tmpclaude*
