@@ -13,19 +13,16 @@ Usage:
 
 import argparse
 import logging
+
 from sqlalchemy import text
+
 from src.db.client import get_engine
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Default seasons to process (add new seasons here)
-DEFAULT_SEASONS = [
-    '22018', '22019', '22020', '22021', '22022', '22023', '22024', '22025', '22026'
-]
+DEFAULT_SEASONS = ["22018", "22019", "22020", "22021", "22022", "22023", "22024", "22025", "22026"]
 
 
 def normalize_season_id(season: str) -> str:
@@ -40,12 +37,12 @@ def normalize_season_id(season: str) -> str:
     season = season.strip()
 
     # Already in correct format
-    if season.startswith('2') and len(season) == 5 and season[1:].isdigit():
+    if season.startswith("2") and len(season) == 5 and season[1:].isdigit():
         return season
 
     # Format: '2024-25'
-    if '-' in season:
-        start_year = season.split('-')[0]
+    if "-" in season:
+        start_year = season.split("-")[0]
         return f"2{start_year}"
 
     # Format: '2024' (just the year)
@@ -134,13 +131,17 @@ def update_league_averages(engine, seasons: list[str]):
     """)
 
     with engine.begin() as conn:
-        conn.execute(query, {'seasons': tuple(normalized_seasons)})
+        conn.execute(query, {"seasons": tuple(normalized_seasons)})
         logger.info(f"League averages updated for {len(normalized_seasons)} seasons")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Update league position averages')
-    parser.add_argument('--season', type=str, help='Specific season (e.g., 2024-25 or 22025). If omitted, updates all seasons.')
+    parser = argparse.ArgumentParser(description="Update league position averages")
+    parser.add_argument(
+        "--season",
+        type=str,
+        help="Specific season (e.g., 2024-25 or 22025). If omitted, updates all seasons.",
+    )
     args = parser.parse_args()
 
     engine = get_engine()
@@ -154,12 +155,14 @@ def main():
 
     # Show current state
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text("""
             SELECT season_id, COUNT(*) as position_groups, SUM(total_games) as total_games
             FROM league_position_averages
             GROUP BY season_id
             ORDER BY season_id
-        """))
+        """)
+        )
         logger.info("Current league_position_averages state:")
         for row in result:
             logger.info(f"  {row[0]}: {row[1]} position groups, {row[2]:,} total games")

@@ -54,6 +54,36 @@ GameFlowData/
 │   ├── league_priors_history.md
 │   ├── player_position_history.md
 │   └── team_allowed_by_position.md
+├── htmlcov
+│   ├── .gitignore
+│   ├── class_index.html
+│   ├── coverage_html_cb_188fc9a4.js
+│   ├── favicon_32_cb_c827f16f.png
+│   ├── function_index.html
+│   ├── index.html
+│   ├── keybd_closed_cb_900cfef5.png
+│   ├── status.json
+│   ├── style_cb_5c747636.css
+│   ├── z_034a03f060e0c6c2_client_py.html
+│   ├── z_21f67b8ad154ca39_espn_injury_scraper_py.html
+│   ├── z_21f67b8ad154ca39_game_lines_scraper_py.html
+│   ├── z_21f67b8ad154ca39_injury_database_py.html
+│   ├── z_21f67b8ad154ca39_injury_scraper_job_py.html
+│   ├── z_21f67b8ad154ca39_nba_player_position_py.html
+│   ├── z_21f67b8ad154ca39_nba_unified_scraper_py.html
+│   ├── z_21f67b8ad154ca39_player_prop_scraper_py.html
+│   ├── z_21f67b8ad154ca39_update_league_position_averages_py.html
+│   ├── z_21f67b8ad154ca39_update_player_position_history_py.html
+│   ├── z_32d203df8c57c9df_backfill_league_priors_py.html
+│   ├── z_32d203df8c57c9df_backfill_opponent_allowed_py.html
+│   ├── z_32d203df8c57c9df_backfill_team_ids_py.html
+│   ├── z_32d203df8c57c9df_nba_linker_local_py.html
+│   ├── z_32d203df8c57c9df_populate_average_stats_py.html
+│   ├── z_532385f02888fdd3_calibration_py.html
+│   ├── z_532385f02888fdd3_daily_runner_py.html
+│   ├── z_532385f02888fdd3_feature_store_py.html
+│   ├── z_532385f02888fdd3_monte_carlo_py.html
+│   └── z_532385f02888fdd3_quantile_trainer_py.html
 ├── notebooks
 │   ├── moneylinePredictionModel
 │   │   ├── .ipynb_checkpoints
@@ -124,6 +154,13 @@ GameFlowData/
 │   │   ├── update_league_position_averages.py
 │   │   └── update_player_position_history.py
 │   └── __init__.py
+├── tests
+│   ├── __init__.py
+│   ├── test_backfill_league_priors.py
+│   ├── test_backfill_opponent_allowed.py
+│   ├── test_backfill_team_ids.py
+│   └── test_espn_injury_scraper.py
+├── .coverage
 ├── .coveragerc
 ├── .env
 ├── .gitignore
@@ -133,14 +170,39 @@ GameFlowData/
 ├── CLAUDE.md
 ├── README.md
 ├── alembic.ini
+├── coverage.json
+├── coverage.xml
 ├── print_structure.py
 ├── pyproject.toml
 ├── pyrightconfig.json
 ├── pytest.ini
 ├── requirements-dev.txt
 ├── requirements.txt
-├── tmpclaude-1eec-cwd
-├── tmpclaude-32ef-cwd
-├── tmpclaude-44dc-cwd
-├── tmpclaude-5209-cwd
-└── tmpclaude-e61d-cwd
+├── tmpclaude-08e5-cwd
+├── tmpclaude-0fd6-cwd
+├── tmpclaude-1210-cwd
+├── tmpclaude-19a8-cwd
+├── tmpclaude-1a9f-cwd
+├── tmpclaude-1eba-cwd
+├── tmpclaude-2627-cwd
+├── tmpclaude-2af0-cwd
+├── tmpclaude-2d6e-cwd
+├── tmpclaude-2f27-cwd
+├── tmpclaude-368d-cwd
+├── tmpclaude-3a91-cwd
+├── tmpclaude-4113-cwd
+├── tmpclaude-45d1-cwd
+├── tmpclaude-4fea-cwd
+├── tmpclaude-60ee-cwd
+├── tmpclaude-6b91-cwd
+├── tmpclaude-6d16-cwd
+├── tmpclaude-7142-cwd
+├── tmpclaude-73a1-cwd
+├── tmpclaude-8740-cwd
+├── tmpclaude-88e4-cwd
+├── tmpclaude-917f-cwd
+├── tmpclaude-b1b5-cwd
+├── tmpclaude-ba40-cwd
+├── tmpclaude-c293-cwd
+├── tmpclaude-d710-cwd
+└── tmpclaude-e934-cwd

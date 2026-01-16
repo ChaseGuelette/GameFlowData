@@ -47,3 +47,5 @@ coverage.xml
 
 # Claude thinking files 
 tmpclaude*
+
+.session/temp_learnings.txt

@@ -8,18 +8,22 @@ This script updates game_ids that are missing leading zeros (8 chars → 10 char
 
 from sqlalchemy import text
 from tqdm import tqdm
+
 from src.db.client import get_engine
 
 BATCH_SIZE = 5000  # Rows per batch
+
 
 def main():
     engine = get_engine()
 
     print("Counting rows to fix...")
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text("""
             SELECT COUNT(*) FROM raw_player_props_combined WHERE LENGTH(game_id) = 8
-        """)).fetchone()
+        """)
+        ).fetchone()
         total_to_fix = result[0]
 
     print(f"Found {total_to_fix:,} rows with 8-char game_ids (need leading zeros)")
@@ -34,7 +38,8 @@ def main():
     while True:
         with engine.begin() as conn:
             # Find and fix a batch
-            result = conn.execute(text("""
+            result = conn.execute(
+                text("""
                 WITH to_update AS (
                     SELECT staging_id
                     FROM raw_player_props_combined
@@ -46,7 +51,9 @@ def main():
                 FROM to_update t
                 WHERE p.staging_id = t.staging_id
                 RETURNING p.staging_id
-            """), {"batch_size": BATCH_SIZE})
+            """),
+                {"batch_size": BATCH_SIZE},
+            )
 
             rows_updated = result.rowcount
 
@@ -61,14 +68,17 @@ def main():
 
     # Verify
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text("""
             SELECT LENGTH(game_id) as len, COUNT(*) as cnt
             FROM raw_player_props_combined
             GROUP BY LENGTH(game_id)
-        """)).fetchall()
+        """)
+        ).fetchall()
         print("\nGame ID lengths after fix:")
         for row in result:
             print(f"  {row[0]} chars: {row[1]:,} rows")
+
 
 if __name__ == "__main__":
     main()

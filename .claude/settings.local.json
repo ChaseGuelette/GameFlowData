@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "mcp__supabase__list_tables",
-      "mcp__supabase__execute_sql"
+      "mcp__supabase__execute_sql",
+      "Bash(pip install:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(sk work-update:*)",
+      "Bash(python -m solokit.work_items.get_next_recommendations:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -1,14 +1,15 @@
-from datetime import datetime
-from sqlalchemy import create_engine, text
-import pandas as pd
 import math
+from datetime import datetime
+
+import pandas as pd
+from sqlalchemy import text
 
 seasonStartDates = {
-    '2020-21' : '2020-12-22',
-    '2021-22' : '2021-10-19',
-    '2022-23' : '2022-10-18',
-    '2023-24' : '2023-10-24',
-    '2024-25' : '2024-10-22'
+    "2020-21": "2020-12-22",
+    "2021-22": "2021-10-19",
+    "2022-23": "2022-10-18",
+    "2023-24": "2023-10-24",
+    "2024-25": "2024-10-22",
 }
 
 """
@@ -26,36 +27,39 @@ Returns:
     str: Season identifier in format 'YYYY-YY' (e.g., '2024-25')
     None: If the date doesn't fall within any of the listed seasons
 """
-def identify_nba_season(date_str):
 
+
+def identify_nba_season(date_str):
     # Available seasons
-    years_list = ['2024-25', '2023-24', '2022-23', '2021-22', '2020-21', '2019-20']
-    
+    years_list = ["2024-25", "2023-24", "2022-23", "2021-22", "2020-21", "2019-20"]
+
     # Parse the input date with multiple format attempts
     date_obj = None
     formats_to_try = [
-        '%Y-%m-%d',  # YYYY-MM-DD
-        '%m-%d-%Y',  # MM-DD-YYYY
-        '%Y/%m/%d',  # YYYY/MM/DD
-        '%m/%d/%Y',  # MM/DD/YYYY
-        '%d-%m-%Y',  # DD-MM-YYYY
-        '%d/%m/%Y'   # DD/MM/YYYY
+        "%Y-%m-%d",  # YYYY-MM-DD
+        "%m-%d-%Y",  # MM-DD-YYYY
+        "%Y/%m/%d",  # YYYY/MM/DD
+        "%m/%d/%Y",  # MM/DD/YYYY
+        "%d-%m-%Y",  # DD-MM-YYYY
+        "%d/%m/%Y",  # DD/MM/YYYY
     ]
-    
+
     for fmt in formats_to_try:
         try:
             date_obj = datetime.strptime(date_str, fmt)
             break
         except ValueError:
             continue
-    
+
     if date_obj is None:
-        raise ValueError(f"Unable to parse date: {date_str}. Supported formats: YYYY-MM-DD, MM-DD-YYYY, etc.")
-    
+        raise ValueError(
+            f"Unable to parse date: {date_str}. Supported formats: YYYY-MM-DD, MM-DD-YYYY, etc."
+        )
+
     # Get year and month
     year = date_obj.year
     month = date_obj.month
-    
+
     # Determine NBA season
     # If month is from October to December, we're in the first year of the season
     # If month is from January to September, we're in the second year of the season
@@ -65,16 +69,17 @@ def identify_nba_season(date_str):
     else:  # January to September
         season_start = year - 1
         season_end = year
-    
+
     # Create season string and check if it's in our list
     season = f"{season_start}-{str(season_end)[-2:]}"
-    
+
     if season in years_list:
         return season
     else:
         # Check if the season is simply not in our predefined list
         # For dates outside our predefined ranges
         return season
+
 
 """
     Calculate a player's recent performance score based on their last 5 and 10 games.
@@ -137,10 +142,12 @@ def identify_nba_season(date_str):
     >>> print(f"{player['PLAYER_NAME']}'s score: {score:.2f}")
     Jaylen Brown's score: 18.45
 """
+
+
 def calculate_recent_scores(player_data, year, date, engine):
-    player_id = player_data['PLAYER_ID']
-    player_name = player_data['PLAYER_NAME']
-    
+    player_id = player_data["PLAYER_ID"]
+    player_name = player_data["PLAYER_NAME"]
+
     with engine.connect() as conn:
         with conn.begin():
             query10 = text(f"""
@@ -191,157 +198,235 @@ def calculate_recent_scores(player_data, year, date, engine):
                 FROM recent_games
                 GROUP BY "PLAYER_ID"
             """)
-            recent_games = pd.read_sql_query(query10, engine, params={'player_id': player_id, 'date' : date})
-            more_recent_games = pd.read_sql_query(query5, engine, params={'player_id': player_id, 'date' : date})
+            recent_games = pd.read_sql_query(
+                query10, engine, params={"player_id": player_id, "date": date}
+            )
+            more_recent_games = pd.read_sql_query(
+                query5, engine, params={"player_id": player_id, "date": date}
+            )
 
     try:
         # Check if DataFrames are empty
         if recent_games.empty or more_recent_games.empty:
             print(f"Warning: Missing game data for player {player_name}")
             return 0  # Return default score
-        
+
         # Make sure all required columns exist
-        required_columns = ['AVG_FGA', 'AVG_FTA', 'AVG_OREB', 'AVG_TOV', 'AVG_PTS', 
-                            'AVG_PLUS_MINUS', 'AVG_MIN', 'GAMES_PLAYED']
-        
-        for df_name, df in [("recent_games", recent_games), ("more_recent_games", more_recent_games)]:
+        required_columns = [
+            "AVG_FGA",
+            "AVG_FTA",
+            "AVG_OREB",
+            "AVG_TOV",
+            "AVG_PTS",
+            "AVG_PLUS_MINUS",
+            "AVG_MIN",
+            "GAMES_PLAYED",
+        ]
+
+        for df_name, df in [
+            ("recent_games", recent_games),
+            ("more_recent_games", more_recent_games),
+        ]:
             missing_cols = [col for col in required_columns if col not in df.columns]
             if missing_cols:
-                print(f"Warning: Missing columns in {df_name} for player {player_name}: {missing_cols}")
+                print(
+                    f"Warning: Missing columns in {df_name} for player {player_name}: {missing_cols}"
+                )
                 return 0  # Return default score
-        
+
         try:
             # Calculate possessions for 10-game span
-            possessions = 0.96 * recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0] - recent_games['AVG_OREB'].values[0] + recent_games['AVG_TOV'].values[0]
-            
+            possessions = (
+                0.96 * recent_games["AVG_FGA"].values[0]
+                + 0.44 * recent_games["AVG_FTA"].values[0]
+                - recent_games["AVG_OREB"].values[0]
+                + recent_games["AVG_TOV"].values[0]
+            )
+
             # Guard against zero or negative possessions
             if possessions <= 0:
-                print(f"Warning: Invalid possessions value ({possessions}) for player {player_name}")
+                print(
+                    f"Warning: Invalid possessions value ({possessions}) for player {player_name}"
+                )
                 possessions = 1  # Set a small default value
-                
+
             # Calculate ratings
-            offensive_rating = (recent_games['AVG_PTS'].values[0] / possessions) 
-            defensive_rating = (recent_games['AVG_PTS'].values[0] - recent_games['AVG_PLUS_MINUS'].values[0]) / possessions
+            offensive_rating = recent_games["AVG_PTS"].values[0] / possessions
+            defensive_rating = (
+                recent_games["AVG_PTS"].values[0] - recent_games["AVG_PLUS_MINUS"].values[0]
+            ) / possessions
             net_ratingTen = offensive_rating - defensive_rating
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 10-game metrics for player {player_name}: {e}")
             net_ratingTen = 0  # Default value
-            
+
         try:
             # Calculate possessions for 5-game span
-            possessionsFive = 0.96 * more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0] - more_recent_games['AVG_OREB'].values[0] + more_recent_games['AVG_TOV'].values[0]
-            
+            possessionsFive = (
+                0.96 * more_recent_games["AVG_FGA"].values[0]
+                + 0.44 * more_recent_games["AVG_FTA"].values[0]
+                - more_recent_games["AVG_OREB"].values[0]
+                + more_recent_games["AVG_TOV"].values[0]
+            )
+
             # Guard against zero or negative possessions
             if possessionsFive <= 0:
-                print(f"Warning: Invalid possessions value ({possessionsFive}) for player {player_name} (5-game)")
+                print(
+                    f"Warning: Invalid possessions value ({possessionsFive}) for player {player_name} (5-game)"
+                )
                 possessionsFive = 1  # Set a small default value
-                
+
             # Calculate ratings for 5-game span
-            offensive_ratingFive = (more_recent_games['AVG_PTS'].values[0] / possessionsFive) 
-            defensive_ratingFive = (more_recent_games['AVG_PTS'].values[0] - more_recent_games['AVG_PLUS_MINUS'].values[0]) / possessionsFive
+            offensive_ratingFive = more_recent_games["AVG_PTS"].values[0] / possessionsFive
+            defensive_ratingFive = (
+                more_recent_games["AVG_PTS"].values[0]
+                - more_recent_games["AVG_PLUS_MINUS"].values[0]
+            ) / possessionsFive
             net_ratingFive = offensive_ratingFive - defensive_ratingFive
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 5-game metrics for player {player_name}: {e}")
             net_ratingFive = 0  # Default value
-            
+
         try:
             # Calculate true shooting percentages
-            denominator = 2 * (recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0])
+            denominator = 2 * (
+                recent_games["AVG_FGA"].values[0] + 0.44 * recent_games["AVG_FTA"].values[0]
+            )
             if denominator <= 0:
                 print(f"Warning: Invalid denominator for TS% calculation for player {player_name}")
                 true_shootingTen = 0
             else:
-                true_shootingTen = recent_games['AVG_PTS'].values[0] / denominator
+                true_shootingTen = recent_games["AVG_PTS"].values[0] / denominator
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 10-game TS% for player {player_name}: {e}")
             true_shootingTen = 0
-            
+
         try:
-            denominator = 2 * (more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0])
+            denominator = 2 * (
+                more_recent_games["AVG_FGA"].values[0]
+                + 0.44 * more_recent_games["AVG_FTA"].values[0]
+            )
             if denominator <= 0:
-                print(f"Warning: Invalid denominator for TS% calculation for player {player_name} (5-game)")
+                print(
+                    f"Warning: Invalid denominator for TS% calculation for player {player_name} (5-game)"
+                )
                 true_shootingFive = 0
             else:
-                true_shootingFive = more_recent_games['AVG_PTS'].values[0] / denominator
+                true_shootingFive = more_recent_games["AVG_PTS"].values[0] / denominator
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 5-game TS% for player {player_name}: {e}")
             true_shootingFive = 0
-            
+
         try:
             # Calculate usage rates
-            if recent_games['AVG_MIN'].values[0] <= 0:
+            if recent_games["AVG_MIN"].values[0] <= 0:
                 print(f"Warning: Zero minutes played for player {player_name}")
                 usage_rateTen = 0
             else:
-                usage_rateTen = ((recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0] + recent_games['AVG_TOV'].values[0]) / recent_games['AVG_MIN'].values[0])
+                usage_rateTen = (
+                    recent_games["AVG_FGA"].values[0]
+                    + 0.44 * recent_games["AVG_FTA"].values[0]
+                    + recent_games["AVG_TOV"].values[0]
+                ) / recent_games["AVG_MIN"].values[0]
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 10-game usage rate for player {player_name}: {e}")
             usage_rateTen = 0
-            
+
         try:
-            if more_recent_games['AVG_MIN'].values[0] <= 0:
+            if more_recent_games["AVG_MIN"].values[0] <= 0:
                 print(f"Warning: Zero minutes played for player {player_name} (5-game)")
                 usage_rateFive = 0
             else:
-                usage_rateFive = ((more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0] + more_recent_games['AVG_TOV'].values[0]) / more_recent_games['AVG_MIN'].values[0])
+                usage_rateFive = (
+                    more_recent_games["AVG_FGA"].values[0]
+                    + 0.44 * more_recent_games["AVG_FTA"].values[0]
+                    + more_recent_games["AVG_TOV"].values[0]
+                ) / more_recent_games["AVG_MIN"].values[0]
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 5-game usage rate for player {player_name}: {e}")
             usage_rateFive = 0
-            
+
         try:
             # Calculate turnover rates
-            denominator = (recent_games['AVG_FGA'].values[0] + 0.44 * recent_games['AVG_FTA'].values[0] + recent_games['AVG_TOV'].values[0])
+            denominator = (
+                recent_games["AVG_FGA"].values[0]
+                + 0.44 * recent_games["AVG_FTA"].values[0]
+                + recent_games["AVG_TOV"].values[0]
+            )
             if denominator <= 0:
                 print(f"Warning: Invalid denominator for TOV% calculation for player {player_name}")
                 turnover_rateTen = 0
             else:
-                turnover_rateTen = (recent_games['AVG_TOV'].values[0] / denominator)
+                turnover_rateTen = recent_games["AVG_TOV"].values[0] / denominator
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 10-game turnover rate for player {player_name}: {e}")
             turnover_rateTen = 0
-            
+
         try:
-            denominator = (more_recent_games['AVG_FGA'].values[0] + 0.44 * more_recent_games['AVG_FTA'].values[0] + more_recent_games['AVG_TOV'].values[0])
+            denominator = (
+                more_recent_games["AVG_FGA"].values[0]
+                + 0.44 * more_recent_games["AVG_FTA"].values[0]
+                + more_recent_games["AVG_TOV"].values[0]
+            )
             if denominator <= 0:
-                print(f"Warning: Invalid denominator for TOV% calculation for player {player_name} (5-game)")
+                print(
+                    f"Warning: Invalid denominator for TOV% calculation for player {player_name} (5-game)"
+                )
                 turnover_rateFive = 0
             else:
-                turnover_rateFive = (more_recent_games['AVG_TOV'].values[0] / denominator)
+                turnover_rateFive = more_recent_games["AVG_TOV"].values[0] / denominator
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 5-game turnover rate for player {player_name}: {e}")
             turnover_rateFive = 0
-            
+
         try:
             # Calculate minutes per game
-            if recent_games['GAMES_PLAYED'].values[0] <= 0:
+            if recent_games["GAMES_PLAYED"].values[0] <= 0:
                 print(f"Warning: Zero games played for player {player_name}")
                 minutes_per_gameTen = 0
             else:
-                minutes_per_gameTen = recent_games['AVG_MIN'].values[0] / recent_games['GAMES_PLAYED'].values[0]
+                minutes_per_gameTen = (
+                    recent_games["AVG_MIN"].values[0] / recent_games["GAMES_PLAYED"].values[0]
+                )
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 10-game minutes per game for player {player_name}: {e}")
             minutes_per_gameTen = 0
-            
+
         try:
-            if more_recent_games['GAMES_PLAYED'].values[0] <= 0:
+            if more_recent_games["GAMES_PLAYED"].values[0] <= 0:
                 print(f"Warning: Zero games played for player {player_name} (5-game)")
                 minutes_per_gameFive = 0
             else:
-                minutes_per_gameFive = more_recent_games['AVG_MIN'].values[0] / more_recent_games['GAMES_PLAYED'].values[0]
+                minutes_per_gameFive = (
+                    more_recent_games["AVG_MIN"].values[0]
+                    / more_recent_games["GAMES_PLAYED"].values[0]
+                )
         except (IndexError, KeyError, ZeroDivisionError) as e:
             print(f"Error calculating 5-game minutes per game for player {player_name}: {e}")
             minutes_per_gameFive = 0
-            
+
         # Calculate final scores
-        recentFormTen = (0.4 * net_ratingTen) + (0.2 * true_shootingTen) + (0.15 * usage_rateTen) + (0.1 * turnover_rateTen) + (0.15 * minutes_per_gameTen)
-        recentFormFive = (0.4 * net_ratingFive) + (0.2 * true_shootingFive) + (0.15 * usage_rateFive) + (0.1 * turnover_rateFive) + (0.15 * minutes_per_gameFive)
-        
+        recentFormTen = (
+            (0.4 * net_ratingTen)
+            + (0.2 * true_shootingTen)
+            + (0.15 * usage_rateTen)
+            + (0.1 * turnover_rateTen)
+            + (0.15 * minutes_per_gameTen)
+        )
+        recentFormFive = (
+            (0.4 * net_ratingFive)
+            + (0.2 * true_shootingFive)
+            + (0.15 * usage_rateFive)
+            + (0.1 * turnover_rateFive)
+            + (0.15 * minutes_per_gameFive)
+        )
+
         finalScore = (0.6 * recentFormTen) + (0.4 * recentFormFive)
         return finalScore
-        
+
     except Exception as e:
         print(f"Unexpected error calculating metrics for player {player_name}: {e}")
-        return 0 
+        return 0
 
 
 """
@@ -435,74 +520,69 @@ def calculate_recent_scores(player_data, year, date, engine):
     >>> player_metrics = calculate_player_metrics(engine, year, date, star_players_df, rotation_players_df)
     >>> print(player_metrics[['PLAYER_NAME', 'SCORE', 'CATEGORY']].head())
 """
+
+
 def calculate_player_metrics(engine, year, date, star_players, key_rotation_players):
-    primary_weights = {
-        'PIE' : 0.175,
-        'USG' : 0.125,
-        'NetRating' : .1
-    }
-    
+    primary_weights = {"PIE": 0.175, "USG": 0.125, "NetRating": 0.1}
+
     secondary_weights = {
-        'TrueShooting' : .125,
-        'TurnoverRate' : .05,
-        'Availability' : .1,
-        'Mins' : .15 #this can be adjusted to chnage to minutes consistency 
+        "TrueShooting": 0.125,
+        "TurnoverRate": 0.05,
+        "Availability": 0.1,
+        "Mins": 0.15,  # this can be adjusted to chnage to minutes consistency
     }
-    clutch_weights = {
-        'CLUTCH_SCORE_PCT' : .5,
-        'CLUTCH_USAGE_RATE' : .25,
-        'CLUTCH_NET_RATING' : .25
-    }
+    clutch_weights = {"CLUTCH_SCORE_PCT": 0.5, "CLUTCH_USAGE_RATE": 0.25, "CLUTCH_NET_RATING": 0.25}
 
     def calculate_primary_scores(player_data, player_GP, team_GP):
         score = 0
-        score += float(player_data['PIE']) * primary_weights['PIE']
-        score += float(player_data['E_USG_PCT']) * primary_weights['USG']
-        
-        #adjust the net rating based on how many games have been played
-        netRating = player_data['NET_RATING'] * primary_weights['NetRating']
+        score += float(player_data["PIE"]) * primary_weights["PIE"]
+        score += float(player_data["E_USG_PCT"]) * primary_weights["USG"]
+
+        # adjust the net rating based on how many games have been played
+        netRating = player_data["NET_RATING"] * primary_weights["NetRating"]
         a = 0.75
-        #this is the adjusted net rating based on number of games played
-        #note that when we make this for a full team performance, we need to get the number of games the team has played
-        netRating = netRating * (player_GP/team_GP) ** a
+        # this is the adjusted net rating based on number of games played
+        # note that when we make this for a full team performance, we need to get the number of games the team has played
+        netRating = netRating * (player_GP / team_GP) ** a
         score += netRating
         return score
-    
+
     def calculate_secondary_scores(player_data, player_GP, team_GP):
         score = 0
-        score += float(player_data['TS_PCT']) * secondary_weights['TrueShooting']
-        score += float(player_data['E_TOV_PCT']) * secondary_weights['TurnoverRate']
-        #player minutes should be split between trends in recent games and season averages
-        score += player_data['MIN'] * secondary_weights['Mins'] #in the future we want to make thier average just part of it
-        
+        score += float(player_data["TS_PCT"]) * secondary_weights["TrueShooting"]
+        score += float(player_data["E_TOV_PCT"]) * secondary_weights["TurnoverRate"]
+        # player minutes should be split between trends in recent games and season averages
+        score += (
+            player_data["MIN"] * secondary_weights["Mins"]
+        )  # in the future we want to make thier average just part of it
+
         # score += availability * secondary_weights['AVAILABILITY']
         return score
 
     def calculate_clutch_scores(player_data, player_GP, team_GP):
         score = 0
-        #get raw stats
-        scorePct = float(player_data['CLUTCH_SCORE_PCT']) * clutch_weights['CLUTCH_SCORE_PCT']
-        usgRate = float(player_data['CLUTCH_USAGE_RATE']) * clutch_weights['CLUTCH_USAGE_RATE']
-        netRating = float(player_data['CLUTCH_NET_RATING']) * clutch_weights['CLUTCH_NET_RATING']
-        #setup adjustment constants 
+        # get raw stats
+        scorePct = float(player_data["CLUTCH_SCORE_PCT"]) * clutch_weights["CLUTCH_SCORE_PCT"]
+        usgRate = float(player_data["CLUTCH_USAGE_RATE"]) * clutch_weights["CLUTCH_USAGE_RATE"]
+        netRating = float(player_data["CLUTCH_NET_RATING"]) * clutch_weights["CLUTCH_NET_RATING"]
+        # setup adjustment constants
         a = 0.75
-        #scale scores to avoid small sample outliers 
-        score += scorePct * (player_GP/team_GP) ** a
-        score += usgRate * (player_GP/team_GP) ** a
-        score += netRating * (player_GP/team_GP) ** a
+        # scale scores to avoid small sample outliers
+        score += scorePct * (player_GP / team_GP) ** a
+        score += usgRate * (player_GP / team_GP) ** a
+        score += netRating * (player_GP / team_GP) ** a
 
         if math.isnan(score):
             return 0
         else:
             return score
-    
-    def calculate_player_scores(players_df, baseWeight = 0.5, clutchWeight = 0.3, recentWeight = 0.2):
+
+    def calculate_player_scores(players_df, baseWeight=0.5, clutchWeight=0.3, recentWeight=0.2):
         scores = []
         for index, player in players_df.iterrows():
-            
-            #get player and team games played
-            player_id = player['PLAYER_ID']
-            team_id = player['TEAM_ID']
+            # get player and team games played
+            player_id = player["PLAYER_ID"]
+            team_id = player["TEAM_ID"]
             with engine.connect() as conn:
                 with conn.begin():
                     player_query = text(f"""
@@ -513,43 +593,51 @@ def calculate_player_metrics(engine, year, date, star_players, key_rotation_play
                         select * from "{year}_historic_game_data"
                         where "TEAM_ID" = :team_id
                     """)
-                    #get player number of games
-                    player_games = pd.read_sql_query(player_query, engine, params = {'player_id' : player_id})
+                    # get player number of games
+                    player_games = pd.read_sql_query(
+                        player_query, engine, params={"player_id": player_id}
+                    )
                     player_GP = len(player_games)
-                    #get team number of games 
-                    team_games = pd.read_sql_query(team_query, engine, params = {'team_id' : team_id})
+                    # get team number of games
+                    team_games = pd.read_sql_query(team_query, engine, params={"team_id": team_id})
                     team_GP = len(team_games)
-            
+
             primaryScore = calculate_primary_scores(player, player_GP, team_GP)
             secondaryScore = calculate_secondary_scores(player, player_GP, team_GP)
             clutchScore = calculate_clutch_scores(player, player_GP, team_GP)
             recentScore = calculate_recent_scores(player, year, date, engine)
-    
+
             final_score = (primaryScore + secondaryScore) * baseWeight
             final_score += clutchScore * clutchWeight
             final_score += recentScore * recentWeight
-    
-            scores.append({
-                'PLAYER_NAME': player['PLAYER_NAME'],
-                'PLAYER_ID': player['PLAYER_ID'],
-                'SCORE': final_score,
-                'PRIMARY_CONTRIBUTION': primaryScore * baseWeight,
-                'SECONDARY_CONTRIBUTION': secondaryScore * baseWeight,
-                'CLUTCH_CONTRIBUTION': clutchScore * clutchWeight,
-                'RECENT_CONTRIBUTION': recentScore * recentWeight,
-                'CATEGORY': 'Star' if player['MIN'] > 25  else 'Rotation' if player['MIN'] < 25 and player['MIN'] > 15 else 'Loser'
-            })
-    
+
+            scores.append(
+                {
+                    "PLAYER_NAME": player["PLAYER_NAME"],
+                    "PLAYER_ID": player["PLAYER_ID"],
+                    "SCORE": final_score,
+                    "PRIMARY_CONTRIBUTION": primaryScore * baseWeight,
+                    "SECONDARY_CONTRIBUTION": secondaryScore * baseWeight,
+                    "CLUTCH_CONTRIBUTION": clutchScore * clutchWeight,
+                    "RECENT_CONTRIBUTION": recentScore * recentWeight,
+                    "CATEGORY": "Star"
+                    if player["MIN"] > 25
+                    else "Rotation"
+                    if player["MIN"] < 25 and player["MIN"] > 15
+                    else "Loser",
+                }
+            )
+
         return pd.DataFrame(scores)
-            
-    
+
     starScores = calculate_player_scores(star_players)
     rotationScores = calculate_player_scores(key_rotation_players)
-    
+
     allScores = pd.concat([starScores, rotationScores])
-    allScores = allScores.sort_values('SCORE', ascending=False)
-    
+    allScores = allScores.sort_values("SCORE", ascending=False)
+
     return allScores
+
 
 """
     Retrieve and calculate performance scores for players on a specific NBA team up to a given date.
@@ -609,13 +697,15 @@ def calculate_player_metrics(engine, year, date, star_players, key_rotation_play
     >>> celtics_scores = get_team_player_scores(engine, 'Boston Celtics', date)
     >>> print(celtics_scores[['PLAYER_NAME', 'SCORE', 'CATEGORY']].head())
 """
+
+
 def get_team_player_scores(engine, teamName, date):
     year = identify_nba_season(date)
-    
+
     team_name = teamName
     season = identify_nba_season(date)
     startDate = seasonStartDates[season]
-    # retreive players we want stats for 
+    # retreive players we want stats for
     # take those players stats from the advanced table
     with engine.connect() as conn:
         with conn.begin():
@@ -675,22 +765,26 @@ def get_team_player_scores(engine, teamName, date):
                     ON a."TEAM_ID" = t."TEAM_ID"
                 WHERE t."TEAM_NAME" = :team_name
             """)
-            #starters
-            player_info = pd.read_sql_query(query, engine, params={'team_name': team_name, 'date' : date, 'seasonStartDate' : startDate})
+            # starters
+            player_info = pd.read_sql_query(
+                query,
+                engine,
+                params={"team_name": team_name, "date": date, "seasonStartDate": startDate},
+            )
 
-            star_mask = player_info['MIN'] > 30
-            key_rotation_mask = (player_info['MIN'] < 30) & (player_info['MIN'] > 15)
+            star_mask = player_info["MIN"] > 30
+            key_rotation_mask = (player_info["MIN"] < 30) & (player_info["MIN"] > 15)
 
             star_players = player_info[star_mask]
             key_rotation_players = player_info[key_rotation_mask]
-                
+
     # #get high impact stats - player impact rating, net rating, usg pct, plus/minus adjsuted for minutes
-    # #get efficiency stats - true shooting, turnover rate 
+    # #get efficiency stats - true shooting, turnover rate
     # #get availability - least important
 
-    # #apply weights to key points 
-    # #star players 1x weight, key rotation .75 weight 
-    # #bench .5 weight 
+    # #apply weights to key points
+    # #star players 1x weight, key rotation .75 weight
+    # #bench .5 weight
 
     player_scores = calculate_player_metrics(engine, year, date, star_players, key_rotation_players)
     return player_scores

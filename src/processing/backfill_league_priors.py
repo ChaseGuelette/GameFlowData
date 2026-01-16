@@ -1,8 +1,11 @@
 import datetime
+
 import pandas as pd
 from sqlalchemy import text
 from tqdm import tqdm
+
 from src.db.client import get_engine
+
 
 def get_season_start_date(snapshot_date_str):
     """
@@ -17,35 +20,37 @@ def get_season_start_date(snapshot_date_str):
         start_year = snap.year
     return f"{start_year}-10-01"
 
+
 def backfill_league_priors(engine):
     """
-    Generates monthly snapshots. 
+    Generates monthly snapshots.
     Auto-detects season_id from the database.
     """
     # 1. Define range of years to process (Adjust as needed)
-    years = range(2018, 2027) 
-    
+    years = range(2018, 2027)
+
     # 2. Generate "1st of Month" dates for NBA Season (Nov-Apr)
     snapshot_dates = []
     for year in years:
         # Late year: Nov (11), Dec (12)
-        for m in [11, 12]: 
+        for m in [11, 12]:
             snapshot_dates.append(f"{year}-{m:02d}-01")
         # Early next year: Jan (1) - Apr (4)
         for m in [1, 2, 3, 4]:
-            snapshot_dates.append(f"{year+1}-{m:02d}-01")
-            
+            snapshot_dates.append(f"{year + 1}-{m:02d}-01")
+
     # Filter out future dates
-    today = datetime.date.today().strftime('%Y-%m-%d')
+    today = datetime.date.today().strftime("%Y-%m-%d")
     snapshot_dates = [d for d in snapshot_dates if d <= today]
-            
+
     print(f"--- Generating League Priors for {len(snapshot_dates)} months ---")
-    
+
     for snap_date in tqdm(snapshot_dates, desc="Processing Months"):
         season_start = get_season_start_date(snap_date)
         calculate_and_insert_snapshot(engine, season_start, snap_date)
-            
+
     print("--- Priors Backfill Complete ---")
+
 
 def calculate_and_insert_snapshot(engine, season_start_date, snapshot_date):
     """
@@ -115,9 +120,10 @@ def calculate_and_insert_snapshot(engine, season_start_date, snapshot_date):
             total_possessions = EXCLUDED.total_possessions,
             total_games = EXCLUDED.total_games;
     """)
-    
+
     with engine.begin() as conn:
-        conn.execute(query, {'season_start': season_start_date, 'snap_date': snapshot_date})
+        conn.execute(query, {"season_start": season_start_date, "snap_date": snapshot_date})
+
 
 if __name__ == "__main__":
     engine = get_engine()

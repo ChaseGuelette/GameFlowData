@@ -9,11 +9,11 @@ Tests cover:
 - SQL query structure validation
 """
 
-from unittest.mock import Mock, MagicMock, patch, call
-import pytest
-
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -23,10 +23,9 @@ sys.modules["src.db.client"] = Mock()
 sys.modules["src.db"] = Mock()
 
 from processing.backfill_team_ids import (
-    main,
     BATCH_SIZE,
+    main,
 )
-
 
 # =============================================================================
 # Test Fixtures
@@ -88,8 +87,8 @@ class TestBatchSizeConfiguration:
 class TestMainFunctionFlow:
     """Tests for main() function execution flow"""
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
     def test_main_counts_rows_first(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that main() counts rows to backfill first"""
         engine, mock_conn, mock_begin_conn = mock_engine
@@ -107,8 +106,8 @@ class TestMainFunctionFlow:
         # Verify SQL was executed
         mock_conn.execute.assert_called()
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
     def test_main_returns_early_when_nothing_to_backfill(
         self, mock_tqdm, mock_get_engine, mock_engine
     ):
@@ -128,11 +127,9 @@ class TestMainFunctionFlow:
         # begin() should not be called for update if nothing to backfill
         engine.begin.assert_not_called()
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_main_creates_progress_bar_with_total(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_main_creates_progress_bar_with_total(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that progress bar is created with correct total"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -170,13 +167,11 @@ class TestMainFunctionFlow:
         # Verify tqdm was called with total=1000
         mock_tqdm.assert_called_once()
         call_kwargs = mock_tqdm.call_args[1]
-        assert call_kwargs['total'] == 1000
+        assert call_kwargs["total"] == 1000
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_main_uses_batch_size_in_query(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_main_uses_batch_size_in_query(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that BATCH_SIZE is passed to the SQL query"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -213,7 +208,7 @@ class TestMainFunctionFlow:
         # Verify that execute was called with batch_size parameter
         update_call = mock_begin_conn.execute.call_args
         params = update_call[0][1] if len(update_call[0]) > 1 else update_call[1]
-        assert params['batch_size'] == BATCH_SIZE
+        assert params["batch_size"] == BATCH_SIZE
 
 
 # =============================================================================
@@ -224,11 +219,9 @@ class TestMainFunctionFlow:
 class TestBatchProcessingLoop:
     """Tests for the batch processing loop in main()"""
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_loop_continues_while_rows_updated(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_loop_continues_while_rows_updated(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that loop continues processing batches while rows are updated"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -239,10 +232,10 @@ class TestBatchProcessingLoop:
 
         # Mock update queries - return rows for first two batches, then 0
         mock_update_result1 = Mock()
-        mock_update_result1.fetchall.return_value = [('id1',), ('id2',)]  # 2 rows
+        mock_update_result1.fetchall.return_value = [("id1",), ("id2",)]  # 2 rows
 
         mock_update_result2 = Mock()
-        mock_update_result2.fetchall.return_value = [('id3',)]  # 1 row
+        mock_update_result2.fetchall.return_value = [("id3",)]  # 1 row
 
         mock_update_result3 = Mock()
         mock_update_result3.fetchall.return_value = []  # 0 rows, exit loop
@@ -277,11 +270,9 @@ class TestBatchProcessingLoop:
         # Verify progress bar was updated
         assert mock_pbar.update.call_count >= 2
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_loop_exits_when_no_rows_updated(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_loop_exits_when_no_rows_updated(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that loop exits when update returns 0 rows"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -318,11 +309,9 @@ class TestBatchProcessingLoop:
         # Should only have 1 batch attempt before exiting
         assert engine.begin.call_count == 1
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_progress_bar_closes_on_completion(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_progress_bar_closes_on_completion(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that progress bar is closed when processing completes"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -368,8 +357,8 @@ class TestBatchProcessingLoop:
 class TestSQLQueryStructure:
     """Tests for SQL query structure validation"""
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
     def test_update_query_uses_cte(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that update query uses Common Table Expressions (WITH clause)"""
         engine, mock_conn, mock_begin_conn = mock_engine
@@ -389,7 +378,11 @@ class TestSQLQueryStructure:
         mock_verify_result = Mock()
         mock_verify_result.fetchone.return_value = (100, 100, 0)
 
-        mock_conn.execute.side_effect = [mock_count_result, mock_remaining_result, mock_verify_result]
+        mock_conn.execute.side_effect = [
+            mock_count_result,
+            mock_remaining_result,
+            mock_verify_result,
+        ]
         mock_begin_conn.execute.return_value = mock_update_result
 
         mock_pbar = Mock()
@@ -402,14 +395,12 @@ class TestSQLQueryStructure:
         query = str(update_call[0][0])
 
         # Verify CTE structure
-        assert 'WITH' in query.upper()
-        assert 'to_update' in query.lower()
+        assert "WITH" in query.upper()
+        assert "to_update" in query.lower()
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_update_query_targets_null_team_id(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_update_query_targets_null_team_id(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that query only targets rows where team_id IS NULL"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -426,7 +417,11 @@ class TestSQLQueryStructure:
         mock_verify_result = Mock()
         mock_verify_result.fetchone.return_value = (100, 100, 0)
 
-        mock_conn.execute.side_effect = [mock_count_result, mock_remaining_result, mock_verify_result]
+        mock_conn.execute.side_effect = [
+            mock_count_result,
+            mock_remaining_result,
+            mock_verify_result,
+        ]
         mock_begin_conn.execute.return_value = mock_update_result
 
         mock_pbar = Mock()
@@ -437,13 +432,11 @@ class TestSQLQueryStructure:
         update_call = mock_begin_conn.execute.call_args
         query = str(update_call[0][0])
 
-        assert 'team_id IS NULL' in query
+        assert "team_id IS NULL" in query
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_update_query_joins_player_game_stats(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_update_query_joins_player_game_stats(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that query joins with player_game_stats for recent team"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -460,7 +453,11 @@ class TestSQLQueryStructure:
         mock_verify_result = Mock()
         mock_verify_result.fetchone.return_value = (100, 100, 0)
 
-        mock_conn.execute.side_effect = [mock_count_result, mock_remaining_result, mock_verify_result]
+        mock_conn.execute.side_effect = [
+            mock_count_result,
+            mock_remaining_result,
+            mock_verify_result,
+        ]
         mock_begin_conn.execute.return_value = mock_update_result
 
         mock_pbar = Mock()
@@ -471,13 +468,11 @@ class TestSQLQueryStructure:
         update_call = mock_begin_conn.execute.call_args
         query = str(update_call[0][0])
 
-        assert 'player_game_stats' in query
+        assert "player_game_stats" in query
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_update_query_joins_team_game_stats(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_update_query_joins_team_game_stats(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that query joins with team_game_stats for home/away teams"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -494,7 +489,11 @@ class TestSQLQueryStructure:
         mock_verify_result = Mock()
         mock_verify_result.fetchone.return_value = (100, 100, 0)
 
-        mock_conn.execute.side_effect = [mock_count_result, mock_remaining_result, mock_verify_result]
+        mock_conn.execute.side_effect = [
+            mock_count_result,
+            mock_remaining_result,
+            mock_verify_result,
+        ]
         mock_begin_conn.execute.return_value = mock_update_result
 
         mock_pbar = Mock()
@@ -505,13 +504,11 @@ class TestSQLQueryStructure:
         update_call = mock_begin_conn.execute.call_args
         query = str(update_call[0][0])
 
-        assert 'team_game_stats' in query
+        assert "team_game_stats" in query
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_update_query_uses_returning(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_update_query_uses_returning(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that query uses RETURNING to count updated rows"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -528,7 +525,11 @@ class TestSQLQueryStructure:
         mock_verify_result = Mock()
         mock_verify_result.fetchone.return_value = (100, 100, 0)
 
-        mock_conn.execute.side_effect = [mock_count_result, mock_remaining_result, mock_verify_result]
+        mock_conn.execute.side_effect = [
+            mock_count_result,
+            mock_remaining_result,
+            mock_verify_result,
+        ]
         mock_begin_conn.execute.return_value = mock_update_result
 
         mock_pbar = Mock()
@@ -539,13 +540,11 @@ class TestSQLQueryStructure:
         update_call = mock_begin_conn.execute.call_args
         query = str(update_call[0][0])
 
-        assert 'RETURNING' in query.upper()
+        assert "RETURNING" in query.upper()
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_update_query_checks_home_away_pattern(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_update_query_checks_home_away_pattern(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that query checks for home (vs.) and away (@) team patterns"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -562,7 +561,11 @@ class TestSQLQueryStructure:
         mock_verify_result = Mock()
         mock_verify_result.fetchone.return_value = (100, 100, 0)
 
-        mock_conn.execute.side_effect = [mock_count_result, mock_remaining_result, mock_verify_result]
+        mock_conn.execute.side_effect = [
+            mock_count_result,
+            mock_remaining_result,
+            mock_verify_result,
+        ]
         mock_begin_conn.execute.return_value = mock_update_result
 
         mock_pbar = Mock()
@@ -574,9 +577,9 @@ class TestSQLQueryStructure:
         query = str(update_call[0][0])
 
         # Check for home team pattern (vs.)
-        assert 'vs.' in query
+        assert "vs." in query
         # Check for away team pattern (@)
-        assert '@' in query
+        assert "@" in query
 
 
 # =============================================================================
@@ -587,11 +590,9 @@ class TestSQLQueryStructure:
 class TestVerificationQuery:
     """Tests for the final verification query"""
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_runs_verification_after_backfill(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_runs_verification_after_backfill(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that verification query runs after backfill completes"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -636,8 +637,8 @@ class TestVerificationQuery:
 class TestEdgeCases:
     """Tests for edge cases and boundary conditions"""
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
     def test_handles_remaining_rows_that_cannot_be_backfilled(
         self, mock_tqdm, mock_get_engine, mock_engine
     ):
@@ -674,11 +675,9 @@ class TestEdgeCases:
         # Verify the function completed
         mock_pbar.close.assert_called_once()
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_handles_exact_batch_size_rows(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_handles_exact_batch_size_rows(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test when total rows equals exactly one batch size"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -688,7 +687,7 @@ class TestEdgeCases:
 
         # First batch updates all rows
         mock_update_result1 = Mock()
-        mock_update_result1.fetchall.return_value = [('id',)] * BATCH_SIZE
+        mock_update_result1.fetchall.return_value = [("id",)] * BATCH_SIZE
 
         # Second batch updates 0 rows
         mock_update_result2 = Mock()
@@ -718,11 +717,9 @@ class TestEdgeCases:
         # Should complete successfully
         mock_pbar.close.assert_called_once()
 
-    @patch('processing.backfill_team_ids.get_engine')
-    @patch('processing.backfill_team_ids.tqdm')
-    def test_requires_player_id_not_null(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    @patch("processing.backfill_team_ids.get_engine")
+    @patch("processing.backfill_team_ids.tqdm")
+    def test_requires_player_id_not_null(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that queries filter for player_id IS NOT NULL"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -737,4 +734,4 @@ class TestEdgeCases:
         count_call = mock_conn.execute.call_args
         query = str(count_call[0][0])
 
-        assert 'player_id IS NOT NULL' in query
+        assert "player_id IS NOT NULL" in query

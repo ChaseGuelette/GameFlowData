@@ -10,9 +10,11 @@ Run: python fix_wrong_game_ids.py
 
 from sqlalchemy import text
 from tqdm import tqdm
+
 from src.db.client import get_engine
 
 BATCH_SIZE = 1000
+
 
 def main():
     engine = get_engine()
@@ -21,7 +23,8 @@ def main():
 
     # Find distinct wrong game_id + correct game_id mappings
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text("""
             WITH unmatched_props AS (
                 SELECT DISTINCT
                     p.game_id as wrong_game_id,
@@ -61,7 +64,8 @@ def main():
             )
             SELECT wrong_game_id, correct_game_id, home_team, away_team, date_diff
             FROM matches
-        """))
+        """)
+        )
 
         mappings = result.fetchall()
 
@@ -74,29 +78,35 @@ def main():
     # Show sample mappings
     print("\nSample mappings:")
     for m in mappings[:5]:
-        print(f"  {m.wrong_game_id} -> {m.correct_game_id} ({m.home_team} vs {m.away_team}, {m.date_diff} days off)")
+        print(
+            f"  {m.wrong_game_id} -> {m.correct_game_id} ({m.home_team} vs {m.away_team}, {m.date_diff} days off)"
+        )
 
     # Apply fixes
     fixed_rows = 0
     for mapping in tqdm(mappings, desc="Fixing game_ids"):
         with engine.begin() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text("""
                 UPDATE raw_player_props_combined
                 SET game_id = :correct_game_id
                 WHERE game_id = :wrong_game_id
                   AND home_team = :home_team
                   AND away_team = :away_team
                   AND team_id IS NULL
-            """), {
-                "correct_game_id": mapping.correct_game_id,
-                "wrong_game_id": mapping.wrong_game_id,
-                "home_team": mapping.home_team,
-                "away_team": mapping.away_team
-            })
+            """),
+                {
+                    "correct_game_id": mapping.correct_game_id,
+                    "wrong_game_id": mapping.wrong_game_id,
+                    "home_team": mapping.home_team,
+                    "away_team": mapping.away_team,
+                },
+            )
             fixed_rows += result.rowcount
 
     print(f"\nDone! Fixed {fixed_rows:,} rows with corrected game_ids.")
     print("\nNow re-run backfill_team_ids.py to fill in the team_ids.")
+
 
 if __name__ == "__main__":
     main()

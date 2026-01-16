@@ -7,24 +7,23 @@ Tests cover:
 - InjuryChangeDetector change detection logic
 """
 
+import sys
 import time
-from unittest.mock import Mock, patch
+from pathlib import Path
+from unittest.mock import Mock
+
 import pytest
 import requests
-
-import sys
-from pathlib import Path
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "scrapers"))
 
 from espn_injury_scraper import (
-    InjuryRecord,
-    InjuryStatus,
     ESPNInjuryScraper,
     InjuryChangeDetector,
+    InjuryRecord,
+    InjuryStatus,
 )
-
 
 # =============================================================================
 # Test Fixtures
@@ -647,9 +646,7 @@ class TestInjuryChangeDetector:
         injury = create_injury_record("1", "Player A", status="out", injury_type="knee")
         previous = [injury]
         # Create identical injury
-        current = [
-            create_injury_record("1", "Player A", status="out", injury_type="knee")
-        ]
+        current = [create_injury_record("1", "Player A", status="out", injury_type="knee")]
 
         result = change_detector.detect_changes(previous, current)
 
@@ -665,9 +662,7 @@ class TestInjuryChangeDetector:
             create_injury_record("3", "Player C", status="questionable"),  # Unchanged
         ]
         current = [
-            create_injury_record(
-                "1", "Player A", status="questionable"
-            ),  # Status changed
+            create_injury_record("1", "Player A", status="questionable"),  # Status changed
             create_injury_record("3", "Player C", status="questionable"),  # Unchanged
             create_injury_record("4", "Player D", status="out"),  # New
         ]

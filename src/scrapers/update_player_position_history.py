@@ -16,14 +16,13 @@ Usage:
 
 import argparse
 import logging
-from datetime import datetime, date
+from datetime import date, datetime
+
 from sqlalchemy import text
+
 from src.db.client import get_engine
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -132,7 +131,7 @@ def update_snapshot(engine, snapshot_date: date):
     """)
 
     with engine.begin() as conn:
-        result = conn.execute(query, {'snap_date': snapshot_date.isoformat()})
+        result = conn.execute(query, {"snap_date": snapshot_date.isoformat()})
         logger.info(f"Snapshot {snapshot_date} updated successfully")
 
 
@@ -273,9 +272,13 @@ def backfill_all_snapshots(engine):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Update player position history snapshots')
-    parser.add_argument('--date', type=str, help='Specific snapshot date (YYYY-MM-DD). Defaults to today.')
-    parser.add_argument('--backfill', action='store_true', help='Backfill all historical snapshots (2018-present)')
+    parser = argparse.ArgumentParser(description="Update player position history snapshots")
+    parser.add_argument(
+        "--date", type=str, help="Specific snapshot date (YYYY-MM-DD). Defaults to today."
+    )
+    parser.add_argument(
+        "--backfill", action="store_true", help="Backfill all historical snapshots (2018-present)"
+    )
     args = parser.parse_args()
 
     engine = get_engine()
@@ -284,7 +287,7 @@ def main():
         backfill_all_snapshots(engine)
     else:
         if args.date:
-            snapshot_date = datetime.strptime(args.date, '%Y-%m-%d').date()
+            snapshot_date = datetime.strptime(args.date, "%Y-%m-%d").date()
         else:
             snapshot_date = date.today()
 
@@ -292,7 +295,11 @@ def main():
 
     # Show current snapshot count
     with engine.connect() as conn:
-        result = conn.execute(text("SELECT COUNT(*) as cnt, COUNT(DISTINCT snapshot_date) as dates FROM player_position_history"))
+        result = conn.execute(
+            text(
+                "SELECT COUNT(*) as cnt, COUNT(DISTINCT snapshot_date) as dates FROM player_position_history"
+            )
+        )
         row = result.fetchone()
         logger.info(f"Total records: {row[0]:,} across {row[1]} snapshot dates")
 
