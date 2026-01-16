@@ -33,3 +33,14 @@ data/
 *.log
 .DS_Store
 Thumbs.db
+
+# Solokit session files
+.session/briefings/
+.session/history/
+# Solokit adoption backups
+.solokit-backup/
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+*.cover

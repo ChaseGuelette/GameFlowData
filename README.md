@@ -69,3 +69,62 @@ MachineAlgo/
 2. Install dependencies: `pip install nba_api pandas sqlalchemy psycopg2-binary python-dotenv scikit-learn`
 3. Create a `.env` file with your `DATABASE_URL`
 4. Run `PythonScrapers/dailyUpdateScript.py` for daily updates
+
+<!-- SOLOKIT_SESSION_MANAGEMENT -->
+
+## Session-Driven Development
+
+This project uses [Solokit](https://github.com/anthropics/solokit) for Session-Driven Development with AI assistants.
+
+### Quick Start
+
+```bash
+sk start           # Begin a session with context briefing
+sk end             # Complete session with quality gates
+sk work-new        # Create a new work item
+sk work-list       # View all work items
+sk status          # Check current session status
+```
+
+### Session Commands
+
+| Command | Description |
+|---------|-------------|
+| `sk start [id]` | Start session with comprehensive briefing |
+| `sk end` | Complete session with quality gates |
+| `sk status` | View current session status |
+| `sk validate` | Run quality checks without ending session |
+
+### Work Item Commands
+
+| Command | Description |
+|---------|-------------|
+| `sk work-new` | Create new work item interactively |
+| `sk work-list` | List all work items |
+| `sk work-show <id>` | Show work item details |
+| `sk work-update <id>` | Update work item fields |
+| `sk work-next` | Get recommended next item |
+| `sk work-delete <id>` | Delete a work item |
+| `sk work-graph` | Visualize work item dependencies |
+
+### Learning Commands
+
+| Command | Description |
+|---------|-------------|
+| `sk learn` | Capture a learning |
+| `sk learn-show` | Browse captured learnings |
+| `sk learn-search <query>` | Search learnings by keyword |
+| `sk learn-curate` | Deduplicate and organize learnings |
+
+### Session Files
+
+The `.session/` directory contains:
+
+- **specs/** - Work item specifications
+- **briefings/** - Session context briefings
+- **history/** - Session summaries
+- **tracking/** - Work items and learnings data
+
+---
+
+Adopted with Solokit v0.3.0
