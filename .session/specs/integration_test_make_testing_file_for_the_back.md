@@ -1,4 +1,4 @@
-# Integration Test: make testing file for the backfill_team_ids.py file, test each major function, do logic focused test that ensure returns and inputs are correct
+# Integration_Test: make testing file for the backfill_team_ids.py file, test each major function, do logic focused test that ensure returns and inputs are correct
 
 <!--
 TEMPLATE INSTRUCTIONS:
