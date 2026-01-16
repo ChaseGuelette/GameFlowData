@@ -105,30 +105,31 @@ class ScraperBot:
         for attempt in range(retries):
             try:
                 response = self.session.get(url, params=params, timeout=10)
-
-                if response.status_code == 200:
-                    # Return data and credit usage header
-                    return response.json().get("data", {}), int(
-                        response.headers.get("x-requests-last", 0)
-                    )
-
-                elif response.status_code == 422:
-                    # 422 usually means no props available for this specific game
-                    return None, 0
-
-                elif response.status_code == 429:
-                    # Rate limit hit: Exponential backoff
-                    time.sleep(current_delay * (2**attempt))
-                    continue
-
-                elif response.status_code == 401 and "OUT_OF_USAGE_CREDITS" in response.text:
-                    raise Exception("CRITICAL: Out of usage credits!")
-
-                else:
-                    # Other errors (500, etc.) - break to retry or fail
-                    break
-            except:
+            except requests.RequestException:
                 time.sleep(1)
+                continue
+
+            if response.status_code == 200:
+                # Return data and credit usage header
+                return response.json().get("data", {}), int(
+                    response.headers.get("x-requests-last", 0)
+                )
+
+            elif response.status_code == 422:
+                # 422 usually means no props available for this specific game
+                return None, 0
+
+            elif response.status_code == 429:
+                # Rate limit hit: Exponential backoff
+                time.sleep(current_delay * (2**attempt))
+                continue
+
+            elif response.status_code == 401 and "OUT_OF_USAGE_CREDITS" in response.text:
+                raise Exception("CRITICAL: Out of usage credits!")
+
+            else:
+                # Other errors (500, etc.) - break to retry or fail
+                break
         return None, 0
 
     def parse_and_store(self, data, snapshot_ts):

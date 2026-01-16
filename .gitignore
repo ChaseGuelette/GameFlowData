@@ -49,3 +49,9 @@ coverage.xml
 tmpclaude*
 
 .session/temp_learnings.txt
+node_modules
+
+#Claude Files 
+.claude/
+#Claude Flow files
+.claude-flow/
