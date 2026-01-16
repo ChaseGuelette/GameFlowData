@@ -74,7 +74,7 @@ def cmd_analyze(engine):
     unmatched_query = """
     SELECT DISTINCT api_player_name, COUNT(*) as occurrences
     FROM raw_player_props_combined
-    WHERE game_id IS NOT NULL 
+    WHERE game_id IS NOT NULL
       AND player_id IS NULL
       AND api_player_name IS NOT NULL
     GROUP BY api_player_name
@@ -178,7 +178,7 @@ def cmd_add(engine):
             insert_query = """
             INSERT INTO player_name_mappings (api_name, player_id, notes)
             VALUES (:api_name, :player_id, :notes)
-            ON CONFLICT (api_name) DO UPDATE 
+            ON CONFLICT (api_name) DO UPDATE
             SET player_id = EXCLUDED.player_id, notes = EXCLUDED.notes
             """
 
@@ -238,7 +238,7 @@ def cmd_import(engine, filepath: str):
             insert_query = """
             INSERT INTO player_name_mappings (api_name, player_id, notes)
             VALUES (:api_name, :player_id, :notes)
-            ON CONFLICT (api_name) DO UPDATE 
+            ON CONFLICT (api_name) DO UPDATE
             SET player_id = EXCLUDED.player_id
             """
 

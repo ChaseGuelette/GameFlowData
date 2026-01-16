@@ -66,11 +66,11 @@ def calculate_and_insert_snapshot(engine, season_start_date, snapshot_date):
             league_fta_per100, league_oreb_per100, league_pf_per100,
             total_possessions, total_games
         )
-        SELECT 
-            tgs.season_id,        
+        SELECT
+            tgs.season_id,
             ph.position_group,
             CAST(:snap_date AS DATE),
-            
+
             -- Stats Calculation (Sum / Total Possessions * 100)
             ROUND((SUM(pgs.pts) / NULLIF(SUM(adv.possessions), 0) * 100), 2),
             ROUND((SUM(pgs.reb) / NULLIF(SUM(adv.possessions), 0) * 100), 2),
@@ -83,29 +83,29 @@ def calculate_and_insert_snapshot(engine, season_start_date, snapshot_date):
             ROUND((SUM(pgs.fta) / NULLIF(SUM(adv.possessions), 0) * 100), 2),
             ROUND((SUM(pgs.oreb) / NULLIF(SUM(adv.possessions), 0) * 100), 2),
             ROUND((SUM(pgs.pf) / NULLIF(SUM(adv.possessions), 0) * 100), 2),
-            
+
             SUM(adv.possessions),
             COUNT(DISTINCT pgs.game_id)
 
         FROM player_game_stats pgs
         JOIN team_game_stats tgs ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
         JOIN player_game_advanced_stats adv ON pgs.game_id = adv.game_id AND pgs.player_id = adv.player_id
-        
+
         -- Correct History Join
         JOIN LATERAL (
             SELECT position_group FROM player_position_history ph
-            WHERE ph.player_id = pgs.player_id 
+            WHERE ph.player_id = pgs.player_id
               AND ph.snapshot_date < tgs.game_date::DATE
             ORDER BY ph.snapshot_date DESC LIMIT 1
         ) ph ON TRUE
 
         WHERE tgs.game_date::DATE >= CAST(:season_start AS DATE)
           AND tgs.game_date::DATE < CAST(:snap_date AS DATE)
-          AND pgs.min > 0 
+          AND pgs.min > 0
           AND adv.possessions > 0
-          
+
         GROUP BY tgs.season_id, ph.position_group
-        
+
         ON CONFLICT (season_id, position_group, snapshot_date) DO UPDATE SET
             league_off_rtg = EXCLUDED.league_off_rtg,
             league_reb_per100 = EXCLUDED.league_reb_per100,

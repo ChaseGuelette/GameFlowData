@@ -40,10 +40,10 @@ def backfill_team_allowed_by_position(engine, seasons: list[str]):
 
 def fetch_raw_allowed_stats(engine, seasons):
     query = text("""
-        SELECT 
+        SELECT
             tgs.team_id, tgs.game_id, tgs.game_date::DATE as game_date, tgs.season_id,
             COALESCE(ph.position_group, 'U') as position_group,
-            
+
             -- Core Stats
             COALESCE(SUM(pgs.pts), 0) as pts,
             COALESCE(SUM(pgs.reb), 0) as reb,
@@ -52,7 +52,7 @@ def fetch_raw_allowed_stats(engine, seasons):
             COALESCE(SUM(pgs.stl), 0) as stl,
             COALESCE(SUM(pgs.blk), 0) as blk,
             COALESCE(SUM(pgs.tov), 0) as tov,
-            
+
             -- Sharp Stats (NEW)
             COALESCE(SUM(pgs.fta), 0) as fta,
             COALESCE(SUM(pgs.oreb), 0) as oreb,
@@ -60,9 +60,9 @@ def fetch_raw_allowed_stats(engine, seasons):
 
             -- Possessions (from Advanced)
             COALESCE(SUM(adv.possessions), 0) as poss_faced
-            
+
         FROM team_game_stats tgs
-        JOIN player_game_stats pgs 
+        JOIN player_game_stats pgs
             ON tgs.game_id = pgs.game_id AND tgs.team_id != pgs.team_id AND pgs.min > 0
         JOIN player_game_advanced_stats adv
             ON pgs.game_id = adv.game_id AND pgs.player_id = adv.player_id

@@ -198,9 +198,9 @@ class ScraperBot:
             with conn.cursor() as cur:
                 # UPDATED TABLE NAME: raw_player_props_staging_v2
                 query = """
-                        INSERT INTO raw_player_props_staging_v2 
-                        (api_game_id, api_player_name, bookmaker, market_key, 
-                         outcome_label, line, odds_american, commence_time, home_team, away_team, 
+                        INSERT INTO raw_player_props_staging_v2
+                        (api_game_id, api_player_name, bookmaker, market_key,
+                         outcome_label, line, odds_american, commence_time, home_team, away_team,
                          snapshot_time, market_last_update, bookmaker_last_update, bookmaker_name)
                         VALUES %s
                     """

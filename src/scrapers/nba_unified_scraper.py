@@ -403,8 +403,8 @@ def transform_team_adv_df(df: pd.DataFrame) -> pd.DataFrame:
 def get_games_missing_advanced_stats(engine) -> list[str]:
     """Get game IDs that have basic stats but are missing advanced stats."""
     sql = """
-    SELECT DISTINCT game_id 
-    FROM team_game_stats 
+    SELECT DISTINCT game_id
+    FROM team_game_stats
     WHERE offensive_rating IS NULL
     ORDER BY game_id ASC
     """
@@ -476,7 +476,7 @@ def update_team_advanced_stats(engine, team_df: pd.DataFrame, game_id: str):
             continue
 
         sql = f"""
-        UPDATE team_game_stats 
+        UPDATE team_game_stats
         SET {", ".join(set_parts)}
         WHERE game_id = :game_id AND team_id = :team_id
         """

@@ -92,61 +92,61 @@ class FeatureStore:
         print(f"Generating training data for seasons: {seasons}")
 
         query = text("""
-            SELECT 
+            SELECT
                 -- Identifiers
                 pgs.game_id, pgs.player_id, pgs.game_date::date, pgs.season_id,
                 pgs.team_id, tgs.opponent_id,
-                
+
                 -- Target Variables
                 pgs.min as actual_minutes,
                 pgs.pts as actual_pts,
                 pgs.reb as actual_reb,
                 pgs.ast as actual_ast,
                 pgs.fg3m as actual_threes,
-                
+
                 -- 1. Position Snapshot
                 pos.position_group,
-                
+
                 -- 2. League Priors (Baseline for NULLs)
                 COALESCE(prior.league_off_rtg, 110.0) as league_avg_off_rtg,
                 COALESCE(prior.league_pace, 99.0) as league_avg_pace,
                 COALESCE(prior.league_threes_per100, 3.5) as league_avg_threes,
-                
+
                 -- 3. Player History
                 COALESCE(p_avg.avg_min_l5, 0) as player_avg_min_l5,
                 COALESCE(p_avg.avg_min_l15, 0) as player_avg_min_l15,
                 COALESCE(p_avg.avg_pts_l5, 0) as player_avg_pts_l5,
                 COALESCE(p_avg.avg_pts_l15, 0) as player_avg_pts_l15,
-                
+
                 COALESCE(pa_avg.avg_usg_pct_l5, 0.20) as player_avg_usg_pct_l5,
                 COALESCE(pa_avg.avg_usg_pct_l15, 0.20) as player_avg_usg_pct_l15,
                 COALESCE(pa_avg.avg_ts_pct_l15, 0.55) as player_avg_ts_pct_l15,
-                
+
                 -- 4. Team Context
                 COALESCE(t_avg.avg_pace_l5, prior.league_pace) as team_avg_pace_l5,
                 COALESCE(t_avg.avg_off_rtg_l5, prior.league_off_rtg) as team_avg_off_rtg_l5,
-                
+
                 -- 5. Opponent Context
                 COALESCE(opp_avg.avg_def_rtg_l5, prior.league_off_rtg) as opp_avg_def_rtg_l5,
                 COALESCE(opp_avg.avg_pace_l5, prior.league_pace) as opp_avg_pace_l5,
-                
+
                 -- 6. Opponent Defense vs Position (FIXED ALIASES MATCHING INFERENCE)
                 COALESCE(opp_def.off_rtg_allowed_l5, prior.league_off_rtg) as opp_pos_off_rtg_allowed_l5,
                 -- Added 'per100' to alias to match dict key
                 COALESCE(opp_def.reb_per100_allowed_l5, prior.league_reb_per100) as opp_pos_reb_per100_allowed_l5,
                 COALESCE(opp_def.threes_per100_allowed_l5, prior.league_threes_per100) as opp_pos_threes_per100_allowed_l5,
-                
+
                 -- 7. Game Lines
                 COALESCE(lines.spread, -5.5) as line_spread,
                 COALESCE(lines.total, 225.0) as line_total,
 
                 -- 8. Game Context
                 CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
-                
+
             FROM player_game_stats pgs
-            JOIN team_game_stats tgs 
+            JOIN team_game_stats tgs
                 ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
-            
+
             -- JOIN 1: Position
             LEFT JOIN LATERAL (
                 SELECT position_group
@@ -155,12 +155,12 @@ class FeatureStore:
                   AND ph.snapshot_date < pgs.game_date
                 ORDER BY ph.snapshot_date DESC LIMIT 1
             ) pos ON TRUE
-            
+
             -- JOIN 2: League Priors
             LEFT JOIN LATERAL (
-                SELECT 
-                    league_off_rtg, league_reb_per100, league_threes_per100, 
-                    99.0 as league_pace 
+                SELECT
+                    league_off_rtg, league_reb_per100, league_threes_per100,
+                    99.0 as league_pace
                 FROM league_priors_history lp
                 WHERE lp.season_id = pgs.season_id
                   AND lp.position_group = pos.position_group
@@ -185,7 +185,7 @@ class FeatureStore:
                   AND paas.game_date < pgs.game_date
                 ORDER BY paas.game_date DESC LIMIT 1
             ) pa_avg ON TRUE
-                
+
             -- JOIN 5: Team Rolling Stats
             LEFT JOIN LATERAL (
                 SELECT avg_pace_l5, avg_off_rtg_l5
@@ -194,7 +194,7 @@ class FeatureStore:
                   AND tags.game_date < pgs.game_date
                 ORDER BY tags.game_date DESC LIMIT 1
             ) t_avg ON TRUE
-                
+
             -- JOIN 6: Opponent Stats
             LEFT JOIN LATERAL (
                 SELECT avg_def_rtg_l5, avg_pace_l5
@@ -203,7 +203,7 @@ class FeatureStore:
                   AND tags.game_date < pgs.game_date
                 ORDER BY tags.game_date DESC LIMIT 1
             ) opp_avg ON TRUE
-            
+
             -- JOIN 7: Opponent Defense vs Position
             LEFT JOIN LATERAL (
                 SELECT off_rtg_allowed_l5, reb_per100_allowed_l5, threes_per100_allowed_l5
@@ -213,10 +213,10 @@ class FeatureStore:
                   AND tabp.game_date < pgs.game_date
                 ORDER BY tabp.game_date DESC LIMIT 1
             ) opp_def ON TRUE
-            
+
             -- JOIN 8: Betting Lines (OPTIMIZED SINGLE SCAN)
             LEFT JOIN LATERAL (
-                SELECT 
+                SELECT
                     MAX(CASE WHEN market_key = 'spreads' THEN line END) as spread,
                     MAX(CASE WHEN market_key = 'totals' THEN line END) as total
                 FROM raw_game_lines_staging
@@ -274,11 +274,11 @@ class FeatureStore:
 
     def _get_context_snapshots(self, conn, game_id, player_id, as_of_date):
         query = text("""
-            SELECT 
+            SELECT
                 pgs.team_id, pgs.season_id, tgs.opponent_id,
                 CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home,
-                (SELECT position_group FROM player_position_history ph 
-                 WHERE ph.player_id = :player_id AND ph.snapshot_date < :as_of_date 
+                (SELECT position_group FROM player_position_history ph
+                 WHERE ph.player_id = :player_id AND ph.snapshot_date < :as_of_date
                  ORDER BY ph.snapshot_date DESC LIMIT 1) as position_group
             FROM player_game_stats pgs
             JOIN team_game_stats tgs ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
@@ -290,7 +290,7 @@ class FeatureStore:
     def _get_league_priors(self, conn, season_id, position_group, as_of_date):
         """Fetch league averages. Used as FALLBACK for missing data."""
         query = text("""
-            SELECT league_off_rtg, league_reb_per100, league_threes_per100, 
+            SELECT league_off_rtg, league_reb_per100, league_threes_per100,
                    99.0 as league_pace -- Placeholder for pace
             FROM league_priors_history
             WHERE season_id = :season_id AND position_group = :position_group
@@ -313,7 +313,7 @@ class FeatureStore:
 
     def _get_player_rolling_stats(self, conn, player_id, as_of_date, priors):
         query = text("""
-            SELECT 
+            SELECT
                 pags.avg_min_l5, pags.avg_min_l15,
                 pags.avg_pts_l5, pags.avg_pts_l15,
                 paas.avg_usg_pct_l5, paas.avg_usg_pct_l15, paas.avg_ts_pct_l15
@@ -362,7 +362,7 @@ class FeatureStore:
         query = text("""
             SELECT off_rtg_allowed_l5, reb_per100_allowed_l5, threes_per100_allowed_l5
             FROM team_allowed_by_position
-            WHERE team_id = :opponent_id 
+            WHERE team_id = :opponent_id
               AND position_group = :position_group
               AND game_date < :as_of_date
             ORDER BY game_date DESC LIMIT 1
@@ -391,7 +391,7 @@ class FeatureStore:
         Fetches Spread/Total from raw_game_lines_staging using optimized aggregation.
         """
         query = text("""
-            SELECT 
+            SELECT
                 MAX(CASE WHEN market_key = 'spreads' THEN line END) as spread,
                 MAX(CASE WHEN market_key = 'totals' THEN line END) as total
             FROM raw_game_lines_staging

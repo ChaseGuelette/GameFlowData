@@ -122,9 +122,9 @@ class GameLineScraper:
         try:
             with conn.cursor() as cur:
                 query = """
-                    INSERT INTO raw_game_lines_staging 
-                    (api_game_id, bookmaker, market_key, outcome_label, 
-                     line, odds_american, commence_time, home_team, away_team, 
+                    INSERT INTO raw_game_lines_staging
+                    (api_game_id, bookmaker, market_key, outcome_label,
+                     line, odds_american, commence_time, home_team, away_team,
                      snapshot_time, market_last_update, bookmaker_last_update, bookmaker_name)
                     VALUES %s
                 """

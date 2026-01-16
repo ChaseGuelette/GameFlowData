@@ -131,7 +131,7 @@ def update_snapshot(engine, snapshot_date: date):
     """)
 
     with engine.begin() as conn:
-        result = conn.execute(query, {"snap_date": snapshot_date.isoformat()})
+        conn.execute(query, {"snap_date": snapshot_date.isoformat()})
         logger.info(f"Snapshot {snapshot_date} updated successfully")
 
 

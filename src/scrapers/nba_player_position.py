@@ -52,8 +52,8 @@ def update_player_positions():
                 with engine.begin() as conn:
                     conn.execute(
                         text("""
-                            UPDATE public.players 
-                            SET primary_position = :pos, position_group = :grp 
+                            UPDATE public.players
+                            SET primary_position = :pos, position_group = :grp
                             WHERE player_id = :id
                         """),
                         {"pos": raw_pos, "grp": pos_group, "id": player_id},

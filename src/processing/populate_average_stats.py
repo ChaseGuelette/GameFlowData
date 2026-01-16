@@ -163,7 +163,7 @@ PLAYER_BASIC_STATS = [
 def fetch_player_game_stats(engine, season_id: str | None = None) -> pd.DataFrame:
     """Fetch player game stats from database."""
     query = """
-        SELECT 
+        SELECT
             player_id,
             game_id,
             season_id,
@@ -319,7 +319,7 @@ PLAYER_ADVANCED_MAPPING = {
 def fetch_player_advanced_stats(engine, season_id: str | None = None) -> pd.DataFrame:
     """Fetch player advanced stats by joining game stats with advanced stats."""
     query = """
-        SELECT 
+        SELECT
             pgs.player_id,
             pgs.game_id,
             pgs.season_id,
@@ -503,7 +503,7 @@ TEAM_ADVANCED_MAPPING = {
 def fetch_team_game_stats(engine, season_id: str | None = None) -> pd.DataFrame:
     """Fetch team game stats from database."""
     query = """
-        SELECT 
+        SELECT
             team_id,
             game_id,
             season_id,

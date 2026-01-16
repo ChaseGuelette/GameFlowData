@@ -95,7 +95,7 @@ class DailyPredictionRunner:
     def _get_games_for_date(self, target_date: date) -> list[dict]:
         """Get all games scheduled for target date."""
         query = """
-            SELECT DISTINCT game_id, 
+            SELECT DISTINCT game_id,
                    MAX(CASE WHEN team_matchup LIKE '%vs.%' THEN team_id END) as home_team_id,
                    MAX(CASE WHEN team_matchup LIKE '%@%' THEN team_id END) as away_team_id
             FROM team_game_stats
@@ -109,7 +109,7 @@ class DailyPredictionRunner:
 
     def _get_players_for_games(self, games: list[dict]) -> list[dict]:
         """Get expected players for games (based on recent activity)."""
-        game_ids = [g["game_id"] for g in games]
+        [g["game_id"] for g in games]
 
         # Get players who played recently for teams in these games
         query = """
@@ -158,7 +158,7 @@ class DailyPredictionRunner:
         markets = [stat_to_market[s] for s in stats if s in stat_to_market]
 
         query = """
-            SELECT 
+            SELECT
                 player_id,
                 game_id,
                 market_key,

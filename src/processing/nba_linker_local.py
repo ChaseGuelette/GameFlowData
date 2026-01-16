@@ -74,7 +74,7 @@ def download_tables():
         "teams": "SELECT team_id, team_name FROM teams",
         "players": "SELECT player_id, player_name FROM players",
         "team_game_stats": """
-            SELECT game_id, team_id, team_name, team_game_date, team_matchup, opponent_id 
+            SELECT game_id, team_id, team_name, team_game_date, team_matchup, opponent_id
             FROM team_game_stats
         """,
         "player_game_stats": "SELECT player_id, game_id, team_id FROM player_game_stats",
@@ -165,7 +165,7 @@ def download_tables():
 
             while current <= max_id:
                 query = text("""
-                    SELECT staging_id, api_player_name, home_team, away_team, commence_time, 
+                    SELECT staging_id, api_player_name, home_team, away_team, commence_time,
                            game_id, player_id, team_id
                     FROM raw_player_props_combined
                     WHERE staging_id >= :start AND staging_id < :end
