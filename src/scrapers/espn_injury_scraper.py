@@ -325,9 +325,7 @@ class InjuryChangeDetector:
 # Example usage and testing
 if __name__ == "__main__":
     # Setup logging
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     # Initialize scraper
     scraper = ESPNInjuryScraper(min_request_interval=2.0)

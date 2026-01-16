@@ -41,9 +41,7 @@ class QuantileModelSuite:
         self.models: dict[float, xgb.XGBRegressor] = {}
         self.feature_names: list[str] = []
 
-    def train(
-        self, X: pd.DataFrame, y: pd.Series, feature_names: list[str] | None = None
-    ) -> dict[str, float]:
+    def train(self, X: pd.DataFrame, y: pd.Series, feature_names: list[str] | None = None) -> dict[str, float]:
         """
         Train separate models for each quantile.
 
@@ -83,9 +81,7 @@ class QuantileModelSuite:
             val_preds = model.predict(X_val)
             coverage = (y_val <= val_preds).mean()
 
-            print(
-                f"  Quantile {q:.2f}: Target coverage = {q:.2f}, Actual coverage = {coverage:.3f}"
-            )
+            print(f"  Quantile {q:.2f}: Target coverage = {q:.2f}, Actual coverage = {coverage:.3f}")
 
             self.models[q] = model
             results[q] = coverage

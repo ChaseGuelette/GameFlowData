@@ -165,9 +165,7 @@ def test_process_local_matches_and_outputs(module, monkeypatch, tmp_path):
             }
         ]
     )
-    player_game_stats = pd.DataFrame(
-        [{"player_id": 100, "game_id": "0022400001", "team_id": 1}]
-    )
+    player_game_stats = pd.DataFrame([{"player_id": 100, "game_id": "0022400001", "team_id": 1}])
     game_lines = pd.DataFrame(
         [
             {
@@ -210,9 +208,7 @@ def test_process_local_matches_and_outputs(module, monkeypatch, tmp_path):
     game_lines.to_csv(tmp_path / "game_lines.csv", index=False)
     player_props.to_csv(tmp_path / "player_props.csv", index=False)
 
-    pd.DataFrame(
-        [{"api_name": "LeBron J.", "player_id": 100}]
-    ).to_csv(tmp_path / "player_mappings.csv", index=False)
+    pd.DataFrame([{"api_name": "LeBron J.", "player_id": 100}]).to_csv(tmp_path / "player_mappings.csv", index=False)
 
     module.process_local()
 
@@ -262,9 +258,7 @@ def test_upload_results_runs_updates(module, monkeypatch, tmp_path):
         ]
     ).to_csv(tmp_path / "game_lines_updates.csv", index=False)
 
-    pd.DataFrame([{"staging_id": 10, "game_id": "0022400001"}]).to_csv(
-        tmp_path / "props_game_updates.csv", index=False
-    )
+    pd.DataFrame([{"staging_id": 10, "game_id": "0022400001"}]).to_csv(tmp_path / "props_game_updates.csv", index=False)
 
     pd.DataFrame([{"staging_id": 10, "player_id": 100, "team_id": 1}]).to_csv(
         tmp_path / "props_full_updates.csv", index=False

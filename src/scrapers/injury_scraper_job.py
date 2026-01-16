@@ -129,8 +129,7 @@ class InjuryScraperJob:
                 from espn_injury_scraper import InjuryRecord
 
                 previous_injuries = [
-                    InjuryRecord(**{k: v for k, v in record.items() if k != "id"})
-                    for record in previous_injuries_data
+                    InjuryRecord(**{k: v for k, v in record.items() if k != "id"}) for record in previous_injuries_data
                 ]
                 changes = self.change_detector.detect_changes(previous_injuries, current_injuries)
 
@@ -138,9 +137,7 @@ class InjuryScraperJob:
                 if changes["new"]:
                     self.logger.info(f"New injuries: {len(changes['new'])}")
                     for injury in changes["new"][:5]:  # Log first 5
-                        self.logger.info(
-                            f"  - {injury.player_name} ({injury.team_name}): {injury.injury_type}"
-                        )
+                        self.logger.info(f"  - {injury.player_name} ({injury.team_name}): {injury.injury_type}")
 
                 if changes["resolved"]:
                     self.logger.info(f"Resolved injuries: {len(changes['resolved'])}")
@@ -268,8 +265,7 @@ class InjuryScraperJob:
             message_parts.append(f"New Injuries ({len(changes['new'])}):")
             for injury in changes["new"][:10]:  # Top 10
                 message_parts.append(
-                    f"  - {injury.player_name} ({injury.team_name}): "
-                    f"{injury.injury_type or 'Unknown'}"
+                    f"  - {injury.player_name} ({injury.team_name}): {injury.injury_type or 'Unknown'}"
                 )
             if len(changes["new"]) > 10:
                 message_parts.append(f"  ... and {len(changes['new']) - 10} more")
@@ -288,9 +284,7 @@ class InjuryScraperJob:
 
 def run_scheduled_job():
     """Entry point for scheduled job execution"""
-    job = InjuryScraperJob(
-        log_dir=os.environ.get("LOG_DIR", "./logs"), alert_email=os.environ.get("ALERT_EMAIL")
-    )
+    job = InjuryScraperJob(log_dir=os.environ.get("LOG_DIR", "./logs"), alert_email=os.environ.get("ALERT_EMAIL"))
 
     results = job.run()
 

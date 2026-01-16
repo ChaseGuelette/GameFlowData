@@ -300,9 +300,7 @@ def scrape_team_game_stats(engine, seasons: list[str], season_type: str = "Regul
 
     # Add opponent_id by parsing matchup
     combined_df["opponent_id"] = combined_df.apply(
-        lambda row: extract_opponent_id(
-            row.get("team_matchup"), row.get("team_id"), team_abbrev_map
-        ),
+        lambda row: extract_opponent_id(row.get("team_matchup"), row.get("team_id"), team_abbrev_map),
         axis=1,
     )
 
@@ -550,9 +548,7 @@ def ensure_players_exist(engine, player_df: pd.DataFrame):
     params = {f"id{i}": pid for i, pid in enumerate(player_ids)}
 
     with engine.connect() as conn:
-        result = conn.execute(
-            text(f"SELECT player_id FROM players WHERE player_id IN ({placeholders})"), params
-        )
+        result = conn.execute(text(f"SELECT player_id FROM players WHERE player_id IN ({placeholders})"), params)
         existing_ids = {row[0] for row in result}
 
     # Find missing players
@@ -642,9 +638,7 @@ def scrape_advanced_stats(engine, limit: int | None = None) -> tuple[int, int]:
                     player_df_filtered = player_df[available_cols]
 
                     with engine.begin() as conn:
-                        player_df_filtered.to_sql(
-                            "player_game_advanced_stats", conn, if_exists="append", index=False
-                        )
+                        player_df_filtered.to_sql("player_game_advanced_stats", conn, if_exists="append", index=False)
 
                 print("✓ Saved")
                 success = True
@@ -899,9 +893,7 @@ def main():
     )
     parser.add_argument("--skip-team", action="store_true", help="Skip team game stats scraping")
     # NEW ARGUMENT
-    parser.add_argument(
-        "--skip-traditional", action="store_true", help="Skip traditional player stats scraping"
-    )
+    parser.add_argument("--skip-traditional", action="store_true", help="Skip traditional player stats scraping")
     parser.add_argument("--skip-advanced", action="store_true", help="Skip advanced stats scraping")
     parser.add_argument(
         "--advanced-limit",

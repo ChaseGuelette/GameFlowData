@@ -173,13 +173,9 @@ class DailyPredictionRunner:
         """
 
         with self.engine.connect() as conn:
-            return pd.read_sql(
-                query, conn, params={"game_ids": tuple(game_ids), "markets": tuple(markets)}
-            )
+            return pd.read_sql(query, conn, params={"game_ids": tuple(game_ids), "markets": tuple(markets)})
 
-    def _calculate_edges(
-        self, predictions_df: pd.DataFrame, lines_df: pd.DataFrame
-    ) -> pd.DataFrame:
+    def _calculate_edges(self, predictions_df: pd.DataFrame, lines_df: pd.DataFrame) -> pd.DataFrame:
         """Add edge calculations to predictions."""
 
         # Map market_key back to stat

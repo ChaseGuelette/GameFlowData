@@ -78,9 +78,7 @@ def main():
     # Show sample mappings
     print("\nSample mappings:")
     for m in mappings[:5]:
-        print(
-            f"  {m.wrong_game_id} -> {m.correct_game_id} ({m.home_team} vs {m.away_team}, {m.date_diff} days off)"
-        )
+        print(f"  {m.wrong_game_id} -> {m.correct_game_id} ({m.home_team} vs {m.away_team}, {m.date_diff} days off)")
 
     # Apply fixes
     fixed_rows = 0

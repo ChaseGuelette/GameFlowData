@@ -47,9 +47,7 @@ def check_ids():
         print(f"   Stats Example: '{list(stats_ids)[0]}'")
         print(f"   Props Example: '{list(props_ids)[0]}'")
     else:
-        print(
-            f"   Some IDs match ({len(overlap)}). The issue might be missing stats for specific games."
-        )
+        print(f"   Some IDs match ({len(overlap)}). The issue might be missing stats for specific games.")
 
 
 if __name__ == "__main__":

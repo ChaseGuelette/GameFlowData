@@ -77,9 +77,7 @@ def test_get_bulk_odds_success(bot):
 
 
 def test_get_bulk_odds_retries_on_rate_limit(bot, module, monkeypatch):
-    bot.session.get = Mock(
-        side_effect=[FakeResponse(429), FakeResponse(200, {"data": []}, {"x-requests-last": "1"})]
-    )
+    bot.session.get = Mock(side_effect=[FakeResponse(429), FakeResponse(200, {"data": []}, {"x-requests-last": "1"})])
     monkeypatch.setattr(module.time, "sleep", lambda *_: None)
 
     data, credits = bot.get_bulk_odds("2025-01-01T00:00:00Z")

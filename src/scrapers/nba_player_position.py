@@ -27,9 +27,7 @@ def update_player_positions():
 
     # 1. Get all players that need position info
     with engine.connect() as conn:
-        players = pd.read_sql(
-            "SELECT player_id FROM public.players WHERE primary_position IS NULL", conn
-        )
+        players = pd.read_sql("SELECT player_id FROM public.players WHERE primary_position IS NULL", conn)
 
     print(f"Found {len(players)} players needing position updates.")
 

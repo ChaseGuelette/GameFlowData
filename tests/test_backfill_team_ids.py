@@ -108,9 +108,7 @@ class TestMainFunctionFlow:
 
     @patch("processing.backfill_team_ids.get_engine")
     @patch("processing.backfill_team_ids.tqdm")
-    def test_main_returns_early_when_nothing_to_backfill(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    def test_main_returns_early_when_nothing_to_backfill(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test that main() returns early when no rows need backfilling"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine
@@ -639,9 +637,7 @@ class TestEdgeCases:
 
     @patch("processing.backfill_team_ids.get_engine")
     @patch("processing.backfill_team_ids.tqdm")
-    def test_handles_remaining_rows_that_cannot_be_backfilled(
-        self, mock_tqdm, mock_get_engine, mock_engine
-    ):
+    def test_handles_remaining_rows_that_cannot_be_backfilled(self, mock_tqdm, mock_get_engine, mock_engine):
         """Test handling of rows that can't be backfilled (player's team not in game)"""
         engine, mock_conn, mock_begin_conn = mock_engine
         mock_get_engine.return_value = engine

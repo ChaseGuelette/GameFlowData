@@ -320,9 +320,7 @@ def cmd_apply(engine):
 
 def main():
     parser = argparse.ArgumentParser(description="Manage player name mappings")
-    parser.add_argument(
-        "command", choices=["analyze", "add", "import", "export", "apply"], help="Command to run"
-    )
+    parser.add_argument("command", choices=["analyze", "add", "import", "export", "apply"], help="Command to run")
     parser.add_argument("--file", type=str, help="CSV file for import command")
 
     args = parser.parse_args()

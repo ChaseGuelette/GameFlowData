@@ -38,9 +38,7 @@ def module(monkeypatch):
     monkeypatch.setitem(sys.modules, "nba_api", nba_api)
     monkeypatch.setitem(sys.modules, "nba_api.stats", nba_api_stats)
     monkeypatch.setitem(sys.modules, "nba_api.stats.endpoints", nba_api_endpoints)
-    monkeypatch.setitem(
-        sys.modules, "nba_api.stats.endpoints.commonplayerinfo", commonplayerinfo_module
-    )
+    monkeypatch.setitem(sys.modules, "nba_api.stats.endpoints.commonplayerinfo", commonplayerinfo_module)
 
     nba_unified_scraper = ModuleType("nba_unified_scraper")
     nba_unified_scraper.get_engine = Mock()
@@ -76,9 +74,7 @@ def test_update_player_positions_updates_db(module, monkeypatch):
     engine.begin.return_value = begin_cm
 
     monkeypatch.setattr(module, "get_engine", Mock(return_value=engine))
-    monkeypatch.setattr(
-        module.pd, "read_sql", Mock(return_value=pd.DataFrame([{"player_id": 123}]))
-    )
+    monkeypatch.setattr(module.pd, "read_sql", Mock(return_value=pd.DataFrame([{"player_id": 123}])))
 
     player_info = Mock()
     player_info.get_data_frames.return_value = [pd.DataFrame([{"POSITION": "Guard"}])]
@@ -112,9 +108,7 @@ def test_update_player_positions_skips_empty_data(module, monkeypatch):
     engine.begin.return_value = begin_cm
 
     monkeypatch.setattr(module, "get_engine", Mock(return_value=engine))
-    monkeypatch.setattr(
-        module.pd, "read_sql", Mock(return_value=pd.DataFrame([{"player_id": 456}]))
-    )
+    monkeypatch.setattr(module.pd, "read_sql", Mock(return_value=pd.DataFrame([{"player_id": 456}])))
 
     player_info = Mock()
     player_info.get_data_frames.return_value = [pd.DataFrame()]

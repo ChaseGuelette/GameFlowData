@@ -708,9 +708,7 @@ class TestESPNInjuryScraperIntegration:
         assert "12346" in ids  # Anthony Davis
         assert "22345" in ids  # Jaylen Brown
 
-    def test_change_detection_with_parsed_data(
-        self, scraper, change_detector, sample_espn_api_response
-    ):
+    def test_change_detection_with_parsed_data(self, scraper, change_detector, sample_espn_api_response):
         """Test change detection with realistic parsed data"""
         # Parse initial injuries
         initial_injuries = scraper.parse_injuries(sample_espn_api_response)

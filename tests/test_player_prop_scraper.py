@@ -111,9 +111,7 @@ def test_get_events_for_date_returns_data(bot):
 
 
 def test_get_events_for_date_retries_on_rate_limit(bot, scraper_module, monkeypatch):
-    bot.session.get = Mock(
-        side_effect=[FakeResponse(429), FakeResponse(200, {"data": [{"id": "2"}]})]
-    )
+    bot.session.get = Mock(side_effect=[FakeResponse(429), FakeResponse(200, {"data": [{"id": "2"}]})])
     monkeypatch.setattr(scraper_module.time, "sleep", lambda *_: None)
 
     result = bot.get_events_for_date("2025-01-01T00:00:00Z")

@@ -40,9 +40,7 @@ def identify_nba_season(date_str):
                 year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
                 date_obj = datetime(year, month, day)
             else:
-                raise ValueError(
-                    f"Unable to parse date: {date_str}. Expected format: YYYY-MM-DD or YYYY-M-D"
-                )
+                raise ValueError(f"Unable to parse date: {date_str}. Expected format: YYYY-MM-DD or YYYY-M-D")
 
     # Get year and month
     year = date_obj.year
@@ -265,12 +263,7 @@ def calculate_recent_form_scores(engine, date, teamName):
         # print(DREB_PCT)
         # print(TOV)
         # print(EFG)
-        fourFactorsScore = (
-            (0.6 * EFG)
-            - (0.25 * TOV)
-            + ((0.1 * OREB_PCT) + (0.1 * DREB_PCT))
-            + (0.15 * FreeThrowRate)
-        )
+        fourFactorsScore = (0.6 * EFG) - (0.25 * TOV) + ((0.1 * OREB_PCT) + (0.1 * DREB_PCT)) + (0.15 * FreeThrowRate)
         print(f"Recent Four Factors Score: {fourFactorsScore}")
         return fourFactorsScore
 
@@ -366,9 +359,7 @@ def calculate_net_four(engine, date, teamName):
                 from "{year}_team_advanced_game_data"
                 where "GAME_ID" = :game_id
             """)
-            recent_games = pd.read_sql_query(
-                query, engine, params={"team_name": teamName, "date": date}
-            )
+            recent_games = pd.read_sql_query(query, engine, params={"team_name": teamName, "date": date})
             gameIds = recent_games["GAME_ID"].tolist()
             abvs = recent_games["TEAM_ABBREVIATION"].tolist()
             abv = abvs[0]
@@ -410,12 +401,7 @@ def calculate_net_four(engine, date, teamName):
         EFG = EFG / len(games_df)
         FreeThrowRate = FreeThrowRate / len(recent_games)
 
-        fourFactorsScore = (
-            (0.6 * EFG)
-            - (0.25 * TOV)
-            + ((0.1 * OREB_PCT) + (0.1 * DREB_PCT))
-            + (0.15 * FreeThrowRate)
-        )
+        fourFactorsScore = (0.6 * EFG) - (0.25 * TOV) + ((0.1 * OREB_PCT) + (0.1 * DREB_PCT)) + (0.15 * FreeThrowRate)
         print(f"Recent Four Factors Score: {fourFactorsScore}")
         return fourFactorsScore
 
@@ -652,17 +638,13 @@ def get_historical_matchups(engine, date, goodTeam, badTeam):
             query = get_game_info_query(year)
             query2 = get_game_id_query(year)
 
-            recent_games = pd.read_sql_query(
-                query, engine, params={"badAbv": badAbv, "goodAbv": goodAbv}
-            )
+            recent_games = pd.read_sql_query(query, engine, params={"badAbv": badAbv, "goodAbv": goodAbv})
             gameIds = recent_games["GAME_ID"].tolist()
 
             # get all the games dates
             for gameId in gameIds:
                 # gameId = gameIds[i]
-                curr_game = pd.read_sql_query(
-                    query2, engine, params={"gameId": gameId, "team_name": goodTeam}
-                )
+                curr_game = pd.read_sql_query(query2, engine, params={"gameId": gameId, "team_name": goodTeam})
                 games_df = pd.concat([games_df, curr_game], ignore_index=True)
 
             valid_games = []
@@ -687,17 +669,13 @@ def get_historical_matchups(engine, date, goodTeam, badTeam):
 
                 # create a new tableName, and requery on the previous year
                 # tableName = f"{yearsList[1]}_team_advanced_game_data"
-                recent_gamesTwo = pd.read_sql_query(
-                    query3, engine, params={"badAbv": badAbv, "goodAbv": goodAbv}
-                )
+                recent_gamesTwo = pd.read_sql_query(query3, engine, params={"badAbv": badAbv, "goodAbv": goodAbv})
                 gameIdsTwo = recent_gamesTwo["GAME_ID"].tolist()
 
                 # get all the games dates for new table
                 for gameId in gameIdsTwo:
                     # gameId = gameIds[i]
-                    curr_game = pd.read_sql_query(
-                        query4, engine, params={"gameId": gameId, "team_name": goodTeam}
-                    )
+                    curr_game = pd.read_sql_query(query4, engine, params={"gameId": gameId, "team_name": goodTeam})
                     games_df2 = pd.concat([games_df2, curr_game], ignore_index=True)
                 print(games_df2)
                 valid_games2 = []
@@ -736,15 +714,11 @@ def get_historical_matchups(engine, date, goodTeam, badTeam):
         # check each game id in the first game df
         for index, row in recent_games.iterrows():
             if row["GAME_ID"] == gameId:
-                final_valid_games_df = pd.concat(
-                    [final_valid_games_df, pd.DataFrame([row])], ignore_index=True
-                )
+                final_valid_games_df = pd.concat([final_valid_games_df, pd.DataFrame([row])], ignore_index=True)
         # check each game id in second games df
         for index, row in recent_gamesTwo.iterrows():
             if row["GAME_ID"] == gameId:
-                final_valid_games_df = pd.concat(
-                    [final_valid_games_df, pd.DataFrame([row])], ignore_index=True
-                )
+                final_valid_games_df = pd.concat([final_valid_games_df, pd.DataFrame([row])], ignore_index=True)
 
     print(len(recent_games))
     print(len(final_valid_games_df))
@@ -833,9 +807,7 @@ def calculate_historical_matchups(engine, date, goodTeam, badTeam, avg_games=3, 
     # positive values = badTeam doing better - team1
     # negative values = goodTeam doing better - team2
     for index, row in matchups_df.iterrows():
-        weight = (
-            (avg_games - index) if weighted else 1
-        )  # Ensure most recent game gets highest weight
+        weight = (avg_games - index) if weighted else 1  # Ensure most recent game gets highest weight
 
         total_net_rating_diff += weight * (row["t1_net_rating"] - row["t2_net_rating"])
         total_efg_diff += weight * (row["t1_efg_pct"] - row["t2_efg_pct"])

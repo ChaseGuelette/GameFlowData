@@ -28,9 +28,7 @@ class CalibrationEvaluator:
         self.predictor = predictor
         self.feature_store = feature_store
 
-    def evaluate_quantile_calibration(
-        self, df: pd.DataFrame, stat: str = "pts"
-    ) -> list[CalibrationReport]:
+    def evaluate_quantile_calibration(self, df: pd.DataFrame, stat: str = "pts") -> list[CalibrationReport]:
         """
         Check if predicted quantiles match actual coverage.
 
@@ -153,9 +151,7 @@ class CalibrationEvaluator:
 
         total_wagered = len(hits)  # Assuming unit bets
 
-        winnings = sum(
-            (o / 100 if o > 0 else 100 / abs(o)) if h else -1 for h, o in zip(hits, odds)
-        )
+        winnings = sum((o / 100 if o > 0 else 100 / abs(o)) if h else -1 for h, o in zip(hits, odds))
 
         return winnings / total_wagered
 

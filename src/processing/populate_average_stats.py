@@ -89,9 +89,7 @@ def calculate_rolling_averages(
     return df
 
 
-def calculate_games_in_window(
-    df: pd.DataFrame, group_cols: list[str], sort_col: str = "game_date"
-) -> pd.DataFrame:
+def calculate_games_in_window(df: pd.DataFrame, group_cols: list[str], sort_col: str = "game_date") -> pd.DataFrame:
     """
     Calculate how many games are in each window (for context).
 
@@ -266,9 +264,7 @@ def insert_player_basic_averages(engine, df: pd.DataFrame):
         # Insert in batches
         for i in range(0, len(insert_df), BATCH_SIZE):
             batch = insert_df.iloc[i : i + BATCH_SIZE]
-            batch.to_sql(
-                "player_average_game_stats", conn, if_exists="append", index=False, method="multi"
-            )
+            batch.to_sql("player_average_game_stats", conn, if_exists="append", index=False, method="multi")
             logger.info(
                 f"Inserted batch {i // BATCH_SIZE + 1} ({min(i + BATCH_SIZE, len(insert_df)):,}/{len(insert_df):,})"
             )
@@ -627,9 +623,7 @@ def insert_team_averages(engine, df: pd.DataFrame):
 
         for i in range(0, len(insert_df), BATCH_SIZE):
             batch = insert_df.iloc[i : i + BATCH_SIZE]
-            batch.to_sql(
-                "team_average_game_stats", conn, if_exists="append", index=False, method="multi"
-            )
+            batch.to_sql("team_average_game_stats", conn, if_exists="append", index=False, method="multi")
             logger.info(
                 f"Inserted batch {i // BATCH_SIZE + 1} ({min(i + BATCH_SIZE, len(insert_df)):,}/{len(insert_df):,})"
             )

@@ -111,9 +111,7 @@ class ScraperBot:
 
             if response.status_code == 200:
                 # Return data and credit usage header
-                return response.json().get("data", {}), int(
-                    response.headers.get("x-requests-last", 0)
-                )
+                return response.json().get("data", {}), int(response.headers.get("x-requests-last", 0))
 
             elif response.status_code == 422:
                 # 422 usually means no props available for this specific game

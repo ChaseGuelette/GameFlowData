@@ -156,12 +156,7 @@ class InjuryDatabase:
             timestamp = latest_scrape.data[0]["scrape_timestamp"]
 
             # Get all injuries from that scrape
-            injuries = (
-                self.client.table("espn_injuries")
-                .select("*")
-                .eq("scrape_timestamp", timestamp)
-                .execute()
-            )
+            injuries = self.client.table("espn_injuries").select("*").eq("scrape_timestamp", timestamp).execute()
 
             self.logger.info(f"Retrieved {len(injuries.data)} latest injuries")
             return injuries.data
@@ -220,11 +215,7 @@ class InjuryDatabase:
 
             # Filter for team and active statuses
             active_statuses = {"out", "doubtful", "questionable", "day-to-day"}
-            team_injuries = [
-                inj
-                for inj in injuries
-                if inj["team_id"] == team_id and inj["status"] in active_statuses
-            ]
+            team_injuries = [inj for inj in injuries if inj["team_id"] == team_id and inj["status"] in active_statuses]
 
             self.logger.info(f"Found {len(team_injuries)} active injuries for team {team_id}")
             return team_injuries
@@ -256,9 +247,7 @@ class InjuryDatabase:
                 .execute()
             )
 
-            self.logger.info(
-                f"Retrieved {len(injuries.data)} injury records for player {espn_player_id}"
-            )
+            self.logger.info(f"Retrieved {len(injuries.data)} injury records for player {espn_player_id}")
             return injuries.data
 
         except Exception as e:
@@ -331,10 +320,7 @@ class InjuryDatabase:
             cutoff_date = datetime.now(UTC) - timedelta(days=days_to_keep)
 
             result = (
-                self.client.table("espn_injuries")
-                .delete()
-                .lt("scrape_timestamp", cutoff_date.isoformat())
-                .execute()
+                self.client.table("espn_injuries").delete().lt("scrape_timestamp", cutoff_date.isoformat()).execute()
             )
 
             deleted_count = len(result.data) if result.data else 0
@@ -353,9 +339,7 @@ if __name__ == "__main__":
     from espn_injury_scraper import ESPNInjuryScraper
 
     # Setup logging
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     # Initialize components
     scraper = ESPNInjuryScraper()

@@ -30,9 +30,7 @@ class FeatureStore:
         self.engine = engine
         self.config = config or FeatureConfig()
 
-    def get_player_game_features(
-        self, player_id: int, game_id: str, as_of_date: date
-    ) -> dict | None:
+    def get_player_game_features(self, player_id: int, game_id: str, as_of_date: date) -> dict | None:
         """
         Get all features for a single player-game (Inference Mode).
         Strictly uses data available BEFORE the game starts.
@@ -44,14 +42,10 @@ class FeatureStore:
                 return None
 
             # 2. League Priors (The Baseline)
-            league_priors = self._get_league_priors(
-                conn, ctx["season_id"], ctx["position_group"], as_of_date
-            )
+            league_priors = self._get_league_priors(conn, ctx["season_id"], ctx["position_group"], as_of_date)
 
             # 3. Player Stats (with Fallback)
-            player_stats = self._get_player_rolling_stats(
-                conn, player_id, as_of_date, league_priors
-            )
+            player_stats = self._get_player_rolling_stats(conn, player_id, as_of_date, league_priors)
 
             # 4. Team & Opponent Stats (with Fallback)
             team_stats = self._get_team_rolling_stats(
@@ -73,9 +67,7 @@ class FeatureStore:
             rest_travel = self._get_rest_travel(conn, ctx["team_id"], game_id)
 
             # 8. Derived Features
-            derived = self._calculate_derived_features(
-                player_stats, team_stats, opp_stats, game_lines, league_priors
-            )
+            derived = self._calculate_derived_features(player_stats, team_stats, opp_stats, game_lines, league_priors)
 
             return {
                 "player_id": player_id,
@@ -257,9 +249,7 @@ class FeatureStore:
         # --- DERIVED FEATURES ---
 
         # 1. Pace Interaction (Multiplicative Formula)
-        df["expected_pace"] = (df["team_avg_pace_l5"] * df["opp_avg_pace_l5"]) / df[
-            "league_avg_pace"
-        ]
+        df["expected_pace"] = (df["team_avg_pace_l5"] * df["opp_avg_pace_l5"]) / df["league_avg_pace"]
 
         # 2. Blowout Impact
         df["line_spread_abs"] = df["line_spread"].abs()
@@ -271,18 +261,14 @@ class FeatureStore:
         # Using np.where to prevent division by zero / noise from very low minute games
         df["player_pts_per100_l5"] = np.where(
             df["player_avg_min_l5"] > 5,
-            (df["player_avg_pts_l5"] / df["player_avg_min_l5"])
-            * (48.0 / df["team_avg_pace_l5"])
-            * 100,
+            (df["player_avg_pts_l5"] / df["player_avg_min_l5"]) * (48.0 / df["team_avg_pace_l5"]) * 100,
             np.nan,  # Let model/imputer handle these
         ).astype(float)  # Ensure float type
 
         # 5. Rate Targets
         mask = df["actual_minutes"] >= self.config.min_minutes_for_rate
         for stat in ["pts", "reb", "ast", "threes"]:
-            df.loc[mask, f"{stat}_per_min"] = (
-                df.loc[mask, f"actual_{stat}"] / df.loc[mask, "actual_minutes"]
-            )
+            df.loc[mask, f"{stat}_per_min"] = df.loc[mask, f"actual_{stat}"] / df.loc[mask, "actual_minutes"]
 
         return df
 
@@ -298,9 +284,7 @@ class FeatureStore:
             JOIN team_game_stats tgs ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
             WHERE pgs.game_id = :game_id AND pgs.player_id = :player_id
         """)
-        result = conn.execute(
-            query, {"game_id": game_id, "player_id": player_id, "as_of_date": as_of_date}
-        ).fetchone()
+        result = conn.execute(query, {"game_id": game_id, "player_id": player_id, "as_of_date": as_of_date}).fetchone()
         return dict(result._mapping) if result and result.position_group else None
 
     def _get_league_priors(self, conn, season_id, position_group, as_of_date):
@@ -444,7 +428,6 @@ class FeatureStore:
         return {
             "line_spread_abs": abs(lines.get("line_spread", 0)),
             "expected_pace": (t_pace * o_pace) / l_pace,
-            "player_usg_trend": p_stats.get("player_avg_usg_pct_l5", 0.2)
-            - p_stats.get("player_avg_usg_pct_l15", 0.2),
+            "player_usg_trend": p_stats.get("player_avg_usg_pct_l5", 0.2) - p_stats.get("player_avg_usg_pct_l15", 0.2),
             "player_pts_per100_l5": p_pts_100,
         }

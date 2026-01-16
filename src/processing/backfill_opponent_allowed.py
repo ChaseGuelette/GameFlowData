@@ -105,8 +105,7 @@ def compute_rolling_metrics(df):
         if isinstance(rolled.index, pd.MultiIndex):
             rolled = rolled.reset_index(drop=True)
         rolled.columns = [
-            f"{c}_allowed_{w_name}" if c != "poss_faced" else f"poss_faced_{w_name}"
-            for c in rolled.columns
+            f"{c}_allowed_{w_name}" if c != "poss_faced" else f"poss_faced_{w_name}" for c in rolled.columns
         ]
 
         counts = grouper["pts"].apply(lambda x: x.shift(1).rolling(w_size, min_periods=1).count())
@@ -118,18 +117,14 @@ def compute_rolling_metrics(df):
     szn = grouper[metrics].apply(lambda x: x.shift(1).expanding().sum())
     if isinstance(szn.index, pd.MultiIndex):
         szn = szn.reset_index(drop=True)
-    szn.columns = [
-        f"{c}_allowed_szn" if c != "poss_faced" else "poss_faced_szn" for c in szn.columns
-    ]
+    szn.columns = [f"{c}_allowed_szn" if c != "poss_faced" else "poss_faced_szn" for c in szn.columns]
 
     szn_c = grouper["pts"].apply(lambda x: x.shift(1).expanding().count())
     if isinstance(szn_c.index, pd.MultiIndex):
         szn_c = szn_c.reset_index(drop=True)
     result_dfs.extend([szn, szn_c.rename("games_szn")])
 
-    df_full = pd.concat(
-        [df[["team_id", "game_id", "game_date", "position_group"]]] + result_dfs, axis=1
-    )
+    df_full = pd.concat([df[["team_id", "game_id", "game_date", "position_group"]]] + result_dfs, axis=1)
 
     # Pace Adjustment
     base_stats = ["pts", "reb", "ast", "threes", "stl", "blk", "tov", "fta", "oreb", "pf"]
@@ -146,9 +141,7 @@ def compute_rolling_metrics(df):
             else:
                 rate_col = f"{stat}_per100_allowed_{w}"
 
-            df_full[rate_col] = np.where(
-                (df_full[poss_col] > 0), (df_full[num_col] / df_full[poss_col]) * 100, 0
-            )
+            df_full[rate_col] = np.where((df_full[poss_col] > 0), (df_full[num_col] / df_full[poss_col]) * 100, 0)
 
     return df_full
 
@@ -241,13 +234,7 @@ def batch_insert_to_db(engine, df, batch_size=2000):
     vals = ", ".join([f":{c}" for c in valid_cols])
     upsert = text(
         f"INSERT INTO team_allowed_by_position ({cols}) VALUES ({vals}) ON CONFLICT (team_id, game_id, position_group) DO UPDATE SET "
-        + ", ".join(
-            [
-                f"{c} = EXCLUDED.{c}"
-                for c in valid_cols
-                if c not in ["team_id", "game_id", "position_group"]
-            ]
-        )
+        + ", ".join([f"{c} = EXCLUDED.{c}" for c in valid_cols if c not in ["team_id", "game_id", "position_group"]])
         + ", created_at = NOW();"
     )
 

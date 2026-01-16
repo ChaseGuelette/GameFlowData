@@ -336,9 +336,7 @@ class TestComputeRollingMetrics:
         # All rate columns should be 0 when possessions is 0
         for window in ["l5", "l15", "szn"]:
             rate_cols = [
-                c
-                for c in result.columns
-                if f"per100_allowed_{window}" in c or f"off_rtg_allowed_{window}" in c
+                c for c in result.columns if f"per100_allowed_{window}" in c or f"off_rtg_allowed_{window}" in c
             ]
             for col in rate_cols:
                 # Should be 0 or NaN (depending on the row)

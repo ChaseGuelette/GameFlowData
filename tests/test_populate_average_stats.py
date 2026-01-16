@@ -223,7 +223,9 @@ def test_insert_player_advanced_averages_inserts(module, monkeypatch):
     module.insert_player_advanced_averages(engine, df)
 
     assert "player_average_advanced_stats" in to_sql_calls
-    assert any("TRUNCATE TABLE player_average_advanced_stats" in str(call[0][0]) for call in conn.execute.call_args_list)
+    assert any(
+        "TRUNCATE TABLE player_average_advanced_stats" in str(call[0][0]) for call in conn.execute.call_args_list
+    )
 
 
 def test_insert_team_averages_inserts(module, monkeypatch):

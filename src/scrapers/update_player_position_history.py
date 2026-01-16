@@ -273,12 +273,8 @@ def backfill_all_snapshots(engine):
 
 def main():
     parser = argparse.ArgumentParser(description="Update player position history snapshots")
-    parser.add_argument(
-        "--date", type=str, help="Specific snapshot date (YYYY-MM-DD). Defaults to today."
-    )
-    parser.add_argument(
-        "--backfill", action="store_true", help="Backfill all historical snapshots (2018-present)"
-    )
+    parser.add_argument("--date", type=str, help="Specific snapshot date (YYYY-MM-DD). Defaults to today.")
+    parser.add_argument("--backfill", action="store_true", help="Backfill all historical snapshots (2018-present)")
     args = parser.parse_args()
 
     engine = get_engine()
@@ -296,9 +292,7 @@ def main():
     # Show current snapshot count
     with engine.connect() as conn:
         result = conn.execute(
-            text(
-                "SELECT COUNT(*) as cnt, COUNT(DISTINCT snapshot_date) as dates FROM player_position_history"
-            )
+            text("SELECT COUNT(*) as cnt, COUNT(DISTINCT snapshot_date) as dates FROM player_position_history")
         )
         row = result.fetchone()
         logger.info(f"Total records: {row[0]:,} across {row[1]} snapshot dates")

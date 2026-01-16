@@ -149,9 +149,7 @@ class MonteCarloPredictor:
         # Floor at 0 (can't have negative rate)
         return np.maximum(samples, 0)
 
-    def _inverse_transform_sample(
-        self, quantile_probs: np.ndarray, quantile_values: np.ndarray
-    ) -> np.ndarray:
+    def _inverse_transform_sample(self, quantile_probs: np.ndarray, quantile_values: np.ndarray) -> np.ndarray:
         """
         Sample from a distribution defined by quantiles
         using inverse transform sampling with linear interpolation.
@@ -161,12 +159,8 @@ class MonteCarloPredictor:
         extended_probs = np.concatenate([[0.01], quantile_probs, [0.99]])
 
         # Extrapolate values for tails
-        lower_slope = (quantile_values[1] - quantile_values[0]) / (
-            quantile_probs[1] - quantile_probs[0]
-        )
-        upper_slope = (quantile_values[-1] - quantile_values[-2]) / (
-            quantile_probs[-1] - quantile_probs[-2]
-        )
+        lower_slope = (quantile_values[1] - quantile_values[0]) / (quantile_probs[1] - quantile_probs[0])
+        upper_slope = (quantile_values[-1] - quantile_values[-2]) / (quantile_probs[-1] - quantile_probs[-2])
 
         lower_value = quantile_values[0] - lower_slope * (quantile_probs[0] - 0.01)
         upper_value = quantile_values[-1] + upper_slope * (0.99 - quantile_probs[-1])
@@ -190,9 +184,7 @@ class MonteCarloPredictor:
         row = {f: features.get(f, 0) for f in feature_names}
         return pd.DataFrame([row])
 
-    def batch_predict(
-        self, player_games: list[tuple[int, str, dict]], stats: list[str] = None
-    ) -> pd.DataFrame:
+    def batch_predict(self, player_games: list[tuple[int, str, dict]], stats: list[str] = None) -> pd.DataFrame:
         """
         Batch predict for multiple player-games.
 

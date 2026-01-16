@@ -125,9 +125,7 @@ def download_tables():
 
                 try:
                     with engine.connect() as conn:
-                        chunk = pd.read_sql(
-                            query, conn, params={"start": current, "end": current + batch_size}
-                        )
+                        chunk = pd.read_sql(query, conn, params={"start": current, "end": current + batch_size})
 
                     if not chunk.empty:
                         mode = "w" if first_batch else "a"
@@ -175,9 +173,7 @@ def download_tables():
 
                 try:
                     with engine.connect() as conn:
-                        chunk = pd.read_sql(
-                            query, conn, params={"start": current, "end": current + batch_size}
-                        )
+                        chunk = pd.read_sql(query, conn, params={"start": current, "end": current + batch_size})
 
                     if not chunk.empty:
                         mode = "w" if first_batch else "a"
@@ -274,9 +270,7 @@ def process_local():
     print("\nBuilding game lookup...")
 
     # Filter to home games (matchup contains 'vs.')
-    home_games = team_game_stats[
-        team_game_stats["team_matchup"].str.contains("vs.", na=False)
-    ].copy()
+    home_games = team_game_stats[team_game_stats["team_matchup"].str.contains("vs.", na=False)].copy()
     home_games["game_date"] = home_games["team_game_date"].str[:10]
     home_games["home_team_norm"] = home_games["team_name"].apply(normalize_team)
 
@@ -355,9 +349,7 @@ def process_local():
     if len(unlinked_lines) > 0:
         # Convert commence_time to Eastern date
         unlinked_lines["commence_time"] = pd.to_datetime(unlinked_lines["commence_time"], utc=True)
-        unlinked_lines["game_date"] = (
-            unlinked_lines["commence_time"].dt.tz_convert(EASTERN).dt.strftime("%Y-%m-%d")
-        )
+        unlinked_lines["game_date"] = unlinked_lines["commence_time"].dt.tz_convert(EASTERN).dt.strftime("%Y-%m-%d")
         unlinked_lines["home_team_norm"] = unlinked_lines["home_team"].apply(normalize_team)
 
         # Match
@@ -372,15 +364,11 @@ def process_local():
                         "nba_away_team_id": match[2],
                     }
                 )
-            return pd.Series(
-                {"nba_game_id": None, "nba_home_team_id": None, "nba_away_team_id": None}
-            )
+            return pd.Series({"nba_game_id": None, "nba_home_team_id": None, "nba_away_team_id": None})
 
         tqdm.pandas(desc="Matching game lines")
         matches = unlinked_lines.progress_apply(match_game_line, axis=1)
-        unlinked_lines = pd.concat(
-            [unlinked_lines[["staging_id", "home_team", "game_date"]], matches], axis=1
-        )
+        unlinked_lines = pd.concat([unlinked_lines[["staging_id", "home_team", "game_date"]], matches], axis=1)
 
         # Filter to matched only
         matched_lines = unlinked_lines[unlinked_lines["nba_game_id"].notna()][
@@ -389,14 +377,10 @@ def process_local():
         print(f"Matched: {len(matched_lines):,}")
 
         # Track unmatched
-        unmatched = unlinked_lines[unlinked_lines["nba_game_id"].isna()][
-            ["home_team", "game_date"]
-        ].drop_duplicates()
+        unmatched = unlinked_lines[unlinked_lines["nba_game_id"].isna()][["home_team", "game_date"]].drop_duplicates()
         if len(unmatched) > 0:
             unmatched.to_csv(DATA_DIR / "unmatched_game_lines.csv", index=False)
-            print(
-                f"  {len(unmatched)} unmatched game/date combos saved to {DATA_DIR}/unmatched_game_lines.csv"
-            )
+            print(f"  {len(unmatched)} unmatched game/date combos saved to {DATA_DIR}/unmatched_game_lines.csv")
 
         # Save
         matched_lines.to_csv(DATA_DIR / "game_lines_updates.csv", index=False)
@@ -414,9 +398,7 @@ def process_local():
 
     if len(unlinked_props) > 0:
         unlinked_props["commence_time"] = pd.to_datetime(unlinked_props["commence_time"], utc=True)
-        unlinked_props["game_date"] = (
-            unlinked_props["commence_time"].dt.tz_convert(EASTERN).dt.strftime("%Y-%m-%d")
-        )
+        unlinked_props["game_date"] = unlinked_props["commence_time"].dt.tz_convert(EASTERN).dt.strftime("%Y-%m-%d")
         unlinked_props["home_team_norm"] = unlinked_props["home_team"].apply(normalize_team)
         unlinked_props["away_team_norm"] = unlinked_props["away_team"].apply(normalize_team)
 
@@ -447,13 +429,9 @@ def process_local():
             return matched_game_id
 
         tqdm.pandas(desc="Matching props to games (fuzzy)")
-        unlinked_props["matched_game_id"] = unlinked_props.progress_apply(
-            match_prop_game_fuzzy, axis=1
-        )
+        unlinked_props["matched_game_id"] = unlinked_props.progress_apply(match_prop_game_fuzzy, axis=1)
 
-        matched_props = unlinked_props[unlinked_props["matched_game_id"].notna()][
-            ["staging_id", "matched_game_id"]
-        ]
+        matched_props = unlinked_props[unlinked_props["matched_game_id"].notna()][["staging_id", "matched_game_id"]]
         matched_props.columns = ["staging_id", "game_id"]
 
         print("\nMatching Results:")
@@ -473,9 +451,7 @@ def process_local():
         ].drop_duplicates()
         if len(unmatched_games) > 0:
             unmatched_games.to_csv(DATA_DIR / "unmatched_games.csv", index=False)
-            print(
-                f"  {len(unmatched_games)} unmatched games saved to {DATA_DIR}/unmatched_games.csv"
-            )
+            print(f"  {len(unmatched_games)} unmatched games saved to {DATA_DIR}/unmatched_games.csv")
 
         matched_props.to_csv(DATA_DIR / "props_game_updates.csv", index=False)
         print(f"Saved to {DATA_DIR}/props_game_updates.csv")
@@ -497,9 +473,7 @@ def process_local():
         )
 
     # Only process rows with game_id but no player_id
-    needs_player = props_with_games[
-        props_with_games["game_id"].notna() & props_with_games["player_id"].isna()
-    ].copy()
+    needs_player = props_with_games[props_with_games["game_id"].notna() & props_with_games["player_id"].isna()].copy()
     print(f"Rows needing player match: {len(needs_player):,}")
 
     if len(needs_player) > 0:
@@ -523,9 +497,7 @@ def process_local():
         needs_player["matched_player_id"] = needs_player.progress_apply(match_player, axis=1)
 
         # Track unmatched
-        unmatched = needs_player[needs_player["matched_player_id"].isna()][
-            "api_player_name"
-        ].unique()
+        unmatched = needs_player[needs_player["matched_player_id"].isna()]["api_player_name"].unique()
 
         if len(unmatched) > 0:
             print(f"\n  {len(unmatched)} unmatched player names - generating suggestions...")
@@ -556,14 +528,10 @@ def process_local():
                     suggestions.append(
                         {
                             "api_name": api_name,
-                            "player_id": best_id
-                            if best_score >= 0.7
-                            else "",  # Only pre-fill if confident
+                            "player_id": best_id if best_score >= 0.7 else "",  # Only pre-fill if confident
                             "suggested_name": best_name,
                             "confidence": f"{best_score:.2f}",
-                            "other_suggestions": "; ".join(
-                                [f"{n} ({s:.2f})" for _, n, s in matches[1:]]
-                            ),
+                            "other_suggestions": "; ".join([f"{n} ({s:.2f})" for _, n, s in matches[1:]]),
                         }
                     )
 
@@ -573,9 +541,7 @@ def process_local():
             print(f"  Review and copy confirmed mappings to {DATA_DIR}/player_mappings.csv")
             print("  Format: api_name,player_id")
 
-        matched_players = needs_player[needs_player["matched_player_id"].notna()][
-            ["staging_id", "matched_player_id"]
-        ]
+        matched_players = needs_player[needs_player["matched_player_id"].notna()][["staging_id", "matched_player_id"]]
         matched_players.columns = ["staging_id", "player_id"]
         matched_players["player_id"] = matched_players["player_id"].astype(int)
         print(f"Matched: {len(matched_players):,}")
@@ -633,9 +599,7 @@ def process_local():
         # 6. Fill missing Game IDs from original data
         orig_games = dict(zip(player_props["staging_id"], player_props["game_id"]))
         player_updates["game_id"] = player_updates.apply(
-            lambda r: r["game_id"]
-            if pd.notna(r.get("game_id"))
-            else orig_games.get(r["staging_id"]),
+            lambda r: r["game_id"] if pd.notna(r.get("game_id")) else orig_games.get(r["staging_id"]),
             axis=1,
         )
 
@@ -652,9 +616,9 @@ def process_local():
         player_updates["team_id"] = player_updates.progress_apply(get_team_id, axis=1)
 
         # 9. Filter Results (Keep row if EITHER Player ID or Team ID is found)
-        team_updates = player_updates[
-            (player_updates["player_id"].notna()) | (player_updates["team_id"].notna())
-        ][["staging_id", "player_id", "team_id"]]
+        team_updates = player_updates[(player_updates["player_id"].notna()) | (player_updates["team_id"].notna())][
+            ["staging_id", "player_id", "team_id"]
+        ]
 
         print(f"Matched player_id: {len(team_updates[team_updates['player_id'].notna()]):,}")
         print(f"Matched team_id:   {len(team_updates[team_updates['team_id'].notna()]):,}")
@@ -729,9 +693,7 @@ def upload_results():
                 chunk.to_sql(temp_table_name, conn, if_exists="replace", index=False)
 
                 # 2. Add an index to the temp table to make the join faster
-                conn.execute(
-                    text(f"CREATE INDEX idx_{temp_table_name}_id ON {temp_table_name}(staging_id)")
-                )
+                conn.execute(text(f"CREATE INDEX idx_{temp_table_name}_id ON {temp_table_name}(staging_id)"))
 
                 # 3. Execute the update
                 result = conn.execute(text(update_sql))
@@ -739,9 +701,7 @@ def upload_results():
                 # 4. Cleanup
                 conn.execute(text(f"DROP TABLE IF EXISTS {temp_table_name}"))
 
-                print(
-                    f"  Processed rows {i:,} to {min(i + CHUNK_SIZE, len(df)):,}... Updated {result.rowcount:,} rows"
-                )
+                print(f"  Processed rows {i:,} to {min(i + CHUNK_SIZE, len(df)):,}... Updated {result.rowcount:,} rows")
 
     # ========================================
     # 1. Game Lines Updates
@@ -790,9 +750,7 @@ def upload_results():
             FROM temp_props_player_updates t
             WHERE r.staging_id = t.staging_id
         """
-        chunked_update(
-            df_props_full, "temp_props_player_updates", sql, "player props player/team info"
-        )
+        chunked_update(df_props_full, "temp_props_player_updates", sql, "player props player/team info")
 
     print("\n[OK] Upload complete!")
 
@@ -804,9 +762,7 @@ def upload_results():
 
 def main():
     parser = argparse.ArgumentParser(description="NBA Data Linker - Local Processing (FIXED)")
-    parser.add_argument(
-        "command", choices=["download", "process", "upload", "all", "init"], help="Command to run"
-    )
+    parser.add_argument("command", choices=["download", "process", "upload", "all", "init"], help="Command to run")
 
     args = parser.parse_args()
 

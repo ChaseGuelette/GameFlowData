@@ -1,0 +1,23 @@
+# Documentation Index
+
+## Scrapers
+- [Game Lines Scraper](game_lines_scraper_documentation.md) - Historical odds for moneyline, spreads, totals.
+- [Player Prop Scraper](player_prop_scraper_documentation.md) - Historical player props snapshots.
+- [NBA Player Position](nba_player_position_documentation.md) - Updates player positions via NBA API.
+- [Update League Position Averages](update_league_position_averages_documentation.md) - League averages by position group.
+- [Update Player Position History](update_player_position_history_documentation.md) - Snapshot-based role history.
+- [Injury Database](injury_database_documentation.md) - Supabase storage and queries.
+- [Injury Scraper Job](injury_scraper_job_documentation.md) - Scheduled scraping orchestration.
+
+## Processing
+- [NBA Linker Local](nba_linker_local_documentation.md) - Local ID matching and uploads.
+- [Populate Average Stats](populate_average_stats_documentation.md) - Rolling averages for player/team stats.
+
+## Models
+- [Feature Store](feature_store_documentation.md) - Training and inference feature assembly.
+
+## Database and Tables
+- [DB Client](db_client_documentation.md) - Database engine access and connectivity checks.
+- [League Priors History](league_priors_history.md) - League baseline snapshots by position.
+- [Player Position History](player_position_history.md) - Role snapshots for players.
+- [Team Allowed By Position](team_allowed_by_position.md) - Opponent defense by position group.
