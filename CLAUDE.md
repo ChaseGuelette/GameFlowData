@@ -272,3 +272,21 @@ When running `/end`, you'll be prompted to capture learnings.
 | `.session/specs/` | Work item specifications |
 | `.session/briefings/` | Session briefings |
 | `.session/history/` | Session summaries |
+
+
+---
+
+## Swarm Execution Protocols (Claude Flow)
+
+While Solokit manages **what** we do (Governance), we use Claude Flow Swarms to handle **complex execution**.
+
+### When to use a Swarm
+1. **Low Complexity:** (< 3 files changed): Do NOT use a swarm. Use standard sequential edits.
+2. **High Complexity:** (New feature, heavy refactoring, or > 3 files): Initiate a Swarm.
+
+### Swarm Commands
+* **Trigger:** `/swarm --objective "Implement the requirements in .session/specs/{current_spec}.md"`
+* **Context:** When Swarming, you are authorized to read agent definitions from `.claude/flow_library/`.
+
+### The Prime Directive
+If a Swarm Agent produces code that fails the Solokit Quality Gate (`/validate` or `pytest`), you must **reject** the code and instruct the Swarm to fix it. Do not bypass the Solokit session end process.
