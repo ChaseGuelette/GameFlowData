@@ -8,11 +8,11 @@ Tests cover:
 """
 
 import datetime
-from unittest.mock import Mock, MagicMock, patch, call
-import pytest
-
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -22,11 +22,10 @@ sys.modules["src.db.client"] = Mock()
 sys.modules["src.db"] = Mock()
 
 from processing.backfill_league_priors import (
-    get_season_start_date,
     backfill_league_priors,
     calculate_and_insert_snapshot,
+    get_season_start_date,
 )
-
 
 # =============================================================================
 # Test Fixtures
@@ -154,7 +153,7 @@ class TestSnapshotDateGeneration:
             for m in [11, 12]:
                 snapshot_dates.append(f"{year}-{m:02d}-01")
             for m in [1, 2, 3, 4]:
-                snapshot_dates.append(f"{year+1}-{m:02d}-01")
+                snapshot_dates.append(f"{year + 1}-{m:02d}-01")
 
         # Check November dates
         assert "2020-11-01" in snapshot_dates
@@ -169,7 +168,7 @@ class TestSnapshotDateGeneration:
             for m in [11, 12]:
                 snapshot_dates.append(f"{year}-{m:02d}-01")
             for m in [1, 2, 3, 4]:
-                snapshot_dates.append(f"{year+1}-{m:02d}-01")
+                snapshot_dates.append(f"{year + 1}-{m:02d}-01")
 
         assert "2020-12-01" in snapshot_dates
         assert "2021-12-01" in snapshot_dates
@@ -183,7 +182,7 @@ class TestSnapshotDateGeneration:
             for m in [11, 12]:
                 snapshot_dates.append(f"{year}-{m:02d}-01")
             for m in [1, 2, 3, 4]:
-                snapshot_dates.append(f"{year+1}-{m:02d}-01")
+                snapshot_dates.append(f"{year + 1}-{m:02d}-01")
 
         # Check that Jan-Apr dates are for year+1
         assert "2021-01-01" in snapshot_dates
@@ -204,7 +203,7 @@ class TestSnapshotDateGeneration:
             for m in [11, 12]:
                 snapshot_dates.append(f"{year}-{m:02d}-01")
             for m in [1, 2, 3, 4]:
-                snapshot_dates.append(f"{year+1}-{m:02d}-01")
+                snapshot_dates.append(f"{year + 1}-{m:02d}-01")
 
         assert len(snapshot_dates) == 6
 
@@ -228,7 +227,7 @@ class TestSnapshotDateGeneration:
             for m in [11, 12]:
                 snapshot_dates.append(f"{year}-{m:02d}-01")
             for m in [1, 2, 3, 4]:
-                snapshot_dates.append(f"{year+1}-{m:02d}-01")
+                snapshot_dates.append(f"{year + 1}-{m:02d}-01")
 
         for date_str in snapshot_dates:
             # Verify format YYYY-MM-DD
@@ -392,9 +391,7 @@ class TestBackfillLeaguePriorsIntegration:
 
     @patch("processing.backfill_league_priors.calculate_and_insert_snapshot")
     @patch("processing.backfill_league_priors.datetime")
-    def test_calls_calculate_for_each_snapshot_date(
-        self, mock_datetime, mock_calculate
-    ):
+    def test_calls_calculate_for_each_snapshot_date(self, mock_datetime, mock_calculate):
         """Test that calculate_and_insert_snapshot is called for each date"""
         # Mock today's date to control filtering
         mock_date = Mock()

@@ -187,3 +187,8 @@ JOIN team_allowed_by_position def
     AND def.position_group = ph.position_group; -- The Position they are defending
 ```
 
+
+## Related Documentation
+- [Documentation Index](index.md)
+- [Feature Store](feature_store_documentation.md)
+- [Player Position History](player_position_history.md)

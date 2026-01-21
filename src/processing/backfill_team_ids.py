@@ -9,19 +9,23 @@ Run: python backfill_team_ids.py
 
 from sqlalchemy import text
 from tqdm import tqdm
+
 from src.db.client import get_engine
 
 BATCH_SIZE = 5000
+
 
 def main():
     engine = get_engine()
 
     print("Counting rows to backfill...")
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text("""
             SELECT COUNT(*) FROM raw_player_props_combined
             WHERE team_id IS NULL AND player_id IS NOT NULL
-        """)).fetchone()
+        """)
+        ).fetchone()
         total_to_fix = result[0]
 
     print(f"Found {total_to_fix:,} rows missing team_id (with player_id)")
@@ -39,7 +43,8 @@ def main():
             # 1. Find player's most recent team from player_game_stats
             # 2. Get home/away team_ids from team_game_stats for the game
             # 3. If player's recent team matches home or away, use that team_id
-            result = conn.execute(text("""
+            result = conn.execute(
+                text("""
                 WITH to_update AS (
                     SELECT p.staging_id
                     FROM raw_player_props_combined p
@@ -73,17 +78,21 @@ def main():
                 FROM derived d
                 WHERE p.staging_id = d.staging_id AND d.derived_team_id IS NOT NULL
                 RETURNING p.staging_id
-            """), {"batch_size": BATCH_SIZE})
+            """),
+                {"batch_size": BATCH_SIZE},
+            )
 
             rows_updated = len(result.fetchall())
 
         if rows_updated == 0:
             # Check if there are still rows to process (might have NULL derived_team_id)
             with engine.connect() as conn:
-                remaining = conn.execute(text("""
+                remaining = conn.execute(
+                    text("""
                     SELECT COUNT(*) FROM raw_player_props_combined
                     WHERE team_id IS NULL AND player_id IS NOT NULL
-                """)).fetchone()[0]
+                """)
+                ).fetchone()[0]
 
             if remaining > 0:
                 print(f"\n{remaining:,} rows could not be backfilled (player's team not in game)")
@@ -97,17 +106,20 @@ def main():
 
     # Verify
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text("""
             SELECT
                 COUNT(*) as total,
                 COUNT(team_id) as has_team_id,
                 COUNT(*) - COUNT(team_id) as missing_team_id
             FROM raw_player_props_combined
             WHERE player_id IS NOT NULL
-        """)).fetchone()
+        """)
+        ).fetchone()
         print(f"\nRows with player_id: {result[0]:,}")
         print(f"  Has team_id: {result[1]:,}")
         print(f"  Missing team_id: {result[2]:,}")
+
 
 if __name__ == "__main__":
     main()

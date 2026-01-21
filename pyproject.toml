@@ -34,9 +34,10 @@ build-backend = "setuptools.build_meta"
 packages = ["src"]
 
 [tool.ruff]
-line-length = 100
+line-length = 120  # Increased to 120 for your data science work
 target-version = "py311"
 
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
@@ -47,9 +48,12 @@ select = [
 ]
 
 ignore = [
-    "E501",  # line too long (handled by formatter)
+    "E501", # line too long (handled by formatter)
+    "N803", # Argument name should be lowercase (Allows X in ML functions)
+    "N806", # Variable in function should be lowercase (Allows X in ML functions)
 ]
 
+# Exclude specific folders from linting
 exclude = [
     ".git",
     ".venv",
@@ -58,11 +62,17 @@ exclude = [
     ".pytest_cache",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Ignore import position errors in tests (common when messing with sys.path)
+"tests/*" = ["E402"]
+# Ignore bare excepts in notebooks (common in exploration)
+"*.ipynb" = ["E722"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["src"]
 
 [tool.pytest.ini_options]

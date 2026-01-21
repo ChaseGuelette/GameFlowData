@@ -1,7 +1,101 @@
 GameFlowData/
 ├── .claude
 │   ├── commands
+│   │   ├── analysis
+│   │   │   ├── COMMAND_COMPLIANCE_REPORT.md
+│   │   │   ├── README.md
+│   │   │   ├── bottleneck-detect.md
+│   │   │   ├── performance-bottlenecks.md
+│   │   │   ├── performance-report.md
+│   │   │   ├── token-efficiency.md
+│   │   │   └── token-usage.md
+│   │   ├── automation
+│   │   │   ├── README.md
+│   │   │   ├── auto-agent.md
+│   │   │   ├── self-healing.md
+│   │   │   ├── session-memory.md
+│   │   │   ├── smart-agents.md
+│   │   │   ├── smart-spawn.md
+│   │   │   └── workflow-select.md
+│   │   ├── github
+│   │   │   ├── README.md
+│   │   │   ├── code-review-swarm.md
+│   │   │   ├── code-review.md
+│   │   │   ├── github-modes.md
+│   │   │   ├── github-swarm.md
+│   │   │   ├── issue-tracker.md
+│   │   │   ├── issue-triage.md
+│   │   │   ├── multi-repo-swarm.md
+│   │   │   ├── pr-enhance.md
+│   │   │   ├── pr-manager.md
+│   │   │   ├── project-board-sync.md
+│   │   │   ├── release-manager.md
+│   │   │   ├── release-swarm.md
+│   │   │   ├── repo-analyze.md
+│   │   │   ├── repo-architect.md
+│   │   │   ├── swarm-issue.md
+│   │   │   ├── swarm-pr.md
+│   │   │   ├── sync-coordinator.md
+│   │   │   └── workflow-automation.md
+│   │   ├── hooks
+│   │   │   ├── README.md
+│   │   │   ├── overview.md
+│   │   │   ├── post-edit.md
+│   │   │   ├── post-task.md
+│   │   │   ├── pre-edit.md
+│   │   │   ├── pre-task.md
+│   │   │   ├── session-end.md
+│   │   │   └── setup.md
+│   │   ├── monitoring
+│   │   │   ├── README.md
+│   │   │   ├── agent-metrics.md
+│   │   │   ├── agents.md
+│   │   │   ├── real-time-view.md
+│   │   │   ├── status.md
+│   │   │   └── swarm-monitor.md
+│   │   ├── optimization
+│   │   │   ├── README.md
+│   │   │   ├── auto-topology.md
+│   │   │   ├── cache-manage.md
+│   │   │   ├── parallel-execute.md
+│   │   │   ├── parallel-execution.md
+│   │   │   └── topology-optimize.md
+│   │   ├── sparc
+│   │   │   ├── analyzer.md
+│   │   │   ├── architect.md
+│   │   │   ├── ask.md
+│   │   │   ├── batch-executor.md
+│   │   │   ├── code.md
+│   │   │   ├── coder.md
+│   │   │   ├── debug.md
+│   │   │   ├── debugger.md
+│   │   │   ├── designer.md
+│   │   │   ├── devops.md
+│   │   │   ├── docs-writer.md
+│   │   │   ├── documenter.md
+│   │   │   ├── innovator.md
+│   │   │   ├── integration.md
+│   │   │   ├── mcp.md
+│   │   │   ├── memory-manager.md
+│   │   │   ├── optimizer.md
+│   │   │   ├── orchestrator.md
+│   │   │   ├── post-deployment-monitoring-mode.md
+│   │   │   ├── refinement-optimization-mode.md
+│   │   │   ├── researcher.md
+│   │   │   ├── reviewer.md
+│   │   │   ├── security-review.md
+│   │   │   ├── sparc-modes.md
+│   │   │   ├── sparc.md
+│   │   │   ├── spec-pseudocode.md
+│   │   │   ├── supabase-admin.md
+│   │   │   ├── swarm-coordinator.md
+│   │   │   ├── tdd.md
+│   │   │   ├── tester.md
+│   │   │   ├── tutorial.md
+│   │   │   └── workflow-manager.md
 │   │   ├── adopt.md
+│   │   ├── claude-flow-help.md
+│   │   ├── claude-flow-memory.md
 │   │   ├── end.md
 │   │   ├── init.md
 │   │   ├── learn-curate.md
@@ -10,6 +104,7 @@ GameFlowData/
 │   │   ├── learn.md
 │   │   ├── start.md
 │   │   ├── status.md
+│   │   ├── swarm.md
 │   │   ├── validate.md
 │   │   ├── work-delete.md
 │   │   ├── work-graph.md
@@ -18,7 +113,248 @@ GameFlowData/
 │   │   ├── work-next.md
 │   │   ├── work-show.md
 │   │   └── work-update.md
-│   └── settings.local.json
+│   ├── flow_library
+│   │   ├── agents
+│   │   │   ├── analysis
+│   │   │   │   ├── code-review
+│   │   │   │   │   └── analyze-code-quality.md
+│   │   │   │   ├── analyze-code-quality.md
+│   │   │   │   └── code-analyzer.md
+│   │   │   ├── architecture
+│   │   │   │   └── system-design
+│   │   │   │       └── arch-system-design.md
+│   │   │   ├── consensus
+│   │   │   │   ├── README.md
+│   │   │   │   ├── byzantine-coordinator.md
+│   │   │   │   ├── crdt-synchronizer.md
+│   │   │   │   ├── gossip-coordinator.md
+│   │   │   │   ├── performance-benchmarker.md
+│   │   │   │   ├── quorum-manager.md
+│   │   │   │   ├── raft-manager.md
+│   │   │   │   └── security-manager.md
+│   │   │   ├── core
+│   │   │   │   ├── coder.md
+│   │   │   │   ├── planner.md
+│   │   │   │   ├── researcher.md
+│   │   │   │   ├── reviewer.md
+│   │   │   │   └── tester.md
+│   │   │   ├── custom
+│   │   │   │   └── test-long-runner.md
+│   │   │   ├── data
+│   │   │   │   └── ml
+│   │   │   │       └── data-ml-model.md
+│   │   │   ├── development
+│   │   │   │   ├── backend
+│   │   │   │   │   └── dev-backend-api.md
+│   │   │   │   └── dev-backend-api.md
+│   │   │   ├── devops
+│   │   │   │   └── ci-cd
+│   │   │   │       └── ops-cicd-github.md
+│   │   │   ├── documentation
+│   │   │   │   └── api-docs
+│   │   │   │       └── docs-api-openapi.md
+│   │   │   ├── flow-nexus
+│   │   │   │   ├── app-store.md
+│   │   │   │   ├── authentication.md
+│   │   │   │   ├── challenges.md
+│   │   │   │   ├── neural-network.md
+│   │   │   │   ├── payments.md
+│   │   │   │   ├── sandbox.md
+│   │   │   │   ├── swarm.md
+│   │   │   │   ├── user-tools.md
+│   │   │   │   └── workflow.md
+│   │   │   ├── github
+│   │   │   │   ├── code-review-swarm.md
+│   │   │   │   ├── github-modes.md
+│   │   │   │   ├── issue-tracker.md
+│   │   │   │   ├── multi-repo-swarm.md
+│   │   │   │   ├── pr-manager.md
+│   │   │   │   ├── project-board-sync.md
+│   │   │   │   ├── release-manager.md
+│   │   │   │   ├── release-swarm.md
+│   │   │   │   ├── repo-architect.md
+│   │   │   │   ├── swarm-issue.md
+│   │   │   │   ├── swarm-pr.md
+│   │   │   │   ├── sync-coordinator.md
+│   │   │   │   └── workflow-automation.md
+│   │   │   ├── goal
+│   │   │   │   ├── agent.md
+│   │   │   │   ├── code-goal-planner.md
+│   │   │   │   └── goal-planner.md
+│   │   │   ├── hive-mind
+│   │   │   │   ├── collective-intelligence-coordinator.md
+│   │   │   │   ├── queen-coordinator.md
+│   │   │   │   ├── scout-explorer.md
+│   │   │   │   ├── swarm-memory-manager.md
+│   │   │   │   └── worker-specialist.md
+│   │   │   ├── optimization
+│   │   │   │   ├── README.md
+│   │   │   │   ├── benchmark-suite.md
+│   │   │   │   ├── load-balancer.md
+│   │   │   │   ├── performance-monitor.md
+│   │   │   │   ├── resource-allocator.md
+│   │   │   │   └── topology-optimizer.md
+│   │   │   ├── payments
+│   │   │   │   └── agentic-payments.md
+│   │   │   ├── sona
+│   │   │   │   └── sona-learning-optimizer.md
+│   │   │   ├── sparc
+│   │   │   │   ├── architecture.md
+│   │   │   │   ├── pseudocode.md
+│   │   │   │   ├── refinement.md
+│   │   │   │   └── specification.md
+│   │   │   ├── specialized
+│   │   │   │   └── mobile
+│   │   │   │       └── spec-mobile-react-native.md
+│   │   │   ├── sublinear
+│   │   │   │   ├── consensus-coordinator.md
+│   │   │   │   ├── matrix-optimizer.md
+│   │   │   │   ├── pagerank-analyzer.md
+│   │   │   │   ├── performance-optimizer.md
+│   │   │   │   └── trading-predictor.md
+│   │   │   ├── swarm
+│   │   │   │   ├── README.md
+│   │   │   │   ├── adaptive-coordinator.md
+│   │   │   │   ├── hierarchical-coordinator.md
+│   │   │   │   └── mesh-coordinator.md
+│   │   │   ├── templates
+│   │   │   │   ├── automation-smart-agent.md
+│   │   │   │   ├── coordinator-swarm-init.md
+│   │   │   │   ├── github-pr-manager.md
+│   │   │   │   ├── implementer-sparc-coder.md
+│   │   │   │   ├── memory-coordinator.md
+│   │   │   │   ├── migration-plan.md
+│   │   │   │   ├── orchestrator-task.md
+│   │   │   │   ├── performance-analyzer.md
+│   │   │   │   └── sparc-coordinator.md
+│   │   │   ├── testing
+│   │   │   │   ├── unit
+│   │   │   │   │   └── tdd-london-swarm.md
+│   │   │   │   ├── validation
+│   │   │   │   │   └── production-validator.md
+│   │   │   │   ├── production-validator.md
+│   │   │   │   └── tdd-london-swarm.md
+│   │   │   └── v3
+│   │   │       ├── database-specialist.yaml
+│   │   │       ├── index.yaml
+│   │   │       ├── project-coordinator.yaml
+│   │   │       ├── python-specialist.yaml
+│   │   │       ├── test-architect.yaml
+│   │   │       ├── typescript-specialist.yaml
+│   │   │       ├── v3-integration-architect.md
+│   │   │       ├── v3-memory-specialist.md
+│   │   │       ├── v3-performance-engineer.md
+│   │   │       ├── v3-queen-coordinator.md
+│   │   │       └── v3-security-architect.md
+│   │   ├── helpers
+│   │   │   ├── README.md
+│   │   │   ├── adr-compliance.sh
+│   │   │   ├── auto-commit.sh
+│   │   │   ├── checkpoint-manager.sh
+│   │   │   ├── daemon-manager.sh
+│   │   │   ├── ddd-tracker.sh
+│   │   │   ├── github-safe.js
+│   │   │   ├── github-setup.sh
+│   │   │   ├── guidance-hook.sh
+│   │   │   ├── guidance-hooks.sh
+│   │   │   ├── health-monitor.sh
+│   │   │   ├── learning-hooks.sh
+│   │   │   ├── learning-optimizer.sh
+│   │   │   ├── learning-service.mjs
+│   │   │   ├── metrics-db.mjs
+│   │   │   ├── pattern-consolidator.sh
+│   │   │   ├── perf-worker.sh
+│   │   │   ├── quick-start.sh
+│   │   │   ├── security-scanner.sh
+│   │   │   ├── setup-mcp.sh
+│   │   │   ├── standard-checkpoint-hooks.sh
+│   │   │   ├── swarm-comms.sh
+│   │   │   ├── swarm-hooks.sh
+│   │   │   ├── swarm-monitor.sh
+│   │   │   ├── sync-v3-metrics.sh
+│   │   │   ├── update-v3-progress.sh
+│   │   │   ├── v3-quick-status.sh
+│   │   │   ├── v3.sh
+│   │   │   ├── validate-v3-config.sh
+│   │   │   └── worker-manager.sh
+│   │   └── skills
+│   │       ├── agentdb-advanced
+│   │       │   └── SKILL.md
+│   │       ├── agentdb-learning
+│   │       │   └── SKILL.md
+│   │       ├── agentdb-memory-patterns
+│   │       │   └── SKILL.md
+│   │       ├── agentdb-optimization
+│   │       │   └── SKILL.md
+│   │       ├── agentdb-vector-search
+│   │       │   └── SKILL.md
+│   │       ├── github-code-review
+│   │       │   └── SKILL.md
+│   │       ├── github-multi-repo
+│   │       │   └── SKILL.md
+│   │       ├── github-project-management
+│   │       │   └── SKILL.md
+│   │       ├── github-release-management
+│   │       │   └── SKILL.md
+│   │       ├── github-workflow-automation
+│   │       │   └── SKILL.md
+│   │       ├── hooks-automation
+│   │       │   └── SKILL.md
+│   │       ├── pair-programming
+│   │       │   └── SKILL.md
+│   │       ├── reasoningbank-agentdb
+│   │       │   └── SKILL.md
+│   │       ├── reasoningbank-intelligence
+│   │       │   └── SKILL.md
+│   │       ├── skill-builder
+│   │       │   ├── .claude-flow
+│   │       │   │   └── metrics
+│   │       │   │       ├── agent-metrics.json
+│   │       │   │       ├── performance.json
+│   │       │   │       └── task-metrics.json
+│   │       │   └── SKILL.md
+│   │       ├── sparc-methodology
+│   │       │   └── SKILL.md
+│   │       ├── stream-chain
+│   │       │   └── SKILL.md
+│   │       ├── swarm-advanced
+│   │       │   └── SKILL.md
+│   │       ├── swarm-orchestration
+│   │       │   └── SKILL.md
+│   │       ├── v3-cli-modernization
+│   │       │   └── SKILL.md
+│   │       ├── v3-core-implementation
+│   │       │   └── SKILL.md
+│   │       ├── v3-ddd-architecture
+│   │       │   └── SKILL.md
+│   │       ├── v3-integration-deep
+│   │       │   └── SKILL.md
+│   │       ├── v3-mcp-optimization
+│   │       │   └── SKILL.md
+│   │       ├── v3-memory-unification
+│   │       │   └── SKILL.md
+│   │       ├── v3-performance-optimization
+│   │       │   └── SKILL.md
+│   │       ├── v3-security-overhaul
+│   │       │   └── SKILL.md
+│   │       ├── v3-swarm-coordination
+│   │       │   └── SKILL.md
+│   │       └── verification-quality
+│   │           └── SKILL.md
+│   ├── settings.json
+│   ├── settings.local.json
+│   ├── statusline.mjs
+│   └── statusline.sh
+├── .claude-flow
+│   ├── agents
+│   ├── data
+│   ├── hooks
+│   ├── logs
+│   ├── sessions
+│   ├── workflows
+│   ├── .gitignore
+│   ├── CAPABILITIES.md
+│   └── config.yaml
 ├── .solokit-backup
 │   └── 20260115_213903
 ├── data
@@ -50,10 +386,51 @@ GameFlowData/
 │   │   ├── league_priors_history-checkpoint.md
 │   │   ├── player_position_history-checkpoint.md
 │   │   └── team_allowed_by_position-checkpoint.md
+│   ├── db_client_documentation.md
 │   ├── feature_store_documentation.md
+│   ├── game_lines_scraper_documentation.md
+│   ├── index.md
+│   ├── injury_database_documentation.md
+│   ├── injury_scraper_job_documentation.md
 │   ├── league_priors_history.md
+│   ├── nba_linker_local_documentation.md
+│   ├── nba_player_position_documentation.md
 │   ├── player_position_history.md
-│   └── team_allowed_by_position.md
+│   ├── player_prop_scraper_documentation.md
+│   ├── populate_average_stats_documentation.md
+│   ├── team_allowed_by_position.md
+│   ├── update_league_position_averages_documentation.md
+│   └── update_player_position_history_documentation.md
+├── htmlcov
+│   ├── .gitignore
+│   ├── class_index.html
+│   ├── coverage_html_cb_188fc9a4.js
+│   ├── favicon_32_cb_c827f16f.png
+│   ├── function_index.html
+│   ├── index.html
+│   ├── keybd_closed_cb_900cfef5.png
+│   ├── status.json
+│   ├── style_cb_5c747636.css
+│   ├── z_034a03f060e0c6c2_client_py.html
+│   ├── z_21f67b8ad154ca39_espn_injury_scraper_py.html
+│   ├── z_21f67b8ad154ca39_game_lines_scraper_py.html
+│   ├── z_21f67b8ad154ca39_injury_database_py.html
+│   ├── z_21f67b8ad154ca39_injury_scraper_job_py.html
+│   ├── z_21f67b8ad154ca39_nba_player_position_py.html
+│   ├── z_21f67b8ad154ca39_nba_unified_scraper_py.html
+│   ├── z_21f67b8ad154ca39_player_prop_scraper_py.html
+│   ├── z_21f67b8ad154ca39_update_league_position_averages_py.html
+│   ├── z_21f67b8ad154ca39_update_player_position_history_py.html
+│   ├── z_32d203df8c57c9df_backfill_league_priors_py.html
+│   ├── z_32d203df8c57c9df_backfill_opponent_allowed_py.html
+│   ├── z_32d203df8c57c9df_backfill_team_ids_py.html
+│   ├── z_32d203df8c57c9df_nba_linker_local_py.html
+│   ├── z_32d203df8c57c9df_populate_average_stats_py.html
+│   ├── z_532385f02888fdd3_calibration_py.html
+│   ├── z_532385f02888fdd3_daily_runner_py.html
+│   ├── z_532385f02888fdd3_feature_store_py.html
+│   ├── z_532385f02888fdd3_monte_carlo_py.html
+│   └── z_532385f02888fdd3_quantile_trainer_py.html
 ├── notebooks
 │   ├── moneylinePredictionModel
 │   │   ├── .ipynb_checkpoints
@@ -92,6 +469,8 @@ GameFlowData/
 │   │   ├── __init__.py
 │   │   └── client.py
 │   ├── models
+│   │   ├── .ipynb_checkpoints
+│   │   │   └── quantile_trainer-checkpoint.py
 │   │   ├── __init__.py
 │   │   ├── calibration.py
 │   │   ├── daily_runner.py
@@ -124,6 +503,24 @@ GameFlowData/
 │   │   ├── update_league_position_averages.py
 │   │   └── update_player_position_history.py
 │   └── __init__.py
+├── tests
+│   ├── __init__.py
+│   ├── test_backfill_league_priors.py
+│   ├── test_backfill_opponent_allowed.py
+│   ├── test_backfill_team_ids.py
+│   ├── test_db_client.py
+│   ├── test_espn_injury_scraper.py
+│   ├── test_feature_store.py
+│   ├── test_game_lines_scraper.py
+│   ├── test_injury_database.py
+│   ├── test_injury_scraper_job.py
+│   ├── test_nba_linker_local.py
+│   ├── test_nba_player_position.py
+│   ├── test_player_prop_scraper.py
+│   ├── test_populate_average_stats.py
+│   ├── test_update_league_position_averages.py
+│   └── test_update_player_position_history.py
+├── .coverage
 ├── .coveragerc
 ├── .env
 ├── .gitignore
@@ -133,14 +530,41 @@ GameFlowData/
 ├── CLAUDE.md
 ├── README.md
 ├── alembic.ini
+├── coverage.json
+├── coverage.xml
+├── package-lock.json
+├── package.json
 ├── print_structure.py
 ├── pyproject.toml
 ├── pyrightconfig.json
 ├── pytest.ini
 ├── requirements-dev.txt
 ├── requirements.txt
-├── tmpclaude-1eec-cwd
-├── tmpclaude-32ef-cwd
-├── tmpclaude-44dc-cwd
-├── tmpclaude-5209-cwd
-└── tmpclaude-e61d-cwd
+├── tmpclaude-08e5-cwd
+├── tmpclaude-0fd6-cwd
+├── tmpclaude-1210-cwd
+├── tmpclaude-19a8-cwd
+├── tmpclaude-1a9f-cwd
+├── tmpclaude-1eba-cwd
+├── tmpclaude-2627-cwd
+├── tmpclaude-2af0-cwd
+├── tmpclaude-2d6e-cwd
+├── tmpclaude-2f27-cwd
+├── tmpclaude-368d-cwd
+├── tmpclaude-3a91-cwd
+├── tmpclaude-4113-cwd
+├── tmpclaude-45d1-cwd
+├── tmpclaude-4fea-cwd
+├── tmpclaude-60ee-cwd
+├── tmpclaude-6b91-cwd
+├── tmpclaude-6d16-cwd
+├── tmpclaude-7142-cwd
+├── tmpclaude-73a1-cwd
+├── tmpclaude-8740-cwd
+├── tmpclaude-88e4-cwd
+├── tmpclaude-917f-cwd
+├── tmpclaude-b1b5-cwd
+├── tmpclaude-ba40-cwd
+├── tmpclaude-c293-cwd
+├── tmpclaude-d710-cwd
+└── tmpclaude-e934-cwd
