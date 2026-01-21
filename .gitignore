@@ -47,3 +47,10 @@ coverage.xml
 
 # Claude thinking files 
 tmpclaude*
+
+#claude flow files
+.claude-flow/
+.swarm/
+tmpclaude-*
+.claude/flow_library/
+.claude
