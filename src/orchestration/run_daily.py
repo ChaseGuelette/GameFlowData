@@ -27,13 +27,7 @@ def run_command(command, description):
     try:
         # Split command into list for shell=False
         cmd_list = command.split()
-        subprocess.run(
-            cmd_list,
-            check=True,
-            capture_output=True,
-            text=True,
-            shell=False
-        )
+        subprocess.run(cmd_list, check=True, capture_output=True, text=True, shell=False)
         logger.info(f"COMPLETED: {description}")
     # Log stdout if needed, or just on error
     # logger.info(result.stdout)

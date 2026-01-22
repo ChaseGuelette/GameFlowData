@@ -80,7 +80,7 @@ def test_extract_opponent_id():
 # =============================================================================
 
 
-@patch("scrapers.nba_unified_scraper.inspect")
+@patch("src.scrapers.nba_unified_scraper.inspect")
 @patch("pandas.read_sql")
 def test_get_existing_game_ids(mock_read_sql, mock_inspect):
     engine = Mock()
@@ -97,8 +97,8 @@ def test_get_existing_game_ids(mock_read_sql, mock_inspect):
     assert nba_unified_scraper.get_existing_game_ids(engine) == {"001", "002"}
 
 
-@patch("scrapers.nba_unified_scraper.leaguegamefinder.LeagueGameFinder")
-@patch("scrapers.nba_unified_scraper.get_existing_game_ids")
+@patch("src.scrapers.nba_unified_scraper.leaguegamefinder.LeagueGameFinder")
+@patch("src.scrapers.nba_unified_scraper.get_existing_game_ids")
 @patch("pandas.DataFrame.to_sql")
 def test_scrape_team_game_stats(mock_to_sql, mock_existing_ids, mock_game_finder):
     engine = Mock()
@@ -158,7 +158,7 @@ def test_transform_team_adv_df():
     assert "offensive_rating" in result.columns
 
 
-@patch("scrapers.nba_unified_scraper.boxscoreadvancedv3.BoxScoreAdvancedV3")
+@patch("src.scrapers.nba_unified_scraper.boxscoreadvancedv3.BoxScoreAdvancedV3")
 def test_scrape_single_game_advanced(mock_boxscore):
     mock_instance = mock_boxscore.return_value
     mock_instance.get_data_frames.return_value = [
@@ -191,9 +191,9 @@ def test_transform_player_traditional_df():
     assert not result.iloc[0]["did_not_play"]
 
 
-@patch("scrapers.nba_unified_scraper.pd.read_sql")
-@patch("scrapers.nba_unified_scraper.boxscoretraditionalv3.BoxScoreTraditionalV3")
-@patch("scrapers.nba_unified_scraper.ensure_players_exist")
+@patch("src.scrapers.nba_unified_scraper.pd.read_sql")
+@patch("src.scrapers.nba_unified_scraper.boxscoretraditionalv3.BoxScoreTraditionalV3")
+@patch("src.scrapers.nba_unified_scraper.ensure_players_exist")
 @patch("pandas.DataFrame.to_sql")
 def test_scrape_traditional_stats(mock_to_sql, mock_ensure_players, mock_boxscore, mock_read_sql):
     engine = Mock()
