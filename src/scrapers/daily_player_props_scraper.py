@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 import requests
 from dotenv import load_dotenv
 from psycopg2 import extras
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 
 # Configure logging
 logging.basicConfig(
@@ -36,38 +36,6 @@ class DailyPlayerPropsScraper:
         self.api_key = api_key
         self.engine = db_engine
         self.session = requests.Session()
-        self._ensure_live_table_exists()
-
-    def _ensure_live_table_exists(self):
-        """Create the raw_player_props_live table if it doesn't exist."""
-        ddl = """
-        CREATE TABLE IF NOT EXISTS public.raw_player_props_live (
-            live_id bigserial primary key,
-            api_game_id text not null,
-            api_player_name text not null,
-            bookmaker text not null,
-            market_key text not null,
-            outcome_label text not null,
-            line numeric null,
-            odds_american integer not null,
-            commence_time timestamp with time zone null,
-            home_team text null,
-            away_team text null,
-            inserted_at timestamp with time zone null default now(),
-            market_last_update timestamp with time zone null,
-            bookmaker_last_update timestamp with time zone null,
-            bookmaker_name text null,
-            snapshot_time timestamp with time zone null,
-            game_id text null,
-            player_id bigint null,
-            team_id bigint null
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_live_props_game ON public.raw_player_props_live(api_game_id);
-        CREATE INDEX IF NOT EXISTS idx_live_props_player ON public.raw_player_props_live(api_player_name);
-        """
-        with self.engine.begin() as conn:
-            conn.execute(text(ddl))
 
     def get_live_events(self):
         """Get list of current/upcoming NBA games."""

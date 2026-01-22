@@ -1,10 +1,11 @@
 import logging
 import os
+from datetime import datetime
 
 import requests
 from dotenv import load_dotenv
 from psycopg2 import extras
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 
 # Configure logging
 logging.basicConfig(
@@ -27,34 +28,6 @@ class LiveOddsScraper:
         self.api_key = api_key
         self.engine = db_engine
         self.session = requests.Session()
-        self._ensure_table_exists()
-
-    def _ensure_table_exists(self):
-        """Create the raw_game_lines_live table if it doesn't exist."""
-        ddl = """
-        CREATE TABLE IF NOT EXISTS public.raw_game_lines_live (
-            live_id bigserial primary key,
-            api_game_id text not null,
-            bookmaker text not null,
-            market_key text not null,
-            outcome_label text not null,
-            line numeric null,
-            odds_american integer not null,
-            commence_time timestamp with time zone null,
-            home_team text null,
-            away_team text null,
-            inserted_at timestamp with time zone null default now(),
-            market_last_update timestamp with time zone null,
-            bookmaker_last_update timestamp with time zone null,
-            bookmaker_name text null
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_live_lines_api_game_id ON public.raw_game_lines_live(api_game_id);
-        CREATE INDEX IF NOT EXISTS idx_live_lines_inserted_at ON public.raw_game_lines_live(inserted_at);
-        """
-        with self.engine.begin() as conn:
-            conn.execute(text(ddl))
-        logger.info("Ensured 'raw_game_lines_live' table exists.")
 
     def fetch_live_odds(self):
         """
@@ -89,6 +62,7 @@ class LiveOddsScraper:
         if not games:
             return 0
 
+        snapshot_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         rows_to_insert = []
 
         for game in games:
@@ -122,6 +96,7 @@ class LiveOddsScraper:
                                 commence_time,
                                 home_team,
                                 away_team,
+                                snapshot_time,
                                 market_updated,
                                 book_updated,
                                 book_name,
@@ -141,7 +116,7 @@ class LiveOddsScraper:
                     INSERT INTO raw_game_lines_live
                     (api_game_id, bookmaker, market_key, outcome_label,
                      line, odds_american, commence_time, home_team, away_team,
-                     market_last_update, bookmaker_last_update, bookmaker_name)
+                     snapshot_time, market_last_update, bookmaker_last_update, bookmaker_name)
                     VALUES %s
                 """
                 extras.execute_values(cur, query, rows)
