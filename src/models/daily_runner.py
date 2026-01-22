@@ -5,6 +5,7 @@ from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,7 +36,11 @@ class DailyPredictionRunner:
 
         # 2. Get all players expected to play
         players = self._get_players_for_games(games)
-        logger.info(f"Found {len(players)} players")
+        logger.info(f"Found {len(players)} players (pre-injury filter)")
+        
+        # Filter injured players
+        players = self._filter_injured_players(players, target_date)
+        logger.info(f"Found {len(players)} players (post-injury filter)")
 
         # 3. Generate predictions
         all_predictions = []
@@ -146,6 +151,55 @@ class DailyPredictionRunner:
         with self.engine.connect() as conn:
             result = conn.execute(query)
             return [dict(r) for r in result]
+
+    def _filter_injured_players(self, players: list[dict], target_date: date) -> list[dict]:
+        """Remove players listed as 'Out' in injury report."""
+        try:
+            # Get latest injury scrape for date
+            start_ts = datetime.combine(target_date, datetime.min.time())
+            end_ts = datetime.combine(target_date, datetime.max.time())
+            
+            # Find latest scrape timestamp in range
+            ts_query = "SELECT MAX(scrape_timestamp) FROM espn_injuries WHERE scrape_timestamp >= :start AND scrape_timestamp <= :end"
+            
+            with self.engine.connect() as conn:
+                latest_ts = conn.execute(text(ts_query), {"start": start_ts, "end": end_ts}).scalar()
+                
+                if not latest_ts:
+                    # Fallback to most recent ever if today has no report yet? 
+                    # Safer to just look back 24h
+                    # For now, just log and return all
+                    logger.warning(f"No injury report found for {target_date}")
+                    return players
+
+                # Get OUT players
+                # Status is often "Out", "Out for season", "Out indefinitely"
+                inj_query = """
+                    SELECT player_name 
+                    FROM espn_injuries 
+                    WHERE scrape_timestamp = :ts 
+                    AND (lower(status) LIKE '%out%' OR lower(status) = 'doubtful')
+                """
+                result = conn.execute(text(inj_query), {"ts": latest_ts})
+                out_names = {row[0].lower().strip() for row in result}
+                
+            # Filter
+            active_players = []
+            for p in players:
+                # Normalize name
+                p_name = p["player_name"].lower().strip()
+                # Simple check - could improve with fuzzy match
+                if p_name in out_names:
+                    continue
+                # Handle "Jr.", "III" differences if strict match fails?
+                # For now exact match on lower/strip is decent baseline
+                active_players.append(p)
+                
+            return active_players
+
+        except Exception as e:
+            logger.error(f"Error filtering injuries: {e}")
+            return players
 
     def _get_current_lines(self, games: list[dict], stats: list[str]) -> pd.DataFrame:
         """Fetch current prop lines from database."""

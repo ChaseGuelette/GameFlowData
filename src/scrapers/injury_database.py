@@ -1,19 +1,25 @@
 """
 Database Integration for ESPN Injury Scraper
-Handles storage, retrieval, and change tracking in Supabase
+Handles storage, retrieval, and change tracking using SQLAlchemy
 """
 
 import logging
 import os
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-from espn_injury_scraper import InjuryRecord
-from supabase import Client, create_client
+# Add project root to path for imports
+sys.path.append(str(Path(__file__).resolve().parents[2]))
+
+from sqlalchemy import create_engine, text
+from src.db.client import get_engine
+from src.scrapers.espn_injury_scraper import InjuryRecord
 
 
 class InjuryDatabase:
     """
-    Manages injury data storage and retrieval in Supabase
+    Manages injury data storage and retrieval in SQL Database
 
     Features:
     - Upsert with deduplication
@@ -22,347 +28,138 @@ class InjuryDatabase:
     - Data validation
     """
 
-    def __init__(self, supabase_url: str = None, supabase_key: str = None):
+    def __init__(self, engine=None):
         """
         Initialize database connection
-
-        Args:
-            supabase_url: Supabase project URL (or from env var)
-            supabase_key: Supabase API key (or from env var)
         """
         self.logger = logging.getLogger(__name__)
+        self.engine = engine or get_engine()
+        self._ensure_table_exists()
 
-        # Get credentials from environment if not provided
-        url = supabase_url or os.environ.get("SUPABASE_URL")
-        key = supabase_key or os.environ.get("SUPABASE_KEY")
-
-        if not url or not key:
-            raise ValueError(
-                "Supabase credentials required. Set SUPABASE_URL and SUPABASE_KEY "
-                "environment variables or pass them to constructor."
-            )
-
-        self.client: Client = create_client(url, key)
-        self.logger.info("Connected to Supabase")
+    def _ensure_table_exists(self):
+        """Create espn_injuries table if it doesn't exist."""
+        ddl = """
+        CREATE TABLE IF NOT EXISTS public.espn_injuries (
+            id bigserial primary key,
+            espn_injury_id text not null,
+            espn_player_id text not null,
+            player_name text not null,
+            team_id text not null,
+            team_name text null,
+            status text not null,
+            injury_type text null,
+            injury_location text null,
+            injury_side text null,
+            injury_detail text null,
+            return_date text null,
+            date_reported text null,
+            short_comment text null,
+            long_comment text null,
+            fantasy_status text null,
+            scrape_timestamp timestamp with time zone not null,
+            created_at timestamp with time zone default now()
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_injuries_player ON public.espn_injuries(espn_player_id);
+        CREATE INDEX IF NOT EXISTS idx_injuries_team ON public.espn_injuries(team_id);
+        CREATE INDEX IF NOT EXISTS idx_injuries_scrape_ts ON public.espn_injuries(scrape_timestamp);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_injuries_unique_snapshot ON public.espn_injuries(espn_injury_id, scrape_timestamp);
+        """
+        with self.engine.begin() as conn:
+            conn.execute(text(ddl))
 
     def store_injuries(self, injuries: list[InjuryRecord]) -> tuple[int, int]:
         """
-        Store injury records in database with deduplication
-
-        Args:
-            injuries: List of InjuryRecord objects
-
-        Returns:
-            Tuple of (inserted_count, updated_count)
+        Store injury records in database.
+        Since we want history, we insert new rows for each scrape timestamp.
+        The unique constraint is (espn_injury_id, scrape_timestamp).
         """
         if not injuries:
             self.logger.warning("No injuries to store")
             return 0, 0
 
         inserted = 0
-        updated = 0
+        updated = 0 # Not really updating, just inserting history
 
-        for injury in injuries:
-            try:
-                # Check if record already exists
-                existing = (
-                    self.client.table("espn_injuries")
-                    .select("*")
-                    .eq("espn_injury_id", injury.espn_injury_id)
-                    .eq("scrape_timestamp", injury.scrape_timestamp)
-                    .execute()
-                )
-
-                if existing.data:
-                    # Skip if exact record already exists
-                    continue
-
-                # Check if we need to update or insert
-                latest = (
-                    self.client.table("espn_injuries")
-                    .select("*")
-                    .eq("espn_injury_id", injury.espn_injury_id)
-                    .order("scrape_timestamp", desc=True)
-                    .limit(1)
-                    .execute()
-                )
-
-                injury_dict = injury.to_dict()
-
-                if latest.data and self._has_changed(latest.data[0], injury_dict):
-                    # Insert new version with updated data
-                    self.client.table("espn_injuries").insert(injury_dict).execute()
-                    updated += 1
-                elif not latest.data:
-                    # New injury - insert
-                    self.client.table("espn_injuries").insert(injury_dict).execute()
-                    inserted += 1
-
-            except Exception as e:
-                self.logger.error(f"Error storing injury {injury.espn_injury_id}: {e}")
-                continue
-
-        self.logger.info(f"Stored injuries - Inserted: {inserted}, Updated: {updated}")
-        return inserted, updated
-
-    def _has_changed(self, old_record: dict, new_record: dict) -> bool:
-        """
-        Check if injury record has meaningfully changed
-
-        Args:
-            old_record: Previous database record
-            new_record: New injury record
-
-        Returns:
-            True if meaningful change detected
-        """
-        # Fields to check for changes
-        check_fields = [
-            "status",
-            "return_date",
-            "injury_type",
-            "injury_location",
-            "short_comment",
-            "long_comment",
+        # Convert to list of dicts
+        records = [inj.to_dict() for inj in injuries]
+        
+        # Prepare insert query
+        cols = [
+            "espn_injury_id", "espn_player_id", "player_name", "team_id", "team_name",
+            "status", "injury_type", "injury_location", "injury_side", "injury_detail",
+            "return_date", "date_reported", "short_comment", "long_comment", 
+            "fantasy_status", "scrape_timestamp"
         ]
+        
+        col_str = ", ".join(cols)
+        val_str = ", ".join([f":{c}" for c in cols])
+        
+        # We use ON CONFLICT DO NOTHING to deduplicate if run multiple times same second
+        stmt = text(f"""
+            INSERT INTO espn_injuries ({col_str})
+            VALUES ({val_str})
+            ON CONFLICT (espn_injury_id, scrape_timestamp) DO NOTHING
+        """)
 
-        for field in check_fields:
-            if old_record.get(field) != new_record.get(field):
-                return True
+        with self.engine.begin() as conn:
+            for record in records:
+                result = conn.execute(stmt, record)
+                if result.rowcount > 0:
+                    inserted += 1
+                else:
+                    # It was a duplicate
+                    pass
 
-        return False
+        self.logger.info(f"Stored injuries - Inserted: {inserted}")
+        return inserted, 0
 
     def get_latest_injuries(self) -> list[dict]:
-        """
-        Get most recent injury snapshot
-
-        Returns:
-            List of latest injury records
-        """
+        """Get most recent injury snapshot."""
         try:
-            # Get the latest scrape timestamp
-            latest_scrape = (
-                self.client.table("espn_injuries")
-                .select("scrape_timestamp")
-                .order("scrape_timestamp", desc=True)
-                .limit(1)
-                .execute()
-            )
-
-            if not latest_scrape.data:
-                self.logger.warning("No injury records found")
-                return []
-
-            timestamp = latest_scrape.data[0]["scrape_timestamp"]
-
-            # Get all injuries from that scrape
-            injuries = self.client.table("espn_injuries").select("*").eq("scrape_timestamp", timestamp).execute()
-
-            self.logger.info(f"Retrieved {len(injuries.data)} latest injuries")
-            return injuries.data
+            # Get latest timestamp
+            with self.engine.connect() as conn:
+                res = conn.execute(text("SELECT MAX(scrape_timestamp) FROM espn_injuries")).scalar()
+                
+                if not res:
+                    return []
+                
+                timestamp = res
+                
+                # Fetch records
+                query = text("SELECT * FROM espn_injuries WHERE scrape_timestamp = :ts")
+                rows = conn.execute(query, {"ts": timestamp}).mappings().all()
+                return [dict(r) for r in rows]
 
         except Exception as e:
             self.logger.error(f"Error retrieving latest injuries: {e}")
             return []
 
-    def get_injuries_for_date(self, date: datetime) -> list[dict]:
-        """
-        Get injuries for a specific date
-
-        Args:
-            date: Date to retrieve injuries for
-
-        Returns:
-            List of injury records
-        """
+    def get_injuries_for_date(self, date_obj: datetime) -> list[dict]:
+        """Get injuries active on a specific date (latest scrape of that day)."""
         try:
-            # Find scrape closest to the requested date
-            start_of_day = date.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_of_day = date.replace(hour=23, minute=59, second=59, microsecond=999999)
-
-            injuries = (
-                self.client.table("espn_injuries")
-                .select("*")
-                .gte("scrape_timestamp", start_of_day.isoformat())
-                .lte("scrape_timestamp", end_of_day.isoformat())
-                .order("scrape_timestamp", desc=True)
-                .execute()
-            )
-
-            self.logger.info(f"Retrieved {len(injuries.data)} injuries for {date.date()}")
-            return injuries.data
+            # Define day range
+            start_of_day = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = date_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            with self.engine.connect() as conn:
+                # Find latest scrape in that day
+                ts_query = text("""
+                    SELECT MAX(scrape_timestamp) 
+                    FROM espn_injuries 
+                    WHERE scrape_timestamp >= :start AND scrape_timestamp <= :end
+                """)
+                ts = conn.execute(ts_query, {"start": start_of_day, "end": end_of_day}).scalar()
+                
+                if not ts:
+                    # Fallback: Find latest scrape BEFORE that day if none on that day?
+                    # Or just return empty. Let's return empty if no scrape that day.
+                    return []
+                
+                query = text("SELECT * FROM espn_injuries WHERE scrape_timestamp = :ts")
+                rows = conn.execute(query, {"ts": ts}).mappings().all()
+                return [dict(r) for r in rows]
 
         except Exception as e:
             self.logger.error(f"Error retrieving injuries for date: {e}")
             return []
-
-    def get_active_injuries_for_team(self, team_id: str, as_of_date: datetime = None) -> list[dict]:
-        """
-        Get active injuries for a specific team
-
-        Args:
-            team_id: ESPN team ID
-            as_of_date: Date to check injuries (defaults to now)
-
-        Returns:
-            List of active injury records for team
-        """
-        if as_of_date is None:
-            as_of_date = datetime.now(UTC)
-
-        try:
-            injuries = self.get_injuries_for_date(as_of_date)
-
-            # Filter for team and active statuses
-            active_statuses = {"out", "doubtful", "questionable", "day-to-day"}
-            team_injuries = [inj for inj in injuries if inj["team_id"] == team_id and inj["status"] in active_statuses]
-
-            self.logger.info(f"Found {len(team_injuries)} active injuries for team {team_id}")
-            return team_injuries
-
-        except Exception as e:
-            self.logger.error(f"Error retrieving team injuries: {e}")
-            return []
-
-    def get_injury_history(self, espn_player_id: str, days_back: int = 30) -> list[dict]:
-        """
-        Get injury history for a specific player
-
-        Args:
-            espn_player_id: ESPN player ID
-            days_back: Number of days to look back
-
-        Returns:
-            List of injury records for player
-        """
-        try:
-            cutoff_date = datetime.now(UTC) - timedelta(days=days_back)
-
-            injuries = (
-                self.client.table("espn_injuries")
-                .select("*")
-                .eq("espn_player_id", espn_player_id)
-                .gte("scrape_timestamp", cutoff_date.isoformat())
-                .order("scrape_timestamp", desc=True)
-                .execute()
-            )
-
-            self.logger.info(f"Retrieved {len(injuries.data)} injury records for player {espn_player_id}")
-            return injuries.data
-
-        except Exception as e:
-            self.logger.error(f"Error retrieving player injury history: {e}")
-            return []
-
-    def get_scrape_stats(self, days_back: int = 7) -> dict:
-        """
-        Get statistics about recent scrapes
-
-        Args:
-            days_back: Number of days to analyze
-
-        Returns:
-            Dictionary with scrape statistics
-        """
-        try:
-            cutoff_date = datetime.now(UTC) - timedelta(days=days_back)
-
-            # Get unique scrape timestamps
-            scrapes = (
-                self.client.table("espn_injuries")
-                .select("scrape_timestamp")
-                .gte("scrape_timestamp", cutoff_date.isoformat())
-                .execute()
-            )
-
-            unique_scrapes = set(record["scrape_timestamp"] for record in scrapes.data)
-
-            # Get total injuries per scrape
-            injuries_per_scrape = []
-            for timestamp in unique_scrapes:
-                count_result = (
-                    self.client.table("espn_injuries")
-                    .select("*", count="exact")
-                    .eq("scrape_timestamp", timestamp)
-                    .execute()
-                )
-                injuries_per_scrape.append(count_result.count)
-
-            stats = {
-                "total_scrapes": len(unique_scrapes),
-                "total_records": len(scrapes.data),
-                "avg_injuries_per_scrape": sum(injuries_per_scrape) / len(injuries_per_scrape)
-                if injuries_per_scrape
-                else 0,
-                "min_injuries": min(injuries_per_scrape) if injuries_per_scrape else 0,
-                "max_injuries": max(injuries_per_scrape) if injuries_per_scrape else 0,
-                "period_days": days_back,
-            }
-
-            self.logger.info(f"Scrape stats: {stats}")
-            return stats
-
-        except Exception as e:
-            self.logger.error(f"Error retrieving scrape stats: {e}")
-            return {}
-
-    def cleanup_old_data(self, days_to_keep: int = 90) -> int:
-        """
-        Remove old injury data beyond retention period
-
-        Args:
-            days_to_keep: Number of days of data to retain
-
-        Returns:
-            Number of records deleted
-        """
-        try:
-            cutoff_date = datetime.now(UTC) - timedelta(days=days_to_keep)
-
-            result = (
-                self.client.table("espn_injuries").delete().lt("scrape_timestamp", cutoff_date.isoformat()).execute()
-            )
-
-            deleted_count = len(result.data) if result.data else 0
-            self.logger.info(f"Cleaned up {deleted_count} old injury records")
-            return deleted_count
-
-        except Exception as e:
-            self.logger.error(f"Error cleaning up old data: {e}")
-            return 0
-
-
-# Example usage
-if __name__ == "__main__":
-    import logging
-
-    from espn_injury_scraper import ESPNInjuryScraper
-
-    # Setup logging
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
-    # Initialize components
-    scraper = ESPNInjuryScraper()
-    db = InjuryDatabase()
-
-    # Scrape and store
-    print("Scraping ESPN injuries...")
-    injuries = scraper.scrape()
-
-    print(f"\nStoring {len(injuries)} injuries in database...")
-    inserted, updated = db.store_injuries(injuries)
-
-    print("\nResults:")
-    print(f"  - Inserted: {inserted}")
-    print(f"  - Updated: {updated}")
-
-    # Test retrieval
-    print("\nRetrieving latest injuries...")
-    latest = db.get_latest_injuries()
-    print(f"Found {len(latest)} injuries in latest scrape")
-
-    # Show stats
-    print("\nScrape statistics (last 7 days):")
-    stats = db.get_scrape_stats(days_back=7)
-    for key, value in stats.items():
-        print(f"  {key}: {value}")

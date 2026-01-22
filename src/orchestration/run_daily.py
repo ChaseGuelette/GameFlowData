@@ -49,11 +49,10 @@ def main():
         action="store_true",
         help="Scrape daily player props (12pm/6pm) into raw_player_props_combined",
     )
-    parser.add_argument(
-        "--scrape-live-props", action="store_true", help="Scrape LIVE player props into raw_player_props_live"
-    )
-    parser.add_argument("--skip-processing", action="store_true", help="Skip the processing/update step")
-    parser.add_argument("--skip-inference", action="store_true", help="Skip the prediction step")
+        parser.add_argument("--scrape-live-props", action="store_true", help="Scrape LIVE player props into raw_player_props_live")
+        parser.add_argument("--scrape-injuries", action="store_true", help="Scrape current injuries from ESPN")
+        parser.add_argument("--skip-processing", action="store_true", help="Skip the processing/update step")
+        parser.add_argument("--skip-inference", action="store_true", help="Skip the prediction step")
     parser.add_argument("--model-dir", type=str, default="src/models/artifacts", help="Path to model artifacts")
 
     args = parser.parse_args()
@@ -88,14 +87,21 @@ def main():
             run_command("python src/scrapers/live_odds_scraper.py", "Scraping LIVE Odds to 'raw_game_lines_live'")
 
         # Scrape LIVE Player Props (Optional)
-        if args.scrape_live_props:
-            run_command(
-                "python src/scrapers/daily_player_props_scraper.py --live",
-                "Scraping LIVE Player Props to 'raw_player_props_live'",
-            )
-
-    else:
-        logger.info("Skipping Scraping Step")
+                if args.scrape_live_props:
+                    run_command(
+                        "python src/scrapers/daily_player_props_scraper.py --live",
+                        "Scraping LIVE Player Props to 'raw_player_props_live'"
+                    )
+                    
+                # Scrape Injuries (Optional)
+                if args.scrape_injuries:
+                    run_command(
+                        "python src/scrapers/injury_scraper_job.py",
+                        "Scraping ESPN Injuries"
+                    )
+                    
+            else:
+                logger.info("Skipping Scraping Step")
 
     # 2. Processing (Update Derived Stats)
     if not args.skip_processing:
