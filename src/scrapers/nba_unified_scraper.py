@@ -137,7 +137,7 @@ def rate_limit_delay(game_num: int):
         time.sleep(delay)
 
 
-def extract_opponent_id(matchup: str, team_id: int, team_abbrevs: dict) -> int | None:
+def extract_opponent_id(matchup: str | None, team_id: int, team_abbrevs: dict) -> int | None:
     """Extract opponent team ID from matchup string like 'LAL vs. GSW' or 'LAL @ GSW'."""
     if not matchup or pd.isna(matchup):
         return None
