@@ -1,17 +1,14 @@
-import os
-import time
-import requests
 import logging
-from datetime import datetime
+import os
+
+import requests
 from dotenv import load_dotenv
 from psycopg2 import extras
 from sqlalchemy import create_engine, text
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger("LiveOddsScraper")
 
@@ -23,6 +20,7 @@ if not DATABASE_URL or not API_KEY:
     raise ValueError("Missing credentials in .env file")
 
 engine = create_engine(DATABASE_URL)
+
 
 class LiveOddsScraper:
     def __init__(self, api_key, db_engine):
@@ -50,7 +48,7 @@ class LiveOddsScraper:
             bookmaker_last_update timestamp with time zone null,
             bookmaker_name text null
         );
-        
+
         CREATE INDEX IF NOT EXISTS idx_live_lines_api_game_id ON public.raw_game_lines_live(api_game_id);
         CREATE INDEX IF NOT EXISTS idx_live_lines_inserted_at ON public.raw_game_lines_live(inserted_at);
         """
@@ -76,12 +74,12 @@ class LiveOddsScraper:
         try:
             response = self.session.get(url, params=params, timeout=15)
             response.raise_for_status()
-            
+
             data = response.json()
             remaining = response.headers.get("x-requests-remaining", "?")
             logger.info(f"Successfully fetched {len(data)} live games. Credits remaining: {remaining}")
             return data
-            
+
         except Exception as e:
             logger.error(f"Failed to fetch live odds: {e}")
             return []
@@ -92,7 +90,7 @@ class LiveOddsScraper:
             return 0
 
         rows_to_insert = []
-        
+
         for game in games:
             api_game_id = game.get("id")
             commence_time = game.get("commence_time")
@@ -132,7 +130,7 @@ class LiveOddsScraper:
 
         if rows_to_insert:
             self._batch_insert(rows_to_insert)
-            
+
         return len(rows_to_insert)
 
     def _batch_insert(self, rows):
@@ -151,6 +149,7 @@ class LiveOddsScraper:
             logger.info(f"Inserted {len(rows)} live odds records.")
         finally:
             conn.close()
+
 
 if __name__ == "__main__":
     scraper = LiveOddsScraper(API_KEY, engine)

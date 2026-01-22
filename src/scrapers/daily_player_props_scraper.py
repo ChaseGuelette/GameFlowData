@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 # Add project root to path
@@ -16,9 +16,7 @@ from sqlalchemy import create_engine, text
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger("DailyPlayerProps")
 
@@ -64,7 +62,7 @@ class DailyPlayerPropsScraper:
             player_id bigint null,
             team_id bigint null
         );
-        
+
         CREATE INDEX IF NOT EXISTS idx_live_props_game ON public.raw_player_props_live(api_game_id);
         CREATE INDEX IF NOT EXISTS idx_live_props_player ON public.raw_player_props_live(api_player_name);
         """
@@ -75,7 +73,7 @@ class DailyPlayerPropsScraper:
         """Get list of current/upcoming NBA games."""
         url = "https://api.the-odds-api.com/v4/sports/basketball_nba/events"
         params = {"apiKey": self.api_key}
-        
+
         try:
             response = self.session.get(url, params=params, timeout=10)
             response.raise_for_status()
@@ -88,7 +86,7 @@ class DailyPlayerPropsScraper:
         """Get events for a specific past date."""
         url = "https://api.the-odds-api.com/v4/historical/sports/basketball_nba/events"
         params = {"apiKey": self.api_key, "date": date_str}
-        
+
         try:
             response = self.session.get(url, params=params, timeout=10)
             if response.status_code == 200:
@@ -110,7 +108,7 @@ class DailyPlayerPropsScraper:
                 "regions": "us,uk",
                 "markets": "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals",
                 "oddsFormat": "american",
-                "dateFormat": "iso"
+                "dateFormat": "iso",
             }
         else:
             url = f"https://api.the-odds-api.com/v4/historical/sports/basketball_nba/events/{event_id}/odds"
@@ -120,29 +118,29 @@ class DailyPlayerPropsScraper:
                 "regions": "us,uk",
                 "markets": "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals",
                 "oddsFormat": "american",
-                "dateFormat": "iso"
+                "dateFormat": "iso",
             }
 
         try:
             response = self.session.get(url, params=params, timeout=10)
             if response.status_code == 200:
                 data = response.json()
-                # Live endpoint returns dict, Historical returns dict wrapped in 'data' usually? 
+                # Live endpoint returns dict, Historical returns dict wrapped in 'data' usually?
                 # Actually, /odds endpoint for historical is wrapped?
                 # Let's check player_prop_scraper.py... "response.json().get('data', {})" for historical
                 # Live endpoint returns the event object directly.
-                
+
                 if is_live:
                     return data, int(response.headers.get("x-requests-last", 0))
                 else:
                     return data.get("data", {}), int(response.headers.get("x-requests-last", 0))
-                    
+
             elif response.status_code == 422:
-                return None, 0 # No odds
-            
+                return None, 0  # No odds
+
         except Exception as e:
             logger.error(f"Error fetching props for {event_id}: {e}")
-            
+
         return None, 0
 
     def parse_and_store(self, data, snapshot_ts, table_name):
@@ -166,26 +164,28 @@ class DailyPlayerPropsScraper:
                 market_updated = market.get("last_update")
 
                 for outcome in market.get("outcomes", []):
-                    rows.append((
-                        game_id,
-                        outcome.get("description"), # Player Name
-                        book_key,
-                        market_key,
-                        outcome.get("name"), # Over/Under
-                        outcome.get("point"),
-                        outcome.get("price"),
-                        commence_time,
-                        home_team,
-                        away_team,
-                        snapshot_ts,
-                        market_updated,
-                        book_updated,
-                        book_name
-                    ))
+                    rows.append(
+                        (
+                            game_id,
+                            outcome.get("description"),  # Player Name
+                            book_key,
+                            market_key,
+                            outcome.get("name"),  # Over/Under
+                            outcome.get("point"),
+                            outcome.get("price"),
+                            commence_time,
+                            home_team,
+                            away_team,
+                            snapshot_ts,
+                            market_updated,
+                            book_updated,
+                            book_name,
+                        )
+                    )
 
         if rows:
             self._batch_insert(rows, table_name)
-        
+
         return len(rows)
 
     def _batch_insert(self, rows, table_name):
@@ -210,23 +210,23 @@ def run_live_scrape(scraper):
     logger.info("Running LIVE Player Props Scrape...")
     events = scraper.get_live_events()
     logger.info(f"Found {len(events)} live/upcoming events.")
-    
+
     total_creds = 0
     total_rows = 0
     snapshot_ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    
+
     for event in events:
         game_id = event["id"]
         logger.info(f"Fetching props for {event['home_team']} vs {event['away_team']}...")
-        
+
         data, cost = scraper.fetch_props(game_id, is_live=True)
         total_creds += cost
-        
+
         if data:
             rows = scraper.parse_and_store(data, snapshot_ts, "raw_player_props_live")
             total_rows += rows
             logger.info(f"  Saved {rows} props.")
-        
+
         time.sleep(0.2)
 
     logger.info(f"Live scrape complete. Saved {total_rows} rows. Used {total_creds} credits.")
@@ -235,7 +235,7 @@ def run_live_scrape(scraper):
 def run_historical_scrape(scraper, date_str):
     """Run scrape for 12pm/6pm snapshots on date -> raw_player_props_combined"""
     logger.info(f"Running Historical Player Props Scrape for {date_str}...")
-    
+
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
@@ -247,24 +247,24 @@ def run_historical_scrape(scraper, date_str):
     for h in [17, 23]:
         snap = datetime(dt.year, dt.month, dt.day, h, 0, 0)
         if snap <= datetime.utcnow():
-             snapshots.append(snap.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            snapshots.append(snap.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     total_creds = 0
-    
+
     for snap_ts in snapshots:
         logger.info(f"Snapshot: {snap_ts}")
         events = scraper.get_historical_events(snap_ts)
-        
+
         for event in events:
             data, cost = scraper.fetch_props(event["id"], date_str=snap_ts, is_live=False)
             total_creds += cost
-            
+
             if data:
                 rows = scraper.parse_and_store(data, snap_ts, "raw_player_props_combined")
                 logger.info(f"  Saved {rows} rows for game {event['id']}")
-            
+
             time.sleep(0.2)
-            
+
     logger.info(f"Historical scrape complete. Used {total_creds} credits.")
 
 
@@ -272,13 +272,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="Scrape live props to raw_player_props_live")
     parser.add_argument("--date", type=str, help="Scrape historical props (12pm/6pm) to raw_player_props_combined")
-    
+
     args = parser.parse_args()
-    
+
     scraper = DailyPlayerPropsScraper(API_KEY, engine)
-    
+
     if args.live:
         run_live_scrape(scraper)
-    
+
     if args.date:
         run_historical_scrape(scraper, args.date)

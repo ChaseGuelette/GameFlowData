@@ -235,7 +235,7 @@ class PlayerPropsModelPipeline:
             # Get stat-specific features if not already set
             if stat not in self.rate_features:
                 self.rate_features[stat] = STAT_FEATURES.get(stat, RATE_FEATURES_PTS)
-            
+
             stat_features = self.rate_features[stat]
 
             # Filter to available features
