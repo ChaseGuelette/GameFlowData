@@ -37,7 +37,8 @@ Thumbs.db
 # Solokit session files
 .session/briefings/
 .session/history/
-.session
+.session/
+.session\
 # Solokit adoption backups
 .solokit-backup/
 # Coverage

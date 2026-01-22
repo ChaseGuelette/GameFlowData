@@ -43,8 +43,8 @@ class ScraperBot:
                 with open(PROGRESS_FILE) as f:
                     data = json.load(f)
                     return set(tuple(x) for x in data)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to load progress: {e}")
         return set()
 
     def save_progress(self):

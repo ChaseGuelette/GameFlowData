@@ -350,11 +350,19 @@ GameFlowData/
 │   ├── data
 │   ├── hooks
 │   ├── logs
+│   │   └── headless
+│   ├── metrics
+│   │   ├── codebase-map.json
+│   │   └── consolidation.json
 │   ├── sessions
 │   ├── workflows
 │   ├── .gitignore
 │   ├── CAPABILITIES.md
-│   └── config.yaml
+│   ├── config.yaml
+│   ├── daemon-state.json
+│   └── daemon.pid
+├── .gemini
+│   └── settings.json
 ├── .solokit-backup
 │   └── 20260115_213903
 ├── data
@@ -398,6 +406,7 @@ GameFlowData/
 │   ├── player_position_history.md
 │   ├── player_prop_scraper_documentation.md
 │   ├── populate_average_stats_documentation.md
+│   ├── solokit_test_commands.md
 │   ├── team_allowed_by_position.md
 │   ├── update_league_position_averages_documentation.md
 │   └── update_player_position_history_documentation.md
@@ -441,17 +450,6 @@ GameFlowData/
 │   │   ├── pipeline.ipynb
 │   │   ├── train.ipynb
 │   │   └── trainSeperatedMethods.ipynb
-│   ├── oldMLNotebooks
-│   │   ├── basicPredictor.ipynb
-│   │   ├── featureSelection.ipynb
-│   │   ├── feature_optimization.ipynb
-│   │   ├── gameHomeAwayScraper.ipynb
-│   │   ├── playbyplay.ipynb
-│   │   ├── playerPredictor.py
-│   │   ├── playerScoresPredictor.ipynb
-│   │   ├── teamPredictor.py
-│   │   ├── teamScorePredictor.ipynb
-│   │   └── teamStrength.ipynb
 │   ├── Untitled.ipynb
 │   ├── advanced_stats_scraper.ipynb
 │   ├── finalizedNeededEndopints.ipynb
@@ -516,6 +514,7 @@ GameFlowData/
 │   ├── test_injury_scraper_job.py
 │   ├── test_nba_linker_local.py
 │   ├── test_nba_player_position.py
+│   ├── test_nba_unified_scraper.py
 │   ├── test_player_prop_scraper.py
 │   ├── test_populate_average_stats.py
 │   ├── test_update_league_position_averages.py
@@ -528,8 +527,10 @@ GameFlowData/
 ├── ARCHITECTURE.md
 ├── CHANGELOG.md
 ├── CLAUDE.md
+├── GEMINI.md
 ├── README.md
 ├── alembic.ini
+├── claude-flow-swarm.md
 ├── coverage.json
 ├── coverage.xml
 ├── package-lock.json
@@ -539,32 +540,4 @@ GameFlowData/
 ├── pyrightconfig.json
 ├── pytest.ini
 ├── requirements-dev.txt
-├── requirements.txt
-├── tmpclaude-08e5-cwd
-├── tmpclaude-0fd6-cwd
-├── tmpclaude-1210-cwd
-├── tmpclaude-19a8-cwd
-├── tmpclaude-1a9f-cwd
-├── tmpclaude-1eba-cwd
-├── tmpclaude-2627-cwd
-├── tmpclaude-2af0-cwd
-├── tmpclaude-2d6e-cwd
-├── tmpclaude-2f27-cwd
-├── tmpclaude-368d-cwd
-├── tmpclaude-3a91-cwd
-├── tmpclaude-4113-cwd
-├── tmpclaude-45d1-cwd
-├── tmpclaude-4fea-cwd
-├── tmpclaude-60ee-cwd
-├── tmpclaude-6b91-cwd
-├── tmpclaude-6d16-cwd
-├── tmpclaude-7142-cwd
-├── tmpclaude-73a1-cwd
-├── tmpclaude-8740-cwd
-├── tmpclaude-88e4-cwd
-├── tmpclaude-917f-cwd
-├── tmpclaude-b1b5-cwd
-├── tmpclaude-ba40-cwd
-├── tmpclaude-c293-cwd
-├── tmpclaude-d710-cwd
-└── tmpclaude-e934-cwd
+└── requirements.txt

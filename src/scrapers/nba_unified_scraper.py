@@ -55,7 +55,7 @@ BAN_COOLDOWN = 600  # 10 minutes if rate limited
 MAX_RETRIES = 3
 
 # Current season default
-DEFAULT_SEASON = "2024-25"
+DEFAULT_SEASON = "2025-26"
 
 
 # =============================================================================
@@ -114,6 +114,8 @@ def determine_dnp(row: pd.Series) -> bool:
     """Determine if a player did not play."""
     comment = row.get("comment", "")
     minutes = row.get("minutes", 0)
+    if minutes == 0:
+        minutes = row.get("min", 0)
 
     if pd.notna(comment) and str(comment).strip() != "":
         return True
@@ -127,11 +129,11 @@ def determine_dnp(row: pd.Series) -> bool:
 def rate_limit_delay(game_num: int):
     """Apply rate limiting between API calls."""
     if game_num > 0 and game_num % LONG_PAUSE_EVERY == 0:
-        pause = round(random.uniform(LONG_PAUSE_MIN, LONG_PAUSE_MAX), 1)
+        pause = round(random.uniform(LONG_PAUSE_MIN, LONG_PAUSE_MAX), 1)  # nosec
         print(f"\n  ⏸️  Long pause: {pause}s (every {LONG_PAUSE_EVERY} games)\n")
         time.sleep(pause)
     else:
-        delay = round(random.uniform(SHORT_DELAY_MIN, SHORT_DELAY_MAX), 2)
+        delay = round(random.uniform(SHORT_DELAY_MIN, SHORT_DELAY_MAX), 2)  # nosec
         time.sleep(delay)
 
 
@@ -169,7 +171,11 @@ def get_existing_game_ids(engine, table_name: str = "team_game_stats") -> set[st
     if table_name not in inspector.get_table_names():
         return set()
 
-    existing_games = pd.read_sql(f"SELECT DISTINCT game_id FROM {table_name}", engine)
+    # Validate table_name contains only safe characters
+    if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
+        raise ValueError(f"Invalid table name: {table_name}")
+
+    existing_games = pd.read_sql(f"SELECT DISTINCT game_id FROM {table_name}", engine)  # nosec
     return set(existing_games["game_id"].unique())
 
 
@@ -254,7 +260,7 @@ def scrape_team_game_stats(engine, seasons: list[str], season_type: str = "Regul
             else:
                 print(f"- No new games found for {season}")
 
-            time.sleep(round(random.uniform(1, 3), 1))
+            time.sleep(round(random.uniform(1, 3), 1))  # nosec
 
         except Exception as e:
             print(f"✗ Error for {season}: {e}")
@@ -479,7 +485,7 @@ def update_team_advanced_stats(engine, team_df: pd.DataFrame, game_id: str):
         UPDATE team_game_stats
         SET {", ".join(set_parts)}
         WHERE game_id = :game_id AND team_id = :team_id
-        """
+        """  # nosec
 
         with engine.begin() as conn:
             conn.execute(text(sql), params)
@@ -548,7 +554,7 @@ def ensure_players_exist(engine, player_df: pd.DataFrame):
     params = {f"id{i}": pid for i, pid in enumerate(player_ids)}
 
     with engine.connect() as conn:
-        result = conn.execute(text(f"SELECT player_id FROM players WHERE player_id IN ({placeholders})"), params)
+        result = conn.execute(text(f"SELECT player_id FROM players WHERE player_id IN ({placeholders})"), params)  # nosec
         existing_ids = {row[0] for row in result}
 
     # Find missing players
@@ -600,8 +606,8 @@ def scrape_advanced_stats(engine, limit: int | None = None) -> tuple[int, int]:
         existing = pd.read_sql("SELECT DISTINCT game_id FROM player_game_advanced_stats", engine)
         existing_player_games = set(existing["game_id"].unique())
         print(f"Found {len(existing_player_games)} games with player advanced stats")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: Could not fetch existing advanced stats: {e}")
 
     player_columns = get_player_game_advanced_stats_columns()
     games_processed = 0

@@ -234,7 +234,7 @@ def find_closest_game_date(candidates, target_date_str, max_days=FUZZY_DATE_WIND
             if diff_days <= max_days and diff_days < best_diff:
                 best_diff = diff_days
                 best_game_id = game_id
-        except Exception:
+        except (ValueError, TypeError):
             continue
 
     if best_game_id:
@@ -575,7 +575,7 @@ def process_local():
             if "." in s:
                 try:
                     s = str(int(float(s)))
-                except Exception:
+                except (ValueError, TypeError):
                     pass
             # Pad to 10 characters with leading zeros if needed
             if s.isdigit() and len(s) < 10:

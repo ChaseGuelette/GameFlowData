@@ -10,6 +10,14 @@ import xgboost as xgb
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import train_test_split
 
+from .feature_store import (
+    MINUTES_FEATURES,
+    RATE_FEATURES_AST,
+    RATE_FEATURES_PTS,
+    RATE_FEATURES_REB,
+    RATE_FEATURES_THREES,
+)
+
 
 @dataclass
 class QuantileModelConfig:
@@ -29,6 +37,15 @@ class QuantileModelConfig:
     # Training config
     val_fraction: float = 0.15
     random_state: int = 42
+
+
+# Map stat names to their feature lists
+STAT_FEATURES = {
+    "pts": RATE_FEATURES_PTS,
+    "reb": RATE_FEATURES_REB,
+    "ast": RATE_FEATURES_AST,
+    "threes": RATE_FEATURES_THREES,
+}
 
 
 class QuantileModelSuite:
@@ -155,6 +172,7 @@ class QuantileModelSuite:
 class PlayerPropsModelPipeline:
     """
     Complete pipeline for training minutes and rate models.
+    Uses centralized feature definitions from feature_store.
     """
 
     def __init__(self, feature_store, config: QuantileModelConfig | None = None):
@@ -165,9 +183,9 @@ class PlayerPropsModelPipeline:
         self.minutes_model: QuantileModelSuite | None = None
         self.rate_models: dict[str, QuantileModelSuite] = {}
 
-        # Feature lists
+        # Feature lists (populated during training)
         self.minutes_features: list[str] = []
-        self.rate_features: list[str] = []
+        self.rate_features: dict[str, list[str]] = {}
 
     def train_minutes_model(self, df: pd.DataFrame) -> dict:
         """Train the minutes prediction model."""
@@ -175,34 +193,18 @@ class PlayerPropsModelPipeline:
         print("TRAINING MINUTES MODEL")
         print("=" * 60)
 
-        # Define minutes-specific features
-        self.minutes_features = [
-            # Player recent minutes
-            "player_avg_min_l5",
-            "player_avg_min_l15",
-            "player_avg_min_szn",
-            "player_games_l5",
-            "player_games_l15",
-            # Player role indicators
-            "player_avg_usg_pct_l5",
-            "player_avg_usg_pct_l15",
-            # Team context
-            "team_avg_pace_l5",
-            "team_avg_pace_l15",
-            # Opponent context (affects game pace)
-            "opp_avg_pace_l5",
-            "opp_avg_pace_l15",
-            # Game context
-            "is_home",
-            "rest_days",
-            "is_back_to_back",
-            "line_spread",  # Blowout indicator
-            "line_total",  # Pace indicator
-        ]
+        # Use centralized feature list if not already set
+        if not self.minutes_features:
+            self.minutes_features = MINUTES_FEATURES
 
         # Filter to available features
         available_features = [f for f in self.minutes_features if f in df.columns]
-        print(f"Using {len(available_features)} features for minutes model")
+        missing_features = [f for f in self.minutes_features if f not in df.columns]
+
+        if missing_features:
+            print(f"Warning: Missing features: {missing_features}")
+
+        print(f"Using {len(available_features)} features: {available_features}")
 
         # Filter to valid rows (player played)
         valid_mask = df["actual_minutes"] > 0
@@ -217,58 +219,33 @@ class PlayerPropsModelPipeline:
 
         return results
 
-    def train_rate_models(self, df: pd.DataFrame, stats: list[str] = None) -> dict:
-        """Train rate models for each stat."""
-        stats = stats or ["pts", "reb", "ast"]
+    def train_rate_models(self, df: pd.DataFrame, stats: list[str] | None = None) -> dict:
+        """Train rate models for each stat using stat-specific features."""
+        stats = stats or ["pts", "reb", "ast", "threes"]
 
         print("\n" + "=" * 60)
         print("TRAINING RATE MODELS")
         print("=" * 60)
 
-        # Define rate-specific features
-        self.rate_features = [
-            # Player efficiency
-            "player_avg_usg_pct_l5",
-            "player_avg_usg_pct_l15",
-            "player_avg_usg_pct_szn",
-            "player_avg_ts_pct_l5",
-            "player_avg_ts_pct_l15",
-            "player_avg_ts_pct_szn",
-            "player_avg_off_rtg_l5",
-            "player_avg_off_rtg_l15",
-            # Player averages (context for rate)
-            "player_avg_pts_l5",
-            "player_avg_pts_l15",
-            "player_avg_reb_l5",
-            "player_avg_reb_l15",
-            "player_avg_ast_l5",
-            "player_avg_ast_l15",
-            # Team context
-            "team_avg_off_rtg_l5",
-            "team_avg_pace_l5",
-            # Opponent overall defense
-            "opp_avg_def_rtg_l5",
-            "opp_avg_def_rtg_l15",
-            "opp_avg_pace_l5",
-            # Opponent positional defense (KEY FEATURE)
-            "opp_pos_pts_allowed_per36_l5",
-            "opp_pos_pts_allowed_per36_l15",
-            "opp_pos_reb_allowed_per36_l5",
-            "opp_pos_reb_allowed_per36_l15",
-            "opp_pos_ast_allowed_per36_l5",
-            "opp_pos_ast_allowed_per36_l15",
-            # Game context
-            "is_home",
-            "line_total",  # Correlated with pace
-        ]
-
-        available_features = [f for f in self.rate_features if f in df.columns]
-        print(f"Using {len(available_features)} features for rate models")
-
         all_results = {}
 
         for stat in stats:
             print(f"\n--- Training {stat.upper()} rate model ---")
+
+            # Get stat-specific features if not already set
+            if stat not in self.rate_features:
+                self.rate_features[stat] = STAT_FEATURES.get(stat, RATE_FEATURES_PTS)
+
+            stat_features = self.rate_features[stat]
+
+            # Filter to available features
+            available_features = [f for f in stat_features if f in df.columns]
+            missing_features = [f for f in stat_features if f not in df.columns]
+
+            if missing_features:
+                print(f"Warning: Missing features for {stat}: {missing_features}")
+
+            print(f"Using {len(available_features)} features: {available_features}")
 
             # Filter to valid rows (minimum minutes for rate calculation)
             rate_col = f"{stat}_per_min"
@@ -323,14 +300,16 @@ class PlayerPropsModelPipeline:
             pipeline.minutes_model = QuantileModelSuite.load(minutes_path)
 
         # Load rate models
-        for stat in ["pts", "reb", "ast", "stl", "blk"]:
+        for stat in ["pts", "reb", "ast", "threes"]:
             rate_path = path / f"{stat}_rate_model.joblib"
             if rate_path.exists():
                 pipeline.rate_models[stat] = QuantileModelSuite.load(rate_path)
 
         # Load feature config
-        config = joblib.load(path / "feature_config.joblib")
-        pipeline.minutes_features = config["minutes_features"]
-        pipeline.rate_features = config["rate_features"]
+        config_path = path / "feature_config.joblib"
+        if config_path.exists():
+            config = joblib.load(config_path)
+            pipeline.minutes_features = config["minutes_features"]
+            pipeline.rate_features = config["rate_features"]
 
         return pipeline

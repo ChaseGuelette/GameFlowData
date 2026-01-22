@@ -30,7 +30,7 @@ def download_csvs():
     for file_name, table_name in tqdm(tables_to_export.items(), desc="Exporting Tables"):
         try:
             # Query the full table
-            query = f"SELECT * FROM public.{table_name}"
+            query = f"SELECT * FROM public.{table_name}"  # nosec
 
             # Read into DataFrame
             df = pd.read_sql(query, engine)
