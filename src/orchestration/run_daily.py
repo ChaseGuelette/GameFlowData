@@ -16,9 +16,7 @@ from src.models.quantile_trainer import PlayerPropsModelPipeline
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger("DailyOrchestrator")
 
@@ -29,13 +27,7 @@ def run_command(command, description):
     try:
         # Split command into list for shell=False
         cmd_list = command.split()
-        subprocess.run(
-            cmd_list,
-            check=True,
-            capture_output=True,
-            text=True,
-            shell=False
-        )
+        subprocess.run(cmd_list, check=True, capture_output=True, text=True, shell=False)
         logger.info(f"COMPLETED: {description}")
     except subprocess.CalledProcessError as e:
         logger.error(f"FAILED: {description}")
@@ -48,9 +40,7 @@ def main():
     parser.add_argument("--date", type=str, default=str(date.today()), help="Target date for predictions (YYYY-MM-DD)")
     parser.add_argument("--skip-scraping", action="store_true", help="Skip the scraping step")
     parser.add_argument(
-        "--scrape-live-odds",
-        action="store_true",
-        help="Scrape LIVE odds (current lines) into raw_game_lines_live"
+        "--scrape-live-odds", action="store_true", help="Scrape LIVE odds (current lines) into raw_game_lines_live"
     )
     parser.add_argument(
         "--scrape-daily-props",
@@ -58,25 +48,11 @@ def main():
         help="Scrape daily player props (12pm/6pm) into raw_player_props_combined",
     )
     parser.add_argument(
-        "--scrape-live-props",
-        action="store_true",
-        help="Scrape LIVE player props into raw_player_props_live"
+        "--scrape-live-props", action="store_true", help="Scrape LIVE player props into raw_player_props_live"
     )
-    parser.add_argument(
-        "--scrape-injuries",
-        action="store_true",
-        help="Scrape current injuries from ESPN"
-    )
-    parser.add_argument(
-        "--skip-processing",
-        action="store_true",
-        help="Skip the processing/update step"
-    )
-    parser.add_argument(
-        "--skip-inference",
-        action="store_true",
-        help="Skip the prediction step"
-    )
+    parser.add_argument("--scrape-injuries", action="store_true", help="Scrape current injuries from ESPN")
+    parser.add_argument("--skip-processing", action="store_true", help="Skip the processing/update step")
+    parser.add_argument("--skip-inference", action="store_true", help="Skip the prediction step")
     parser.add_argument("--model-dir", type=str, default="src/models/artifacts", help="Path to model artifacts")
 
     args = parser.parse_args()
@@ -93,8 +69,7 @@ def main():
 
         # Scrape Daily Game Lines (Odds)
         run_command(
-            f"python src/scrapers/daily_game_lines_scraper.py --date {args.date}",
-            "Scraping Daily Game Lines (Odds)"
+            f"python src/scrapers/daily_game_lines_scraper.py --date {args.date}", "Scraping Daily Game Lines (Odds)"
         )
 
         # Scrape Daily Player Props (12pm/6pm snapshots)
@@ -106,24 +81,18 @@ def main():
 
         # Scrape LIVE Odds (Optional)
         if args.scrape_live_odds:
-            run_command(
-                "python src/scrapers/live_odds_scraper.py",
-                "Scraping LIVE Odds to 'raw_game_lines_live'"
-            )
+            run_command("python src/scrapers/live_odds_scraper.py", "Scraping LIVE Odds to 'raw_game_lines_live'")
 
         # Scrape LIVE Player Props (Optional)
         if args.scrape_live_props:
             run_command(
                 "python src/scrapers/daily_player_props_scraper.py --live",
-                "Scraping LIVE Player Props to 'raw_player_props_live'"
+                "Scraping LIVE Player Props to 'raw_player_props_live'",
             )
 
         # Scrape Injuries (Optional)
         if args.scrape_injuries:
-            run_command(
-                "python src/scrapers/injury_scraper_job.py",
-                "Scraping ESPN Injuries"
-            )
+            run_command("python src/scrapers/injury_scraper_job.py", "Scraping ESPN Injuries")
 
     else:
         logger.info("Skipping Scraping Step")

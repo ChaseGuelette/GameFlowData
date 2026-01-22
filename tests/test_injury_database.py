@@ -12,7 +12,6 @@ from src.scrapers.injury_database import InjuryDatabase
 
 
 class TestInjuryDatabase(unittest.TestCase):
-
     def setUp(self):
         # Mock engine and connection
         self.mock_engine = MagicMock()
@@ -52,11 +51,22 @@ class TestInjuryDatabase(unittest.TestCase):
         db = InjuryDatabase()
 
         record = InjuryRecord(
-            espn_injury_id="1", espn_player_id="p1", player_name="Test Player",
-            team_id="t1", team_name="Team", status="Out",
-            injury_type="Knee", injury_location="Knee", injury_side="Left", injury_detail="Sprain",
-            return_date="Soon", date_reported="2024-01-01", short_comment="Hurt", long_comment="Really hurt",
-            fantasy_status="Out", scrape_timestamp="2024-01-01T12:00:00Z"
+            espn_injury_id="1",
+            espn_player_id="p1",
+            player_name="Test Player",
+            team_id="t1",
+            team_name="Team",
+            status="Out",
+            injury_type="Knee",
+            injury_location="Knee",
+            injury_side="Left",
+            injury_detail="Sprain",
+            return_date="Soon",
+            date_reported="2024-01-01",
+            short_comment="Hurt",
+            long_comment="Really hurt",
+            fantasy_status="Out",
+            scrape_timestamp="2024-01-01T12:00:00Z",
         )
 
         # Mock execution result
@@ -84,10 +94,7 @@ class TestInjuryDatabase(unittest.TestCase):
         self.mock_connection.execute.return_value.scalar.return_value = "2024-01-01T12:00:00Z"
 
         # Mock second query (Select rows)
-        mock_rows = [
-            {"player_name": "Player 1", "status": "Out"},
-            {"player_name": "Player 2", "status": "Day-to-Day"}
-        ]
+        mock_rows = [{"player_name": "Player 1", "status": "Out"}, {"player_name": "Player 2", "status": "Day-to-Day"}]
         mock_result_proxy = MagicMock()
         mock_result_proxy.mappings.return_value.all.return_value = mock_rows
 
@@ -133,6 +140,7 @@ class TestInjuryDatabase(unittest.TestCase):
 
         results = db.get_injuries_for_date(target_date)
         self.assertEqual(len(results), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

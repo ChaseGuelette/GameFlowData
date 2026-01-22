@@ -9,7 +9,6 @@ from src.scrapers.injury_scraper_job import InjuryScraperJob
 
 
 class TestInjuryScraperJob(unittest.TestCase):
-
     @patch("src.scrapers.injury_scraper_job.InjuryDatabase")
     @patch("src.scrapers.injury_scraper_job.ESPNInjuryScraper")
     def test_run_success(self, MockScraper, MockDB):
@@ -17,12 +16,12 @@ class TestInjuryScraperJob(unittest.TestCase):
 
         # Setup Scraper Mock
         mock_scraper_instance = MockScraper.return_value
-        mock_scraper_instance.scrape.return_value = ["inj1", "inj2"] # Mock list of injuries
+        mock_scraper_instance.scrape.return_value = ["inj1", "inj2"]  # Mock list of injuries
 
         # Setup DB Mock
         mock_db_instance = MockDB.return_value
-        mock_db_instance.get_latest_injuries.return_value = [] # No previous
-        mock_db_instance.store_injuries.return_value = (2, 0) # 2 inserted
+        mock_db_instance.get_latest_injuries.return_value = []  # No previous
+        mock_db_instance.store_injuries.return_value = (2, 0)  # 2 inserted
 
         job = InjuryScraperJob(log_dir="tests/logs")
         results = job.run()
@@ -67,6 +66,7 @@ class TestInjuryScraperJob(unittest.TestCase):
         self.assertFalse(results["success"])
         self.assertTrue(len(results["errors"]) > 0, "No errors recorded in results")
         self.assertIn("API Error", results["errors"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -85,10 +85,22 @@ class InjuryDatabase:
 
         # Prepare insert query
         cols = [
-            "espn_injury_id", "espn_player_id", "player_name", "team_id", "team_name",
-            "status", "injury_type", "injury_location", "injury_side", "injury_detail",
-            "return_date", "date_reported", "short_comment", "long_comment",
-            "fantasy_status", "scrape_timestamp"
+            "espn_injury_id",
+            "espn_player_id",
+            "player_name",
+            "team_id",
+            "team_name",
+            "status",
+            "injury_type",
+            "injury_location",
+            "injury_side",
+            "injury_detail",
+            "return_date",
+            "date_reported",
+            "short_comment",
+            "long_comment",
+            "fantasy_status",
+            "scrape_timestamp",
         ]
 
         col_str = ", ".join(cols)
