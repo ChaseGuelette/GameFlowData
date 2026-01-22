@@ -193,8 +193,9 @@ class PlayerPropsModelPipeline:
         print("TRAINING MINUTES MODEL")
         print("=" * 60)
 
-        # Use centralized feature list
-        self.minutes_features = MINUTES_FEATURES
+        # Use centralized feature list if not already set
+        if not self.minutes_features:
+            self.minutes_features = MINUTES_FEATURES
 
         # Filter to available features
         available_features = [f for f in self.minutes_features if f in df.columns]
@@ -231,9 +232,11 @@ class PlayerPropsModelPipeline:
         for stat in stats:
             print(f"\n--- Training {stat.upper()} rate model ---")
 
-            # Get stat-specific features
-            stat_features = STAT_FEATURES.get(stat, RATE_FEATURES_PTS)
-            self.rate_features[stat] = stat_features
+            # Get stat-specific features if not already set
+            if stat not in self.rate_features:
+                self.rate_features[stat] = STAT_FEATURES.get(stat, RATE_FEATURES_PTS)
+            
+            stat_features = self.rate_features[stat]
 
             # Filter to available features
             available_features = [f for f in stat_features if f in df.columns]

@@ -89,6 +89,8 @@ class DailyPredictionRunner:
         # 5. Calculate edges
         if len(lines_df) > 0:
             predictions_df = self._calculate_edges(predictions_df, lines_df)
+        else:
+            logger.warning("No prop lines found for today's games. Skipping edge calculation.")
 
         return predictions_df
 

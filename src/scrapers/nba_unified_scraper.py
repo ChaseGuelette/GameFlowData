@@ -55,7 +55,7 @@ BAN_COOLDOWN = 600  # 10 minutes if rate limited
 MAX_RETRIES = 3
 
 # Current season default
-DEFAULT_SEASON = "2024-25"
+DEFAULT_SEASON = "2025-26"
 
 
 # =============================================================================
@@ -114,6 +114,8 @@ def determine_dnp(row: pd.Series) -> bool:
     """Determine if a player did not play."""
     comment = row.get("comment", "")
     minutes = row.get("minutes", 0)
+    if minutes == 0:
+        minutes = row.get("min", 0)
 
     if pd.notna(comment) and str(comment).strip() != "":
         return True
