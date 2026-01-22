@@ -23,18 +23,18 @@ logger = logging.getLogger("DailyOrchestrator")
 
 def run_command(command, description):
     """Run a shell command and check for errors."""
-        logger.info(f"STARTING: {description}")
-        try:
-            # Split command into list for shell=False
-            cmd_list = command.split()
-            subprocess.run(
-                cmd_list,
-                check=True,
-                capture_output=True,
-                text=True,
-                shell=False
-            )
-            logger.info(f"COMPLETED: {description}")
+    logger.info(f"STARTING: {description}")
+    try:
+        # Split command into list for shell=False
+        cmd_list = command.split()
+        subprocess.run(
+            cmd_list,
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=False
+        )
+        logger.info(f"COMPLETED: {description}")
     # Log stdout if needed, or just on error
     # logger.info(result.stdout)
     except subprocess.CalledProcessError as e:

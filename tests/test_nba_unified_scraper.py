@@ -19,7 +19,7 @@ sys.modules["nba_api"] = mock_nba_api
 sys.modules["nba_api.stats"] = mock_nba_api.stats
 sys.modules["nba_api.stats.endpoints"] = mock_nba_api.stats.endpoints
 
-from scrapers import nba_unified_scraper
+from src.scrapers import nba_unified_scraper
 
 # =============================================================================
 # Helper Function Tests

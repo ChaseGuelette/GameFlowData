@@ -609,7 +609,6 @@ def scrape_advanced_stats(engine, limit: int | None = None) -> tuple[int, int]:
     except Exception as e:
         print(f"Warning: Could not fetch existing advanced stats: {e}")
 
-
     player_columns = get_player_game_advanced_stats_columns()
     games_processed = 0
     games_failed = 0
