@@ -350,11 +350,17 @@ GameFlowData/
 │   ├── data
 │   ├── hooks
 │   ├── logs
+│   │   └── headless
+│   ├── metrics
+│   │   ├── codebase-map.json
+│   │   └── consolidation.json
 │   ├── sessions
 │   ├── workflows
 │   ├── .gitignore
 │   ├── CAPABILITIES.md
-│   └── config.yaml
+│   ├── config.yaml
+│   ├── daemon-state.json
+│   └── daemon.pid
 ├── .gemini
 │   └── settings.json
 ├── .solokit-backup
@@ -533,39 +539,4 @@ GameFlowData/
 ├── pyrightconfig.json
 ├── pytest.ini
 ├── requirements-dev.txt
-├── requirements.txt
-├── tmpclaude-08e5-cwd
-├── tmpclaude-0fd6-cwd
-├── tmpclaude-1210-cwd
-├── tmpclaude-19a8-cwd
-├── tmpclaude-1a9f-cwd
-├── tmpclaude-1eba-cwd
-├── tmpclaude-2627-cwd
-├── tmpclaude-2af0-cwd
-├── tmpclaude-2d6e-cwd
-├── tmpclaude-2f27-cwd
-├── tmpclaude-368d-cwd
-├── tmpclaude-3a91-cwd
-├── tmpclaude-4113-cwd
-├── tmpclaude-45d1-cwd
-├── tmpclaude-4fea-cwd
-├── tmpclaude-60ee-cwd
-├── tmpclaude-6b91-cwd
-├── tmpclaude-6d16-cwd
-├── tmpclaude-7142-cwd
-├── tmpclaude-72d8-cwd
-├── tmpclaude-73a1-cwd
-├── tmpclaude-7c88-cwd
-├── tmpclaude-7e83-cwd
-├── tmpclaude-8740-cwd
-├── tmpclaude-88e4-cwd
-├── tmpclaude-9177-cwd
-├── tmpclaude-917f-cwd
-├── tmpclaude-9f44-cwd
-├── tmpclaude-afb9-cwd
-├── tmpclaude-b1b5-cwd
-├── tmpclaude-ba40-cwd
-├── tmpclaude-c293-cwd
-├── tmpclaude-cd2c-cwd
-├── tmpclaude-d710-cwd
-└── tmpclaude-e934-cwd
+└── requirements.txt
