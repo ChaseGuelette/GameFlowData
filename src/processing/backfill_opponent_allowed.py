@@ -233,7 +233,7 @@ def batch_insert_to_db(engine, df, batch_size=2000):
     cols = ", ".join(valid_cols)
     vals = ", ".join([f":{c}" for c in valid_cols])
     upsert = text(
-        f"INSERT INTO team_allowed_by_position ({cols}) VALUES ({vals}) ON CONFLICT (team_id, game_id, position_group) DO UPDATE SET "
+        f"INSERT INTO team_allowed_by_position ({cols}) VALUES ({vals}) ON CONFLICT (team_id, game_id, position_group) DO UPDATE SET "  # nosec
         + ", ".join([f"{c} = EXCLUDED.{c}" for c in valid_cols if c not in ["team_id", "game_id", "position_group"]])
         + ", created_at = NOW();"
     )

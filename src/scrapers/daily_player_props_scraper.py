@@ -198,7 +198,7 @@ class DailyPlayerPropsScraper:
                      outcome_label, line, odds_american, commence_time, home_team, away_team,
                      snapshot_time, market_last_update, bookmaker_last_update, bookmaker_name)
                     VALUES %s
-                """
+                """  # nosec
                 extras.execute_values(cur, query, rows)
             conn.commit()
         finally:
