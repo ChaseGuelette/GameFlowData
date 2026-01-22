@@ -4,15 +4,15 @@ Handles storage, retrieval, and change tracking using SQLAlchemy
 """
 
 import logging
-import os
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 # Add project root to path for imports
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
+
 from src.db.client import get_engine
 from src.scrapers.espn_injury_scraper import InjuryRecord
 
@@ -59,7 +59,6 @@ class InjuryDatabase:
             scrape_timestamp timestamp with time zone not null,
             created_at timestamp with time zone default now()
         );
-        
         CREATE INDEX IF NOT EXISTS idx_injuries_player ON public.espn_injuries(espn_player_id);
         CREATE INDEX IF NOT EXISTS idx_injuries_team ON public.espn_injuries(team_id);
         CREATE INDEX IF NOT EXISTS idx_injuries_scrape_ts ON public.espn_injuries(scrape_timestamp);
@@ -79,22 +78,22 @@ class InjuryDatabase:
             return 0, 0
 
         inserted = 0
-        updated = 0 # Not really updating, just inserting history
+        # updated = 0  # Not really updating, just inserting history
 
         # Convert to list of dicts
         records = [inj.to_dict() for inj in injuries]
-        
+
         # Prepare insert query
         cols = [
             "espn_injury_id", "espn_player_id", "player_name", "team_id", "team_name",
             "status", "injury_type", "injury_location", "injury_side", "injury_detail",
-            "return_date", "date_reported", "short_comment", "long_comment", 
+            "return_date", "date_reported", "short_comment", "long_comment",
             "fantasy_status", "scrape_timestamp"
         ]
-        
+
         col_str = ", ".join(cols)
         val_str = ", ".join([f":{c}" for c in cols])
-        
+
         # We use ON CONFLICT DO NOTHING to deduplicate if run multiple times same second
         stmt = text(f"""
             INSERT INTO espn_injuries ({col_str})
@@ -120,12 +119,12 @@ class InjuryDatabase:
             # Get latest timestamp
             with self.engine.connect() as conn:
                 res = conn.execute(text("SELECT MAX(scrape_timestamp) FROM espn_injuries")).scalar()
-                
+
                 if not res:
                     return []
-                
+
                 timestamp = res
-                
+
                 # Fetch records
                 query = text("SELECT * FROM espn_injuries WHERE scrape_timestamp = :ts")
                 rows = conn.execute(query, {"ts": timestamp}).mappings().all()
@@ -141,21 +140,21 @@ class InjuryDatabase:
             # Define day range
             start_of_day = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
             end_of_day = date_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
-            
+
             with self.engine.connect() as conn:
                 # Find latest scrape in that day
                 ts_query = text("""
-                    SELECT MAX(scrape_timestamp) 
-                    FROM espn_injuries 
+                    SELECT MAX(scrape_timestamp)
+                    FROM espn_injuries
                     WHERE scrape_timestamp >= :start AND scrape_timestamp <= :end
                 """)
                 ts = conn.execute(ts_query, {"start": start_of_day, "end": end_of_day}).scalar()
-                
+
                 if not ts:
                     # Fallback: Find latest scrape BEFORE that day if none on that day?
                     # Or just return empty. Let's return empty if no scrape that day.
                     return []
-                
+
                 query = text("SELECT * FROM espn_injuries WHERE scrape_timestamp = :ts")
                 rows = conn.execute(query, {"ts": ts}).mappings().all()
                 return [dict(r) for r in rows]
