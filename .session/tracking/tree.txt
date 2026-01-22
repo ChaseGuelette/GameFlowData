@@ -355,6 +355,8 @@ GameFlowData/
 │   ├── .gitignore
 │   ├── CAPABILITIES.md
 │   └── config.yaml
+├── .gemini
+│   └── settings.json
 ├── .solokit-backup
 │   └── 20260115_213903
 ├── data
@@ -398,6 +400,7 @@ GameFlowData/
 │   ├── player_position_history.md
 │   ├── player_prop_scraper_documentation.md
 │   ├── populate_average_stats_documentation.md
+│   ├── solokit_test_commands.md
 │   ├── team_allowed_by_position.md
 │   ├── update_league_position_averages_documentation.md
 │   └── update_player_position_history_documentation.md
@@ -441,17 +444,6 @@ GameFlowData/
 │   │   ├── pipeline.ipynb
 │   │   ├── train.ipynb
 │   │   └── trainSeperatedMethods.ipynb
-│   ├── oldMLNotebooks
-│   │   ├── basicPredictor.ipynb
-│   │   ├── featureSelection.ipynb
-│   │   ├── feature_optimization.ipynb
-│   │   ├── gameHomeAwayScraper.ipynb
-│   │   ├── playbyplay.ipynb
-│   │   ├── playerPredictor.py
-│   │   ├── playerScoresPredictor.ipynb
-│   │   ├── teamPredictor.py
-│   │   ├── teamScorePredictor.ipynb
-│   │   └── teamStrength.ipynb
 │   ├── Untitled.ipynb
 │   ├── advanced_stats_scraper.ipynb
 │   ├── finalizedNeededEndopints.ipynb
@@ -528,8 +520,10 @@ GameFlowData/
 ├── ARCHITECTURE.md
 ├── CHANGELOG.md
 ├── CLAUDE.md
+├── GEMINI.md
 ├── README.md
 ├── alembic.ini
+├── claude-flow-swarm.md
 ├── coverage.json
 ├── coverage.xml
 ├── package-lock.json
@@ -559,12 +553,19 @@ GameFlowData/
 ├── tmpclaude-6b91-cwd
 ├── tmpclaude-6d16-cwd
 ├── tmpclaude-7142-cwd
+├── tmpclaude-72d8-cwd
 ├── tmpclaude-73a1-cwd
+├── tmpclaude-7c88-cwd
+├── tmpclaude-7e83-cwd
 ├── tmpclaude-8740-cwd
 ├── tmpclaude-88e4-cwd
+├── tmpclaude-9177-cwd
 ├── tmpclaude-917f-cwd
+├── tmpclaude-9f44-cwd
+├── tmpclaude-afb9-cwd
 ├── tmpclaude-b1b5-cwd
 ├── tmpclaude-ba40-cwd
 ├── tmpclaude-c293-cwd
+├── tmpclaude-cd2c-cwd
 ├── tmpclaude-d710-cwd
 └── tmpclaude-e934-cwd
