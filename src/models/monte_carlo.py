@@ -137,8 +137,8 @@ class MonteCarloPredictor:
         if stat not in self.pipeline.rate_models:
             raise ValueError(f"No rate model for stat: {stat}")
 
-        # Get quantile predictions
-        X = self._prepare_features(features, self.pipeline.rate_features)
+        # Get quantile predictions (use stat-specific feature list)
+        X = self._prepare_features(features, self.pipeline.rate_features[stat])
         quantiles_df = self.pipeline.rate_models[stat].predict_quantiles(X)
 
         quantile_values = quantiles_df.iloc[0].values
@@ -182,7 +182,9 @@ class MonteCarloPredictor:
     def _prepare_features(self, features: dict, feature_names: list[str]) -> pd.DataFrame:
         """Prepare feature dict as DataFrame for model input."""
         row = {f: features.get(f, 0) for f in feature_names}
-        return pd.DataFrame([row])
+        df = pd.DataFrame([row])
+        df = df.apply(pd.to_numeric, errors="coerce").fillna(0).astype(np.float32)
+        return df
 
     def batch_predict(self, player_games: list[tuple[int, str, dict]], stats: list[str] = None) -> pd.DataFrame:
         """

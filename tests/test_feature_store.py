@@ -368,8 +368,8 @@ def test_get_training_dataset_builds_rate_targets():
     finally:
         pd.read_sql = pd_read_sql
 
-    assert captured["params"]["seasons"] == ("22024",)
-    assert captured["params"]["excluded"] == store.config.excluded_seasons
+    assert captured["params"]["seasons"] == ["22024"]
+    assert captured["params"]["excluded"] == list(store.config.excluded_seasons)
 
     # Rate targets should be calculated for rows with >= 10 minutes
     assert "pts_per_min" in df.columns
