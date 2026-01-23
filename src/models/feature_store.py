@@ -70,6 +70,7 @@ RATE_FEATURES_PTS = [
     "team_avg_pace_l5",
     "opp_avg_def_rtg_l5",
     "opp_pos_off_rtg_allowed_l5",
+    "opp_pos_off_rtg_allowed_l15",
     "line_total",
     "is_home",
 ]
@@ -78,6 +79,8 @@ RATE_FEATURES_REB = [
     "player_avg_reb_l5",
     "player_avg_reb_pct_l5",
     "opp_pos_reb_allowed_l5",
+    "opp_pos_reb_per100_allowed_l5",
+    "opp_pos_reb_allowed_l15",
     "team_avg_pace_l5",
     "opp_avg_pace_l5",
     "is_home",
@@ -88,6 +91,8 @@ RATE_FEATURES_AST = [
     "player_avg_ast_pct_l5",
     "player_avg_usg_pct_l5",
     "opp_pos_ast_allowed_l5",
+    "opp_pos_ast_per100_allowed_l5",
+    "opp_pos_ast_allowed_l15",
     "team_avg_pace_l5",
     "is_home",
 ]
@@ -96,6 +101,12 @@ RATE_FEATURES_THREES = [
     "player_avg_fg3m_l5",
     "player_avg_fg3a_l5",
     "opp_pos_threes_allowed_l5",
+    "opp_pos_threes_per100_allowed_l5",
+    "opp_pos_threes_allowed_l15",
+    "team_avg_fg3a_l5",
+    "team_avg_fg3_pct_l5",
+    "opp_avg_fg3a_l5",
+    "opp_avg_fg3_pct_l5",
     "team_avg_pace_l5",
     "is_home",
 ]
@@ -335,16 +346,31 @@ class FeatureStore:
 
                 -- Team Context
                 COALESCE(t_avg.avg_pace_l5, 0) as team_avg_pace_l5,
+                COALESCE(t_avg.avg_fg3a_l5, 0) as team_avg_fg3a_l5,
+                COALESCE(t_avg.avg_fg3_pct_l5, 0) as team_avg_fg3_pct_l5,
 
                 -- Opponent Context (via opponent_id join)
                 COALESCE(opp_avg.avg_def_rtg_l5, 0) as opp_avg_def_rtg_l5,
                 COALESCE(opp_avg.avg_pace_l5, 0) as opp_avg_pace_l5,
+                COALESCE(opp_avg.avg_fg3a_l5, 0) as opp_avg_fg3a_l5,
+                COALESCE(opp_avg.avg_fg3_pct_l5, 0) as opp_avg_fg3_pct_l5,
 
-                -- Opponent Defense vs Position (raw allowed stats, not per100)
+                -- Opponent Defense vs Position (L5 raw)
                 COALESCE(opp_def.off_rtg_allowed_l5, 0) as opp_pos_off_rtg_allowed_l5,
                 COALESCE(opp_def.reb_allowed_l5, 0) as opp_pos_reb_allowed_l5,
                 COALESCE(opp_def.ast_allowed_l5, 0) as opp_pos_ast_allowed_l5,
                 COALESCE(opp_def.threes_allowed_l5, 0) as opp_pos_threes_allowed_l5,
+
+                -- Opponent Defense vs Position (L5 pace-adjusted per 100 possessions)
+                COALESCE(opp_def.threes_per100_allowed_l5, 0) as opp_pos_threes_per100_allowed_l5,
+                COALESCE(opp_def.reb_per100_allowed_l5, 0) as opp_pos_reb_per100_allowed_l5,
+                COALESCE(opp_def.ast_per100_allowed_l5, 0) as opp_pos_ast_per100_allowed_l5,
+
+                -- Opponent Defense vs Position (L15 raw)
+                COALESCE(opp_def.off_rtg_allowed_l15, 0) as opp_pos_off_rtg_allowed_l15,
+                COALESCE(opp_def.reb_allowed_l15, 0) as opp_pos_reb_allowed_l15,
+                COALESCE(opp_def.ast_allowed_l15, 0) as opp_pos_ast_allowed_l15,
+                COALESCE(opp_def.threes_allowed_l15, 0) as opp_pos_threes_allowed_l15,
 
                 -- Game Lines
                 COALESCE(lines.spread, 0) as line_spread,
@@ -387,7 +413,7 @@ class FeatureStore:
 
             -- Team Rolling Stats
             LEFT JOIN LATERAL (
-                SELECT avg_pace_l5
+                SELECT avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
                 FROM team_average_game_stats tags
                 WHERE tags.team_id = pgs.team_id
                   AND tags.game_date < pgs.game_date
@@ -396,7 +422,7 @@ class FeatureStore:
 
             -- Opponent Stats (via opponent_id)
             LEFT JOIN LATERAL (
-                SELECT avg_def_rtg_l5, avg_pace_l5
+                SELECT avg_def_rtg_l5, avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
                 FROM team_average_game_stats tags
                 WHERE tags.team_id = tgs.opponent_id
                   AND tags.game_date < pgs.game_date
@@ -405,7 +431,10 @@ class FeatureStore:
 
             -- Opponent Defense vs Position
             LEFT JOIN LATERAL (
-                SELECT off_rtg_allowed_l5, reb_allowed_l5, ast_allowed_l5, threes_allowed_l5
+                SELECT
+                    off_rtg_allowed_l5, reb_allowed_l5, ast_allowed_l5, threes_allowed_l5,
+                    threes_per100_allowed_l5, reb_per100_allowed_l5, ast_per100_allowed_l5,
+                    off_rtg_allowed_l15, reb_allowed_l15, ast_allowed_l15, threes_allowed_l15
                 FROM team_allowed_by_position tabp
                 WHERE tabp.team_id = tgs.opponent_id
                   AND tabp.position_group = pos.position_group
@@ -549,7 +578,7 @@ class FeatureStore:
     def _get_team_rolling_stats(self, conn, team_id, as_of_date, is_opponent=False):
         prefix = "opp" if is_opponent else "team"
         query = text("""
-            SELECT avg_pace_l5, avg_def_rtg_l5
+            SELECT avg_pace_l5, avg_def_rtg_l5, avg_fg3a_l5, avg_fg3_pct_l5
             FROM team_average_game_stats
             WHERE team_id = :team_id AND game_date < :as_of_date
             ORDER BY game_date DESC LIMIT 1
@@ -560,13 +589,18 @@ class FeatureStore:
             return {
                 f"{prefix}_avg_pace_l5": 0,
                 f"{prefix}_avg_def_rtg_l5": 0,
+                f"{prefix}_avg_fg3a_l5": 0,
+                f"{prefix}_avg_fg3_pct_l5": 0,
             }
         return {f"{prefix}_{k}": v or 0 for k, v in result._mapping.items()}
 
     def _get_opponent_positional_stats(self, conn, opponent_id, position_group, as_of_date):
         """Fetch opponent's positional defense stats. Returns 0 if not found."""
         query = text("""
-            SELECT off_rtg_allowed_l5, reb_allowed_l5, ast_allowed_l5, threes_allowed_l5
+            SELECT
+                off_rtg_allowed_l5, reb_allowed_l5, ast_allowed_l5, threes_allowed_l5,
+                threes_per100_allowed_l5, reb_per100_allowed_l5, ast_per100_allowed_l5,
+                off_rtg_allowed_l15, reb_allowed_l15, ast_allowed_l15, threes_allowed_l15
             FROM team_allowed_by_position
             WHERE team_id = :opponent_id
               AND position_group = :position_group
@@ -584,6 +618,13 @@ class FeatureStore:
                 "opp_pos_reb_allowed_l5": 0,
                 "opp_pos_ast_allowed_l5": 0,
                 "opp_pos_threes_allowed_l5": 0,
+                "opp_pos_threes_per100_allowed_l5": 0,
+                "opp_pos_reb_per100_allowed_l5": 0,
+                "opp_pos_ast_per100_allowed_l5": 0,
+                "opp_pos_off_rtg_allowed_l15": 0,
+                "opp_pos_reb_allowed_l15": 0,
+                "opp_pos_ast_allowed_l15": 0,
+                "opp_pos_threes_allowed_l15": 0,
             }
         return {f"opp_pos_{k}": v or 0 for k, v in result._mapping.items()}
 

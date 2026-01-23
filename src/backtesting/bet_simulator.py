@@ -92,11 +92,46 @@ class BetSimulator:
     """
 
     edge_threshold: float = 0.05
-    default_stake: float = 100.0
+    starting_bankroll: float = 10000.0
+    kelly_fraction: float = 0.125
     min_odds: int = -200  # Don't bet on heavy favorites
     max_odds: int = 200  # Don't bet on long shots
 
     bets: list[Bet] = field(default_factory=list)
+    current_bankroll: float = field(init=False)
+
+    def __post_init__(self):
+        self.current_bankroll = self.starting_bankroll
+
+    def _calculate_kelly_stake(self, odds: int, model_prob: float) -> float:
+        """Calculate stake using fractional Kelly Criterion."""
+        if odds == 0:
+            return 0.0
+
+        # Convert American odds to decimal odds (b = net fractional odds)
+        # Decimal Odds = (odds / 100) + 1 for positive
+        # Decimal Odds = (100 / abs(odds)) + 1 for negative
+        # Kelly 'b' is the net odds (Decimal - 1)
+        if odds > 0:
+            b = odds / 100.0
+        else:
+            b = 100.0 / abs(odds)
+
+        # Kelly formula: f = (p(b + 1) - 1) / b
+        # Simplified: f = (p * b - (1 - p)) / b
+        f = (model_prob * (b + 1) - 1) / b
+
+        # Apply fraction
+        f_fractional = f * self.kelly_fraction
+
+        if f_fractional <= 0:
+            return 0.0
+
+        # Calculate stake based on current bankroll
+        stake = f_fractional * self.current_bankroll
+        
+        # Safety: Ensure we don't bet more than we have
+        return min(stake, self.current_bankroll)
 
     def should_bet(
         self,
@@ -135,6 +170,17 @@ class BetSimulator:
         stake: float | None = None,
     ) -> Bet:
         """Create and record a bet."""
+        # Calculate stake if not provided
+        if stake is None:
+            stake = self._calculate_kelly_stake(odds, model_prob)
+
+        # Ensure we have funds (double check)
+        if stake > self.current_bankroll:
+            stake = self.current_bankroll
+
+        # Deduct stake from bankroll immediately
+        self.current_bankroll -= stake
+
         bet = Bet(
             player_id=player_id,
             game_id=game_id,
@@ -143,7 +189,7 @@ class BetSimulator:
             side=side,
             line=line,
             odds=odds,
-            stake=stake or self.default_stake,
+            stake=stake,
             model_prob=model_prob,
             implied_prob=implied_prob,
             edge=model_prob - implied_prob,
@@ -170,6 +216,10 @@ class BetSimulator:
         for _, row in predictions_df.iterrows():
             if pd.isna(row.get("line")):
                 continue
+
+            # Stop if bankroll is depleted
+            if self.current_bankroll <= 0:
+                break
 
             # Check over bet
             if self.should_bet(
@@ -236,6 +286,15 @@ class BetSimulator:
             if key in actuals_lookup:
                 bet.resolve(actuals_lookup[key])
                 resolved_count += 1
+                
+                # Update bankroll based on outcome
+                if bet.outcome == BetOutcome.WIN:
+                    # Return stake + profit
+                    self.current_bankroll += bet.stake + bet.profit
+                elif bet.outcome == BetOutcome.PUSH:
+                    # Return stake only
+                    self.current_bankroll += bet.stake
+                # On LOSS, money is already gone (deducted at placement)
 
         return resolved_count
 

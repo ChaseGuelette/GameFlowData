@@ -137,6 +137,7 @@ class MetricsCalculator:
         self,
         predictions_df: pd.DataFrame,
         bets_df: pd.DataFrame,
+        starting_bankroll: float = 0.0,
     ) -> PerformanceMetrics:
         """
         Calculate comprehensive metrics.
@@ -147,9 +148,10 @@ class MetricsCalculator:
                 pred_q50, pred_q75, pred_q90, actual
             bets_df: All simulated bets with outcomes
                 Required columns: stat, edge, outcome, profit, stake
+            starting_bankroll: Optional starting bankroll for equity-based risk metrics.
         """
         betting_metrics = self._calculate_betting_metrics(bets_df)
-        risk_metrics = self._calculate_risk_metrics(bets_df)
+        risk_metrics = self._calculate_risk_metrics(bets_df, starting_bankroll)
         calibration_results = self._calculate_calibration(predictions_df)
         by_stat = self._calculate_by_stat(bets_df)
         by_edge = self._calculate_by_edge_bucket(bets_df)
@@ -207,7 +209,7 @@ class MetricsCalculator:
             "hit_rate": float(wins / (wins + losses)) if (wins + losses) > 0 else 0.0,
         }
 
-    def _calculate_risk_metrics(self, bets_df: pd.DataFrame) -> dict:
+    def _calculate_risk_metrics(self, bets_df: pd.DataFrame, starting_bankroll: float = 0.0) -> dict:
         """Calculate risk-adjusted metrics."""
         if bets_df.empty or bets_df["profit"].isna().all():
             return {
@@ -233,19 +235,30 @@ class MetricsCalculator:
         std_return = profits.std()
         sharpe = (mean_return / std_return) * np.sqrt(170) if std_return > 0 else 0.0
 
-        # Max drawdown from cumulative P&L
-        # Prepend 0 as starting point so drawdowns from initial capital are captured
-        cumulative = np.concatenate([[0.0], np.cumsum(profits)])
-        running_max = np.maximum.accumulate(cumulative)
-        drawdowns = cumulative - running_max
-        max_drawdown = abs(drawdowns.min()) if len(drawdowns) > 0 else 0.0
+        # Max drawdown calculation
+        cumulative_pl = np.concatenate([[0.0], np.cumsum(profits)])
+        
+        if starting_bankroll > 0:
+            # Equity curve based
+            equity = starting_bankroll + cumulative_pl
+            running_max = np.maximum.accumulate(equity)
+            drawdowns = equity - running_max  # Always <= 0
+            max_drawdown_amount = abs(drawdowns.min()) if len(drawdowns) > 0 else 0.0
+            
+            # Drawdown % relative to peak equity
+            peak = running_max.max()
+            max_dd_pct = max_drawdown_amount / peak if peak > 0 else 0.0
+        else:
+            # P&L based (legacy/fallback)
+            running_max = np.maximum.accumulate(cumulative_pl)
+            drawdowns = cumulative_pl - running_max
+            max_drawdown_amount = abs(drawdowns.min()) if len(drawdowns) > 0 else 0.0
 
-        # Normalize drawdown by peak (as percentage of peak equity)
-        peak = running_max[np.argmin(drawdowns)] if len(drawdowns) > 0 else 0.0
-        total_staked = bets_df[bets_df["outcome"].notna()]["stake"].sum()
-        # Use peak equity if positive, otherwise use total staked as reference
-        reference = peak if peak > 0 else total_staked
-        max_dd_pct = max_drawdown / reference if reference > 0 else 0.0
+            # Normalize drawdown by peak P&L (if positive) or total staked
+            peak = running_max[np.argmin(drawdowns)] if len(drawdowns) > 0 else 0.0
+            total_staked = bets_df[bets_df["outcome"].notna()]["stake"].sum()
+            reference = peak if peak > 0 else total_staked
+            max_dd_pct = max_drawdown_amount / reference if reference > 0 else 0.0
 
         # Win/loss streaks
         outcomes = bets_df[bets_df["outcome"].notna()]["outcome"].values

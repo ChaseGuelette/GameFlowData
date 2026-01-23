@@ -59,7 +59,15 @@ def main():
     )
     parser.add_argument("--stats", nargs="+", default=["pts", "reb", "ast"], help="Stats to predict")
     parser.add_argument("--edge-threshold", type=float, default=0.05, help="Minimum edge to place bet")
-    parser.add_argument("--bookmaker", type=str, default="pinnacle", help="Bookmaker for line comparison")
+    parser.add_argument("--starting-bankroll", type=float, default=10000.0, help="Starting bankroll amount")
+    parser.add_argument("--kelly-fraction", type=float, default=0.125, help="Kelly Criterion fraction (e.g., 0.125 for 1/8th)")
+    parser.add_argument(
+        "--bookmakers",
+        nargs="+",
+        default=["draftkings", "fanduel", "betmgm"],
+        help="List of bookmakers to shop lines from",
+    )
+    parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers")
 
     args = parser.parse_args()
 
@@ -93,11 +101,13 @@ def main():
         predictor=predictor,
         stats=args.stats,
         edge_threshold=args.edge_threshold,
-        bookmaker=args.bookmaker,
+        starting_bankroll=args.starting_bankroll,
+        kelly_fraction=args.kelly_fraction,
+        bookmakers=args.bookmakers,
     )
 
     logger.info(f"Running backtest from {args.start} to {args.end}...")
-    result = harness.run(start_date=args.start, end_date=args.end)
+    result = harness.run(start_date=args.start, end_date=args.end, max_workers=args.workers)
 
     # Save results
     result.to_csv(str(output_dir))
@@ -108,9 +118,9 @@ def main():
     logger.info("BACKTEST RESULTS")
     logger.info("=" * 60)
     logger.info(f"Total bets: {metrics.total_bets}")
-    logger.info(f"Win rate: {metrics.win_rate:.1%}")
+    logger.info(f"Win rate: {metrics.hit_rate:.1%}")
     logger.info(f"ROI: {metrics.roi:.2%}")
-    logger.info(f"Total profit: {metrics.total_profit:.2f} units")
+    logger.info(f"Total profit: ${metrics.total_profit:,.2f}")
     logger.info(f"Sharpe ratio: {metrics.sharpe_ratio:.3f}")
     logger.info(f"Max drawdown: {metrics.max_drawdown:.2%}")
     logger.info(f"Results saved to: {output_dir}")

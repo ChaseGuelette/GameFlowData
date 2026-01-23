@@ -59,8 +59,9 @@ class BacktestHarness:
 
     # Configuration
     edge_threshold: float = 0.05
-    bet_size: float = 100.0
-    bookmaker: str = "pinnacle"
+    starting_bankroll: float = 10000.0
+    kelly_fraction: float = 0.125
+    bookmakers: list[str] = field(default_factory=lambda: ["pinnacle"])
     stats: list[str] = field(default_factory=lambda: ["pts", "reb", "ast"])
     min_minutes_avg: int = 10
 
@@ -71,7 +72,8 @@ class BacktestHarness:
     def __post_init__(self):
         self._simulator = BetSimulator(
             edge_threshold=self.edge_threshold,
-            default_stake=self.bet_size,
+            starting_bankroll=self.starting_bankroll,
+            kelly_fraction=self.kelly_fraction,
         )
         self._metrics_calc = MetricsCalculator()
 
@@ -80,6 +82,7 @@ class BacktestHarness:
         start_date: str | date,
         end_date: str | date,
         progress_callback: callable | None = None,
+        max_workers: int = 4,
     ) -> BacktestResult:
         """
         Run backtest over date range.
@@ -88,56 +91,87 @@ class BacktestHarness:
             start_date: Start date (inclusive)
             end_date: End date (inclusive)
             progress_callback: Optional callback(current_date, total_dates) for progress
+            max_workers: Number of threads for parallel prediction generation
 
         Returns:
             BacktestResult with predictions, bets, and metrics
         """
+        import concurrent.futures
+
         if isinstance(start_date, str):
             start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
         if isinstance(end_date, str):
             end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
 
-        logger.info(f"Starting backtest from {start_date} to {end_date}")
+        logger.info(f"Starting backtest from {start_date} to {end_date} (workers={max_workers})")
 
         # Get all dates with games in range
         game_dates = self._get_game_dates(start_date, end_date)
         logger.info(f"Found {len(game_dates)} dates with games")
 
         all_predictions = []
+        completed_count = 0
 
-        for i, game_date in enumerate(game_dates):
-            if progress_callback:
-                progress_callback(game_date, len(game_dates))
+        # Phase 1: Parallel Prediction Generation
+        logger.info("Phase 1: Generating predictions...")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Map dates to futures
+            future_to_date = {
+                executor.submit(self._run_date, d): d for d in game_dates
+            }
 
-            logger.info(f"Processing {game_date} ({i + 1}/{len(game_dates)})")
+            for future in concurrent.futures.as_completed(future_to_date):
+                completed_count += 1
+                game_date = future_to_date[future]
+                
+                if progress_callback:
+                    progress_callback(game_date, len(game_dates))
+                
+                if completed_count % 5 == 0 or completed_count == len(game_dates):
+                    logger.info(f"Processed {completed_count}/{len(game_dates)} dates")
 
-            try:
-                # Generate predictions for this date
-                date_predictions = self._run_date(game_date)
-
-                if date_predictions is not None and len(date_predictions) > 0:
-                    all_predictions.append(date_predictions)
-
-                    # Place bets based on edges
-                    self._simulator.evaluate_predictions(date_predictions, game_date)
-
-            except Exception as e:
-                logger.error(f"Error processing {game_date}: {e}")
-                continue
+                try:
+                    date_preds = future.result()
+                    if date_preds is not None and len(date_preds) > 0:
+                        all_predictions.append(date_preds)
+                except Exception as e:
+                    logger.error(f"Error processing {game_date}: {e}")
 
         # Combine all predictions
         if all_predictions:
             predictions_df = pd.concat(all_predictions, ignore_index=True)
+            # Sort by date to ensure deterministic simulation order
+            predictions_df = predictions_df.sort_values(["game_date", "game_id", "player_id"])
         else:
             predictions_df = pd.DataFrame()
 
-        logger.info(f"Total predictions: {len(predictions_df)}")
+        logger.info(f"Total predictions generated: {len(predictions_df)}")
 
-        # Resolve bets with actual outcomes
+        # Phase 2: Sequential Simulation
+        logger.info("Phase 2: Simulating bets...")
+        
+        # Get actuals upfront so we can resolve bets daily
         actuals_df = self._get_actuals(start_date, end_date)
+        
+        # Iterate through unique dates in the predictions
+        if not predictions_df.empty:
+            sorted_dates = sorted(predictions_df["game_date"].unique())
+            for sim_date in sorted_dates:
+                # 1. Resolve pending bets from previous days (updates bankroll)
+                if len(actuals_df) > 0:
+                    self._simulator.resolve_bets(actuals_df)
+                
+                # 2. Get preds for this date
+                day_preds = predictions_df[predictions_df["game_date"] == sim_date]
+                
+                # 3. Evaluate and place bets (updates simulator state using new bankroll)
+                self._simulator.evaluate_predictions(day_preds, sim_date)
+
+        # Final resolution for any remaining bets
         if len(actuals_df) > 0:
             resolved = self._simulator.resolve_bets(actuals_df)
-            logger.info(f"Resolved {resolved} bets")
+            logger.info(f"Final resolution: {resolved} bets")
 
         # Get bets DataFrame
         bets_df = self._simulator.to_dataframe()
@@ -148,7 +182,9 @@ class BacktestHarness:
             predictions_df = self._merge_actuals(predictions_df, actuals_df)
 
         # Calculate metrics
-        metrics = self._metrics_calc.calculate(predictions_df, bets_df)
+        metrics = self._metrics_calc.calculate(
+            predictions_df, bets_df, starting_bankroll=self.starting_bankroll
+        )
 
         logger.info(f"\n{metrics}")
 
@@ -160,8 +196,9 @@ class BacktestHarness:
             end_date=end_date,
             config={
                 "edge_threshold": self.edge_threshold,
-                "bet_size": self.bet_size,
-                "bookmaker": self.bookmaker,
+                "starting_bankroll": self.starting_bankroll,
+                "kelly_fraction": self.kelly_fraction,
+                "bookmakers": self.bookmakers,
                 "stats": self.stats,
             },
         )
@@ -246,7 +283,29 @@ class BacktestHarness:
         lines_df = self._get_lines_for_date(game_date, [g["game_id"] for g in games])
         if len(lines_df) > 0:
             predictions_df = self._calculate_edges(predictions_df, lines_df)
+            
+            # Filter to best line per player/stat (Line Shopping)
+            predictions_df = self._filter_best_bets(predictions_df)
 
+        return predictions_df
+
+    def _filter_best_bets(self, predictions_df: pd.DataFrame) -> pd.DataFrame:
+        """Select single best betting opportunity per player/stat."""
+        if predictions_df.empty:
+            return predictions_df
+            
+        # Calculate max potential edge (over or under)
+        predictions_df["max_edge"] = predictions_df[["over_edge", "under_edge"]].max(axis=1)
+        
+        # Sort by max edge descending
+        predictions_df = predictions_df.sort_values("max_edge", ascending=False)
+        
+        # Deduplicate to keep best line per player/stat
+        predictions_df = predictions_df.drop_duplicates(
+            subset=["player_id", "game_id", "stat"], 
+            keep="first"
+        )
+        
         return predictions_df
 
     def _get_games_for_date(self, game_date: date) -> list[dict]:
@@ -313,7 +372,7 @@ class BacktestHarness:
                 FROM raw_player_props_combined
                 WHERE game_id IN :game_ids
                   AND market_key IN :markets
-                  AND bookmaker = :bookmaker
+                  AND bookmaker IN :bookmakers
                   AND snapshot_time::date <= :game_date
             )
             SELECT
@@ -329,6 +388,7 @@ class BacktestHarness:
         """).bindparams(
             bindparam("game_ids", expanding=True),
             bindparam("markets", expanding=True),
+            bindparam("bookmakers", expanding=True),
         )
 
         try:
@@ -339,7 +399,7 @@ class BacktestHarness:
                     params={
                         "game_ids": list(game_ids),
                         "markets": list(markets),
-                        "bookmaker": self.bookmaker,
+                        "bookmakers": list(self.bookmakers),
                         "game_date": game_date,
                     },
                 )

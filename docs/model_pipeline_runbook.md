@@ -130,8 +130,13 @@ python src/backtesting/run_backtest.py --start 2024-10-22 --end 2025-01-15
 # Specify exact model run
 python src/backtesting/run_backtest.py --model-dir src/models/artifacts/run_20250120_143022 --start 2024-10-22 --end 2025-01-15
 
-# Custom settings
-python src/backtesting/run_backtest.py --start 2024-11-01 --end 2024-12-31 --edge-threshold 0.07 --n-samples 10000
+# Custom settings (Bankroll & Kelly Staking)
+python src/backtesting/run_backtest.py \
+    --start 2024-11-01 \
+    --end 2024-12-31 \
+    --starting-bankroll 5000 \
+    --kelly-fraction 0.125 \
+    --edge-threshold 0.04
 ```
 
 ### Arguments
@@ -145,7 +150,19 @@ python src/backtesting/run_backtest.py --start 2024-11-01 --end 2024-12-31 --edg
 | `--n-samples` | `5000` | Monte Carlo samples per prediction |
 | `--stats` | `pts reb ast` | Stats to predict and bet on |
 | `--edge-threshold` | `0.05` | Minimum edge (5%) to place a simulated bet |
+| `--starting-bankroll` | `10000.0` | Initial bankroll for simulation |
+| `--kelly-fraction` | `0.125` | Fraction of Kelly stake (e.g., 0.125 = 1/8th Kelly) |
 | `--bookmaker` | `pinnacle` | Bookmaker for line comparison |
+
+### Bankroll Management & Staking
+
+The backtester now supports **Dynamic Bankroll Management** using the **Kelly Criterion**.
+
+-   **Dynamic Bankroll:** The simulation tracks a running bankroll. Wins increase the available capital for future bets, while losses decrease it.
+-   **Kelly Staking:** Bet sizes are calculated as a fraction of the *current* bankroll based on the edge and odds.
+    -   Formula: $f^* = \frac{p(b+1) - 1}{b}$
+    -   Stake: $f^* \times \text{Kelly Fraction} \times \text{Current Bankroll}$
+-   **Resolution:** Bets are resolved daily, and the bankroll is updated before the next day's bets are placed.
 
 ### Logic Flow
 
@@ -157,6 +174,7 @@ python src/backtesting/run_backtest.py --start 2024-11-01 --end 2024-12-31 --edg
    └─ Query distinct game dates from player_game_stats
 
 3. For Each Game Date:
+   ├─ Resolve PENDING bets from previous day (Update Bankroll)
    ├─ Get all games and players who played that day
    ├─ For each player:
    │   ├─ FeatureStore.get_player_game_features(player, game, date)
@@ -168,7 +186,8 @@ python src/backtesting/run_backtest.py --start 2024-11-01 --end 2024-12-31 --edg
    │   ├─ Implied prob from book odds
    │   └─ Edge = P(over) - implied_prob
    ├─ Place bets where |edge| > threshold
-   └─ Resolve bets against actual outcomes
+   │   └─ Stake = Kelly Fraction * Current Bankroll
+   └─ Store bets for next day resolution
 
 4. Calculate Performance Metrics
    ├─ ROI (total profit / total wagered)
@@ -192,7 +211,7 @@ python src/backtesting/run_backtest.py --start 2024-11-01 --end 2024-12-31 --edg
 | ROI | Profit per unit wagered | >3% is good, >7% is great |
 | Win Rate | % of bets won | ~53-55% at -110 odds to profit |
 | Sharpe | Risk-adjusted return | >1.0 is strong |
-| Max Drawdown | Worst peak-to-trough loss | <20% of bankroll |
+| Max Drawdown | Worst peak-to-trough loss | <20% of Peak Equity |
 
 ---
 
