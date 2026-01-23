@@ -51,33 +51,51 @@ STAT_FEATURES = {
 class QuantileModelSuite:
     """
     Trains and manages a suite of quantile regression models.
+    Supports per-quantile feature sets.
     """
 
     def __init__(self, config: QuantileModelConfig | None = None):
         self.config = config or QuantileModelConfig()
         self.models: dict[float, xgb.XGBRegressor] = {}
-        self.feature_names: list[str] = []
+        self.feature_names_per_quantile: dict[float, list[str]] = {}
 
-    def train(self, X: pd.DataFrame, y: pd.Series, feature_names: list[str] | None = None) -> dict[str, float]:
+    @property
+    def all_feature_names(self) -> list[str]:
+        """Union of all per-quantile feature names (sorted for determinism)."""
+        all_names = set()
+        for names in self.feature_names_per_quantile.values():
+            all_names.update(names)
+        return sorted(all_names)
+
+    def train(self, X: pd.DataFrame, y: pd.Series, feature_names_per_quantile: dict[float, list[str]]) -> dict:
         """
-        Train separate models for each quantile.
+        Train separate models for each quantile using per-quantile feature sets.
+
+        Args:
+            X: DataFrame containing the union of all per-quantile features.
+            y: Target series.
+            feature_names_per_quantile: Dict mapping quantile -> list of feature names.
 
         Returns dict of {quantile: validation_loss}.
         """
-        self.feature_names = feature_names or list(X.columns)
+        self.feature_names_per_quantile = feature_names_per_quantile
 
-        # Split for early stopping
+        # Split for early stopping (preserve temporal order)
         X_train, X_val, y_train, y_val = train_test_split(
             X,
             y,
             test_size=self.config.val_fraction,
-            shuffle=False,  # Preserve temporal order
+            shuffle=False,
         )
 
         results = {}
 
         for q in self.config.quantiles:
-            print(f"\nTraining quantile {q:.2f}...")
+            q_features = self.feature_names_per_quantile[q]
+            print(f"\nTraining quantile {q:.2f} ({len(q_features)} features)...")
+
+            X_train_q = X_train[q_features]
+            X_val_q = X_val[q_features]
 
             model = xgb.XGBRegressor(
                 objective="reg:quantileerror",
@@ -92,13 +110,12 @@ class QuantileModelSuite:
                 n_jobs=-1,
             )
 
-            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+            model.fit(X_train_q, y_train, eval_set=[(X_val_q, y_val)], verbose=False)
 
-            # Evaluate calibration (Train vs Val)
-            train_preds = model.predict(X_train)
+            train_preds = model.predict(X_train_q)
             train_coverage = (y_train <= train_preds).mean()
 
-            val_preds = model.predict(X_val)
+            val_preds = model.predict(X_val_q)
             val_coverage = (y_val <= val_preds).mean()
 
             print(
@@ -136,20 +153,19 @@ class QuantileModelSuite:
         results = {}
 
         for q in self.config.quantiles:
-            print(f"\nGenerating learning curve for Q{q:.2f}...")
+            q_features = self.feature_names_per_quantile.get(q, list(X.columns))
+            print(f"\nGenerating learning curve for Q{q:.2f} ({len(q_features)} features)...")
             q_results = []
 
             for fraction in train_sizes:
                 size = int(fraction * len(X_train))
-                if size < 50:  # Skip if too small
+                if size < 50:
                     continue
 
-                # Random subset of training data (simulating limited data)
-                # Using fixed random_state for reproducibility
                 subset_idx = np.random.RandomState(42).choice(
                     len(X_train), size=size, replace=False
                 )
-                X_subset = X_train.iloc[subset_idx]
+                X_subset = X_train.iloc[subset_idx][q_features]
                 y_subset = y_train.iloc[subset_idx]
 
                 model = xgb.XGBRegressor(
@@ -167,9 +183,8 @@ class QuantileModelSuite:
 
                 model.fit(X_subset, y_subset, verbose=False)
 
-                # Evaluate
                 train_cov = (y_subset <= model.predict(X_subset)).mean()
-                val_cov = (y_val <= model.predict(X_val)).mean()
+                val_cov = (y_val <= model.predict(X_val[q_features])).mean()
 
                 q_results.append(
                     {
@@ -190,13 +205,16 @@ class QuantileModelSuite:
     def predict_quantiles(self, X: pd.DataFrame) -> pd.DataFrame:
         """
         Predict all quantiles for input data.
+        X should contain the union of all per-quantile features (use all_feature_names).
 
         Returns DataFrame with columns ['q10', 'q25', 'q50', 'q75', 'q90'].
         """
         predictions = {}
 
         for q, model in self.models.items():
-            predictions[f"q{int(q * 100):02d}"] = model.predict(X)
+            q_features = self.feature_names_per_quantile[q]
+            X_q = X[q_features]
+            predictions[f"q{int(q * 100):02d}"] = model.predict(X_q)
 
         result = pd.DataFrame(predictions)
 
@@ -234,7 +252,7 @@ class QuantileModelSuite:
         save_dict = {
             "models": {q: model for q, model in self.models.items()},
             "config": self.config,
-            "feature_names": self.feature_names,
+            "feature_names_per_quantile": self.feature_names_per_quantile,
         }
         joblib.dump(save_dict, path)
         print(f"Saved quantile model suite to {path}")
@@ -246,7 +264,7 @@ class QuantileModelSuite:
 
         suite = cls(config=save_dict["config"])
         suite.models = save_dict["models"]
-        suite.feature_names = save_dict["feature_names"]
+        suite.feature_names_per_quantile = save_dict.get("feature_names_per_quantile", {})
 
         return suite
 
@@ -254,7 +272,7 @@ class QuantileModelSuite:
 class PlayerPropsModelPipeline:
     """
     Complete pipeline for training minutes and rate models.
-    Uses centralized feature definitions from feature_store.
+    Supports per-quantile feature sets for optimal calibration.
     """
 
     def __init__(self, feature_store, config: QuantileModelConfig | None = None):
@@ -265,30 +283,39 @@ class PlayerPropsModelPipeline:
         self.minutes_model: QuantileModelSuite | None = None
         self.rate_models: dict[str, QuantileModelSuite] = {}
 
-        # Feature lists (populated during training)
-        self.minutes_features: list[str] = []
-        self.rate_features: dict[str, list[str]] = {}
+        # Per-quantile feature dicts (populated during training)
+        # minutes_features: {0.1: [...], 0.25: [...], ...}
+        self.minutes_features: dict[float, list[str]] = {}
+        # rate_features: {"pts": {0.1: [...], ...}, "reb": {...}, ...}
+        self.rate_features: dict[str, dict[float, list[str]]] = {}
 
     def train_minutes_model(self, df: pd.DataFrame) -> dict:
-        """Train the minutes prediction model."""
+        """Train the minutes prediction model with per-quantile features."""
         print("\n" + "=" * 60)
         print("TRAINING MINUTES MODEL")
         print("=" * 60)
 
-        # Use centralized feature list if not already set
+        # Fallback if no per-quantile features set
         if not self.minutes_features:
-            self.minutes_features = MINUTES_FEATURES
+            self.minutes_features = {q: list(MINUTES_FEATURES) for q in self.config.quantiles}
 
-        # Filter to available features
-        available_features = [f for f in self.minutes_features if f in df.columns]
-        missing_features = [f for f in self.minutes_features if f not in df.columns]
+        # Compute union of all per-quantile features
+        all_features = set()
+        for feat_list in self.minutes_features.values():
+            all_features.update(feat_list)
 
-        if missing_features:
-            print(f"Warning: Missing features: {missing_features}")
+        available_features = sorted([f for f in all_features if f in df.columns])
+        missing = all_features - set(df.columns)
+        if missing:
+            print(f"Warning: Missing features: {sorted(missing)}")
 
-        print(f"Using {len(available_features)} features: {available_features}")
+        # Build per-quantile available features
+        per_q_available = {}
+        for q, feat_list in self.minutes_features.items():
+            per_q_available[q] = [f for f in feat_list if f in df.columns]
+            print(f"  Q{q:.2f}: {len(per_q_available[q])} features")
 
-        # Filter to valid rows (player played)
+        # Filter to valid rows
         valid_mask = df["actual_minutes"] > 0
         X = df.loc[valid_mask, available_features].fillna(0)
         y = df.loc[valid_mask, "actual_minutes"]
@@ -297,12 +324,12 @@ class PlayerPropsModelPipeline:
 
         # Train
         self.minutes_model = QuantileModelSuite(self.config)
-        results = self.minutes_model.train(X, y, available_features)
+        results = self.minutes_model.train(X, y, per_q_available)
 
         return results
 
     def train_rate_models(self, df: pd.DataFrame, stats: list[str] | None = None) -> dict:
-        """Train rate models for each stat using stat-specific features."""
+        """Train rate models for each stat with per-quantile features."""
         stats = stats or ["pts", "reb", "ast", "threes"]
 
         print("\n" + "=" * 60)
@@ -314,22 +341,30 @@ class PlayerPropsModelPipeline:
         for stat in stats:
             print(f"\n--- Training {stat.upper()} rate model ---")
 
-            # Get stat-specific features if not already set
+            # Fallback if not set
             if stat not in self.rate_features:
-                self.rate_features[stat] = STAT_FEATURES.get(stat, RATE_FEATURES_PTS)
+                default_features = STAT_FEATURES.get(stat, RATE_FEATURES_PTS)
+                self.rate_features[stat] = {q: list(default_features) for q in self.config.quantiles}
 
-            stat_features = self.rate_features[stat]
+            stat_features_per_q = self.rate_features[stat]
 
-            # Filter to available features
-            available_features = [f for f in stat_features if f in df.columns]
-            missing_features = [f for f in stat_features if f not in df.columns]
+            # Compute union
+            all_features = set()
+            for feat_list in stat_features_per_q.values():
+                all_features.update(feat_list)
 
-            if missing_features:
-                print(f"Warning: Missing features for {stat}: {missing_features}")
+            available_features = sorted([f for f in all_features if f in df.columns])
+            missing = all_features - set(df.columns)
+            if missing:
+                print(f"Warning: Missing features for {stat}: {sorted(missing)}")
 
-            print(f"Using {len(available_features)} features: {available_features}")
+            # Build per-quantile available features
+            per_q_available = {}
+            for q, feat_list in stat_features_per_q.items():
+                per_q_available[q] = [f for f in feat_list if f in df.columns]
+                print(f"  Q{q:.2f}: {len(per_q_available[q])} features")
 
-            # Filter to valid rows (minimum minutes for rate calculation)
+            # Filter to valid rows
             rate_col = f"{stat}_per_min"
             valid_mask = df[rate_col].notna() & (df["actual_minutes"] >= 10)
 
@@ -340,7 +375,7 @@ class PlayerPropsModelPipeline:
 
             # Train
             model_suite = QuantileModelSuite(self.config)
-            results = model_suite.train(X, y, available_features)
+            results = model_suite.train(X, y, per_q_available)
 
             self.rate_models[stat] = model_suite
             all_results[stat] = results
@@ -358,7 +393,7 @@ class PlayerPropsModelPipeline:
         for stat, model in self.rate_models.items():
             model.save(path / f"{stat}_rate_model.joblib")
 
-        # Save feature lists
+        # Save per-quantile feature config
         joblib.dump(
             {
                 "minutes_features": self.minutes_features,

@@ -96,27 +96,29 @@ class TrainingOrchestrator:
             json.dump(config, f, indent=4)
 
     def _run_feature_selection(self, df: pd.DataFrame) -> dict:
-        """Run feature selection on the training dataframe."""
-        logger.info("Running Feature Selection Pipeline (Training Data Only)...")
+        """Run per-quantile feature selection on the training dataframe."""
+        logger.info("Running Per-Quantile Feature Selection Pipeline (Training Data Only)...")
         selector = FeatureSelector(n_splits=3)
         features = {}
 
         # Minutes
-        logger.info("Selecting Minutes features...")
+        logger.info("Selecting Minutes features (per quantile)...")
         target = "actual_minutes"
         candidates = get_candidate_columns(df, target)
         minutes_df = df[df["actual_minutes"] > 0].fillna(0)
 
-        features["minutes_features"] = selector.select_features(minutes_df, target, candidates, model_name="Minutes")
+        features["minutes_features"] = selector.select_features_per_quantile(
+            minutes_df, target, candidates, model_name="Minutes"
+        )
 
         # Rate Stats
         for stat in ["pts", "reb", "ast", "threes"]:
-            logger.info(f"Selecting {stat.upper()} features...")
+            logger.info(f"Selecting {stat.upper()} features (per quantile)...")
             target = f"{stat}_per_min"
             rate_df = df[(df["actual_minutes"] >= 10) & (df[target].notna())].fillna(0)
             candidates = get_candidate_columns(rate_df, target)
 
-            features[f"{stat}_rate_features"] = selector.select_features(
+            features[f"{stat}_rate_features"] = selector.select_features_per_quantile(
                 rate_df, target, candidates, model_name=f"{stat.upper()} Rate"
             )
 
@@ -149,7 +151,6 @@ class TrainingOrchestrator:
         logger.info("Evaluating Minutes Model...")
         reports = self._calibrate_model(
             model=pipeline.minutes_model,
-            features=pipeline.minutes_features,
             df=df,
             actual_col="actual_minutes",
             filter_mask=(df["actual_minutes"] > 0),
@@ -163,7 +164,6 @@ class TrainingOrchestrator:
             mask = (df["actual_minutes"] >= 10) & (df[f"{stat}_per_min"].notna())
             reports = self._calibrate_model(
                 model=model,
-                features=pipeline.rate_features[stat],
                 df=df,
                 actual_col=f"{stat}_per_min",
                 filter_mask=mask,
@@ -191,11 +191,13 @@ class TrainingOrchestrator:
 
         return all_reports
 
-    def _calibrate_model(self, model, features, df, actual_col, filter_mask, name) -> list[dict]:
+    def _calibrate_model(self, model, df, actual_col, filter_mask, name) -> list[dict]:
         """Evaluate calibration for a single model."""
         # Use reset_index(drop=True) to align indices for assignment
         filtered = df[filter_mask].copy().reset_index(drop=True)
-        X = filtered[features].fillna(0)
+        
+        # Use the model's all_feature_names property
+        X = filtered[model.all_feature_names].fillna(0)
         y_actual = filtered[actual_col].values
 
         if X.empty:

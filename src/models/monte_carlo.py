@@ -121,7 +121,7 @@ class MonteCarloPredictor:
     def _sample_minutes(self, features: dict) -> np.ndarray:
         """Sample from the minutes distribution."""
         # Get quantile predictions
-        X = self._prepare_features(features, self.pipeline.minutes_features)
+        X = self._prepare_features(features, self.pipeline.minutes_model.all_feature_names)
         quantiles_df = self.pipeline.minutes_model.predict_quantiles(X)
 
         quantile_values = quantiles_df.iloc[0].values
@@ -138,7 +138,7 @@ class MonteCarloPredictor:
             raise ValueError(f"No rate model for stat: {stat}")
 
         # Get quantile predictions (use stat-specific feature list)
-        X = self._prepare_features(features, self.pipeline.rate_features[stat])
+        X = self._prepare_features(features, self.pipeline.rate_models[stat].all_feature_names)
         quantiles_df = self.pipeline.rate_models[stat].predict_quantiles(X)
 
         quantile_values = quantiles_df.iloc[0].values
