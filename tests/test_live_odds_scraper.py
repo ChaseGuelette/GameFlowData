@@ -12,8 +12,9 @@ class TestLiveOddsScraper(unittest.TestCase):
         self.api_key = "test_key"
         self.scraper = LiveOddsScraper(self.api_key, self.mock_engine)
 
+    @patch("src.scrapers.live_odds_scraper.extras.execute_values")
     @patch("src.scrapers.live_odds_scraper.requests.Session.get")
-    def test_successful_fetch_and_parse(self, mock_get):
+    def test_successful_fetch_and_parse(self, mock_get, mock_execute_values):
         """Test successful API response parsing and DB insertion."""
         # Mock API Response
         mock_response = MagicMock()
@@ -48,16 +49,7 @@ class TestLiveOddsScraper(unittest.TestCase):
 
         # Assertions
         self.assertEqual(count, 2)  # 2 outcomes
-
-        # Check SQL execution
-        conn = self.mock_engine.raw_connection.return_value
-        conn.cursor.return_value.__enter__.return_value
-        # Check that execute_values (or equivalent) was called.
-        # Since we use psycopg2.extras.execute_values, mocking that is tricky if it's imported directly.
-        # But we mocked the engine, so we check if cursor got calls.
-        # The scraper calls extras.execute_values(cur, query, rows)
-        # We can't easily mock extras.execute_values unless we patch it where it is used.
-        pass
+        mock_execute_values.assert_called()
 
     @patch("src.scrapers.live_odds_scraper.extras.execute_values")
     @patch("src.scrapers.live_odds_scraper.requests.Session.get")

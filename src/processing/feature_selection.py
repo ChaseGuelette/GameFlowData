@@ -133,7 +133,7 @@ class ImprovedFeatureSelector:
         tscv = TimeSeriesSplit(n_splits=self.n_splits)
 
         # Define search space: Top 5, 10, 15, ... up to Max
-        step = 5
+        step = 1
         max_feats = len(ranked_candidates)
         counts_to_test = list(range(5, max_feats + 1, step))
         if max_feats not in counts_to_test:

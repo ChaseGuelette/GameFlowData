@@ -6,7 +6,11 @@
       "Bash(pip install:*)",
       "Bash(python -m pytest:*)",
       "Bash(sk work-update:*)",
-      "Bash(python -m solokit.work_items.get_next_recommendations:*)"
+      "Bash(python -m solokit.work_items.get_next_recommendations:*)",
+      "Skill(start)",
+      "Bash(sk start:*)",
+      "Bash(python -m ruff check:*)",
+      "Bash(python -m ruff format:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

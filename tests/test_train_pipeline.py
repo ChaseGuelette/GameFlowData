@@ -1,16 +1,6 @@
 import sys
 from unittest.mock import MagicMock, patch
 
-# MOCK DEPENDENCIES
-mock_xgb = MagicMock()
-sys.modules["xgboost"] = mock_xgb
-mock_sklearn = MagicMock()
-sys.modules["sklearn"] = mock_sklearn
-sys.modules["sklearn.model_selection"] = MagicMock()
-sys.modules["sklearn.preprocessing"] = MagicMock()
-sys.modules["sklearn.metrics"] = MagicMock()
-sys.modules["sklearn.isotonic"] = MagicMock()
-
 import unittest
 from pathlib import Path
 
@@ -119,7 +109,8 @@ class TestTrainingOrchestrator(unittest.TestCase):
     @patch("src.models.train_pipeline.FeatureStore")
     @patch("src.models.train_pipeline.PlayerPropsModelPipeline")
     @patch("src.models.train_pipeline.FeatureSelector")
-    def test_calibration_hard_fail(self, MockSelector, MockPipeline, MockFeatureStore, MockGetEngine):
+    @patch("src.models.train_pipeline.MonteCarloPredictor")
+    def test_calibration_hard_fail(self, MockMC, MockSelector, MockPipeline, MockFeatureStore, MockGetEngine):
         orchestrator = TrainingOrchestrator(base_artifacts_dir=str(self.test_artifacts_dir))
 
         n_rows = 100
@@ -129,6 +120,7 @@ class TestTrainingOrchestrator(unittest.TestCase):
                 "actual_minutes": [30.0] * n_rows,
                 "player_id": [1] * n_rows,
                 "game_id": ["g"] * n_rows,
+                "game_date": ["2022-01-01"] * n_rows,
                 "pts_per_min": [0.6] * n_rows,
                 "reb_per_min": [0.1] * n_rows,
                 "ast_per_min": [0.1] * n_rows,
@@ -149,9 +141,14 @@ class TestTrainingOrchestrator(unittest.TestCase):
         mock_pipeline_instance.minutes_model.predict_quantiles.return_value = bad_preds
         mock_pipeline_instance.rate_models = {}
 
-        with self.assertRaises(ValueError) as context:
-            orchestrator.run(["2022"], "2023")
-        self.assertIn("Calibration failed", str(context.exception))
+        # Sanity pass mocks
+        MockFeatureStore.return_value.get_player_game_features.return_value = {"f": 1}
+        MockMC.return_value.predict.return_value = {}
+
+        orchestrator.run(["2022"], "2023")
+
+        run_dir = list(self.test_artifacts_dir.glob("run_*"))[0]
+        self.assertTrue((run_dir / "CALIBRATION_FAILED.txt").exists())
 
     @patch("src.models.train_pipeline.get_engine")
     @patch("src.models.train_pipeline.FeatureStore")

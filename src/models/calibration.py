@@ -16,7 +16,6 @@ class CalibrationReport:
     gap: float
     n_samples: int
 
-    @property
     def is_calibrated(self, tolerance: float = 0.03) -> bool:
         return abs(self.gap) <= tolerance
 

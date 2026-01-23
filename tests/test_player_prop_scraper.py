@@ -306,7 +306,7 @@ def test_batch_insert_executes_values(scraper_module, tmp_path, monkeypatch):
     execute_values.assert_called_once()
     args = execute_values.call_args[0]
     assert args[2] == rows
-    assert "raw_player_props_staging_v2" in args[1]
+    assert "raw_player_props_combined" in args[1]
     assert conn.committed is True
     assert conn.closed is True
 

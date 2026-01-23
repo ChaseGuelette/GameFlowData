@@ -3,7 +3,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 # ID: (Latitude, Longitude)
 # These are approximate stadium locations
@@ -140,8 +140,8 @@ class FeatureStore:
                 WHERE season_id IN :seasons
                 GROUP BY team_id, game_id, game_date, matchup, season_id
                 ORDER BY team_id, game_date
-            """)
-            df = pd.read_sql(query, conn, params={"seasons": tuple(seasons)})
+            """).bindparams(bindparam("seasons", expanding=True))
+            df = pd.read_sql(query, conn, params={"seasons": list(seasons)})
 
         if df.empty:
             return pd.DataFrame(columns=["game_id", "team_id", "rest_days", "travel_dist", "is_back_to_back"])
@@ -266,7 +266,7 @@ class FeatureStore:
 
         # 2. Get previous game info
         query = text("""
-            SELECT game_date, matchup, opponent_id
+            SELECT game_date, team_matchup, opponent_id
             FROM team_game_stats
             WHERE team_id = :team_id AND game_date < :game_date
             ORDER BY game_date DESC LIMIT 1
@@ -278,7 +278,7 @@ class FeatureStore:
             return {"rest_days": 7, "travel_dist": 0, "is_back_to_back": 0}
 
         prev_date = prev_game.game_date
-        prev_is_home = "vs." in prev_game.matchup
+        prev_is_home = "vs." in prev_game.team_matchup
         prev_opp_id = prev_game.opponent_id
 
         prev_opp_lat, prev_opp_lon = TEAM_LOCATIONS.get(prev_opp_id, (0, 0))
@@ -427,13 +427,16 @@ class FeatureStore:
               AND pgs.season_id NOT IN :excluded
               AND pgs.min > 0
               AND pos.position_group IS NOT NULL
-        """)
+        """).bindparams(
+            bindparam("seasons", expanding=True),
+            bindparam("excluded", expanding=True),
+        )
 
         with self.engine.connect() as conn:
             df = pd.read_sql(
                 query,
                 conn,
-                params={"seasons": tuple(seasons), "excluded": self.config.excluded_seasons},
+                params={"seasons": list(seasons), "excluded": list(self.config.excluded_seasons)},
             )
 
         # Calculate Travel & Rest

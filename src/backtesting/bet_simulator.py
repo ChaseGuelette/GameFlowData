@@ -1,0 +1,303 @@
+"""
+Bet simulation and P&L tracking for backtesting.
+"""
+
+from dataclasses import dataclass, field
+from datetime import date
+from enum import Enum
+
+import pandas as pd
+
+
+class BetSide(Enum):
+    """Bet direction."""
+
+    OVER = "over"
+    UNDER = "under"
+
+
+class BetOutcome(Enum):
+    """Bet result."""
+
+    WIN = "win"
+    LOSS = "loss"
+    PUSH = "push"
+
+
+@dataclass
+class Bet:
+    """Represents a single simulated bet."""
+
+    # Identifiers
+    player_id: int
+    game_id: str
+    game_date: date
+    stat: str
+
+    # Bet details
+    side: BetSide
+    line: float
+    odds: int
+    stake: float
+
+    # Model info
+    model_prob: float
+    implied_prob: float
+    edge: float
+
+    # Outcome (filled after result)
+    actual: float | None = None
+    outcome: BetOutcome | None = None
+    profit: float | None = None
+
+    def resolve(self, actual_value: float) -> None:
+        """Resolve the bet with the actual outcome."""
+        self.actual = actual_value
+
+        if self.side == BetSide.OVER:
+            if actual_value > self.line:
+                self.outcome = BetOutcome.WIN
+            elif actual_value < self.line:
+                self.outcome = BetOutcome.LOSS
+            else:
+                self.outcome = BetOutcome.PUSH
+        else:  # UNDER
+            if actual_value < self.line:
+                self.outcome = BetOutcome.WIN
+            elif actual_value > self.line:
+                self.outcome = BetOutcome.LOSS
+            else:
+                self.outcome = BetOutcome.PUSH
+
+        self.profit = self._calculate_profit()
+
+    def _calculate_profit(self) -> float:
+        """Calculate profit/loss based on outcome."""
+        if self.outcome == BetOutcome.PUSH:
+            return 0.0
+
+        if self.outcome == BetOutcome.WIN:
+            if self.odds > 0:
+                return self.stake * (self.odds / 100)
+            else:
+                return self.stake * (100 / abs(self.odds))
+        else:  # LOSS
+            return -self.stake
+
+
+@dataclass
+class BetSimulator:
+    """
+    Simulates betting based on model predictions and tracks P&L.
+    """
+
+    edge_threshold: float = 0.05
+    default_stake: float = 100.0
+    min_odds: int = -200  # Don't bet on heavy favorites
+    max_odds: int = 200  # Don't bet on long shots
+
+    bets: list[Bet] = field(default_factory=list)
+
+    def should_bet(
+        self,
+        model_prob: float,
+        implied_prob: float,
+        odds: int,
+        side: BetSide,
+    ) -> bool:
+        """Determine if a bet should be placed based on edge and filters."""
+        if model_prob is None or implied_prob is None or odds is None:
+            return False
+
+        edge = model_prob - implied_prob
+
+        # Must have minimum edge
+        if edge < self.edge_threshold:
+            return False
+
+        # Filter extreme odds
+        if odds < self.min_odds or odds > self.max_odds:
+            return False
+
+        return True
+
+    def place_bet(
+        self,
+        player_id: int,
+        game_id: str,
+        game_date: date,
+        stat: str,
+        side: BetSide,
+        line: float,
+        odds: int,
+        model_prob: float,
+        implied_prob: float,
+        stake: float | None = None,
+    ) -> Bet:
+        """Create and record a bet."""
+        bet = Bet(
+            player_id=player_id,
+            game_id=game_id,
+            game_date=game_date,
+            stat=stat,
+            side=side,
+            line=line,
+            odds=odds,
+            stake=stake or self.default_stake,
+            model_prob=model_prob,
+            implied_prob=implied_prob,
+            edge=model_prob - implied_prob,
+        )
+        self.bets.append(bet)
+        return bet
+
+    def evaluate_predictions(
+        self,
+        predictions_df: pd.DataFrame,
+        game_date: date,
+    ) -> list[Bet]:
+        """
+        Evaluate predictions DataFrame and place appropriate bets.
+
+        Expected columns:
+        - player_id, game_id, stat
+        - line, over_odds, under_odds
+        - over_prob, under_prob
+        - implied_over, implied_under
+        """
+        new_bets = []
+
+        for _, row in predictions_df.iterrows():
+            if pd.isna(row.get("line")):
+                continue
+
+            # Check over bet
+            if self.should_bet(
+                model_prob=row.get("over_prob"),
+                implied_prob=row.get("implied_over"),
+                odds=row.get("over_odds"),
+                side=BetSide.OVER,
+            ):
+                bet = self.place_bet(
+                    player_id=row["player_id"],
+                    game_id=row["game_id"],
+                    game_date=game_date,
+                    stat=row["stat"],
+                    side=BetSide.OVER,
+                    line=row["line"],
+                    odds=int(row["over_odds"]),
+                    model_prob=row["over_prob"],
+                    implied_prob=row["implied_over"],
+                )
+                new_bets.append(bet)
+
+            # Check under bet
+            if self.should_bet(
+                model_prob=row.get("under_prob"),
+                implied_prob=row.get("implied_under"),
+                odds=row.get("under_odds"),
+                side=BetSide.UNDER,
+            ):
+                bet = self.place_bet(
+                    player_id=row["player_id"],
+                    game_id=row["game_id"],
+                    game_date=game_date,
+                    stat=row["stat"],
+                    side=BetSide.UNDER,
+                    line=row["line"],
+                    odds=int(row["under_odds"]),
+                    model_prob=row["under_prob"],
+                    implied_prob=row["implied_under"],
+                )
+                new_bets.append(bet)
+
+        return new_bets
+
+    def resolve_bets(self, actuals_df: pd.DataFrame) -> int:
+        """
+        Resolve unresolved bets with actual outcomes.
+
+        Expected columns: player_id, game_id, stat, actual_value
+        """
+        resolved_count = 0
+
+        # Build lookup for actuals
+        actuals_lookup = {}
+        for _, row in actuals_df.iterrows():
+            key = (row["player_id"], row["game_id"], row["stat"])
+            actuals_lookup[key] = row["actual_value"]
+
+        # Resolve each unresolved bet
+        for bet in self.bets:
+            if bet.outcome is not None:
+                continue
+
+            key = (bet.player_id, bet.game_id, bet.stat)
+            if key in actuals_lookup:
+                bet.resolve(actuals_lookup[key])
+                resolved_count += 1
+
+        return resolved_count
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convert bets to DataFrame for analysis."""
+        records = []
+        for bet in self.bets:
+            records.append(
+                {
+                    "player_id": bet.player_id,
+                    "game_id": bet.game_id,
+                    "game_date": bet.game_date,
+                    "stat": bet.stat,
+                    "side": bet.side.value,
+                    "line": bet.line,
+                    "odds": bet.odds,
+                    "stake": bet.stake,
+                    "model_prob": bet.model_prob,
+                    "implied_prob": bet.implied_prob,
+                    "edge": bet.edge,
+                    "actual": bet.actual,
+                    "outcome": bet.outcome.value if bet.outcome else None,
+                    "profit": bet.profit,
+                }
+            )
+        return pd.DataFrame(records)
+
+    def get_summary(self) -> dict:
+        """Get summary statistics for all bets."""
+        resolved = [b for b in self.bets if b.outcome is not None]
+
+        if not resolved:
+            return {
+                "total_bets": len(self.bets),
+                "resolved_bets": 0,
+                "wins": 0,
+                "losses": 0,
+                "pushes": 0,
+                "total_staked": 0.0,
+                "total_profit": 0.0,
+                "roi": 0.0,
+                "hit_rate": 0.0,
+            }
+
+        wins = sum(1 for b in resolved if b.outcome == BetOutcome.WIN)
+        losses = sum(1 for b in resolved if b.outcome == BetOutcome.LOSS)
+        pushes = sum(1 for b in resolved if b.outcome == BetOutcome.PUSH)
+        total_staked = sum(b.stake for b in resolved if b.outcome != BetOutcome.PUSH)
+        total_profit = sum(b.profit for b in resolved)
+
+        return {
+            "total_bets": len(self.bets),
+            "resolved_bets": len(resolved),
+            "wins": wins,
+            "losses": losses,
+            "pushes": pushes,
+            "total_staked": total_staked,
+            "total_profit": total_profit,
+            "roi": total_profit / total_staked if total_staked > 0 else 0.0,
+            "hit_rate": wins / (wins + losses) if (wins + losses) > 0 else 0.0,
+        }
+
+    def reset(self) -> None:
+        """Clear all bets."""
+        self.bets = []
