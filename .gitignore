@@ -67,3 +67,6 @@ tmpclaude-*
 #node modules
 node_modules/
 node_modules\
+
+# Ignore model artifacts and logs
+src/models/artifacts/

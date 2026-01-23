@@ -5,9 +5,8 @@ from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -101,56 +100,72 @@ class DailyPredictionRunner:
 
     def _get_games_for_date(self, target_date: date) -> list[dict]:
         """Get all games scheduled for target date."""
-        query = """
+        query = text("""
             SELECT DISTINCT game_id,
                    MAX(CASE WHEN team_matchup LIKE '%vs.%' THEN team_id END) as home_team_id,
                    MAX(CASE WHEN team_matchup LIKE '%@%' THEN team_id END) as away_team_id
             FROM team_game_stats
             WHERE team_game_date::date = :target_date
             GROUP BY game_id
-        """
+        """)
 
         with self.engine.connect() as conn:
             result = conn.execute(query, {"target_date": target_date})
-            return [dict(r) for r in result]
+            return [dict(row._mapping) for row in result]
 
     def _get_players_for_games(self, games: list[dict]) -> list[dict]:
         """Get expected players for games (based on recent activity)."""
-        [g["game_id"] for g in games]
+        if not games:
+            return []
 
-        # Get players who played recently for teams in these games
-        query = """
-            WITH game_teams AS (
-                SELECT game_id, home_team_id, away_team_id
-                FROM (VALUES {}) AS t(game_id, home_team_id, away_team_id)
-            ),
-            recent_players AS (
-                SELECT DISTINCT ON (pgs.player_id)
-                    pgs.player_id,
-                    p.player_name,
-                    pgs.team_id,
-                    pgs.avg_min_l5
-                FROM player_average_game_stats pgs
-                JOIN players p ON pgs.player_id = p.player_id
-                WHERE pgs.team_id IN (
-                    SELECT home_team_id FROM game_teams
-                    UNION
-                    SELECT away_team_id FROM game_teams
-                )
-                AND pgs.avg_min_l5 >= 10  -- Only players averaging 10+ minutes
-                ORDER BY pgs.player_id, pgs.game_date DESC
-            )
-            SELECT rp.*, gt.game_id,
-                   CASE WHEN rp.team_id = gt.home_team_id THEN gt.away_team_id
-                        ELSE gt.home_team_id END as opponent_id
-            FROM recent_players rp
-            JOIN game_teams gt ON rp.team_id IN (gt.home_team_id, gt.away_team_id)
-        """
+        # Collect all team IDs from today's games
+        team_ids = set()
+        for g in games:
+            if g.get("home_team_id"):
+                team_ids.add(g["home_team_id"])
+            if g.get("away_team_id"):
+                team_ids.add(g["away_team_id"])
 
-        # This is simplified - actual implementation would properly construct the VALUES clause
+        if not team_ids:
+            return []
+
+        # Get recent active players for these teams
+        query = text("""
+            SELECT DISTINCT ON (pgs.player_id)
+                pgs.player_id,
+                p.player_name,
+                pgs.team_id,
+                pgs.avg_min_l5
+            FROM player_average_game_stats pgs
+            JOIN players p ON pgs.player_id = p.player_id
+            WHERE pgs.team_id IN :team_ids
+              AND pgs.avg_min_l5 >= 10
+            ORDER BY pgs.player_id, pgs.game_date DESC
+        """).bindparams(bindparam("team_ids", expanding=True))
+
         with self.engine.connect() as conn:
-            result = conn.execute(query)
-            return [dict(r) for r in result]
+            result = conn.execute(query, {"team_ids": list(team_ids)})
+            players = [dict(row._mapping) for row in result]
+
+        # Map each player to their game and opponent
+        # Build team -> game mapping
+        team_game_map = {}  # team_id -> (game_id, opponent_id)
+        for g in games:
+            home = g.get("home_team_id")
+            away = g.get("away_team_id")
+            if home and away:
+                team_game_map[home] = {"game_id": g["game_id"], "opponent_id": away}
+                team_game_map[away] = {"game_id": g["game_id"], "opponent_id": home}
+
+        result_players = []
+        for p in players:
+            mapping = team_game_map.get(p["team_id"])
+            if mapping:
+                p["game_id"] = mapping["game_id"]
+                p["opponent_id"] = mapping["opponent_id"]
+                result_players.append(p)
+
+        return result_players
 
     def _filter_injured_players(self, players: list[dict], target_date: date) -> list[dict]:
         """Remove players listed as 'Out' in injury report."""
@@ -205,6 +220,9 @@ class DailyPredictionRunner:
         """Fetch current prop lines from database."""
         game_ids = [g["game_id"] for g in games]
 
+        if not game_ids:
+            return pd.DataFrame()
+
         stat_to_market = {
             "pts": "player_points",
             "reb": "player_rebounds",
@@ -213,7 +231,7 @@ class DailyPredictionRunner:
 
         markets = [stat_to_market[s] for s in stats if s in stat_to_market]
 
-        query = """
+        query = text("""
             SELECT
                 player_id,
                 game_id,
@@ -226,10 +244,13 @@ class DailyPredictionRunner:
               AND market_key IN :markets
               AND bookmaker = 'pinnacle'
             GROUP BY player_id, game_id, market_key, line
-        """
+        """).bindparams(
+            bindparam("game_ids", expanding=True),
+            bindparam("markets", expanding=True),
+        )
 
         with self.engine.connect() as conn:
-            return pd.read_sql(query, conn, params={"game_ids": tuple(game_ids), "markets": tuple(markets)})
+            return pd.read_sql(query, conn, params={"game_ids": list(game_ids), "markets": list(markets)})
 
     def _calculate_edges(self, predictions_df: pd.DataFrame, lines_df: pd.DataFrame) -> pd.DataFrame:
         """Add edge calculations to predictions."""

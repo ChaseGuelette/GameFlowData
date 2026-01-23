@@ -5,7 +5,7 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 from psycopg2 import extras
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 # Configure logging
 logging.basicConfig(
@@ -28,6 +28,31 @@ class LiveOddsScraper:
         self.api_key = api_key
         self.engine = db_engine
         self.session = requests.Session()
+        self._create_table_if_not_exists()
+
+    def _create_table_if_not_exists(self):
+        """Ensure the staging table exists."""
+        query = """
+        CREATE TABLE IF NOT EXISTS raw_game_lines_live (
+            id SERIAL PRIMARY KEY,
+            api_game_id TEXT,
+            bookmaker TEXT,
+            market_key TEXT,
+            outcome_label TEXT,
+            line NUMERIC,
+            odds_american INTEGER,
+            commence_time TIMESTAMP,
+            home_team TEXT,
+            away_team TEXT,
+            snapshot_time TIMESTAMP,
+            market_last_update TIMESTAMP,
+            bookmaker_last_update TIMESTAMP,
+            bookmaker_name TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+        """
+        with self.engine.begin() as conn:
+            conn.execute(text(query))
 
     def fetch_live_odds(self):
         """

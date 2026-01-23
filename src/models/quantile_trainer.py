@@ -94,14 +94,96 @@ class QuantileModelSuite:
 
             model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
 
-            # Evaluate calibration
-            val_preds = model.predict(X_val)
-            coverage = (y_val <= val_preds).mean()
+            # Evaluate calibration (Train vs Val)
+            train_preds = model.predict(X_train)
+            train_coverage = (y_train <= train_preds).mean()
 
-            print(f"  Quantile {q:.2f}: Target coverage = {q:.2f}, Actual coverage = {coverage:.3f}")
+            val_preds = model.predict(X_val)
+            val_coverage = (y_val <= val_preds).mean()
+
+            print(
+                f"  Quantile {q:.2f}: Target={q:.2f} | "
+                f"Train cov={train_coverage:.3f} | Val cov={val_coverage:.3f} | "
+                f"Gap={train_coverage - val_coverage:.3f}"
+            )
 
             self.models[q] = model
-            results[q] = coverage
+            results[q] = {
+                "train_coverage": train_coverage,
+                "val_coverage": val_coverage,
+                "gap": train_coverage - val_coverage,
+            }
+
+        return results
+
+    def get_learning_curve_data(
+        self, X: pd.DataFrame, y: pd.Series, train_sizes: list[float] | None = None
+    ) -> dict[float, list[dict]]:
+        """
+        Generate learning curve data for diagnosis.
+        Returns dict: {quantile: [{train_size, fraction, train_coverage, val_coverage}, ...]}
+        """
+        train_sizes = train_sizes or np.linspace(0.1, 1.0, 5)
+
+        # Split for evaluation (Preserve temporal order)
+        X_train, X_val, y_train, y_val = train_test_split(
+            X,
+            y,
+            test_size=self.config.val_fraction,
+            shuffle=False,
+        )
+
+        results = {}
+
+        for q in self.config.quantiles:
+            print(f"\nGenerating learning curve for Q{q:.2f}...")
+            q_results = []
+
+            for fraction in train_sizes:
+                size = int(fraction * len(X_train))
+                if size < 50:  # Skip if too small
+                    continue
+
+                # Random subset of training data (simulating limited data)
+                # Using fixed random_state for reproducibility
+                subset_idx = np.random.RandomState(42).choice(
+                    len(X_train), size=size, replace=False
+                )
+                X_subset = X_train.iloc[subset_idx]
+                y_subset = y_train.iloc[subset_idx]
+
+                model = xgb.XGBRegressor(
+                    objective="reg:quantileerror",
+                    quantile_alpha=q,
+                    n_estimators=self.config.n_estimators,
+                    max_depth=self.config.max_depth,
+                    learning_rate=self.config.learning_rate,
+                    subsample=self.config.subsample,
+                    colsample_bytree=self.config.colsample_bytree,
+                    min_child_weight=self.config.min_child_weight,
+                    random_state=self.config.random_state,
+                    n_jobs=-1,
+                )
+
+                model.fit(X_subset, y_subset, verbose=False)
+
+                # Evaluate
+                train_cov = (y_subset <= model.predict(X_subset)).mean()
+                val_cov = (y_val <= model.predict(X_val)).mean()
+
+                q_results.append(
+                    {
+                        "train_size": size,
+                        "fraction": fraction,
+                        "train_coverage": train_cov,
+                        "val_coverage": val_cov,
+                    }
+                )
+                print(
+                    f"  Size {size} ({fraction:.0%}): Train={train_cov:.3f}, Val={val_cov:.3f}"
+                )
+
+            results[q] = q_results
 
         return results
 
@@ -143,7 +225,7 @@ class QuantileModelSuite:
             # Apply isotonic regression
             ir = IsotonicRegression()
             fixed = ir.fit_transform(quantile_values, values)
-            result.loc[idx, quantile_cols] = fixed
+            result.loc[idx, quantile_cols] = fixed.astype(np.float32)
 
         return result
 
