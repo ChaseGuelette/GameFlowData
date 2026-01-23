@@ -144,6 +144,9 @@ class BetSimulator:
         if model_prob is None or implied_prob is None or odds is None:
             return False
 
+        if pd.isna(model_prob) or pd.isna(implied_prob) or pd.isna(odds):
+            return False
+
         edge = model_prob - implied_prob
 
         # Must have minimum edge

@@ -145,6 +145,7 @@ def generate_historical_schedule():
         ("2022-23 Season", datetime(2022, 10, 18), datetime(2023, 6, 12)),
         ("2023-24 Season", datetime(2023, 10, 24), datetime(2024, 6, 17)),
         ("2024-25 Season", datetime(2024, 10, 22), datetime(2025, 4, 15)),  # Current
+        ("2025-26 Season", datetime(2025, 10, 20), datetime(2026, 1, 23)),  # Current Backfill
     ]
 
     # Strategy: 2 Snapshots per day (Afternoon & Evening) to catch movement

@@ -27,8 +27,12 @@ import re
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
+
+# Add project root to path
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 # NBA API imports
 from nba_api.stats.endpoints import (
@@ -278,7 +282,7 @@ def scrape_team_game_stats(engine, seasons: list[str], season_type: str = "Regul
 
     # Map to database schema
     mapping = {
-        "game_date": "team_game_date",
+        "game_date": "game_date",
         "matchup": "team_matchup",
         "wl": "team_wl",
         "min": "team_min",
@@ -317,7 +321,7 @@ def scrape_team_game_stats(engine, seasons: list[str], season_type: str = "Regul
         "team_abbreviation",
         "team_name",
         "game_id",
-        "team_game_date",
+        "game_date",
         "team_matchup",
         "team_wl",
         "team_min",

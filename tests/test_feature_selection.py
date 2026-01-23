@@ -64,7 +64,7 @@ class TestImprovedFeatureSelector(unittest.TestCase):
         # So we should pass 3 feature columns
         cols = ["feature_good", "feature_noise", "feature_constant"]
 
-        ranked = self.selector._rank_features(self.df[cols], self.df["target"])
+        ranked = self.selector._rank_features_for_quantile(self.df[cols], self.df["target"], 0.5)
 
         self.assertEqual(ranked[0], "feature_good")
         self.assertIn("feature_noise", ranked[1:])
@@ -83,15 +83,18 @@ class TestImprovedFeatureSelector(unittest.TestCase):
         # With 3 features, it will just test [3].
         # So optimization loop runs once.
 
-        selected = self.selector._optimize_feature_count(self.df, self.df["target"], candidates)
+        selected = self.selector._optimize_count_for_quantile(self.df, self.df["target"], candidates, 0.5)
 
         self.assertEqual(selected, candidates)  # Should return all if max < 5
 
     def test_empty_data_handling(self):
         """Test handling of empty or NaN-only data."""
         df_empty = pd.DataFrame({"target": [np.nan] * 10, "feat": [1] * 10})
-        selected = self.selector.select_features(df_empty, "target", ["feat"])
-        self.assertEqual(selected, [])
+        selected = self.selector.select_features_per_quantile(df_empty, "target", ["feat"])
+        
+        # Should return dict with empty lists for each quantile
+        for q in self.selector.quantiles:
+            self.assertEqual(selected[q], [])
 
     def test_candidate_generation(self):
         """Test get_candidate_columns exclusion logic."""

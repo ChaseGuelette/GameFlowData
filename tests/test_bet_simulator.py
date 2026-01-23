@@ -206,7 +206,7 @@ class TestBetSimulator:
 
     def test_place_bet(self):
         """Test placing a bet."""
-        simulator = BetSimulator(default_stake=100.0)
+        simulator = BetSimulator()
 
         bet = simulator.place_bet(
             player_id=1,
@@ -218,6 +218,7 @@ class TestBetSimulator:
             odds=-110,
             model_prob=0.60,
             implied_prob=0.52,
+            stake=100.0,
         )
 
         assert len(simulator.bets) == 1
@@ -312,7 +313,7 @@ class TestBetSimulator:
 
     def test_get_summary(self):
         """Test getting summary statistics."""
-        simulator = BetSimulator(default_stake=100.0)
+        simulator = BetSimulator()
 
         # Place and resolve some bets
         bet1 = simulator.place_bet(

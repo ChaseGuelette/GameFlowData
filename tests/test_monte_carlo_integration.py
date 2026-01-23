@@ -16,6 +16,7 @@ class FakeQuantileModel:
 
     def __init__(self, base_value: float):
         self.base_value = base_value
+        self.all_feature_names = ["feature_1"]  # Default features
 
     def predict_quantiles(self, X: pd.DataFrame) -> pd.DataFrame:
         """Return monotonically increasing quantiles around base_value."""
@@ -123,8 +124,9 @@ def test_stat_specific_features_are_used(sample_features):
     calls_log = {}
 
     class LoggingModel:
-        def __init__(self, stat_name):
+        def __init__(self, stat_name, feature_names):
             self.stat_name = stat_name
+            self.all_feature_names = feature_names
 
         def predict_quantiles(self, X: pd.DataFrame) -> pd.DataFrame:
             calls_log[self.stat_name] = list(X.columns)
@@ -140,10 +142,10 @@ def test_stat_specific_features_are_used(sample_features):
             )
 
     pipeline = FakePipeline()
-    pipeline.minutes_model = LoggingModel("minutes")
+    pipeline.minutes_model = LoggingModel("minutes", pipeline.minutes_features)
     pipeline.rate_models = {
-        "pts": LoggingModel("pts"),
-        "reb": LoggingModel("reb"),
+        "pts": LoggingModel("pts", pipeline.rate_features["pts"]),
+        "reb": LoggingModel("reb", pipeline.rate_features["reb"]),
     }
 
     predictor = MonteCarloPredictor(pipeline, n_samples=100)

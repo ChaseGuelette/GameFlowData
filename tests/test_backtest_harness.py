@@ -74,13 +74,13 @@ class TestBacktestHarness:
             model_pipeline=mock_pipeline,
             predictor=mock_predictor,
             edge_threshold=0.05,
-            bet_size=100.0,
+            starting_bankroll=10000.0,
         )
 
     def test_initialization(self, harness):
         """Test harness initialization."""
         assert harness.edge_threshold == 0.05
-        assert harness.bet_size == 100.0
+        assert harness.starting_bankroll == 10000.0
         assert harness._simulator is not None
         assert harness._metrics_calc is not None
 
