@@ -335,7 +335,7 @@ def process_local():
             return name
         # Unicode normalization (strip accents)
         name = str(name)
-        name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
+        name = unicodedata.normalize("NFKD", name).encode("ASCII", "ignore").decode("utf-8")
         name = name.lower().strip()
         for old, new in [(".", ""), ("'", ""), ("-", " "), (" jr", ""), (" iii", ""), (" ii", "")]:
             name = name.replace(old, new)

@@ -31,7 +31,9 @@ WINDOWS = {
 }
 
 # Batch size for inserts
-BATCH_SIZE = 1000
+# Player advanced: 57 cols, Player basic: 69 cols, Team: 104 cols
+# 100 rows × 104 cols = 10,400 params (under PostgreSQL ~32k limit)
+BATCH_SIZE = 100
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -160,7 +162,7 @@ PLAYER_BASIC_STATS = [
 ]
 
 
-def fetch_player_game_stats(engine, season_id: str | None = None) -> pd.DataFrame:
+def fetch_player_game_stats(engine, season_id: str | None = None, from_year: int | None = None) -> pd.DataFrame:
     """Fetch player game stats from database."""
     query = """
         SELECT
@@ -174,11 +176,13 @@ def fetch_player_game_stats(engine, season_id: str | None = None) -> pd.DataFram
             stl, blk, tov, pf, pts, plus_minus,
             did_not_play
         FROM player_game_stats
-        WHERE did_not_play = false OR did_not_play IS NULL
+        WHERE (did_not_play = false OR did_not_play IS NULL)
     """
 
     if season_id:
         query += f" AND season_id = '{season_id}'"
+    elif from_year:
+        query += f" AND game_date >= '{from_year}-01-01'"
 
     query += " ORDER BY player_id, season_id, game_date"
 
@@ -316,7 +320,7 @@ PLAYER_ADVANCED_MAPPING = {
 }
 
 
-def fetch_player_advanced_stats(engine, season_id: str | None = None) -> pd.DataFrame:
+def fetch_player_advanced_stats(engine, season_id: str | None = None, from_year: int | None = None) -> pd.DataFrame:
     """Fetch player advanced stats by joining game stats with advanced stats."""
     query = """
         SELECT
@@ -350,6 +354,8 @@ def fetch_player_advanced_stats(engine, season_id: str | None = None) -> pd.Data
 
     if season_id:
         query += f" AND pgs.season_id = '{season_id}'"
+    elif from_year:
+        query += f" AND pgs.game_date >= '{from_year}-01-01'"
 
     query += " ORDER BY pgs.player_id, pgs.season_id, pgs.game_date"
 
@@ -502,7 +508,7 @@ TEAM_ADVANCED_MAPPING = {
 }
 
 
-def fetch_team_game_stats(engine, season_id: str | None = None) -> pd.DataFrame:
+def fetch_team_game_stats(engine, season_id: str | None = None, from_year: int | None = None) -> pd.DataFrame:
     """Fetch team game stats from database."""
     query = """
         SELECT
@@ -522,10 +528,13 @@ def fetch_team_game_stats(engine, season_id: str | None = None) -> pd.DataFrame:
             rebound_percentage, offensive_rebound_percentage,
             defensive_rebound_percentage, pie
         FROM team_game_stats
+        WHERE 1=1
     """
 
     if season_id:
-        query += f" WHERE season_id = '{season_id}'"
+        query += f" AND season_id = '{season_id}'"
+    elif from_year:
+        query += f" AND game_date >= '{from_year}-01-01'"
 
     query += " ORDER BY team_id, season_id, game_date"
 
@@ -642,6 +651,11 @@ def main():
     parser = argparse.ArgumentParser(description="Populate average stats tables")
     parser.add_argument("--season", type=str, help="Specific season (e.g., 2024-25)")
     parser.add_argument(
+        "--from-year",
+        type=int,
+        help="Only process seasons from this year onward (e.g., 2021)",
+    )
+    parser.add_argument(
         "--table",
         type=str,
         choices=["player", "player_advanced", "team", "all"],
@@ -652,9 +666,14 @@ def main():
 
     engine = get_engine()
 
+    # Build season filter from --from-year if provided
+    season_filter = args.season
+    from_year = args.from_year
+
     logger.info("=" * 60)
     logger.info("Starting average stats population")
-    logger.info(f"Season filter: {args.season or 'ALL'}")
+    logger.info(f"Season filter: {season_filter or 'ALL'}")
+    logger.info(f"From year: {from_year or 'ALL'}")
     logger.info(f"Tables: {args.table}")
     logger.info("=" * 60)
 
@@ -663,21 +682,21 @@ def main():
     try:
         # Player basic stats
         if args.table in ["player", "all"]:
-            df = fetch_player_game_stats(engine, args.season)
+            df = fetch_player_game_stats(engine, season_filter, from_year)
             df = calculate_player_basic_averages(df)
             insert_player_basic_averages(engine, df)
             del df  # Free memory
 
         # Player advanced stats
         if args.table in ["player_advanced", "all"]:
-            df = fetch_player_advanced_stats(engine, args.season)
+            df = fetch_player_advanced_stats(engine, season_filter, from_year)
             df = calculate_player_advanced_averages(df)
             insert_player_advanced_averages(engine, df)
             del df
 
         # Team stats
         if args.table in ["team", "all"]:
-            df = fetch_team_game_stats(engine, args.season)
+            df = fetch_team_game_stats(engine, season_filter, from_year)
             df = calculate_team_averages(df)
             insert_team_averages(engine, df)
             del df

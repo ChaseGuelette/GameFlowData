@@ -294,7 +294,7 @@ def test_main_player_only_calls_player_flow(module, monkeypatch):
 
     module.main()
 
-    fetch_basic.assert_called_once_with(engine, "2024-25")
+    fetch_basic.assert_called_once_with(engine, "2024-25", None)
     calc_basic.assert_called_once_with(player_df)
     insert_basic.assert_called_once()
     fetch_adv.assert_not_called()

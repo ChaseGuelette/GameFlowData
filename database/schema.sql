@@ -109,9 +109,9 @@ create table public.player_average_advanced_stats (
   avg_poss_l5 numeric(6, 2) null,
   avg_poss_l15 numeric(6, 2) null,
   avg_poss_szn numeric(6, 2) null,
-  avg_pie_l5 numeric(5, 4) null,
-  avg_pie_l15 numeric(5, 4) null,
-  avg_pie_szn numeric(5, 4) null,
+  avg_pie_l5 numeric(6, 4) null,
+  avg_pie_l15 numeric(6, 4) null,
+  avg_pie_szn numeric(6, 4) null,
   constraint pk_player_avg_advanced_stats primary key (player_id, game_id),
   constraint fk_player_adv_avg_player foreign KEY (player_id) references players (player_id) on update CASCADE on delete CASCADE,
   constraint fk_player_adv_avg_team foreign KEY (team_id) references teams (team_id) on update CASCADE on delete CASCADE
@@ -645,9 +645,9 @@ create table public.team_average_game_stats (
   avg_dreb_pct_l5 numeric(5, 4) null,
   avg_dreb_pct_l15 numeric(5, 4) null,
   avg_dreb_pct_szn numeric(5, 4) null,
-  avg_pie_l5 numeric(5, 4) null,
-  avg_pie_l15 numeric(5, 4) null,
-  avg_pie_szn numeric(5, 4) null,
+  avg_pie_l5 numeric(6, 4) null,
+  avg_pie_l15 numeric(6, 4) null,
+  avg_pie_szn numeric(6, 4) null,
   constraint pk_team_avg_game_stats primary key (team_id, game_id),
   constraint fk_team_avg_team foreign KEY (team_id) references teams (team_id) on update CASCADE on delete CASCADE
 ) TABLESPACE pg_default;
