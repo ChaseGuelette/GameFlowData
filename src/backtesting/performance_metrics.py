@@ -237,14 +237,14 @@ class MetricsCalculator:
 
         # Max drawdown calculation
         cumulative_pl = np.concatenate([[0.0], np.cumsum(profits)])
-        
+
         if starting_bankroll > 0:
             # Equity curve based
             equity = starting_bankroll + cumulative_pl
             running_max = np.maximum.accumulate(equity)
             drawdowns = equity - running_max  # Always <= 0
             max_drawdown_amount = abs(drawdowns.min()) if len(drawdowns) > 0 else 0.0
-            
+
             # Drawdown % relative to peak equity
             peak = running_max.max()
             max_dd_pct = max_drawdown_amount / peak if peak > 0 else 0.0

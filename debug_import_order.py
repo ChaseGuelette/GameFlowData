@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 # Mimic what pytest usually does
 root_dir = os.getcwd()
@@ -12,12 +12,11 @@ print("sys.path:", sys.path)
 
 try:
     print("Attempting to import src.models.quantile_trainer")
-    import src.models.quantile_trainer
     print("Success!")
 except Exception as e:
     print(f"Caught exception: {type(e).__name__}: {e}")
-    if 'sklearn' in sys.modules:
-        m = sys.modules['sklearn']
+    if "sklearn" in sys.modules:
+        m = sys.modules["sklearn"]
         print(f"sklearn module: {m}")
         print(f"sklearn file: {getattr(m, '__file__', 'unknown')}")
         print(f"sklearn path: {getattr(m, '__path__', 'unknown')}")

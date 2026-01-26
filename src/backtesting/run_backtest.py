@@ -60,7 +60,9 @@ def main():
     parser.add_argument("--stats", nargs="+", default=["pts", "reb", "ast"], help="Stats to predict")
     parser.add_argument("--edge-threshold", type=float, default=0.05, help="Minimum edge to place bet")
     parser.add_argument("--starting-bankroll", type=float, default=10000.0, help="Starting bankroll amount")
-    parser.add_argument("--kelly-fraction", type=float, default=0.125, help="Kelly Criterion fraction (e.g., 0.125 for 1/8th)")
+    parser.add_argument(
+        "--kelly-fraction", type=float, default=0.125, help="Kelly Criterion fraction (e.g., 0.125 for 1/8th)"
+    )
     parser.add_argument(
         "--bookmakers",
         nargs="+",

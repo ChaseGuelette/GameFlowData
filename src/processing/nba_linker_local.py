@@ -21,6 +21,8 @@ Requirements:
 """
 
 import argparse
+import sys
+import unicodedata
 from collections import defaultdict
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -30,6 +32,9 @@ import pandas as pd
 import pytz
 from sqlalchemy import text
 from tqdm import tqdm
+
+# Add project root to path
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.db.client import get_engine
 
@@ -74,7 +79,7 @@ def download_tables():
         "teams": "SELECT team_id, team_name FROM teams",
         "players": "SELECT player_id, player_name FROM players",
         "team_game_stats": """
-            SELECT game_id, team_id, team_name, team_game_date, team_matchup, opponent_id
+            SELECT game_id, team_id, team_name, game_date as team_game_date, team_matchup, opponent_id
             FROM team_game_stats
         """,
         "player_game_stats": "SELECT player_id, game_id, team_id FROM player_game_stats",
@@ -93,7 +98,8 @@ def download_tables():
             df.to_csv(filepath, index=False)
             print(f"  Saved {len(df):,} rows to {filepath}")
         except Exception as e:
-            print(f"Error downloading {name}: {e}")
+            print(f"CRITICAL ERROR: Failed to download {name}: {e}")
+            sys.exit(1)
 
     # 2. GAME LINES - Medium table, batch by ID
     game_lines_file = DATA_DIR / "game_lines.csv"
@@ -247,6 +253,20 @@ def process_local():
     """Process all matching locally in pandas with FUZZY DATE MATCHING."""
     print("Loading CSVs...")
 
+    required_files = [
+        "teams.csv",
+        "players.csv",
+        "team_game_stats.csv",
+        "player_game_stats.csv",
+        "game_lines.csv",
+        "player_props.csv",
+    ]
+    missing = [f for f in required_files if not (DATA_DIR / f).exists()]
+    if missing:
+        print(f"\nCRITICAL ERROR: Missing required files: {missing}")
+        print("Please run the 'download' command first to fetch these tables.")
+        sys.exit(1)
+
     teams = pd.read_csv(DATA_DIR / "teams.csv")
     players = pd.read_csv(DATA_DIR / "players.csv")
     team_game_stats = pd.read_csv(DATA_DIR / "team_game_stats.csv")
@@ -313,7 +333,10 @@ def process_local():
     def normalize_player(name):
         if pd.isna(name):
             return name
-        name = str(name).lower().strip()
+        # Unicode normalization (strip accents)
+        name = str(name)
+        name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
+        name = name.lower().strip()
         for old, new in [(".", ""), ("'", ""), ("-", " "), (" jr", ""), (" iii", ""), (" ii", "")]:
             name = name.replace(old, new)
         return " ".join(name.split())

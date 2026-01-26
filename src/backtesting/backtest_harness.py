@@ -114,20 +114,18 @@ class BacktestHarness:
 
         # Phase 1: Parallel Prediction Generation
         logger.info("Phase 1: Generating predictions...")
-        
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Map dates to futures
-            future_to_date = {
-                executor.submit(self._run_date, d): d for d in game_dates
-            }
+            future_to_date = {executor.submit(self._run_date, d): d for d in game_dates}
 
             for future in concurrent.futures.as_completed(future_to_date):
                 completed_count += 1
                 game_date = future_to_date[future]
-                
+
                 if progress_callback:
                     progress_callback(game_date, len(game_dates))
-                
+
                 if completed_count % 5 == 0 or completed_count == len(game_dates):
                     logger.info(f"Processed {completed_count}/{len(game_dates)} dates")
 
@@ -150,10 +148,10 @@ class BacktestHarness:
 
         # Phase 2: Sequential Simulation
         logger.info("Phase 2: Simulating bets...")
-        
+
         # Get actuals upfront so we can resolve bets daily
         actuals_df = self._get_actuals(start_date, end_date)
-        
+
         # Iterate through unique dates in the predictions
         if not predictions_df.empty:
             sorted_dates = sorted(predictions_df["game_date"].unique())
@@ -161,10 +159,10 @@ class BacktestHarness:
                 # 1. Resolve pending bets from previous days (updates bankroll)
                 if len(actuals_df) > 0:
                     self._simulator.resolve_bets(actuals_df)
-                
+
                 # 2. Get preds for this date
                 day_preds = predictions_df[predictions_df["game_date"] == sim_date]
-                
+
                 # 3. Evaluate and place bets (updates simulator state using new bankroll)
                 self._simulator.evaluate_predictions(day_preds, sim_date)
 
@@ -182,9 +180,7 @@ class BacktestHarness:
             predictions_df = self._merge_actuals(predictions_df, actuals_df)
 
         # Calculate metrics
-        metrics = self._metrics_calc.calculate(
-            predictions_df, bets_df, starting_bankroll=self.starting_bankroll
-        )
+        metrics = self._metrics_calc.calculate(predictions_df, bets_df, starting_bankroll=self.starting_bankroll)
 
         logger.info(f"\n{metrics}")
 
@@ -283,7 +279,7 @@ class BacktestHarness:
         lines_df = self._get_lines_for_date(game_date, [g["game_id"] for g in games])
         if len(lines_df) > 0:
             predictions_df = self._calculate_edges(predictions_df, lines_df)
-            
+
             # Filter to best line per player/stat (Line Shopping)
             predictions_df = self._filter_best_bets(predictions_df)
 
@@ -293,19 +289,16 @@ class BacktestHarness:
         """Select single best betting opportunity per player/stat."""
         if predictions_df.empty:
             return predictions_df
-            
+
         # Calculate max potential edge (over or under)
         predictions_df["max_edge"] = predictions_df[["over_edge", "under_edge"]].max(axis=1)
-        
+
         # Sort by max edge descending
         predictions_df = predictions_df.sort_values("max_edge", ascending=False)
-        
+
         # Deduplicate to keep best line per player/stat
-        predictions_df = predictions_df.drop_duplicates(
-            subset=["player_id", "game_id", "stat"], 
-            keep="first"
-        )
-        
+        predictions_df = predictions_df.drop_duplicates(subset=["player_id", "game_id", "stat"], keep="first")
+
         return predictions_df
 
     def _get_games_for_date(self, game_date: date) -> list[dict]:

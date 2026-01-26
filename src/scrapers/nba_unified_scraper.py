@@ -693,9 +693,30 @@ def transform_player_traditional_df(df: pd.DataFrame) -> pd.DataFrame:
     # 1. Convert camelCase to snake_case (e.g. firstName -> first_name)
     df = df.rename(columns={col: camel_to_snake(col) for col in df.columns})
 
-    # 2. Rename person_id to player_id to match schema
-    if "person_id" in df.columns:
-        df = df.rename(columns={"person_id": "player_id"})
+    # 2. Map V3 API column names to database schema abbreviations
+    v3_to_db_mapping = {
+        "person_id": "player_id",
+        "field_goals_made": "fgm",
+        "field_goals_attempted": "fga",
+        "field_goals_percentage": "fg_pct",
+        "three_pointers_made": "fg3m",
+        "three_pointers_attempted": "fg3a",
+        "three_pointers_percentage": "fg3_pct",
+        "free_throws_made": "ftm",
+        "free_throws_attempted": "fta",
+        "free_throws_percentage": "ft_pct",
+        "rebounds_offensive": "oreb",
+        "rebounds_defensive": "dreb",
+        "rebounds_total": "reb",
+        "assists": "ast",
+        "steals": "stl",
+        "blocks": "blk",
+        "turnovers": "tov",
+        "fouls_personal": "pf",
+        "points": "pts",
+        "plus_minus_points": "plus_minus",
+    }
+    df = df.rename(columns=v3_to_db_mapping)
 
     # 3. Parse minutes
     # Schema has 'min' as bigint, so we must round to nearest int.
@@ -815,18 +836,8 @@ def scrape_traditional_stats(engine, limit: int | None = None) -> tuple[int, int
                     break
 
                 # Transform (Renames cols, parses minutes, adds DNP)
+                # Note: V3 API column mapping (points->pts, etc.) handled in transform function
                 player_df = transform_player_traditional_df(player_df)
-
-                # --- Column Mappings for Schema ---
-                # 'turnovers' -> 'tov'
-                if "turnovers" in player_df.columns:
-                    player_df.rename(columns={"turnovers": "tov"}, inplace=True)
-                elif "turnover" in player_df.columns:
-                    player_df.rename(columns={"turnover": "tov"}, inplace=True)
-
-                # Ensure 'min' exists (handled in transform, but double check)
-                if "minutes" in player_df.columns and "min" not in player_df.columns:
-                    player_df.rename(columns={"minutes": "min"}, inplace=True)
 
                 # --- Merge Metadata (game_date, wl, matchup, etc) ---
                 # We filter metadata_df for just this game to avoid large merges

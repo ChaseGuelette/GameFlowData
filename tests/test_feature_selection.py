@@ -91,7 +91,7 @@ class TestImprovedFeatureSelector(unittest.TestCase):
         """Test handling of empty or NaN-only data."""
         df_empty = pd.DataFrame({"target": [np.nan] * 10, "feat": [1] * 10})
         selected = self.selector.select_features_per_quantile(df_empty, "target", ["feat"])
-        
+
         # Should return dict with empty lists for each quantile
         for q in self.selector.quantiles:
             self.assertEqual(selected[q], [])

@@ -129,7 +129,7 @@ class BetSimulator:
 
         # Calculate stake based on current bankroll
         stake = f_fractional * self.current_bankroll
-        
+
         # Safety: Ensure we don't bet more than we have
         return min(stake, self.current_bankroll)
 
@@ -289,7 +289,7 @@ class BetSimulator:
             if key in actuals_lookup:
                 bet.resolve(actuals_lookup[key])
                 resolved_count += 1
-                
+
                 # Update bankroll based on outcome
                 if bet.outcome == BetOutcome.WIN:
                     # Return stake + profit

@@ -326,23 +326,25 @@ def fetch_player_advanced_stats(engine, season_id: str | None = None) -> pd.Data
             pgs.game_date::date as game_date,
             pgs.team_id,
             pgs.did_not_play,
-            pgs.offensive_rating,
-            pgs.defensive_rating,
-            pgs.net_rating,
-            pgs.true_shooting_percentage,
-            pgs.effective_field_goal_percentage,
-            pgs.usage_percentage,
-            pgs.assist_ratio,
-            pgs.assist_percentage,
-            pgs.assist_to_turnover,
-            pgs.turnover_ratio,
-            pgs.rebound_percentage,
-            pgs.offensive_rebound_percentage,
-            pgs.defensive_rebound_percentage,
-            pgs.pace,
-            pgs.possessions,
-            pgs.pie
+            adv.offensive_rating,
+            adv.defensive_rating,
+            adv.net_rating,
+            adv.true_shooting_percentage,
+            adv.effective_field_goal_percentage,
+            adv.usage_percentage,
+            adv.assist_ratio,
+            adv.assist_percentage,
+            adv.assist_to_turnover,
+            adv.turnover_ratio,
+            adv.rebound_percentage,
+            adv.offensive_rebound_percentage,
+            adv.defensive_rebound_percentage,
+            adv.pace,
+            adv.possessions,
+            adv.pie
         FROM player_game_stats pgs
+        LEFT JOIN player_game_advanced_stats adv
+            ON pgs.player_id = adv.player_id AND pgs.game_id = adv.game_id
         WHERE (pgs.did_not_play = false OR pgs.did_not_play IS NULL)
     """
 

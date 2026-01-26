@@ -131,7 +131,7 @@
 #             }
 #         )
 #         MockFeatureStore.return_value.get_training_dataset.return_value = df
-        
+
 #         mock_features = {0.1: ["f1"], 0.5: ["f1"], 0.9: ["f1"]}
 #         MockSelector.return_value.select_features_per_quantile.return_value = mock_features
 
@@ -178,7 +178,7 @@
 #             }
 #         )
 #         MockFeatureStore.return_value.get_training_dataset.return_value = df
-        
+
 #         mock_features = {0.1: ["f1"], 0.5: ["f1"], 0.9: ["f1"]}
 #         MockSelector.return_value.select_features_per_quantile.return_value = mock_features
 
@@ -237,7 +237,7 @@
 #             }
 #         )
 #         MockFeatureStore.return_value.get_training_dataset.return_value = df
-        
+
 #         mock_features = {0.1: ["selected_feat_1"], 0.9: ["selected_feat_1"]}
 #         MockSelector.return_value.select_features_per_quantile.return_value = mock_features
 
