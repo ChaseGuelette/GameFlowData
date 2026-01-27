@@ -1,6 +1,6 @@
 # models/quantile_trainer.py
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 import joblib
@@ -38,6 +38,23 @@ class QuantileModelConfig:
     val_fraction: float = 0.15
     random_state: int = 42
 
+    def to_dict(self) -> dict:
+        """Convert config to dictionary."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "QuantileModelConfig":
+        """Create config from dictionary."""
+        # Filter out unknown keys
+        valid_keys = cls.__annotations__.keys()
+        filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+        
+        # Handle tuple conversion for quantiles if it comes back as list
+        if "quantiles" in filtered_data:
+            filtered_data["quantiles"] = tuple(filtered_data["quantiles"])
+            
+        return cls(**filtered_data)
+
 
 # Map stat names to their feature lists
 STAT_FEATURES = {
@@ -67,7 +84,13 @@ class QuantileModelSuite:
             all_names.update(names)
         return sorted(all_names)
 
-    def train(self, X: pd.DataFrame, y: pd.Series, feature_names_per_quantile: dict[float, list[str]]) -> dict:
+    def train(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        feature_names_per_quantile: dict[float, list[str]],
+        sample_weight: pd.Series | None = None,
+    ) -> dict:
         """
         Train separate models for each quantile using per-quantile feature sets.
 
@@ -75,18 +98,29 @@ class QuantileModelSuite:
             X: DataFrame containing the union of all per-quantile features.
             y: Target series.
             feature_names_per_quantile: Dict mapping quantile -> list of feature names.
+            sample_weight: Optional sample weights for training.
 
         Returns dict of {quantile: validation_loss}.
         """
         self.feature_names_per_quantile = feature_names_per_quantile
 
         # Split for early stopping (preserve temporal order)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X,
-            y,
+        arrays = [X, y]
+        if sample_weight is not None:
+            arrays.append(sample_weight)
+
+        split_results = train_test_split(
+            *arrays,
             test_size=self.config.val_fraction,
             shuffle=False,
         )
+
+        X_train, X_val = split_results[0], split_results[1]
+        y_train, y_val = split_results[2], split_results[3]
+        
+        w_train = None
+        if sample_weight is not None:
+            w_train = split_results[4]
 
         results = {}
 
@@ -110,7 +144,13 @@ class QuantileModelSuite:
                 n_jobs=-1,
             )
 
-            model.fit(X_train_q, y_train, eval_set=[(X_val_q, y_val)], verbose=False)
+            model.fit(
+                X_train_q,
+                y_train,
+                sample_weight=w_train,
+                eval_set=[(X_val_q, y_val)],
+                verbose=False,
+            )
 
             train_preds = model.predict(X_train_q)
             train_coverage = (y_train <= train_preds).mean()
@@ -289,15 +329,22 @@ class PlayerPropsModelPipeline:
         # rate_features: {"pts": {0.1: [...], ...}, "reb": {...}, ...}
         self.rate_features: dict[str, dict[float, list[str]]] = {}
 
-    def train_minutes_model(self, df: pd.DataFrame) -> dict:
+    def train_minutes_model(self, df: pd.DataFrame, hyperparams: dict | None = None) -> dict:
         """Train the minutes prediction model with per-quantile features."""
         print("\n" + "=" * 60)
         print("TRAINING MINUTES MODEL")
         print("=" * 60)
 
+        # Use tuned hyperparams if provided
+        if hyperparams:
+            config = QuantileModelConfig.from_dict(hyperparams)
+            print(f"Using tuned hyperparams: lr={config.learning_rate}, depth={config.max_depth}, n_est={config.n_estimators}")
+        else:
+            config = self.config
+
         # Fallback if no per-quantile features set
         if not self.minutes_features:
-            self.minutes_features = {q: list(MINUTES_FEATURES) for q in self.config.quantiles}
+            self.minutes_features = {q: list(MINUTES_FEATURES) for q in config.quantiles}
 
         # Compute union of all per-quantile features
         all_features = set()
@@ -328,9 +375,16 @@ class PlayerPropsModelPipeline:
 
         return results
 
-    def train_rate_models(self, df: pd.DataFrame, stats: list[str] | None = None) -> dict:
+    def train_rate_models(
+        self,
+        df: pd.DataFrame,
+        stats: list[str] | None = None,
+        sample_weight: pd.Series | None = None,
+        hyperparams: dict | None = None,
+    ) -> dict:
         """Train rate models for each stat with per-quantile features."""
         stats = stats or ["pts", "reb", "ast", "threes"]
+        hyperparams = hyperparams or {}
 
         print("\n" + "=" * 60)
         print("TRAINING RATE MODELS")
@@ -341,10 +395,19 @@ class PlayerPropsModelPipeline:
         for stat in stats:
             print(f"\n--- Training {stat.upper()} rate model ---")
 
+            # Use tuned hyperparams if provided for this stat
+            if stat in hyperparams and hyperparams[stat]:
+                config = QuantileModelConfig.from_dict(hyperparams[stat])
+                print(
+                    f"Using tuned hyperparams: lr={config.learning_rate}, depth={config.max_depth}, n_est={config.n_estimators}"
+                )
+            else:
+                config = self.config
+
             # Fallback if not set
             if stat not in self.rate_features:
                 default_features = STAT_FEATURES.get(stat, RATE_FEATURES_PTS)
-                self.rate_features[stat] = {q: list(default_features) for q in self.config.quantiles}
+                self.rate_features[stat] = {q: list(default_features) for q in config.quantiles}
 
             stat_features_per_q = self.rate_features[stat]
 
@@ -371,11 +434,15 @@ class PlayerPropsModelPipeline:
             X = df.loc[valid_mask, available_features].fillna(0)
             y = df.loc[valid_mask, rate_col]
 
+            w = None
+            if sample_weight is not None:
+                w = sample_weight.loc[valid_mask]
+
             print(f"Training on {len(X):,} samples")
 
             # Train
-            model_suite = QuantileModelSuite(self.config)
-            results = model_suite.train(X, y, per_q_available)
+            model_suite = QuantileModelSuite(config)
+            results = model_suite.train(X, y, per_q_available, sample_weight=w)
 
             self.rate_models[stat] = model_suite
             all_results[stat] = results

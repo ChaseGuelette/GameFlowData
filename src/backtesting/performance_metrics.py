@@ -32,7 +32,8 @@ class PerformanceMetrics:
     pushes: int
     total_staked: float
     total_profit: float
-    roi: float
+    roi: float  # ROI on stakes (profit / total_staked)
+    return_on_capital: float  # ROI on starting bankroll (profit / starting_bankroll)
     hit_rate: float
 
     # Risk metrics
@@ -62,6 +63,7 @@ class PerformanceMetrics:
                 "total_staked": self.total_staked,
                 "total_profit": self.total_profit,
                 "roi": self.roi,
+                "return_on_capital": self.return_on_capital,
                 "hit_rate": self.hit_rate,
             },
             "risk": {
@@ -100,7 +102,8 @@ class PerformanceMetrics:
             f"  Hit Rate: {self.hit_rate:.1%}",
             f"  Total Staked: ${self.total_staked:,.2f}",
             f"  Total Profit: ${self.total_profit:,.2f}",
-            f"  ROI: {self.roi:.2%}",
+            f"  ROI (on stakes): {self.roi:.2%}",
+            f"  Return on Capital: {self.return_on_capital:.2%}",
             "",
             "RISK METRICS",
             f"  Sharpe Ratio: {self.sharpe_ratio:.2f}",
@@ -150,7 +153,7 @@ class MetricsCalculator:
                 Required columns: stat, edge, outcome, profit, stake
             starting_bankroll: Optional starting bankroll for equity-based risk metrics.
         """
-        betting_metrics = self._calculate_betting_metrics(bets_df)
+        betting_metrics = self._calculate_betting_metrics(bets_df, starting_bankroll)
         risk_metrics = self._calculate_risk_metrics(bets_df, starting_bankroll)
         calibration_results = self._calculate_calibration(predictions_df)
         by_stat = self._calculate_by_stat(bets_df)
@@ -166,6 +169,7 @@ class MetricsCalculator:
             total_staked=betting_metrics["total_staked"],
             total_profit=betting_metrics["total_profit"],
             roi=betting_metrics["roi"],
+            return_on_capital=betting_metrics["return_on_capital"],
             hit_rate=betting_metrics["hit_rate"],
             sharpe_ratio=risk_metrics["sharpe_ratio"],
             max_drawdown=risk_metrics["max_drawdown"],
@@ -177,7 +181,7 @@ class MetricsCalculator:
             by_edge_bucket=by_edge,
         )
 
-    def _calculate_betting_metrics(self, bets_df: pd.DataFrame) -> dict:
+    def _calculate_betting_metrics(self, bets_df: pd.DataFrame, starting_bankroll: float = 0.0) -> dict:
         """Calculate basic betting metrics."""
         if bets_df.empty:
             return {
@@ -188,6 +192,7 @@ class MetricsCalculator:
                 "total_staked": 0.0,
                 "total_profit": 0.0,
                 "roi": 0.0,
+                "return_on_capital": 0.0,
                 "hit_rate": 0.0,
             }
 
@@ -206,6 +211,7 @@ class MetricsCalculator:
             "total_staked": float(total_staked),
             "total_profit": float(total_profit),
             "roi": float(total_profit / total_staked) if total_staked > 0 else 0.0,
+            "return_on_capital": float(total_profit / starting_bankroll) if starting_bankroll > 0 else 0.0,
             "hit_rate": float(wins / (wins + losses)) if (wins + losses) > 0 else 0.0,
         }
 

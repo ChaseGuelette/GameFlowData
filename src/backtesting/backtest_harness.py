@@ -11,6 +11,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import scipy.stats as stats
 from sqlalchemy import bindparam, text
 
 from src.backtesting.bet_simulator import BetSimulator
@@ -38,9 +39,11 @@ class BacktestResult:
         self.predictions_df.to_csv(output_path / "predictions.csv", index=False)
         self.bets_df.to_csv(output_path / "bets.csv", index=False)
 
-        # Save metrics as JSON
+        # Save metrics as JSON (include config for visualization)
+        metrics_output = self.metrics.to_dict()
+        metrics_output["config"] = self.config
         with open(output_path / "metrics.json", "w") as f:
-            json.dump(self.metrics.to_dict(), f, indent=2, default=str)
+            json.dump(metrics_output, f, indent=2, default=str)
 
 
 @dataclass
@@ -151,25 +154,37 @@ class BacktestHarness:
 
         # Get actuals upfront so we can resolve bets daily
         actuals_df = self._get_actuals(start_date, end_date)
+        
+        # Get voids (DNPs) upfront
+        voids_df = self._get_voids(start_date, end_date)
 
         # Iterate through unique dates in the predictions
         if not predictions_df.empty:
             sorted_dates = sorted(predictions_df["game_date"].unique())
             for sim_date in sorted_dates:
-                # 1. Resolve pending bets from previous days (updates bankroll)
+                # 1. Resolve voids (refund DNPs) from previous days/current day
+                if len(voids_df) > 0:
+                    self._simulator.resolve_voids(voids_df)
+
+                # 2. Resolve pending bets from previous days (updates bankroll)
                 if len(actuals_df) > 0:
                     self._simulator.resolve_bets(actuals_df)
 
-                # 2. Get preds for this date
+                # 3. Get preds for this date
                 day_preds = predictions_df[predictions_df["game_date"] == sim_date]
 
-                # 3. Evaluate and place bets (updates simulator state using new bankroll)
+                # 4. Evaluate and place bets (updates simulator state using new bankroll)
                 self._simulator.evaluate_predictions(day_preds, sim_date)
 
         # Final resolution for any remaining bets
+        if len(voids_df) > 0:
+            voided = self._simulator.resolve_voids(voids_df)
+            if voided > 0:
+                logger.info(f"Final resolution: {voided} voided bets")
+                
         if len(actuals_df) > 0:
             resolved = self._simulator.resolve_bets(actuals_df)
-            logger.info(f"Final resolution: {resolved} bets")
+            logger.info(f"Final resolution: {resolved} resolved bets")
 
         # Get bets DataFrame
         bets_df = self._simulator.to_dataframe()
@@ -257,6 +272,7 @@ class BacktestHarness:
                             "team_id": player.get("team_id"),
                             "stat": stat,
                             "pred_mean": pred.mean,
+                            "pred_std": pred.samples.std(),
                             "pred_median": pred.median,
                             "pred_q10": pred.q10,
                             "pred_q25": pred.q25,
@@ -286,7 +302,7 @@ class BacktestHarness:
         return predictions_df
 
     def _filter_best_bets(self, predictions_df: pd.DataFrame) -> pd.DataFrame:
-        """Select single best betting opportunity per player/stat."""
+        """Select single best betting opportunity per player/game (One Bet Per Player)."""
         if predictions_df.empty:
             return predictions_df
 
@@ -296,8 +312,9 @@ class BacktestHarness:
         # Sort by max edge descending
         predictions_df = predictions_df.sort_values("max_edge", ascending=False)
 
-        # Deduplicate to keep best line per player/stat
-        predictions_df = predictions_df.drop_duplicates(subset=["player_id", "game_id", "stat"], keep="first")
+        # Deduplicate to keep best line per player (Limit Correlation Risk)
+        # Modified: Subset now excludes "stat" to ensure only ONE bet per player per game
+        predictions_df = predictions_df.drop_duplicates(subset=["player_id", "game_id"], keep="first")
 
         return predictions_df
 
@@ -417,27 +434,29 @@ class BacktestHarness:
             how="left",
         )
 
-        # Calculate model probability of over
+        # Calculate model probability of over using Z-Score and CDF
         def estimate_over_prob(row):
             if pd.isna(row.get("line")):
                 return None
 
-            quantiles = [0.10, 0.25, 0.50, 0.75, 0.90]
-            values = [
-                row["pred_q10"],
-                row["pred_q25"],
-                row["pred_q50"],
-                row["pred_q75"],
-                row["pred_q90"],
-            ]
+            mean_pred = row.get("pred_mean")
+            std_dev = row.get("pred_std")
 
-            if row["line"] <= values[0]:
-                return 0.95
-            elif row["line"] >= values[-1]:
-                return 0.05
-            else:
-                prob_under = np.interp(row["line"], values, quantiles)
-                return 1 - prob_under
+            if pd.isna(mean_pred) or pd.isna(std_dev) or std_dev == 0:
+                # Fallback to 50% or None if critical data missing
+                return 0.5
+
+            line = row["line"]
+
+            # Calculate Z-score
+            z_score = (line - mean_pred) / std_dev
+
+            # Use survival function (1 - CDF) for probability of going OVER
+            prob_over = stats.norm.sf(z_score)
+
+            # Apply sanity caps (min 5%, max 90%)
+            # This prevents extreme Kelly bets on outliers
+            return min(max(prob_over, 0.05), 0.90)
 
         merged["over_prob"] = merged.apply(estimate_over_prob, axis=1)
         merged["under_prob"] = 1 - merged["over_prob"]
@@ -491,6 +510,23 @@ class BacktestHarness:
         )
 
         return melted
+
+    def _get_voids(self, start_date: date, end_date: date) -> pd.DataFrame:
+        """Get players who did not play (voids) for all games in range."""
+        query = """
+            SELECT
+                player_id,
+                game_id
+            FROM player_game_stats
+            WHERE game_date >= :start_date
+              AND game_date <= :end_date
+              AND did_not_play IS TRUE
+        """
+
+        with self.engine.connect() as conn:
+            df = pd.read_sql(text(query), conn, params={"start_date": start_date, "end_date": end_date})
+            
+        return df
 
     def _merge_actuals(self, predictions_df: pd.DataFrame, actuals_df: pd.DataFrame) -> pd.DataFrame:
         """Merge actual outcomes into predictions."""

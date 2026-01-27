@@ -70,3 +70,7 @@ node_modules\
 
 # Ignore model artifacts and logs
 src/models/artifacts/
+
+#Ignore backtest results
+backtest_results/
+**/bankroll_chart.html

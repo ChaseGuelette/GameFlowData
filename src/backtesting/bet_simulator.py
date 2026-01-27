@@ -301,6 +301,38 @@ class BetSimulator:
 
         return resolved_count
 
+    def resolve_voids(self, voids_df: pd.DataFrame) -> int:
+        """
+        Resolve bets as PUSH (void) for players who did not play.
+        
+        Expected columns: player_id, game_id
+        """
+        if voids_df.empty:
+            return 0
+            
+        voided_count = 0
+        
+        # Build set of (player_id, game_id) for fast lookup
+        # We don't need 'stat' because if a player didn't play, ALL their props are void
+        void_keys = set()
+        for _, row in voids_df.iterrows():
+            void_keys.add((row["player_id"], row["game_id"]))
+            
+        for bet in self.bets:
+            if bet.outcome is not None:
+                continue
+                
+            if (bet.player_id, bet.game_id) in void_keys:
+                bet.outcome = BetOutcome.PUSH
+                bet.actual = 0  # No stats recorded
+                bet.profit = 0.0
+                
+                # Refund stake
+                self.current_bankroll += bet.stake
+                voided_count += 1
+                
+        return voided_count
+
     def to_dataframe(self) -> pd.DataFrame:
         """Convert bets to DataFrame for analysis."""
         records = []
