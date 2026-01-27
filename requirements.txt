@@ -8,8 +8,8 @@ psycopg2==2.9.11
 python-dotenv==1.0.1
 pytz==2025.2
 requests==2.32.5
-scikit-learn==1.6.1
-scipy==1.15.1
+scikit-learn==1.8.0
+scipy==1.17.0
 sqlalchemy==2.0.46
 tqdm==4.67.1
 xgboost==3.1.3

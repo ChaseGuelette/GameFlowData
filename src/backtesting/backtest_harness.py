@@ -281,6 +281,8 @@ class BacktestHarness:
                             "pred_q90": pred.q90,
                         }
                     )
+                    # Store samples separately to avoid DataFrame memory bloat
+                    prediction_samples[(player["player_id"], player["game_id"], stat)] = pred.samples
 
             except Exception as e:
                 logger.debug(f"Error predicting for player {player['player_id']}: {e}")
@@ -294,7 +296,7 @@ class BacktestHarness:
         # Get prop lines and calculate edges
         lines_df = self._get_lines_for_date(game_date, [g["game_id"] for g in games])
         if len(lines_df) > 0:
-            predictions_df = self._calculate_edges(predictions_df, lines_df)
+            predictions_df = self._calculate_edges(predictions_df, lines_df, prediction_samples)
 
             # Filter to best line per player/stat (Line Shopping)
             predictions_df = self._filter_best_bets(predictions_df)
@@ -417,8 +419,8 @@ class BacktestHarness:
             logger.warning(f"Error fetching lines for {game_date}: {e}")
             return pd.DataFrame()
 
-    def _calculate_edges(self, predictions_df: pd.DataFrame, lines_df: pd.DataFrame) -> pd.DataFrame:
-        """Add edge calculations to predictions."""
+    def _calculate_edges(self, predictions_df: pd.DataFrame, lines_df: pd.DataFrame, prediction_samples: dict) -> pd.DataFrame:
+        """Add edge calculations to predictions using empirical CDF from Monte Carlo samples."""
         market_to_stat = {
             "player_points": "pts",
             "player_rebounds": "reb",
@@ -434,25 +436,28 @@ class BacktestHarness:
             how="left",
         )
 
-        # Calculate model probability of over using Z-Score and CDF
+        # Calculate model probability of over using empirical CDF from Monte Carlo samples
         def estimate_over_prob(row):
             if pd.isna(row.get("line")):
                 return None
 
-            mean_pred = row.get("pred_mean")
-            std_dev = row.get("pred_std")
-
-            if pd.isna(mean_pred) or pd.isna(std_dev) or std_dev == 0:
-                # Fallback to 50% or None if critical data missing
-                return 0.5
-
             line = row["line"]
+            # Look up samples from the dictionary using the composite key
+            samples = prediction_samples.get((row["player_id"], row["game_id"], row["stat"]))
 
-            # Calculate Z-score
-            z_score = (line - mean_pred) / std_dev
+            # Primary: empirical CDF from Monte Carlo samples
+            if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
+                prob_over = float((samples > line).mean())
+            else:
+                # Fallback: Gaussian approximation (no samples available)
+                mean_pred = row.get("pred_mean")
+                std_dev = row.get("pred_std")
 
-            # Use survival function (1 - CDF) for probability of going OVER
-            prob_over = stats.norm.sf(z_score)
+                if pd.isna(mean_pred) or pd.isna(std_dev) or std_dev == 0:
+                    return 0.5
+
+                z_score = (line - mean_pred) / std_dev
+                prob_over = stats.norm.sf(z_score)
 
             # Apply sanity caps (min 5%, max 90%)
             # This prevents extreme Kelly bets on outliers
