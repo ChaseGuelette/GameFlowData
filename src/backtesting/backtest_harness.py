@@ -15,6 +15,7 @@ from sqlalchemy import bindparam, text
 
 from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
+from src.models.black_litterman import BlackLittermanBlender
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class BacktestHarness:
     stats: list[str] = field(default_factory=lambda: ["pts", "reb", "ast"])
     min_minutes_avg: int = 10
     allowed_bets: list[tuple[str, str]] | None = None  # e.g., [("pts", "under"), ("reb", "over")]
+    bl_blender: BlackLittermanBlender | None = None  # Black-Litterman probability blender
 
     # Internal state
     _simulator: BetSimulator = field(init=False)
@@ -214,6 +216,7 @@ class BacktestHarness:
                 "bookmakers": self.bookmakers,
                 "stats": self.stats,
                 "allowed_bets": [f"{s}:{side}" for s, side in self.allowed_bets] if self.allowed_bets else None,
+                "bl_tau": self.bl_blender.config.tau if self.bl_blender else None,
             },
         )
 
@@ -530,7 +533,12 @@ class BacktestHarness:
     def _calculate_edges(
         self, predictions_df: pd.DataFrame, lines_df: pd.DataFrame, prediction_samples: dict
     ) -> pd.DataFrame:
-        """Add edge calculations to predictions using empirical CDF from Monte Carlo samples."""
+        """Add edge calculations to predictions using empirical CDF from Monte Carlo samples.
+
+        When a Black-Litterman blender is configured, probabilities are blended with
+        the devigged market prior in log-odds space. Otherwise, raw empirical CDF
+        probabilities are used (original behavior).
+        """
         market_to_stat = {
             "player_points": "pts",
             "player_rebounds": "reb",
@@ -546,37 +554,7 @@ class BacktestHarness:
             how="left",
         )
 
-        # Calculate model probability of over using empirical CDF from Monte Carlo samples
-        def estimate_over_prob(row):
-            if pd.isna(row.get("line")):
-                return None
-
-            line = row["line"]
-            # Look up samples from the dictionary using the composite key
-            samples = prediction_samples.get((row["player_id"], row["game_id"], row["stat"]))
-
-            # Primary: empirical CDF from Monte Carlo samples
-            if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
-                prob_over = float((samples > line).mean())
-            else:
-                # Fallback: Gaussian approximation (no samples available)
-                mean_pred = row.get("pred_mean")
-                std_dev = row.get("pred_std")
-
-                if pd.isna(mean_pred) or pd.isna(std_dev) or std_dev == 0:
-                    return 0.5
-
-                z_score = (line - mean_pred) / std_dev
-                prob_over = stats.norm.sf(z_score)
-
-            # Apply sanity caps (min 5%, max 90%)
-            # This prevents extreme Kelly bets on outliers
-            return min(max(prob_over, 0.05), 0.90)
-
-        merged["over_prob"] = merged.apply(estimate_over_prob, axis=1)
-        merged["under_prob"] = 1 - merged["over_prob"]
-
-        # Convert odds to implied probability
+        # Convert odds to implied probability (raw, with vig — used as baseline when BL is off)
         def odds_to_prob(odds):
             if pd.isna(odds):
                 return None
@@ -585,10 +563,89 @@ class BacktestHarness:
             else:
                 return abs(odds) / (abs(odds) + 100)
 
-        merged["implied_over"] = merged["over_odds"].apply(odds_to_prob)
-        merged["implied_under"] = merged["under_odds"].apply(odds_to_prob)
+        if self.bl_blender is not None:
+            # ── Black-Litterman path ──
+            # Uses devigged market probs, per-prediction confidence, and log-odds blending.
+            bl_results = []
+            for _, row in merged.iterrows():
+                if pd.isna(row.get("line")) or pd.isna(row.get("over_odds")) or pd.isna(row.get("under_odds")):
+                    bl_results.append({
+                        "model_over": None, "model_under": None,
+                        "market_over": None, "market_under": None,
+                        "confidence": None,
+                        "posterior_over": None, "posterior_under": None,
+                    })
+                    continue
 
-        # Calculate edges
+                samples = prediction_samples.get((row["player_id"], row["game_id"], row["stat"]))
+
+                if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
+                    result = self.bl_blender.blend_prediction(
+                        samples=samples,
+                        line=row["line"],
+                        over_odds=int(row["over_odds"]),
+                        under_odds=int(row["under_odds"]),
+                    )
+                else:
+                    # No samples — fall back to market prior (no bet will be placed)
+                    try:
+                        mkt_over, mkt_under = self.bl_blender.devig(
+                            int(row["over_odds"]), int(row["under_odds"])
+                        )
+                    except Exception:
+                        mkt_over, mkt_under = 0.5, 0.5
+
+                    result = {
+                        "model_over": 0.5, "model_under": 0.5,
+                        "market_over": mkt_over, "market_under": mkt_under,
+                        "confidence": 0.0,
+                        "posterior_over": mkt_over, "posterior_under": mkt_under,
+                    }
+
+                bl_results.append(result)
+
+            bl_df = pd.DataFrame(bl_results)
+            for col in bl_df.columns:
+                merged[col] = bl_df[col].values
+
+            # Use posterior probs for betting decisions
+            merged["over_prob"] = merged["posterior_over"]
+            merged["under_prob"] = merged["posterior_under"]
+
+            # Use devigged market probs as the baseline for edge calculation
+            merged["implied_over"] = merged["market_over"]
+            merged["implied_under"] = merged["market_under"]
+
+        else:
+            # ── Original path (no BL) ──
+            def estimate_over_prob(row):
+                if pd.isna(row.get("line")):
+                    return None
+
+                line = row["line"]
+                samples = prediction_samples.get((row["player_id"], row["game_id"], row["stat"]))
+
+                if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
+                    prob_over = float((samples > line).mean())
+                else:
+                    mean_pred = row.get("pred_mean")
+                    std_dev = row.get("pred_std")
+
+                    if pd.isna(mean_pred) or pd.isna(std_dev) or std_dev == 0:
+                        return 0.5
+
+                    z_score = (line - mean_pred) / std_dev
+                    prob_over = stats.norm.sf(z_score)
+
+                return min(max(prob_over, 0.05), 0.90)
+
+            merged["over_prob"] = merged.apply(estimate_over_prob, axis=1)
+            merged["under_prob"] = 1 - merged["over_prob"]
+
+            merged["implied_over"] = merged["over_odds"].apply(odds_to_prob)
+            merged["implied_under"] = merged["under_odds"].apply(odds_to_prob)
+
+        # Calculate edges (works for both paths)
         merged["over_edge"] = merged["over_prob"] - merged["implied_over"]
         merged["under_edge"] = merged["under_prob"] - merged["implied_under"]
 

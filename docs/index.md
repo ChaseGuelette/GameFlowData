@@ -15,6 +15,7 @@
 
 ## Models
 - [Feature Store](feature_store_documentation.md) - Training and inference feature assembly.
+- [Black-Litterman Blending](black_litterman_documentation.md) - Probability blending with market prior.
 
 ## Database and Tables
 - [DB Client](db_client_documentation.md) - Database engine access and connectivity checks.

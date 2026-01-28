@@ -78,26 +78,24 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
   `feature_store.py`. Keep `line_spread` in MINUTES_FEATURES only (it genuinely predicts
   playing time and isn't directly bet on). Retrain and re-backtest.
 
-- [ ] **A3. Implement Black-Litterman blending layer** *(NOW TOP PRIORITY)*
-  New module (`src/models/black_litterman.py`) between `MonteCarloPredictor` and `BetSimulator`.
+- [x] **A3. Implement Black-Litterman blending layer** *(IMPLEMENTED — 2026-01-28)*
+  New module `src/models/black_litterman.py` between `MonteCarloPredictor` and `BetSimulator`.
   The A1 diagnostic proved this is the correct fix: the model's raw P(over) is useless
   (Brier 0.2705), but the market is well-calibrated (Brier 0.2495). BL anchors to the market
   prior and only deviates when the model shows high-confidence disagreement.
 
-  **Design:**
-  - **Prior**: Devigged market probability (from prop odds, vig removed)
+  **Implementation (completed):**
+  - `BlackLittermanBlender` class with `BLConfig` dataclass in `src/models/black_litterman.py`
+  - **Prior**: Devigged market probability via multiplicative normalization (equivalent to Shin's method for 2-outcome markets)
   - **View**: Model's empirical P(over) from MC samples
-  - **Confidence**: Per-prediction confidence from MC distribution properties
-    (z-score of line vs distribution center, distribution width)
-  - **Tau parameter**: Global scaling of model influence (start conservative, ~0.10–0.20)
-  - **Formula**: `posterior = market_prob + tau × confidence × (model_prob − market_prob)`
+  - **Confidence**: Z-score based: `z = |mean - line| / std`, `confidence = 1 - exp(-0.5z²)`
+  - **Blending**: Log-odds space (not linear probability) to handle boundary effects:
+    `posterior_logit = market_logit + w × (model_logit - market_logit)` where `w = min(tau × confidence, max_weight)`
+  - **Integration**: Wired into `_calculate_edges()` in `backtest_harness.py`. Enabled via `--bl-tau` CLI flag on `run_backtest.py`. Disabled by default (backward compatible).
+  - **Diagnostics**: Extra columns in predictions CSV: `model_over/under`, `market_over/under`, `confidence`, `posterior_over/under`
+  - **Tests**: 39 unit tests in `tests/test_black_litterman.py` (all passing)
 
-  When uncertain or model agrees with market → posterior ≈ market (no bet).
-  When confident and disagreeing → posterior deviates (potential edge).
-  No retraining needed — this is a post-prediction adjustment.
-
-  **Integration**: Hook into `_calculate_edges()` in `backtest_harness.py`.
-  Add `--bl-tau` CLI flag to `run_backtest.py`.
+  **Next step**: Run validation backtest with `--bl-tau 0.05` to confirm Brier score improvement and characterize edge distribution. Tau sweep `[0.01, 0.02, 0.05, 0.10, 0.15, 0.20]` on held-out period.
 
 - [ ] **A4. Residual modeling (Option A — feature-based)**
   Add the prop line as a centering feature to rate models. The model learns deviations from
@@ -223,7 +221,7 @@ backtest with positive ROI.
 | Item | Effort | Expected Value | Notes |
 |------|--------|----------------|-------|
 | ~~A1 (Market neutralization diagnostic)~~ | ~~Trivial~~ | ~~Critical~~ | **DONE** — R²=0.10, Brier 0.2705, overconfidence not correlation |
-| **A3 (Black-Litterman blending)** | **Medium** | **Critical** | **DO NEXT** — anchors to market prior, fixes overconfidence |
+| ~~A3 (Black-Litterman blending)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — Implemented in `black_litterman.py`, 39 tests passing. Needs validation backtest. |
 | A2 (Remove line_total) | Low | High | Reduces market leakage, increases independent signal |
 | B2 (Rest/B2B features) | Low | Medium-High | Known strong signal, easy to compute |
 | B3 (L3 + trend features) | Low | Medium | More granular than L5/L15 |

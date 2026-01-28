@@ -76,6 +76,12 @@ def main():
         default=None,
         help="Stat:side pairs to allow (e.g., pts:under reb:over). If omitted, all combos are allowed.",
     )
+    parser.add_argument(
+        "--bl-tau",
+        type=float,
+        default=None,
+        help="Black-Litterman tau parameter. Enables BL blending when set (e.g., 0.05=conservative). None=disabled.",
+    )
 
     args = parser.parse_args()
 
@@ -111,6 +117,14 @@ def main():
     logger.info(f"Initializing Monte Carlo predictor (n_samples={args.n_samples})...")
     predictor = MonteCarloPredictor(pipeline, n_samples=args.n_samples)
 
+    # Configure Black-Litterman blender (optional)
+    bl_blender = None
+    if args.bl_tau is not None:
+        from src.models.black_litterman import BlackLittermanBlender, BLConfig
+
+        bl_blender = BlackLittermanBlender(BLConfig(tau=args.bl_tau))
+        logger.info(f"Black-Litterman blending enabled (tau={args.bl_tau})")
+
     # Configure and run harness
     harness = BacktestHarness(
         engine=engine,
@@ -123,6 +137,7 @@ def main():
         kelly_fraction=args.kelly_fraction,
         bookmakers=args.bookmakers,
         allowed_bets=allowed_bets,
+        bl_blender=bl_blender,
     )
 
     if allowed_bets:

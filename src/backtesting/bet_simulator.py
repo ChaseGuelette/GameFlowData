@@ -45,6 +45,9 @@ class Bet:
     implied_prob: float
     edge: float
 
+    # BL diagnostic (optional)
+    posterior_prob: float | None = None  # BL-blended probability (when BL is enabled)
+
     # Outcome (filled after result)
     actual: float | None = None
     outcome: BetOutcome | None = None
@@ -246,6 +249,9 @@ class BetSimulator:
                         model_prob=row["over_prob"],
                         implied_prob=row["implied_over"],
                     )
+                    # Store BL posterior if available
+                    if "posterior_over" in row.index and not pd.isna(row.get("posterior_over")):
+                        bet.posterior_prob = row["posterior_over"]
                     new_bets.append(bet)
 
             # Check under bet (skip if not in allowlist)
@@ -267,6 +273,9 @@ class BetSimulator:
                         model_prob=row["under_prob"],
                         implied_prob=row["implied_under"],
                     )
+                    # Store BL posterior if available
+                    if "posterior_under" in row.index and not pd.isna(row.get("posterior_under")):
+                        bet.posterior_prob = row["posterior_under"]
                     new_bets.append(bet)
 
         return new_bets
@@ -355,6 +364,7 @@ class BetSimulator:
                     "model_prob": bet.model_prob,
                     "implied_prob": bet.implied_prob,
                     "edge": bet.edge,
+                    "posterior_prob": bet.posterior_prob,
                     "actual": bet.actual,
                     "outcome": bet.outcome.value if bet.outcome else None,
                     "profit": bet.profit,

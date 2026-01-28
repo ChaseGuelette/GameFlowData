@@ -44,7 +44,7 @@ GameFlowData/
 │   ├── models/                 # ML core: features, training, inference
 │   ├── backtesting/            # Historical replay and bet simulation
 │   └── orchestration/          # Daily workflow coordination
-├── tests/                      # Unit and integration tests (32 modules)
+├── tests/                      # Unit and integration tests (33 modules)
 ├── docs/                       # Component-level documentation
 ├── notebooks/                  # Jupyter notebooks for research
 ├── database/                   # Schema definitions (schema.sql)
@@ -171,6 +171,29 @@ The modeling engine predicts the probability distribution of player stats.
 - Checks: P(actual < predicted_q) ≈ q for each quantile.
 - Tolerance-based validation: `CALIBRATION_TOLERANCE = 0.05`, `CALIBRATION_HARD_FAIL = 0.10`.
 
+#### Stage E: Probability Blending (`black_litterman.py`)
+
+Anchors the model's overconfident probability estimates to the market's well-calibrated prior using a log-odds Bayesian blend. Sits between Monte Carlo output and the bet simulator.
+
+- `BlackLittermanBlender` class with `BLConfig` dataclass.
+- **Prior:** Devigged sportsbook probability (vig removed via multiplicative normalization, equivalent to Shin's method for 2-outcome markets).
+- **View:** Model's empirical P(over) from MC samples.
+- **Confidence:** Per-prediction confidence from MC distribution properties:
+  ```
+  z = |mean(samples) - line| / std(samples)
+  confidence = 1 - exp(-0.5 * z²)
+  ```
+  z~0 → confidence~0 (line at center, posterior ≈ market). z~2 → confidence~0.86 (strong model disagreement).
+- **Blending (log-odds space):**
+  ```
+  w = min(tau × confidence, max_weight)
+  posterior_logit = market_logit + w × (model_logit - market_logit)
+  posterior = sigmoid(posterior_logit)
+  ```
+- **Parameters:** `tau` (global scaling, 0.01–0.30, default 0.05), `max_weight` (hard cap, default 0.50), `min_prob`/`max_prob` (clamping to avoid log(0)).
+- **Key property:** When tau=0 or confidence=0, posterior = market → no edge → no bet. Model influence scales with both global trust (tau) and per-prediction confidence.
+- **Integration:** Wired into `_calculate_edges()` in `backtest_harness.py` via `--bl-tau` CLI flag. Disabled by default (backward compatible).
+
 #### Training Orchestrator (`train_pipeline.py`)
 
 - `TrainingOrchestrator` class — orchestrates full training workflow.
@@ -197,8 +220,8 @@ A simulation environment to validate betting strategies.
 
 | Module | Purpose |
 |--------|---------|
-| `backtest_harness.py` | Core engine — day-by-day historical replay with blind predictions. `BacktestResult` dataclass. |
-| `bet_simulator.py` | `Bet` and `BetOutcome` classes. `BetSide` enum (OVER/UNDER). P&L tracking per bet. |
+| `backtest_harness.py` | Core engine — day-by-day historical replay with blind predictions. `BacktestResult` dataclass. Integrates optional BL blending in `_calculate_edges()`. |
+| `bet_simulator.py` | `Bet` and `BetOutcome` classes. `BetSide` enum (OVER/UNDER). P&L tracking per bet. Stores BL `posterior_prob` diagnostic. |
 | `performance_metrics.py` | `PerformanceMetrics` dataclass — ROI, hit rate, Sharpe ratio, drawdown, Brier score. |
 | `run_backtest.py` | CLI entry point. Accepts date range, model paths, output directory. |
 | `visualize_results.py` | Plotly-based visualization — equity curves, P&L distribution, quantile coverage. |
@@ -210,7 +233,9 @@ A simulation environment to validate betting strategies.
     - **Line Shopping:** Selects the best available line across bookmakers.
     - **Kelly Criterion:** Sizes bets based on calculated edge and bankroll.
     - **ROI Analysis:** Tracks bankroll growth, drawdown, and win rates.
-- **Edge Calculation:** `_calculate_edges()` method determines bet eligibility. Planned hook for Black-Litterman blending (Track A3).
+- **Edge Calculation:** `_calculate_edges()` method determines bet eligibility. Supports two modes:
+    - **Default (BL disabled):** Raw empirical CDF → edge vs raw implied probability.
+    - **BL enabled (`--bl-tau`):** Devigged market prior + log-odds BL blending → edge = posterior_prob - devigged_market_prob. Adds diagnostic columns: `model_over/under`, `market_over/under`, `confidence`, `posterior_over/under`.
 
 ### 7. Orchestration (`src/orchestration/`)
 
@@ -274,6 +299,7 @@ graph TD
         Trainer[Quantile Trainer]
         Calibrator[Calibration Evaluator]
         MC[Monte Carlo Sim]
+        BL[Black-Litterman Blender]
     end
 
     subgraph "Execution"
@@ -305,6 +331,8 @@ graph TD
     Trainer --> Calibrator
     Calibrator --> MC
     MC --> Daily
+    MC --> BL
+    BL --> Backtest
     MC --> Backtest
     Backtest --> BetSim
     BetSim --> PerfMetrics
@@ -338,7 +366,9 @@ python -m src.models.hyperparameter_tuner [--n-trials 50] [--timeout 3600]
 
 ### Backtesting
 ```bash
-python src/backtesting/run_backtest.py --start-date YYYY-MM-DD --end-date YYYY-MM-DD
+python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD
+python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD --bl-tau 0.05  # Enable BL blending
+python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD --allowed-bets pts:under reb:over
 python src/backtesting/visualize_results.py --results-dir backtest_results/
 ```
 
@@ -353,7 +383,7 @@ python src/orchestration/run_daily.py
 
 **Framework:** Pytest with pytest-cov (60% coverage target).
 
-**Test Organization:** 32 test modules in `tests/` mirroring `src/` structure. Each source module has a corresponding `test_*.py`.
+**Test Organization:** 33 test modules in `tests/` mirroring `src/` structure. Each source module has a corresponding `test_*.py`.
 
 **Test Categories (markers):**
 - `unit` — Isolated logic tests with mocks.
@@ -399,8 +429,10 @@ See `ACTIONITEMS.md` for full details.
 
 **Root finding (2026-01-28):** The model is catastrophically overconfident on probability estimates. Quantile calibration (Q10–Q90) is good, but translating MC distributions into betting probabilities via `(samples > line).mean()` amplifies small mean shifts into extreme P(over) values. Brier score 0.2705 (worse than naive 0.2500).
 
+**Black-Litterman blending (A3) — Implemented (2026-01-28):** The BL blending layer is complete and integrated into the backtesting pipeline. Anchors model probabilities to the devigged market prior using log-odds space blending with per-prediction z-score confidence. Activated via `--bl-tau` flag (default: disabled). Needs validation backtest to confirm Brier score improvement and edge characteristics.
+
 **Active tracks:**
-- **Track A** (Critical): Probability recalibration via Black-Litterman blending — anchor model output to market prior.
+- **Track A** (Critical): Probability recalibration — A3 (BL blending) implemented, A2 (remove line_total) and A4/A5 (residual modeling) pending.
 - **Track B** (Parallel): New signal sources — injury/lineup context, rest/back-to-back, short-window trends, minutes stability.
 - **Track C**: Calibration refinement — Q10 over-coverage investigation.
 - **Track D**: Deprioritized model items (pending recalibration).

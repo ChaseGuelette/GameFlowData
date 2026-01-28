@@ -33,6 +33,7 @@ data/
 *.log
 .DS_Store
 Thumbs.db
+nul
 
 # Solokit session files
 .session/briefings/
