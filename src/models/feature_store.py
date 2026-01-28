@@ -74,7 +74,6 @@ RATE_FEATURES_PTS = [
     "opp_avg_def_rtg_l5",
     "opp_pos_off_rtg_allowed_l5",
     "opp_pos_off_rtg_allowed_l15",
-    "line_total",
     "is_home",
 ]
 

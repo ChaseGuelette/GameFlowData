@@ -72,11 +72,12 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
   **Conclusion: the problem is probability miscalibration, not market correlation.**
   Black-Litterman blending is the correct first fix — anchor to market prior.
 
-- [ ] **A2. Remove `line_total` from rate features**
-  `line_total` (Vegas game total) is in PTS, AST, and THREES rate features. It's nearly a
-  direct restatement of the scoring market. Remove it from all `RATE_FEATURES_*` lists in
-  `feature_store.py`. Keep `line_spread` in MINUTES_FEATURES only (it genuinely predicts
-  playing time and isn't directly bet on). Retrain and re-backtest.
+- [x] **A2. Remove `line_total` from rate features** *(DONE — 2026-01-28)*
+  `line_total` (Vegas game total) was in `RATE_FEATURES_PTS`. Removed it to eliminate market
+  leakage. `line_total` remains in `MINUTES_FEATURES` (genuinely predicts playing time).
+  `line_spread` remains in `MINUTES_FEATURES` only.
+  **Note:** Existing model artifacts were trained WITH `line_total` in PTS features. Models
+  must be retrained for this change to take effect. Re-backtest after retraining.
 
 - [x] **A3. Implement Black-Litterman blending layer** *(IMPLEMENTED — 2026-01-28)*
   New module `src/models/black_litterman.py` between `MonteCarloPredictor` and `BetSimulator`.
@@ -222,7 +223,7 @@ backtest with positive ROI.
 |------|--------|----------------|-------|
 | ~~A1 (Market neutralization diagnostic)~~ | ~~Trivial~~ | ~~Critical~~ | **DONE** — R²=0.10, Brier 0.2705, overconfidence not correlation |
 | ~~A3 (Black-Litterman blending)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — Implemented in `black_litterman.py`, 39 tests passing. Needs validation backtest. |
-| A2 (Remove line_total) | Low | High | Reduces market leakage, increases independent signal |
+| ~~A2 (Remove line_total)~~ | ~~Low~~ | ~~High~~ | **DONE** — Removed from `RATE_FEATURES_PTS`. Needs retrain + re-backtest. |
 | B2 (Rest/B2B features) | Low | Medium-High | Known strong signal, easy to compute |
 | B3 (L3 + trend features) | Low | Medium | More granular than L5/L15 |
 | B1 (Injury features) | Medium-High | High | Biggest feature gap, needs data acquisition |
