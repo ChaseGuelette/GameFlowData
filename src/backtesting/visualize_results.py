@@ -37,7 +37,7 @@ def load_data(results_dir: Path) -> tuple[pd.DataFrame, float]:
     # Load starting bankroll from metrics config if available
     starting_bankroll = 10000.0  # Default
     if metrics_path.exists():
-        with open(metrics_path, "r") as f:
+        with open(metrics_path) as f:
             metrics = json.load(f)
             # Try to find starting bankroll in nested config or root
             if "config" in metrics and "starting_bankroll" in metrics["config"]:
@@ -57,7 +57,7 @@ def generate_chart(df: pd.DataFrame, starting_bankroll: float, output_path: Path
     # 2. Calculate Cumulative Bankroll
     # We need a starting point. Let's create a row for "Day 0"
     start_date = daily_stats["game_date"].min() - pd.Timedelta(days=1)
-    
+
     # Calculate cumulative profit
     daily_stats["cumulative_profit"] = daily_stats["profit"].cumsum()
     daily_stats["bankroll"] = starting_bankroll + daily_stats["cumulative_profit"]
@@ -144,16 +144,16 @@ def main():
         return
 
     print(f"Processing results from {results_dir}...")
-    
+
     try:
         df, starting_bankroll = load_data(results_dir)
-        
+
         output_file = results_dir / "bankroll_chart.html"
         generate_chart(df, starting_bankroll, output_file)
-        
+
         # Open in browser
         webbrowser.open(output_file.absolute().as_uri())
-        
+
     except Exception as e:
         print(f"An error occurred: {e}")
 

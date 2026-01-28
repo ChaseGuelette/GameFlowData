@@ -1,6 +1,6 @@
 # models/quantile_trainer.py
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import joblib
@@ -48,11 +48,11 @@ class QuantileModelConfig:
         # Filter out unknown keys
         valid_keys = cls.__annotations__.keys()
         filtered_data = {k: v for k, v in data.items() if k in valid_keys}
-        
+
         # Handle tuple conversion for quantiles if it comes back as list
         if "quantiles" in filtered_data:
             filtered_data["quantiles"] = tuple(filtered_data["quantiles"])
-            
+
         return cls(**filtered_data)
 
 
@@ -117,7 +117,7 @@ class QuantileModelSuite:
 
         X_train, X_val = split_results[0], split_results[1]
         y_train, y_val = split_results[2], split_results[3]
-        
+
         w_train = None
         if sample_weight is not None:
             w_train = split_results[4]
@@ -202,9 +202,7 @@ class QuantileModelSuite:
                 if size < 50:
                     continue
 
-                subset_idx = np.random.RandomState(42).choice(
-                    len(X_train), size=size, replace=False
-                )
+                subset_idx = np.random.RandomState(42).choice(len(X_train), size=size, replace=False)
                 X_subset = X_train.iloc[subset_idx][q_features]
                 y_subset = y_train.iloc[subset_idx]
 
@@ -234,9 +232,7 @@ class QuantileModelSuite:
                         "val_coverage": val_cov,
                     }
                 )
-                print(
-                    f"  Size {size} ({fraction:.0%}): Train={train_cov:.3f}, Val={val_cov:.3f}"
-                )
+                print(f"  Size {size} ({fraction:.0%}): Train={train_cov:.3f}, Val={val_cov:.3f}")
 
             results[q] = q_results
 
@@ -257,9 +253,7 @@ class QuantileModelSuite:
             # validate_features=False works around pandas 3.0 compat issue
             # where XGBoost DMatrix can't extract feature names from the new
             # str-typed Index. Feature order is guaranteed correct by the caller.
-            predictions[f"q{int(q * 100):02d}"] = model.predict(
-                X_q, validate_features=False
-            )
+            predictions[f"q{int(q * 100):02d}"] = model.predict(X_q, validate_features=False)
 
         result = pd.DataFrame(predictions)
 
@@ -343,7 +337,9 @@ class PlayerPropsModelPipeline:
         # Use tuned hyperparams if provided
         if hyperparams:
             config = QuantileModelConfig.from_dict(hyperparams)
-            print(f"Using tuned hyperparams: lr={config.learning_rate}, depth={config.max_depth}, n_est={config.n_estimators}")
+            print(
+                f"Using tuned hyperparams: lr={config.learning_rate}, depth={config.max_depth}, n_est={config.n_estimators}"
+            )
         else:
             config = self.config
 

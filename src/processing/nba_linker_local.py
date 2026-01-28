@@ -33,10 +33,20 @@ import pytz
 from sqlalchemy import text
 from tqdm import tqdm
 
+
+def _progress_apply(df, func, desc="Processing", **kwargs):
+    """Apply with tqdm progress bar, falling back to plain apply if incompatible (pandas 3.0+)."""
+    try:
+        tqdm.pandas(desc=desc)
+        return df.progress_apply(func, **kwargs)
+    except (AttributeError, ImportError):
+        return df.apply(func, **kwargs)
+
+
 # Add project root to path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from src.db.client import get_engine
+from src.db.client import get_engine  # noqa: E402
 
 # ============================================================================
 # CONFIG
@@ -389,8 +399,7 @@ def process_local():
                 )
             return pd.Series({"nba_game_id": None, "nba_home_team_id": None, "nba_away_team_id": None})
 
-        tqdm.pandas(desc="Matching game lines")
-        matches = unlinked_lines.progress_apply(match_game_line, axis=1)
+        matches = _progress_apply(unlinked_lines, match_game_line, desc="Matching game lines", axis=1)
         unlinked_lines = pd.concat([unlinked_lines[["staging_id", "home_team", "game_date"]], matches], axis=1)
 
         # Filter to matched only
@@ -451,8 +460,9 @@ def process_local():
 
             return matched_game_id
 
-        tqdm.pandas(desc="Matching props to games (fuzzy)")
-        unlinked_props["matched_game_id"] = unlinked_props.progress_apply(match_prop_game_fuzzy, axis=1)
+        unlinked_props["matched_game_id"] = _progress_apply(
+            unlinked_props, match_prop_game_fuzzy, desc="Matching props to games (fuzzy)", axis=1
+        )
 
         matched_props = unlinked_props[unlinked_props["matched_game_id"].notna()][["staging_id", "matched_game_id"]]
         matched_props.columns = ["staging_id", "game_id"]
@@ -516,8 +526,7 @@ def process_local():
 
             return None
 
-        tqdm.pandas(desc="Matching players")
-        needs_player["matched_player_id"] = needs_player.progress_apply(match_player, axis=1)
+        needs_player["matched_player_id"] = _progress_apply(needs_player, match_player, desc="Matching players", axis=1)
 
         # Track unmatched
         unmatched = needs_player[needs_player["matched_player_id"].isna()]["api_player_name"].unique()
@@ -635,8 +644,7 @@ def process_local():
                 return pgs_lookup.get((int(row["player_id"]), row["clean_game_id"]))
             return None
 
-        tqdm.pandas(desc="Matching team_id")
-        player_updates["team_id"] = player_updates.progress_apply(get_team_id, axis=1)
+        player_updates["team_id"] = _progress_apply(player_updates, get_team_id, desc="Matching team_id", axis=1)
 
         # 9. Filter Results (Keep row if EITHER Player ID or Team ID is found)
         team_updates = player_updates[(player_updates["player_id"].notna()) | (player_updates["team_id"].notna())][

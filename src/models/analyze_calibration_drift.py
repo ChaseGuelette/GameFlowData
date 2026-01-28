@@ -71,7 +71,7 @@ def analyze_minutes_rate_correlation(df: pd.DataFrame) -> dict:
         )
 
         bucket_data = []
-        logger.info(f"  By minutes bucket:")
+        logger.info("  By minutes bucket:")
 
         for bucket in ["10-15", "15-20", "20-25", "25-30", "30-35", "35-40", "40+"]:
             bucket_df = analysis_df[analysis_df["min_bucket"] == bucket]
@@ -82,13 +82,15 @@ def analyze_minutes_rate_correlation(df: pd.DataFrame) -> dict:
             std_rate = bucket_df[rate_col].std()
             mean_total = bucket_df[actual_col].mean() if actual_col in bucket_df.columns else 0
 
-            bucket_data.append({
-                "bucket": bucket,
-                "n": len(bucket_df),
-                "mean_rate": float(mean_rate),
-                "std_rate": float(std_rate),
-                "mean_total": float(mean_total),
-            })
+            bucket_data.append(
+                {
+                    "bucket": bucket,
+                    "n": len(bucket_df),
+                    "mean_rate": float(mean_rate),
+                    "std_rate": float(std_rate),
+                    "mean_total": float(mean_total),
+                }
+            )
 
             logger.info(
                 f"    {bucket:>6} min: n={len(bucket_df):>5}, "
@@ -107,9 +109,7 @@ def analyze_minutes_rate_correlation(df: pd.DataFrame) -> dict:
                     f"  ⚠ {stat.upper()} rate {direction} with minutes! "
                     f"({rates[0]:.3f} → {rates[-1]:.3f}, delta={trend:+.3f})"
                 )
-                logger.warning(
-                    f"    This causes bias when multiplying predicted minutes × predicted rate"
-                )
+                logger.warning("    This causes bias when multiplying predicted minutes × predicted rate")
 
     return results
 
@@ -171,16 +171,18 @@ def analyze_combined_calibration(
             for stat in ["pts", "reb", "ast"]:
                 actual_col = f"actual_{stat}"
                 if actual_col in df.columns:
-                    results[stat]["predictions"].append({
-                        "q10": preds[stat].q10,
-                        "q25": preds[stat].q25,
-                        "q50": preds[stat].q50,
-                        "q75": preds[stat].q75,
-                        "q90": preds[stat].q90,
-                        "mean": preds[stat].mean,
-                    })
+                    results[stat]["predictions"].append(
+                        {
+                            "q10": preds[stat].q10,
+                            "q25": preds[stat].q25,
+                            "q50": preds[stat].q50,
+                            "q75": preds[stat].q75,
+                            "q90": preds[stat].q90,
+                            "mean": preds[stat].mean,
+                        }
+                    )
                     results[stat]["actuals"].append(row[actual_col])
-        except Exception as e:
+        except Exception:
             continue
 
     # Calculate calibration
@@ -202,15 +204,17 @@ def analyze_combined_calibration(
             coverage = (actuals <= preds_df[pred_col].values).mean()
             gap = coverage - q
 
-            status = "OK" if abs(gap) <= 0.05 else f"⚠ GAP"
+            status = "OK" if abs(gap) <= 0.05 else "⚠ GAP"
             logger.info(f"  Q{q:.2f}: coverage={coverage:.3f}, target={q:.2f}, gap={gap:+.3f} [{status}]")
 
-            stat_reports.append({
-                "quantile": q,
-                "coverage": float(coverage),
-                "target": q,
-                "gap": float(gap),
-            })
+            stat_reports.append(
+                {
+                    "quantile": q,
+                    "coverage": float(coverage),
+                    "target": q,
+                    "gap": float(gap),
+                }
+            )
 
         reports[stat] = stat_reports
 

@@ -1,23 +1,9 @@
-import sys
-from unittest.mock import MagicMock
-
-# MOCK DEPENDENCIES BEFORE IMPORTING SOURCE
-# This allows tests to run in environments without xgboost/sklearn installed
-mock_xgb = MagicMock()
-sys.modules["xgboost"] = mock_xgb
-mock_sklearn = MagicMock()
-sys.modules["sklearn"] = mock_sklearn
-sys.modules["sklearn.model_selection"] = MagicMock()
-sys.modules["sklearn.inspection"] = MagicMock()
-sys.modules["sklearn.metrics"] = MagicMock()
-sys.modules["sklearn.preprocessing"] = MagicMock()
-
 import unittest
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
 
-# Now import the module under test
 from src.processing.feature_selection import ImprovedFeatureSelector, get_candidate_columns
 
 
@@ -37,31 +23,21 @@ class TestImprovedFeatureSelector(unittest.TestCase):
         )
         self.selector = ImprovedFeatureSelector(n_splits=2, quantiles=[0.5])
 
-        # Setup Mock XGBRegressor behavior for ranking
-        # We need to ensure when it's instantiated and fit, we can inspect it
-        self.mock_xgb_cls = mock_xgb.XGBRegressor
-
-        # Setup Mock Permutation Importance
-        # It needs to return an object with 'importances_mean'
-        self.mock_perm_imp = sys.modules["sklearn.inspection"].permutation_importance
-        self.mock_perm_imp.return_value = MagicMock(
-            importances_mean=np.array([0.5, 0.0, 0.0])  # good, noise, constant
-        )
-
+    @patch("src.processing.feature_selection.xgb.XGBRegressor")
+    @patch("src.processing.feature_selection.permutation_importance")
+    @patch("src.processing.feature_selection.TimeSeriesSplit")
+    def test_feature_ranking_logic(self, mock_tscv, mock_perm_imp, mock_xgb_cls):
+        """Test that ranking uses the permutation importance output."""
         # Setup TimeSeriesSplit mock to actually yield indices
-        self.mock_tscv = sys.modules["sklearn.model_selection"].TimeSeriesSplit
-        self.mock_tscv.return_value.split.return_value = [
+        mock_tscv.return_value.split.return_value = [
             (list(range(0, 50)), list(range(50, 100)))  # One split
         ]
 
-    def test_feature_ranking_logic(self):
-        """Test that ranking uses the permutation importance output."""
-        # We control the permutation importance output in setUp
-        # The selector sorts by this importance
+        # Setup Mock Permutation Importance
+        mock_perm_imp.return_value = MagicMock(
+            importances_mean=np.array([0.5, 0.0, 0.0])  # good, noise, constant
+        )
 
-        # We need to make sure the columns match our mock importance order
-        # Our mock return value was [0.5, 0.0, 0.0]
-        # So we should pass 3 feature columns
         cols = ["feature_good", "feature_noise", "feature_constant"]
 
         ranked = self.selector._rank_features_for_quantile(self.df[cols], self.df["target"], 0.5)
@@ -69,26 +45,30 @@ class TestImprovedFeatureSelector(unittest.TestCase):
         self.assertEqual(ranked[0], "feature_good")
         self.assertIn("feature_noise", ranked[1:])
 
-    def test_optimization_k_selection(self):
+    @patch("src.processing.feature_selection.xgb.XGBRegressor")
+    @patch("src.processing.feature_selection.mean_pinball_loss")
+    @patch("src.processing.feature_selection.TimeSeriesSplit")
+    def test_optimization_k_selection(self, mock_tscv, mock_loss, mock_xgb_cls):
         """Test that optimization loop runs and selects K."""
+        mock_tscv.return_value.split.return_value = [(list(range(0, 50)), list(range(50, 100)))]
+
         # Mock mean_pinball_loss to decrease then increase
-        # K=1 -> 0.5, K=2 -> 0.4, K=3 -> 0.6
-        mock_loss = sys.modules["sklearn.metrics"].mean_pinball_loss
-        mock_loss.side_effect = [0.5, 0.4, 0.6] + [0.6] * 100  # Sequence of return values
+        mock_loss.side_effect = [0.5, 0.4, 0.6] + [0.6] * 100
 
         candidates = ["feature_good", "feature_noise", "feature_constant"]
-
-        # We need to force count_to_test to be granular or just verify flow
-        # The code calculates counts_to_test = range(5, max, 5).
-        # With 3 features, it will just test [3].
-        # So optimization loop runs once.
 
         selected = self.selector._optimize_count_for_quantile(self.df, self.df["target"], candidates, 0.5)
 
         self.assertEqual(selected, candidates)  # Should return all if max < 5
 
-    def test_empty_data_handling(self):
+    @patch("src.processing.feature_selection.xgb.XGBRegressor")
+    @patch("src.processing.feature_selection.permutation_importance")
+    @patch("src.processing.feature_selection.TimeSeriesSplit")
+    @patch("src.processing.feature_selection.mean_pinball_loss")
+    def test_empty_data_handling(self, mock_loss, mock_tscv, mock_perm_imp, mock_xgb_cls):
         """Test handling of empty or NaN-only data."""
+        mock_tscv.return_value.split.return_value = []
+
         df_empty = pd.DataFrame({"target": [np.nan] * 10, "feat": [1] * 10})
         selected = self.selector.select_features_per_quantile(df_empty, "target", ["feat"])
 

@@ -1,4 +1,3 @@
-
 """
 Optuna-Based Hyperparameter Tuning for Quantile Regression Models
 
@@ -173,7 +172,7 @@ class QuantileHyperparameterTuner:
 
         def objective(trial: optuna.Trial) -> float:
             params = self._sample_params(trial)
-            early_stopping_rounds = params.pop("early_stopping_rounds")
+            params.pop("early_stopping_rounds")
 
             gaps = []
 
@@ -221,7 +220,7 @@ class QuantileHyperparameterTuner:
 
         def objective(trial: optuna.Trial) -> float:
             params = self._sample_params(trial)
-            early_stopping_rounds = params.pop("early_stopping_rounds")
+            params.pop("early_stopping_rounds")
 
             model = xgb.XGBRegressor(
                 objective="reg:quantileerror",
@@ -529,7 +528,7 @@ def run_standalone_tuning(
         configs = tuner.tune_per_quantile(X, y)
         logger.info(f"Completed per-quantile tuning for {len(configs)} quantiles")
     else:
-        config = tuner.tune(X, y)
+        tuner.tune(X, y)
         logger.info("Completed shared tuning")
 
     # Save results

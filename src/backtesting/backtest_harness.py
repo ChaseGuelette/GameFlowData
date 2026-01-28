@@ -9,7 +9,6 @@ from datetime import date, datetime
 from pathlib import Path
 
 import joblib
-import numpy as np
 import pandas as pd
 import scipy.stats as stats
 from sqlalchemy import bindparam, text
@@ -67,6 +66,7 @@ class BacktestHarness:
     bookmakers: list[str] = field(default_factory=lambda: ["pinnacle"])
     stats: list[str] = field(default_factory=lambda: ["pts", "reb", "ast"])
     min_minutes_avg: int = 10
+    allowed_bets: list[tuple[str, str]] | None = None  # e.g., [("pts", "under"), ("reb", "over")]
 
     # Internal state
     _simulator: BetSimulator = field(init=False)
@@ -77,6 +77,7 @@ class BacktestHarness:
             edge_threshold=self.edge_threshold,
             starting_bankroll=self.starting_bankroll,
             kelly_fraction=self.kelly_fraction,
+            allowed_bets=set(self.allowed_bets) if self.allowed_bets else None,
         )
         self._metrics_calc = MetricsCalculator()
 
@@ -110,15 +111,23 @@ class BacktestHarness:
         game_dates = self._get_game_dates(start_date, end_date)
         logger.info(f"Found {len(game_dates)} dates with games")
 
+        # Phase 0: Prefetch all data (features + lines) to minimize DB round trips
+        logger.info("Phase 0: Prefetching all features and lines...")
+        prefetched_features = self.feature_store.get_features_for_date_range(start_date, end_date)
+        prefetched_lines = self._prefetch_all_lines(start_date, end_date)
+        logger.info(
+            f"Prefetched features for {len(prefetched_features)} dates, lines for {len(prefetched_lines)} dates"
+        )
+
         all_predictions = []
         completed_count = 0
 
-        # Phase 1: Sequential Batch Prediction Generation
+        # Phase 1: Generate predictions (zero DB calls per date)
         logger.info("Phase 1: Generating predictions (Sequential Batch)...")
 
         for game_date in game_dates:
             completed_count += 1
-            
+
             if progress_callback:
                 progress_callback(game_date, len(game_dates))
 
@@ -126,8 +135,7 @@ class BacktestHarness:
                 logger.info(f"Processed {completed_count}/{len(game_dates)} dates")
 
             try:
-                # Run prediction for this date (using efficient batch fetch)
-                date_preds = self._run_date(game_date)
+                date_preds = self._run_date(game_date, prefetched_features, prefetched_lines)
                 if date_preds is not None and len(date_preds) > 0:
                     all_predictions.append(date_preds)
             except Exception as e:
@@ -148,7 +156,7 @@ class BacktestHarness:
 
         # Get actuals upfront so we can resolve bets daily
         actuals_df = self._get_actuals(start_date, end_date)
-        
+
         # Get voids (DNPs) upfront
         voids_df = self._get_voids(start_date, end_date)
 
@@ -175,7 +183,7 @@ class BacktestHarness:
             voided = self._simulator.resolve_voids(voids_df)
             if voided > 0:
                 logger.info(f"Final resolution: {voided} voided bets")
-                
+
         if len(actuals_df) > 0:
             resolved = self._simulator.resolve_bets(actuals_df)
             logger.info(f"Final resolution: {resolved} resolved bets")
@@ -205,6 +213,7 @@ class BacktestHarness:
                 "kelly_fraction": self.kelly_fraction,
                 "bookmakers": self.bookmakers,
                 "stats": self.stats,
+                "allowed_bets": [f"{s}:{side}" for s, side in self.allowed_bets] if self.allowed_bets else None,
             },
         )
 
@@ -222,10 +231,20 @@ class BacktestHarness:
             result = conn.execute(text(query), {"start_date": start_date, "end_date": end_date})
             return [row[0] for row in result]
 
-    def _run_date(self, game_date: date) -> pd.DataFrame | None:
+    def _run_date(
+        self,
+        game_date: date,
+        prefetched_features: dict | None = None,
+        prefetched_lines: dict | None = None,
+    ) -> pd.DataFrame | None:
         """Run predictions for a single date using efficient batch processing."""
-        # Batch fetch all features for this date (One Query Rule them all)
-        features_df = self.feature_store.get_features_for_date(game_date)
+        # Get features (from prefetch dict or single-date DB query)
+        if prefetched_features is not None:
+            features_df = prefetched_features.get(game_date)
+            if features_df is None:
+                features_df = pd.DataFrame()
+        else:
+            features_df = self.feature_store.get_features_for_date(game_date)
 
         if features_df is None or features_df.empty:
             logger.debug(f"No features returned for {game_date}")
@@ -238,66 +257,39 @@ class BacktestHarness:
             features_df = features_df[features_df["player_avg_min_l5"] >= self.min_minutes_avg]
 
         if features_df.empty:
-            logger.debug(f"All {pre_filter_count} players filtered out for {game_date} (min_minutes_avg={self.min_minutes_avg})")
+            logger.debug(
+                f"All {pre_filter_count} players filtered out for {game_date} (min_minutes_avg={self.min_minutes_avg})"
+            )
             return None
 
-        all_predictions = []
-        prediction_samples = {}
+        # Sort for deterministic RNG ordering across query strategies
+        features_df = features_df.sort_values(["player_id", "game_id"]).reset_index(drop=True)
 
-        # Convert to records for iteration
-        player_records = features_df.to_dict("records")
-
-        for player_row in player_records:
-            try:
-                # Features are just the row itself
-                features = player_row
-
-                # Generate predictions
-                preds = self.predictor.predict(
-                    player_id=player_row["player_id"],
-                    game_id=player_row["game_id"],
-                    features=features,
-                    stats=self.stats,
-                )
-
-                for stat, pred in preds.items():
-                    all_predictions.append(
-                        {
-                            "player_id": player_row["player_id"],
-                            "player_name": player_row.get("player_name"),
-                            "game_id": player_row["game_id"],
-                            "game_date": game_date,
-                            "team_id": player_row.get("team_id"),
-                            "stat": stat,
-                            "pred_mean": pred.mean,
-                            "pred_std": pred.samples.std(),
-                            "pred_median": pred.median,
-                            "pred_q10": pred.q10,
-                            "pred_q25": pred.q25,
-                            "pred_q50": pred.q50,
-                            "pred_q75": pred.q75,
-                            "pred_q90": pred.q90,
-                        }
-                    )
-                    # Store samples separately to avoid DataFrame memory bloat
-                    prediction_samples[(player_row["player_id"], player_row["game_id"], stat)] = pred.samples
-
-            except Exception as e:
-                logger.warning(f"Error predicting for player {player_row.get('player_id')}: {e}")
-                continue
-
-        logger.info(f"  {game_date}: {len(player_records)} players -> {len(all_predictions)} predictions")
-
-        if not all_predictions:
+        # Batch predict all players at once (4 XGBoost calls instead of ~N*4)
+        try:
+            predictions_list, prediction_samples = self.predictor.predict_batch_for_date(features_df, stats=self.stats)
+        except Exception as e:
+            logger.error(f"Error in batch prediction for {game_date}: {e}")
             return None
 
-        predictions_df = pd.DataFrame(all_predictions)
+        # Add game_date to each prediction
+        for pred in predictions_list:
+            pred["game_date"] = game_date
 
-        # Get unique game IDs for fetching lines
-        game_ids = features_df["game_id"].unique().tolist()
+        logger.info(f"  {game_date}: {len(features_df)} players -> {len(predictions_list)} predictions")
 
-        # Get prop lines and calculate edges
-        lines_df = self._get_lines_for_date(game_date, game_ids)
+        if not predictions_list:
+            return None
+
+        predictions_df = pd.DataFrame(predictions_list)
+
+        # Get lines (from prefetch dict or single-date DB query)
+        if prefetched_lines is not None:
+            lines_df = prefetched_lines.get(game_date, pd.DataFrame())
+        else:
+            game_ids = features_df["game_id"].unique().tolist()
+            lines_df = self._get_lines_for_date(game_date, game_ids)
+
         if len(lines_df) > 0:
             predictions_df = self._calculate_edges(predictions_df, lines_df, prediction_samples)
 
@@ -422,7 +414,122 @@ class BacktestHarness:
             logger.warning(f"Error fetching lines for {game_date}: {e}")
             return pd.DataFrame()
 
-    def _calculate_edges(self, predictions_df: pd.DataFrame, lines_df: pd.DataFrame, prediction_samples: dict) -> pd.DataFrame:
+    def _prefetch_all_lines(self, start_date: date, end_date: date, chunk_size: int = 15) -> dict[date, pd.DataFrame]:
+        """Prefetch all prop lines for a date range in chunked queries.
+
+        Returns dict[date, DataFrame] with the same columns as _get_lines_for_date.
+        """
+        stat_to_market = {
+            "pts": "player_points",
+            "reb": "player_rebounds",
+            "ast": "player_assists",
+        }
+        markets = [stat_to_market[s] for s in self.stats if s in stat_to_market]
+
+        # Get all game dates in range first
+        date_query = text("""
+            SELECT DISTINCT game_date
+            FROM player_game_stats
+            WHERE game_date >= :start_date AND game_date <= :end_date
+            ORDER BY game_date
+        """)
+        with self.engine.connect() as conn:
+            date_result = conn.execute(date_query, {"start_date": start_date, "end_date": end_date})
+            all_dates = [row[0] for row in date_result]
+
+        if not all_dates:
+            logger.warning("No game dates found for lines prefetch")
+            return {}
+
+        # Chunk dates to keep individual queries manageable
+        chunks = [all_dates[i : i + chunk_size] for i in range(0, len(all_dates), chunk_size)]
+        logger.info(
+            f"Prefetching lines in {len(chunks)} chunks (chunk_size={chunk_size}) for {len(all_dates)} dates..."
+        )
+
+        query = text("""
+            WITH game_dates AS (
+                SELECT DISTINCT game_id, game_date
+                FROM player_game_stats
+                WHERE game_date >= :chunk_start AND game_date <= :chunk_end
+            ),
+            ranked_lines AS (
+                SELECT
+                    rp.player_id,
+                    rp.game_id,
+                    gd.game_date,
+                    rp.market_key,
+                    rp.line,
+                    rp.outcome_label,
+                    rp.odds_american,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY rp.player_id, rp.game_id, rp.market_key, rp.line
+                        ORDER BY rp.snapshot_time DESC
+                    ) as rn
+                FROM raw_player_props_combined rp
+                JOIN game_dates gd ON rp.game_id = gd.game_id
+                WHERE rp.market_key IN :markets
+                  AND rp.bookmaker IN :bookmakers
+                  AND rp.snapshot_time::date <= gd.game_date
+            )
+            SELECT
+                player_id,
+                game_id,
+                game_date,
+                market_key,
+                line,
+                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
+                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
+            FROM ranked_lines
+            WHERE rn = 1
+            GROUP BY player_id, game_id, game_date, market_key, line
+        """).bindparams(
+            bindparam("markets", expanding=True),
+            bindparam("bookmakers", expanding=True),
+        )
+
+        result = {}
+        total_lines = 0
+
+        for ci, chunk_dates in enumerate(chunks):
+            chunk_start = chunk_dates[0]
+            chunk_end = chunk_dates[-1]
+
+            try:
+                with self.engine.connect() as conn:
+                    chunk_lines = pd.read_sql(
+                        query,
+                        conn,
+                        params={
+                            "chunk_start": chunk_start,
+                            "chunk_end": chunk_end,
+                            "markets": list(markets),
+                            "bookmakers": list(self.bookmakers),
+                        },
+                    )
+
+                if not chunk_lines.empty:
+                    for gd, group_df in chunk_lines.groupby("game_date"):
+                        if hasattr(gd, "date"):
+                            gd = gd.date()
+                        result[gd] = group_df.drop(columns=["game_date"]).reset_index(drop=True)
+                    total_lines += len(chunk_lines)
+
+                logger.info(
+                    f"  Lines chunk {ci + 1}/{len(chunks)}: "
+                    f"{chunk_start} to {chunk_end} "
+                    f"({len(chunk_dates)} dates) -> {len(chunk_lines)} rows"
+                )
+
+            except Exception as e:
+                logger.error(f"Error fetching lines chunk {ci + 1} ({chunk_start} to {chunk_end}): {e}")
+
+        logger.info(f"Prefetched lines for {len(result)} dates ({total_lines} total line entries)")
+        return result
+
+    def _calculate_edges(
+        self, predictions_df: pd.DataFrame, lines_df: pd.DataFrame, prediction_samples: dict
+    ) -> pd.DataFrame:
         """Add edge calculations to predictions using empirical CDF from Monte Carlo samples."""
         market_to_stat = {
             "player_points": "pts",
@@ -533,7 +640,7 @@ class BacktestHarness:
 
         with self.engine.connect() as conn:
             df = pd.read_sql(text(query), conn, params={"start_date": start_date, "end_date": end_date})
-            
+
         return df
 
     def _merge_actuals(self, predictions_df: pd.DataFrame, actuals_df: pd.DataFrame) -> pd.DataFrame:

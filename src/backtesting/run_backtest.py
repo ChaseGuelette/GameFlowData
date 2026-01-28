@@ -70,8 +70,24 @@ def main():
         help="List of bookmakers to shop lines from",
     )
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers")
+    parser.add_argument(
+        "--allowed-bets",
+        nargs="+",
+        default=None,
+        help="Stat:side pairs to allow (e.g., pts:under reb:over). If omitted, all combos are allowed.",
+    )
 
     args = parser.parse_args()
+
+    # Parse allowed_bets from "stat:side" strings to list of tuples
+    allowed_bets = None
+    if args.allowed_bets:
+        allowed_bets = []
+        for pair in args.allowed_bets:
+            parts = pair.lower().split(":")
+            if len(parts) != 2 or parts[1] not in ("over", "under"):
+                parser.error(f"Invalid --allowed-bets value '{pair}'. Use format stat:side (e.g., pts:under)")
+            allowed_bets.append((parts[0], parts[1]))
 
     # Resolve model directory
     model_path = find_latest_model_dir(args.model_dir)
@@ -106,8 +122,11 @@ def main():
         starting_bankroll=args.starting_bankroll,
         kelly_fraction=args.kelly_fraction,
         bookmakers=args.bookmakers,
+        allowed_bets=allowed_bets,
     )
 
+    if allowed_bets:
+        logger.info(f"Allowed bets filter: {[f'{s}:{side}' for s, side in allowed_bets]}")
     logger.info(f"Running backtest from {args.start} to {args.end}...")
     result = harness.run(start_date=args.start, end_date=args.end, max_workers=args.workers)
 

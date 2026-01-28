@@ -176,6 +176,7 @@ class TestPerformanceMetrics:
             total_staked=9700.0,
             total_profit=500.0,
             roi=0.0515,
+            return_on_capital=0.05,
             hit_rate=0.567,
             sharpe_ratio=1.2,
             max_drawdown=0.15,

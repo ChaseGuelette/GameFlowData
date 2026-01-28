@@ -64,6 +64,7 @@ class TrainingOrchestrator:
             logger.info(f"Hyperparameter tuning ENABLED: {tuning_trials} trials")
         elif hyperparams_path:
             logger.info(f"Loading hyperparams from: {hyperparams_path}")
+
     def run(self, train_seasons: list[str], calibration_season: str):
         """
         Execute full training pipeline with strict train/calibration split.
@@ -239,7 +240,9 @@ class TrainingOrchestrator:
 
         return features
 
-    def _train_models(self, df: pd.DataFrame, feature_config: dict, hyperparams: dict | None = None) -> PlayerPropsModelPipeline:
+    def _train_models(
+        self, df: pd.DataFrame, feature_config: dict, hyperparams: dict | None = None
+    ) -> PlayerPropsModelPipeline:
         """Initialize and train the model pipeline with injected features."""
         pipeline = PlayerPropsModelPipeline(self.feature_store)
 
@@ -302,9 +305,13 @@ class TrainingOrchestrator:
         self._save_calibration_report(all_reports)
 
         if worst_gap > self.CALIBRATION_HARD_FAIL:
-            logger.warning(f"Calibration FAILED: worst gap = {worst_gap:.1%} (threshold: {self.CALIBRATION_HARD_FAIL:.0%})")
+            logger.warning(
+                f"Calibration FAILED: worst gap = {worst_gap:.1%} (threshold: {self.CALIBRATION_HARD_FAIL:.0%})"
+            )
             with open(self.run_dir / "CALIBRATION_FAILED.txt", "w") as f:
-                f.write(f"Worst calibration gap: {worst_gap:.1%}\nHard fail threshold: {self.CALIBRATION_HARD_FAIL:.0%}\nDO NOT deploy without review.")
+                f.write(
+                    f"Worst calibration gap: {worst_gap:.1%}\nHard fail threshold: {self.CALIBRATION_HARD_FAIL:.0%}\nDO NOT deploy without review."
+                )
         elif worst_gap > self.CALIBRATION_TOLERANCE:
             logger.warning(f"Calibration warning: worst gap = {worst_gap:.1%}")
             with open(self.run_dir / "CALIBRATION_WARNING.txt", "w") as f:
@@ -316,7 +323,7 @@ class TrainingOrchestrator:
         """Evaluate calibration for a single model."""
         # Use reset_index(drop=True) to align indices for assignment
         filtered = df[filter_mask].copy().reset_index(drop=True)
-        
+
         # Use the model's all_feature_names property
         X = filtered[model.all_feature_names].fillna(0)
         y_actual = filtered[actual_col].values
@@ -360,7 +367,7 @@ class TrainingOrchestrator:
         logger.info("\n=== Combined Calibration (Minutes × Rate → Total) ===")
 
         # Filter to valid rows with actual stats
-        valid_mask = (df["actual_minutes"] >= 10)
+        valid_mask = df["actual_minutes"] >= 10
         for stat in ["pts", "reb", "ast"]:
             valid_mask &= df[stat].notna()
 
@@ -396,14 +403,16 @@ class TrainingOrchestrator:
                 )
 
                 for stat in ["pts", "reb", "ast"]:
-                    results[stat]["predictions"].append({
-                        "q10": preds[stat].q10,
-                        "q25": preds[stat].q25,
-                        "q50": preds[stat].q50,
-                        "q75": preds[stat].q75,
-                        "q90": preds[stat].q90,
-                        "mean": preds[stat].mean,
-                    })
+                    results[stat]["predictions"].append(
+                        {
+                            "q10": preds[stat].q10,
+                            "q25": preds[stat].q25,
+                            "q50": preds[stat].q50,
+                            "q75": preds[stat].q75,
+                            "q90": preds[stat].q90,
+                            "mean": preds[stat].mean,
+                        }
+                    )
                     results[stat]["actuals"].append(row[stat])
             except Exception as e:
                 logger.debug(f"Prediction failed for row {idx}: {e}")
@@ -431,12 +440,14 @@ class TrainingOrchestrator:
                 status = "OK" if abs(gap) <= self.CALIBRATION_TOLERANCE else f"GAP {gap:+.3f}"
                 logger.info(f"    Q{q:.2f}: Act={coverage:.3f} Target={q:.2f} [{status}]")
 
-                stat_reports.append({
-                    "quantile": q,
-                    "coverage": float(coverage),
-                    "target": q,
-                    "gap": float(gap),
-                })
+                stat_reports.append(
+                    {
+                        "quantile": q,
+                        "coverage": float(coverage),
+                        "target": q,
+                        "gap": float(gap),
+                    }
+                )
 
             reports[stat] = stat_reports
 
@@ -452,9 +463,9 @@ class TrainingOrchestrator:
 
             if worst_gap > self.CALIBRATION_TOLERANCE:
                 logger.warning(
-                    f"Combined calibration shows drift! "
-                    f"Individual models are calibrated but combined prediction is not. "
-                    f"Consider variance inflation or correlation modeling."
+                    "Combined calibration shows drift! "
+                    "Individual models are calibrated but combined prediction is not. "
+                    "Consider variance inflation or correlation modeling."
                 )
 
         return reports
@@ -485,9 +496,7 @@ class TrainingOrchestrator:
 
             # Correlation by minutes bucket
             analysis_df["minutes_bucket"] = pd.cut(
-                analysis_df["actual_minutes"],
-                bins=[0, 20, 30, 40, 50],
-                labels=["10-20", "20-30", "30-40", "40+"]
+                analysis_df["actual_minutes"], bins=[0, 20, 30, 40, 50], labels=["10-20", "20-30", "30-40", "40+"]
             )
 
             bucket_stats = []
@@ -496,19 +505,23 @@ class TrainingOrchestrator:
                 if len(bucket_df) > 30:
                     bucket_corr = bucket_df["actual_minutes"].corr(bucket_df[rate_col])
                     mean_rate = bucket_df[rate_col].mean()
-                    bucket_stats.append({
-                        "bucket": bucket,
-                        "n": len(bucket_df),
-                        "correlation": float(bucket_corr) if not pd.isna(bucket_corr) else 0.0,
-                        "mean_rate": float(mean_rate),
-                    })
+                    bucket_stats.append(
+                        {
+                            "bucket": bucket,
+                            "n": len(bucket_df),
+                            "correlation": float(bucket_corr) if not pd.isna(bucket_corr) else 0.0,
+                            "mean_rate": float(mean_rate),
+                        }
+                    )
 
             correlations[stat]["by_bucket"] = bucket_stats
 
             # Log findings
             logger.info(f"  {stat.upper()}: overall_corr={corr:.3f}")
             for bs in bucket_stats:
-                logger.info(f"    {bs['bucket']} min: corr={bs['correlation']:.3f}, mean_rate={bs['mean_rate']:.3f}, n={bs['n']}")
+                logger.info(
+                    f"    {bs['bucket']} min: corr={bs['correlation']:.3f}, mean_rate={bs['mean_rate']:.3f}, n={bs['n']}"
+                )
 
         # Check for systematic pattern
         for stat, data in correlations.items():

@@ -111,7 +111,7 @@ def print_histogram(hist: dict) -> None:
             continue
         bar_len = int(count / max_count * bar_width)
         bar = "#" * bar_len
-        logger.info(f"  {edges[i]:4.0f}-{edges[i+1]:4.0f} | {bar} ({count:,})")
+        logger.info(f"  {edges[i]:4.0f}-{edges[i + 1]:4.0f} | {bar} ({count:,})")
 
 
 def print_segment_summary(result: dict) -> None:
@@ -166,7 +166,9 @@ def analyze_bimodality(df: pd.DataFrame, min_starter_avg: float = 20.0) -> dict:
     starter_ids = player_avg[(player_avg["mean"] >= min_starter_avg) & (player_avg["count"] >= 10)].index
     starters = valid[valid["player_id"].isin(starter_ids)].copy()
 
-    logger.info(f"Starters (avg >= {min_starter_avg} min, 10+ games): {len(starter_ids):,} players, {len(starters):,} games")
+    logger.info(
+        f"Starters (avg >= {min_starter_avg} min, 10+ games): {len(starter_ids):,} players, {len(starters):,} games"
+    )
 
     if "line_spread" not in starters.columns:
         logger.error("line_spread column not found in dataset. Cannot segment by spread.")
@@ -184,9 +186,7 @@ def analyze_bimodality(df: pd.DataFrame, min_starter_avg: float = 20.0) -> dict:
 
     results = {}
     for seg_name, seg_def in SPREAD_SEGMENTS.items():
-        seg_df = starters[
-            (starters["abs_spread"] > seg_def["min"]) & (starters["abs_spread"] <= seg_def["max"])
-        ]
+        seg_df = starters[(starters["abs_spread"] > seg_def["min"]) & (starters["abs_spread"] <= seg_def["max"])]
         # For "close" segment, include spread == 0
         if seg_def["min"] == 0:
             seg_df = starters[starters["abs_spread"] <= seg_def["max"]]
@@ -263,7 +263,6 @@ def compare_model_vs_actuals(df: pd.DataFrame, model_dir: str) -> dict:
 
     # Filter to rows that have all needed features
     valid = df.dropna(subset=["actual_minutes", "line_spread"]).copy()
-    available_features = [f for f in feature_names if f in valid.columns]
     missing_features = [f for f in feature_names if f not in valid.columns]
 
     if missing_features:
@@ -321,8 +320,7 @@ def compare_model_vs_actuals(df: pd.DataFrame, model_dir: str) -> dict:
             }
 
             logger.info(
-                f"  {q_col.upper()}: target={target:.0%}  actual={actual_below:.1%}  "
-                f"gap={gap:+.1%}  [{status}]"
+                f"  {q_col.upper()}: target={target:.0%}  actual={actual_below:.1%}  gap={gap:+.1%}  [{status}]"
             )
 
         # Mean prediction error
@@ -366,9 +364,7 @@ def compare_model_vs_actuals(df: pd.DataFrame, model_dir: str) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Analyze minutes distribution bimodality across spread segments"
-    )
+    parser = argparse.ArgumentParser(description="Analyze minutes distribution bimodality across spread segments")
     parser.add_argument(
         "--seasons",
         nargs="+",

@@ -250,6 +250,7 @@ class TestBacktestResult:
             total_staked=1000.0,
             total_profit=100.0,
             roi=0.10,
+            return_on_capital=0.01,
             hit_rate=0.60,
             sharpe_ratio=1.5,
             max_drawdown=0.05,

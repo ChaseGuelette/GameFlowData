@@ -63,10 +63,10 @@ class PropPrediction:
 # Use for stats where correlation adjustment doesn't apply (e.g., REB)
 # Values > 1.0 widen the distribution, < 1.0 narrow it
 DEFAULT_VARIANCE_INFLATION = {
-    "pts": 1.0,    # PTS is handled by correlation adjustment
-    "reb": 1.15,   # REB needs ~15% wider distribution (no correlation to leverage)
-    "ast": 1.0,    # AST is handled by correlation adjustment
-    "threes": 1.0, # Threes handled by correlation adjustment
+    "pts": 1.0,  # PTS is handled by correlation adjustment
+    "reb": 1.15,  # REB needs ~15% wider distribution (no correlation to leverage)
+    "ast": 1.0,  # AST is handled by correlation adjustment
+    "threes": 1.0,  # Threes handled by correlation adjustment
 }
 
 
@@ -77,7 +77,7 @@ DEFAULT_VARIANCE_INFLATION = {
 # NOTE: Start conservative - these interact with variance_inflation
 DEFAULT_TAIL_ADJUSTMENT = {
     "lower_tail_multiplier": 1.15,  # Extend lower tail 15% more
-    "upper_tail_multiplier": 1.0,   # Keep upper tail as-is
+    "upper_tail_multiplier": 1.0,  # Keep upper tail as-is
 }
 
 
@@ -87,9 +87,9 @@ DEFAULT_TAIL_ADJUSTMENT = {
 # minutes_reduction: how much to reduce minutes in bad games (0.0 to 1.0)
 # NOTE: Start conservative and tune based on backtest results
 DEFAULT_BLOWOUT_CONFIG = {
-    "enabled": False,          # Disabled by default - enable after tuning
-    "probability": 0.05,       # 5% of games have unexpected minutes reduction
-    "minutes_reduction": 0.30, # Reduce minutes by 30% in those games
+    "enabled": False,  # Disabled by default - enable after tuning
+    "probability": 0.05,  # 5% of games have unexpected minutes reduction
+    "minutes_reduction": 0.30,  # Reduce minutes by 30% in those games
 }
 
 
@@ -217,9 +217,7 @@ class MonteCarloPredictor:
 
             # 3. Apply correlation adjustment if enabled
             if self.use_correlated_sampling:
-                rate_samples = self._apply_correlation_adjustment(
-                    rate_samples, minutes_samples, stat
-                )
+                rate_samples = self._apply_correlation_adjustment(rate_samples, minutes_samples, stat)
 
             # 4. Combine: stat = minutes × rate
             stat_samples = minutes_samples * rate_samples
@@ -243,6 +241,111 @@ class MonteCarloPredictor:
             )
 
         return predictions
+
+    def predict_batch_for_date(
+        self, features_df: pd.DataFrame, stats: list[str] | None = None
+    ) -> tuple[list[dict], dict[tuple, np.ndarray]]:
+        """
+        Batch predict for all players on a date.
+
+        Uses batched XGBoost calls (4 total: 1 minutes + 3 rates) instead of
+        N individual calls per player.
+
+        Args:
+            features_df: Multi-row DataFrame with all player features for one date.
+                         Must have player_id, game_id columns.
+            stats: Stats to predict (default: ['pts', 'reb', 'ast'])
+
+        Returns:
+            (predictions_list, samples_dict) where:
+            - predictions_list: list of dicts with prediction fields
+            - samples_dict: dict[(player_id, game_id, stat)] -> samples array
+        """
+        stats = stats or ["pts", "reb", "ast"]
+        n_players = len(features_df)
+
+        # 1. Batch minutes prediction (1 XGBoost call for ALL players)
+        X_minutes = self._prepare_features_batch(features_df, self.pipeline.minutes_model.all_feature_names)
+        minutes_quantiles_df = self.pipeline.minutes_model.predict_quantiles(X_minutes)
+
+        # 2. Batch rate predictions (1 XGBoost call per stat)
+        rate_quantiles = {}
+        for stat in stats:
+            if stat not in self.pipeline.rate_models:
+                continue
+            X_rate = self._prepare_features_batch(features_df, self.pipeline.rate_models[stat].all_feature_names)
+            rate_quantiles[stat] = self.pipeline.rate_models[stat].predict_quantiles(X_rate)
+
+        # 3. Per-player sampling loop (fast numpy, not XGBoost)
+        predictions_list = []
+        samples_dict = {}
+
+        player_ids = features_df["player_id"].values
+        game_ids = features_df["game_id"].values
+        player_names = features_df["player_name"].values if "player_name" in features_df.columns else [None] * n_players
+        team_ids = features_df["team_id"].values if "team_id" in features_df.columns else [None] * n_players
+
+        for i in range(n_players):
+            # Sample minutes for this player
+            minutes_qvals = minutes_quantiles_df.iloc[i].values
+            minutes_samples = self._inverse_transform_sample(self.quantile_probs, minutes_qvals)
+
+            if self.blowout_config.get("enabled", False):
+                minutes_samples = self._apply_blowout_factor(minutes_samples)
+            minutes_samples = np.maximum(minutes_samples, 0)
+
+            for stat in stats:
+                if stat not in rate_quantiles:
+                    continue
+
+                # Sample rate for this player
+                rate_qvals = rate_quantiles[stat].iloc[i].values
+                rate_samples = self._inverse_transform_sample(self.quantile_probs, rate_qvals)
+                rate_samples = np.maximum(rate_samples, 0)
+
+                # Apply correlation adjustment
+                if self.use_correlated_sampling:
+                    rate_samples = self._apply_correlation_adjustment(rate_samples, minutes_samples, stat)
+
+                # Combine: stat = minutes * rate
+                stat_samples = minutes_samples * rate_samples
+
+                # Apply variance inflation
+                stat_samples = self._apply_variance_inflation(stat_samples, stat)
+
+                predictions_list.append(
+                    {
+                        "player_id": player_ids[i],
+                        "player_name": player_names[i],
+                        "game_id": game_ids[i],
+                        "team_id": team_ids[i],
+                        "stat": stat,
+                        "pred_mean": float(stat_samples.mean()),
+                        "pred_std": float(stat_samples.std()),
+                        "pred_median": float(np.median(stat_samples)),
+                        "pred_q10": float(np.percentile(stat_samples, 10)),
+                        "pred_q25": float(np.percentile(stat_samples, 25)),
+                        "pred_q50": float(np.percentile(stat_samples, 50)),
+                        "pred_q75": float(np.percentile(stat_samples, 75)),
+                        "pred_q90": float(np.percentile(stat_samples, 90)),
+                    }
+                )
+                samples_dict[(player_ids[i], game_ids[i], stat)] = stat_samples
+
+        return predictions_list, samples_dict
+
+    def _prepare_features_batch(self, features_df: pd.DataFrame, feature_names: list[str]) -> pd.DataFrame:
+        """Prepare multi-row feature DataFrame for model input."""
+        present = [f for f in feature_names if f in features_df.columns]
+        missing = [f for f in feature_names if f not in features_df.columns]
+
+        df = features_df[present].copy()
+        for col in missing:
+            df[col] = 0
+
+        df = df[feature_names]
+        df = df.apply(pd.to_numeric, errors="coerce").fillna(0).astype(np.float32)
+        return df
 
     def _apply_variance_inflation(
         self,
@@ -364,7 +467,7 @@ class MonteCarloPredictor:
 
         # Apply reduction to those samples
         minutes_samples = minutes_samples.copy()
-        minutes_samples[blowout_mask] *= (1 - reduction)
+        minutes_samples[blowout_mask] *= 1 - reduction
 
         return minutes_samples
 
@@ -508,9 +611,7 @@ def compute_correlation_config_from_data(df: pd.DataFrame) -> dict:
         buckets = [(10, 15), (15, 20), (20, 25), (25, 30), (30, 35), (35, 40), (40, 50)]
 
         for low, high in buckets:
-            bucket_df = analysis_df[
-                (analysis_df["actual_minutes"] >= low) & (analysis_df["actual_minutes"] < high)
-            ]
+            bucket_df = analysis_df[(analysis_df["actual_minutes"] >= low) & (analysis_df["actual_minutes"] < high)]
 
             if len(bucket_df) < 30:
                 continue

@@ -85,7 +85,7 @@ def parse_minutes(minutes_str) -> float:
     if pd.isna(minutes_str) or minutes_str == "" or minutes_str is None:
         return 0.0
 
-    if isinstance(minutes_str, (int, float)):
+    if isinstance(minutes_str, int | float):
         return float(minutes_str)
 
     minutes_str = str(minutes_str)

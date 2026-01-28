@@ -1,9 +1,12 @@
+import logging
 from dataclasses import dataclass
 from datetime import date
 
 import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
+
+logger = logging.getLogger(__name__)
 
 # ID: (Latitude, Longitude)
 # These are approximate stadium locations
@@ -458,14 +461,202 @@ class FeatureStore:
 
         # Fill missing columns that training data has but this query might miss if strict
         # (Though we selected them all)
-        
+
         # Default Travel & Rest to 0 for now to avoid N+1 complexities in this hotfix.
-        cols = ["rest_days", "travel_dist", "is_back_to_back",
-                "opp_rest_days", "opp_travel_dist", "opp_is_back_to_back"]
+        cols = [
+            "rest_days",
+            "travel_dist",
+            "is_back_to_back",
+            "opp_rest_days",
+            "opp_travel_dist",
+            "opp_is_back_to_back",
+        ]
         for col in cols:
             df[col] = 0.0
 
         return df
+
+    def _get_game_dates_in_range(self, start_date: date, end_date: date) -> list[date]:
+        """Get all distinct game dates in a range."""
+        query = text("""
+            SELECT DISTINCT game_date
+            FROM player_game_stats
+            WHERE game_date >= :start_date AND game_date <= :end_date
+            ORDER BY game_date
+        """)
+        with self.engine.connect() as conn:
+            result = conn.execute(query, {"start_date": start_date, "end_date": end_date})
+            return [row[0] for row in result]
+
+    def get_features_for_date_range(
+        self,
+        start_date: date,
+        end_date: date,
+        chunk_size: int = 25,
+    ) -> dict[date, pd.DataFrame]:
+        """
+        Prefetch features for all players across a date range in chunked queries.
+        Same LATERAL JOIN query as get_features_for_date() but batched by date chunks
+        to avoid Supabase statement timeouts.
+
+        Returns:
+            Dict mapping game_date -> DataFrame of features for that date.
+        """
+        all_dates = self._get_game_dates_in_range(start_date, end_date)
+        if not all_dates:
+            return {}
+
+        # Chunk dates to keep individual queries under timeout
+        chunks = [all_dates[i : i + chunk_size] for i in range(0, len(all_dates), chunk_size)]
+        logger.info(f"Fetching features in {len(chunks)} chunks (chunk_size={chunk_size})")
+
+        chunk_dfs = []
+        for chunk_idx, chunk_dates in enumerate(chunks):
+            chunk_start = chunk_dates[0]
+            chunk_end = chunk_dates[-1]
+
+            query = text("""
+                SELECT
+                    pgs.game_id, pgs.player_id, pgs.game_date::date as game_date, pgs.season_id,
+                    pgs.team_id, tgs.opponent_id,
+                    p.player_name,
+                    pos.position_group,
+                    COALESCE(p_avg.avg_min_l5, 0) as player_avg_min_l5,
+                    COALESCE(p_avg.avg_min_l15, 0) as player_avg_min_l15,
+                    COALESCE(p_avg.avg_pts_l5, 0) as player_avg_pts_l5,
+                    COALESCE(p_avg.avg_pts_l15, 0) as player_avg_pts_l15,
+                    COALESCE(p_avg.avg_reb_l5, 0) as player_avg_reb_l5,
+                    COALESCE(p_avg.avg_ast_l5, 0) as player_avg_ast_l5,
+                    COALESCE(p_avg.avg_fg3m_l5, 0) as player_avg_fg3m_l5,
+                    COALESCE(p_avg.avg_fg3a_l5, 0) as player_avg_fg3a_l5,
+                    COALESCE(pa_avg.avg_usg_pct_l5, 0) as player_avg_usg_pct_l5,
+                    COALESCE(pa_avg.avg_ts_pct_l15, 0) as player_avg_ts_pct_l15,
+                    COALESCE(pa_avg.avg_reb_pct_l5, 0) as player_avg_reb_pct_l5,
+                    COALESCE(pa_avg.avg_ast_pct_l5, 0) as player_avg_ast_pct_l5,
+                    COALESCE(t_avg.avg_pace_l5, 0) as team_avg_pace_l5,
+                    COALESCE(t_avg.avg_fg3a_l5, 0) as team_avg_fg3a_l5,
+                    COALESCE(t_avg.avg_fg3_pct_l5, 0) as team_avg_fg3_pct_l5,
+                    COALESCE(opp_avg.avg_def_rtg_l5, 0) as opp_avg_def_rtg_l5,
+                    COALESCE(opp_avg.avg_pace_l5, 0) as opp_avg_pace_l5,
+                    COALESCE(opp_avg.avg_fg3a_l5, 0) as opp_avg_fg3a_l5,
+                    COALESCE(opp_avg.avg_fg3_pct_l5, 0) as opp_avg_fg3_pct_l5,
+                    COALESCE(opp_def.off_rtg_allowed_l5, 0) as opp_pos_off_rtg_allowed_l5,
+                    COALESCE(opp_def.reb_allowed_l5, 0) as opp_pos_reb_allowed_l5,
+                    COALESCE(opp_def.ast_allowed_l5, 0) as opp_pos_ast_allowed_l5,
+                    COALESCE(opp_def.threes_allowed_l5, 0) as opp_pos_threes_allowed_l5,
+                    COALESCE(opp_def.threes_per100_allowed_l5, 0) as opp_pos_threes_per100_allowed_l5,
+                    COALESCE(opp_def.reb_per100_allowed_l5, 0) as opp_pos_reb_per100_allowed_l5,
+                    COALESCE(opp_def.ast_per100_allowed_l5, 0) as opp_pos_ast_per100_allowed_l5,
+                    COALESCE(opp_def.off_rtg_allowed_l15, 0) as opp_pos_off_rtg_allowed_l15,
+                    COALESCE(opp_def.reb_allowed_l15, 0) as opp_pos_reb_allowed_l15,
+                    COALESCE(opp_def.ast_allowed_l15, 0) as opp_pos_ast_allowed_l15,
+                    COALESCE(opp_def.threes_allowed_l15, 0) as opp_pos_threes_allowed_l15,
+                    COALESCE(lines.spread, 0) as line_spread,
+                    COALESCE(lines.total, 0) as line_total,
+                    CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
+                FROM player_game_stats pgs
+                JOIN players p ON pgs.player_id = p.player_id
+                JOIN team_game_stats tgs
+                    ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
+                LEFT JOIN LATERAL (
+                    SELECT position_group
+                    FROM player_position_history ph
+                    WHERE ph.player_id = pgs.player_id
+                      AND ph.snapshot_date < pgs.game_date
+                    ORDER BY ph.snapshot_date DESC LIMIT 1
+                ) pos ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
+                           avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5
+                    FROM player_average_game_stats pags
+                    WHERE pags.player_id = pgs.player_id
+                      AND pags.game_date < pgs.game_date
+                    ORDER BY pags.game_date DESC LIMIT 1
+                ) p_avg ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT avg_usg_pct_l5, avg_ts_pct_l15, avg_reb_pct_l5, avg_ast_pct_l5
+                    FROM player_average_advanced_stats paas
+                    WHERE paas.player_id = pgs.player_id
+                      AND paas.game_date < pgs.game_date
+                    ORDER BY paas.game_date DESC LIMIT 1
+                ) pa_avg ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
+                    FROM team_average_game_stats tags
+                    WHERE tags.team_id = pgs.team_id
+                      AND tags.game_date < pgs.game_date
+                    ORDER BY tags.game_date DESC LIMIT 1
+                ) t_avg ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT avg_def_rtg_l5, avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
+                    FROM team_average_game_stats tags
+                    WHERE tags.team_id = tgs.opponent_id
+                      AND tags.game_date < pgs.game_date
+                    ORDER BY tags.game_date DESC LIMIT 1
+                ) opp_avg ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT
+                        off_rtg_allowed_l5, reb_allowed_l5, ast_allowed_l5, threes_allowed_l5,
+                        threes_per100_allowed_l5, reb_per100_allowed_l5, ast_per100_allowed_l5,
+                        off_rtg_allowed_l15, reb_allowed_l15, ast_allowed_l15, threes_allowed_l15
+                    FROM team_allowed_by_position tabp
+                    WHERE tabp.team_id = tgs.opponent_id
+                      AND tabp.position_group = pos.position_group
+                      AND tabp.game_date < pgs.game_date
+                    ORDER BY tabp.game_date DESC LIMIT 1
+                ) opp_def ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT
+                        MAX(CASE WHEN market_key = 'spreads' THEN line END) as spread,
+                        MAX(CASE WHEN market_key = 'totals' THEN line END) as total
+                    FROM raw_game_lines_staging
+                    WHERE nba_game_id = pgs.game_id
+                      AND bookmaker IN ('pinnacle', 'draftkings')
+                ) lines ON TRUE
+                WHERE pgs.game_date >= :chunk_start
+                  AND pgs.game_date <= :chunk_end
+                  AND pgs.min >= 5
+                  AND pos.position_group IS NOT NULL
+            """)
+
+            try:
+                with self.engine.connect() as conn:
+                    chunk_df = pd.read_sql(
+                        query,
+                        conn,
+                        params={"chunk_start": chunk_start, "chunk_end": chunk_end},
+                    )
+                logger.info(
+                    f"  Feature chunk {chunk_idx + 1}/{len(chunks)}: "
+                    f"{chunk_start} to {chunk_end} ({len(chunk_dates)} dates) -> {len(chunk_df)} rows"
+                )
+                if not chunk_df.empty:
+                    chunk_dfs.append(chunk_df)
+            except Exception as e:
+                logger.error(f"  Feature chunk {chunk_idx + 1}/{len(chunks)} failed: {e}")
+                continue
+
+        if not chunk_dfs:
+            return {}
+
+        all_results = pd.concat(chunk_dfs, ignore_index=True)
+
+        # Add hardcoded rest/travel columns (same as get_features_for_date)
+        for col in [
+            "rest_days",
+            "travel_dist",
+            "is_back_to_back",
+            "opp_rest_days",
+            "opp_travel_dist",
+            "opp_is_back_to_back",
+        ]:
+            all_results[col] = 0.0
+
+        # Ensure game_date is a proper date type for groupby
+        if hasattr(all_results["game_date"].iloc[0], "date"):
+            all_results["game_date"] = all_results["game_date"].apply(lambda x: x.date() if hasattr(x, "date") else x)
+
+        return {game_date: group_df.reset_index(drop=True) for game_date, group_df in all_results.groupby("game_date")}
 
     def get_training_dataset(self, seasons: list[str]) -> pd.DataFrame:
         """

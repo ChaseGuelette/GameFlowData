@@ -1,13 +1,9 @@
-import warnings
-
 import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from tqdm import tqdm
 
 from src.db.client import get_engine
-
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 
 
 def backfill_team_allowed_by_position(engine, seasons: list[str]):

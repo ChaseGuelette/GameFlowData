@@ -96,6 +96,7 @@ class BetSimulator:
     kelly_fraction: float = 0.125
     min_odds: int = -200  # Don't bet on heavy favorites
     max_odds: int = 200  # Don't bet on long shots
+    allowed_bets: set[tuple[str, str]] | None = None  # e.g., {("pts", "under"), ("reb", "over")}
 
     bets: list[Bet] = field(default_factory=list)
     current_bankroll: float = field(init=False)
@@ -224,45 +225,49 @@ class BetSimulator:
             if self.current_bankroll <= 0:
                 break
 
-            # Check over bet
-            if self.should_bet(
-                model_prob=row.get("over_prob"),
-                implied_prob=row.get("implied_over"),
-                odds=row.get("over_odds"),
-                side=BetSide.OVER,
-            ):
-                bet = self.place_bet(
-                    player_id=row["player_id"],
-                    game_id=row["game_id"],
-                    game_date=game_date,
-                    stat=row["stat"],
-                    side=BetSide.OVER,
-                    line=row["line"],
-                    odds=int(row["over_odds"]),
-                    model_prob=row["over_prob"],
-                    implied_prob=row["implied_over"],
-                )
-                new_bets.append(bet)
+            stat = row["stat"]
 
-            # Check under bet
-            if self.should_bet(
-                model_prob=row.get("under_prob"),
-                implied_prob=row.get("implied_under"),
-                odds=row.get("under_odds"),
-                side=BetSide.UNDER,
-            ):
-                bet = self.place_bet(
-                    player_id=row["player_id"],
-                    game_id=row["game_id"],
-                    game_date=game_date,
-                    stat=row["stat"],
+            # Check over bet (skip if not in allowlist)
+            if self.allowed_bets is None or (stat, "over") in self.allowed_bets:
+                if self.should_bet(
+                    model_prob=row.get("over_prob"),
+                    implied_prob=row.get("implied_over"),
+                    odds=row.get("over_odds"),
+                    side=BetSide.OVER,
+                ):
+                    bet = self.place_bet(
+                        player_id=row["player_id"],
+                        game_id=row["game_id"],
+                        game_date=game_date,
+                        stat=stat,
+                        side=BetSide.OVER,
+                        line=row["line"],
+                        odds=int(row["over_odds"]),
+                        model_prob=row["over_prob"],
+                        implied_prob=row["implied_over"],
+                    )
+                    new_bets.append(bet)
+
+            # Check under bet (skip if not in allowlist)
+            if self.allowed_bets is None or (stat, "under") in self.allowed_bets:
+                if self.should_bet(
+                    model_prob=row.get("under_prob"),
+                    implied_prob=row.get("implied_under"),
+                    odds=row.get("under_odds"),
                     side=BetSide.UNDER,
-                    line=row["line"],
-                    odds=int(row["under_odds"]),
-                    model_prob=row["under_prob"],
-                    implied_prob=row["implied_under"],
-                )
-                new_bets.append(bet)
+                ):
+                    bet = self.place_bet(
+                        player_id=row["player_id"],
+                        game_id=row["game_id"],
+                        game_date=game_date,
+                        stat=stat,
+                        side=BetSide.UNDER,
+                        line=row["line"],
+                        odds=int(row["under_odds"]),
+                        model_prob=row["under_prob"],
+                        implied_prob=row["implied_under"],
+                    )
+                    new_bets.append(bet)
 
         return new_bets
 
@@ -304,33 +309,33 @@ class BetSimulator:
     def resolve_voids(self, voids_df: pd.DataFrame) -> int:
         """
         Resolve bets as PUSH (void) for players who did not play.
-        
+
         Expected columns: player_id, game_id
         """
         if voids_df.empty:
             return 0
-            
+
         voided_count = 0
-        
+
         # Build set of (player_id, game_id) for fast lookup
         # We don't need 'stat' because if a player didn't play, ALL their props are void
         void_keys = set()
         for _, row in voids_df.iterrows():
             void_keys.add((row["player_id"], row["game_id"]))
-            
+
         for bet in self.bets:
             if bet.outcome is not None:
                 continue
-                
+
             if (bet.player_id, bet.game_id) in void_keys:
                 bet.outcome = BetOutcome.PUSH
                 bet.actual = 0  # No stats recorded
                 bet.profit = 0.0
-                
+
                 # Refund stake
                 self.current_bankroll += bet.stake
                 voided_count += 1
-                
+
         return voided_count
 
     def to_dataframe(self) -> pd.DataFrame:
