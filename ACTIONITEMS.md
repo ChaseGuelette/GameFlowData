@@ -24,33 +24,53 @@ The empirical CDF implementation was verified line-by-line — it is correct. Th
 well-calibrated (all quantiles within OK band) but does not beat the market. The 49.2% hit rate
 is below the ~52.4% breakeven at -110 vig.
 
-**Root cause: the model is correlated with the market.** Features like `line_spread` and
-`line_total` are direct restatements of the betting market's view. The model partially learns
-to replicate the market. Per Hubacek et al., even an accurate model is unprofitable if it's
-correlated with the bookmaker's model. Profitability requires *independent* signal — information
-the market hasn't already priced.
+**Root cause: the model is catastrophically overconfident, not market-correlated.**
+The market neutralization diagnostic (A1) revealed a surprise — the model is NOT a market
+clone. R² of `model_prob` regressed on `implied_prob` is only **0.104** (10% explained).
+The real problem is probability miscalibration against prop lines:
+
+| Metric | Market | Model | Naive (50%) |
+|--------|--------|-------|-------------|
+| Brier score | 0.2495 | **0.2705** | 0.2500 |
+| Correlation w/ outcome | 0.079 | 0.046 | — |
+| Residual signal | — | **0.022** | — |
+
+The model is **worse than a coin flip** on Brier score. When it predicts 84% over → actual
+is 49.1%. Its quantile calibration is good (Q10–Q90 all within OK bands) but its *probability
+calibration against prop lines* is catastrophically wrong. The model's MC distributions are
+reasonable in shape, but translating `(samples > line).mean()` into a betting probability
+produces extreme overconfidence because the distribution centers near the line (as it should
+for a well-calibrated model) and small shifts in mean create large swings in P(over).
+
+The model's residuals vs the market have essentially zero predictive signal (r = 0.022).
+This means the model currently adds no independent information beyond what the market already
+prices. Per Hubacek et al., profitability requires independent signal the market hasn't priced.
 
 ### New Strategic Direction
 
-The path forward has two pillars:
+The path forward has three pillars:
 
-1. **Market decorrelation** — restructure how the model relates to the market (residual
-   modeling, remove market leakage features, Black-Litterman blending)
-2. **New signal sources** — add features the market prices imperfectly (injury context,
+1. **Probability recalibration** — the model's raw P(over) is useless. Black-Litterman
+   blending anchors to the market's well-calibrated prior and extracts whatever small
+   independent signal the model has. This is the critical first step.
+2. **Market decorrelation** — restructure how the model relates to the market (residual
+   modeling, remove market leakage features) to increase independent signal.
+3. **New signal sources** — add features the market prices imperfectly (injury context,
    rest/fatigue, short-window trends, lineup effects)
 
 ---
 
-## Track A: Market Decorrelation (Critical Path — Must Do First)
+## Track A: Probability Recalibration & Market Decorrelation (Critical Path)
 
-These items address the fundamental problem: the model agrees with the market too closely
-to generate edge. Ordered by effort (easiest first).
+These items address the fundamental problem: the model's raw probabilities are catastrophically
+overconfident and contain no independent signal beyond the market. Ordered by effort (easiest first).
 
-- [ ] **A1. Run post-hoc market neutralization diagnostic**
-  Using the latest backtest output (`predictions.csv`), regress `model_prob` on `implied_prob`.
-  If R^2 is high, the model is essentially a noisy market replica. This takes minutes and
-  requires no code changes — just load the CSV and run a regression.
-  Determines how urgent decorrelation is.
+- [x] **A1. Run post-hoc market neutralization diagnostic** *(DONE — 2026-01-28)*
+  Regressed `model_prob` on `implied_prob`. R² = 0.104 — model is NOT a market clone.
+  However, the model is catastrophically overconfident (Brier 0.2705 vs naive 0.2500).
+  Model residuals have zero predictive signal (r = 0.022 with outcomes).
+  **Conclusion: the problem is probability miscalibration, not market correlation.**
+  Black-Litterman blending is the correct first fix — anchor to market prior.
 
 - [ ] **A2. Remove `line_total` from rate features**
   `line_total` (Vegas game total) is in PTS, AST, and THREES rate features. It's nearly a
@@ -58,14 +78,26 @@ to generate edge. Ordered by effort (easiest first).
   `feature_store.py`. Keep `line_spread` in MINUTES_FEATURES only (it genuinely predicts
   playing time and isn't directly bet on). Retrain and re-backtest.
 
-- [ ] **A3. Implement Black-Litterman blending layer**
-  New module between `MonteCarloPredictor` and `BetSimulator` that blends:
-  - **Prior**: Market-implied probability (from prop odds)
-  - **View**: Model's MC distribution (your prediction)
-  - **Confidence**: Width of MC distribution (narrow = confident, wide = uncertain)
+- [ ] **A3. Implement Black-Litterman blending layer** *(NOW TOP PRIORITY)*
+  New module (`src/models/black_litterman.py`) between `MonteCarloPredictor` and `BetSimulator`.
+  The A1 diagnostic proved this is the correct fix: the model's raw P(over) is useless
+  (Brier 0.2705), but the market is well-calibrated (Brier 0.2495). BL anchors to the market
+  prior and only deviates when the model shows high-confidence disagreement.
 
-  When uncertain, posterior stays near market (no bet). When confident and disagreeing, posterior
-  deviates (potential edge). No retraining needed — this is a post-prediction adjustment.
+  **Design:**
+  - **Prior**: Devigged market probability (from prop odds, vig removed)
+  - **View**: Model's empirical P(over) from MC samples
+  - **Confidence**: Per-prediction confidence from MC distribution properties
+    (z-score of line vs distribution center, distribution width)
+  - **Tau parameter**: Global scaling of model influence (start conservative, ~0.10–0.20)
+  - **Formula**: `posterior = market_prob + tau × confidence × (model_prob − market_prob)`
+
+  When uncertain or model agrees with market → posterior ≈ market (no bet).
+  When confident and disagreeing → posterior deviates (potential edge).
+  No retraining needed — this is a post-prediction adjustment.
+
+  **Integration**: Hook into `_calculate_edges()` in `backtest_harness.py`.
+  Add `--bl-tau` CLI flag to `run_backtest.py`.
 
 - [ ] **A4. Residual modeling (Option A — feature-based)**
   Add the prop line as a centering feature to rate models. The model learns deviations from
@@ -146,9 +178,9 @@ where bookmaker attention is lower.
 
 ## Track D: Previous Model Improvement Items (Deprioritized)
 
-These were the original Track B items. Most are superseded by the market decorrelation
-findings — fixing per-stat biases won't help if the fundamental problem is market correlation.
-Revisit after Tracks A and B are complete.
+These were the original Track B items. Most are superseded by the probability recalibration
+findings — fixing per-stat biases won't help if the fundamental problem is overconfident
+probabilities and zero independent signal. Revisit after Tracks A and B are complete.
 
 - [ ] **D1. Investigate PTS upward bias** *(Superseded by A2)*
   PTS rate_factors going up to 1.30 may inflate upper tail. However, the market decorrelation
@@ -190,22 +222,43 @@ backtest with positive ROI.
 
 | Item | Effort | Expected Value | Notes |
 |------|--------|----------------|-------|
-| A1 (Market correlation diagnostic) | Trivial | Critical | 10-minute diagnostic, do first |
-| A2 (Remove line_total) | Low | High | Reduces market leakage |
+| ~~A1 (Market neutralization diagnostic)~~ | ~~Trivial~~ | ~~Critical~~ | **DONE** — R²=0.10, Brier 0.2705, overconfidence not correlation |
+| **A3 (Black-Litterman blending)** | **Medium** | **Critical** | **DO NEXT** — anchors to market prior, fixes overconfidence |
+| A2 (Remove line_total) | Low | High | Reduces market leakage, increases independent signal |
 | B2 (Rest/B2B features) | Low | Medium-High | Known strong signal, easy to compute |
 | B3 (L3 + trend features) | Low | Medium | More granular than L5/L15 |
-| A3 (Black-Litterman blending) | Medium | High | Principled decorrelation dial |
 | B1 (Injury features) | Medium-High | High | Biggest feature gap, needs data acquisition |
 | A4 (Residual modeling — features) | Medium | High | Structural decorrelation |
 | B4 (Minutes stability) | Low | Medium | Better bet filtering |
 | C1 (Q10 investigation) | Low | Low-Medium | Calibration refinement |
 | A5 (Residual modeling — classifier) | High | High | Only if A4 isn't sufficient |
-| D1-D4 (Old model items) | Various | Low until decorrelated | Revisit after Track A |
+| D1-D4 (Old model items) | Various | Low until recalibrated | Revisit after Track A |
 | E1-E7 (Go-live) | Various | Blocked | Needs demonstrated edge first |
 
 ---
 
 ## Key Findings Archive
+
+### Market Neutralization Diagnostic (Closed — 2026-01-28)
+
+Ran full diagnostic on `backtest_results/bt_20260128_145106/predictions.csv` (15,090 rows).
+
+**Key results:**
+- R² (model_prob ~ implied_prob) = 0.104 → model is NOT a market clone
+- Per-stat: PTS R²=0.041, REB R²=0.187
+- Model Brier score: 0.2705 (worse than naive 0.2500)
+- Market Brier score: 0.2495 (well-calibrated)
+- Model correlation with outcome: 0.046
+- Market correlation with outcome: 0.079 (market is better predictor)
+- Model residual correlation with outcome: 0.022 (essentially zero independent signal)
+- Probability calibration: model says 84% over → actual 49.1% (catastrophic overconfidence)
+- Model avg P(over): 0.604 (should be ~0.50 for balanced lines)
+
+**Conclusion:** The original hypothesis ("model is correlated with the market") was wrong.
+The model is overconfident, not correlated. Good quantile calibration does NOT imply good
+probability calibration against prop lines. The MC distribution centers near the line (correct
+behavior), but `(samples > line).mean()` amplifies small mean shifts into extreme probabilities.
+Black-Litterman blending is the correct fix — anchor to the market's well-calibrated prior.
 
 ### Minutes Bimodality (Closed — 2026-01-28)
 

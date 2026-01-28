@@ -10,8 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Initial project setup with Session-Driven Development
+- Market neutralization diagnostic (A1) — regression + Brier score analysis on predictions.csv
+- Comprehensive roadmap in ACTIONITEMS.md with Tracks A–E
 
 ### Changed
+
+- Updated ACTIONITEMS.md with corrected root cause diagnosis: model is catastrophically overconfident (Brier 0.2705), not market-correlated (R²=0.10)
+- Promoted Black-Litterman blending (A3) to top priority based on diagnostic findings
+- Reorganized priority matrix with A1 marked complete
 
 ### Fixed
 
