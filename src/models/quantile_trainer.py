@@ -254,7 +254,12 @@ class QuantileModelSuite:
         for q, model in self.models.items():
             q_features = self.feature_names_per_quantile[q]
             X_q = X[q_features]
-            predictions[f"q{int(q * 100):02d}"] = model.predict(X_q)
+            # validate_features=False works around pandas 3.0 compat issue
+            # where XGBoost DMatrix can't extract feature names from the new
+            # str-typed Index. Feature order is guaranteed correct by the caller.
+            predictions[f"q{int(q * 100):02d}"] = model.predict(
+                X_q, validate_features=False
+            )
 
         result = pd.DataFrame(predictions)
 

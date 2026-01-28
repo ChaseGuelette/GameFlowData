@@ -99,14 +99,12 @@ class BacktestHarness:
         Returns:
             BacktestResult with predictions, bets, and metrics
         """
-        import concurrent.futures
-
         if isinstance(start_date, str):
             start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
         if isinstance(end_date, str):
             end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
 
-        logger.info(f"Starting backtest from {start_date} to {end_date} (workers={max_workers})")
+        logger.info(f"Starting backtest from {start_date} to {end_date} (Sequential Execution)")
 
         # Get all dates with games in range
         game_dates = self._get_game_dates(start_date, end_date)
@@ -115,29 +113,25 @@ class BacktestHarness:
         all_predictions = []
         completed_count = 0
 
-        # Phase 1: Parallel Prediction Generation
-        logger.info("Phase 1: Generating predictions...")
+        # Phase 1: Sequential Batch Prediction Generation
+        logger.info("Phase 1: Generating predictions (Sequential Batch)...")
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Map dates to futures
-            future_to_date = {executor.submit(self._run_date, d): d for d in game_dates}
+        for game_date in game_dates:
+            completed_count += 1
+            
+            if progress_callback:
+                progress_callback(game_date, len(game_dates))
 
-            for future in concurrent.futures.as_completed(future_to_date):
-                completed_count += 1
-                game_date = future_to_date[future]
+            if completed_count % 5 == 0 or completed_count == len(game_dates):
+                logger.info(f"Processed {completed_count}/{len(game_dates)} dates")
 
-                if progress_callback:
-                    progress_callback(game_date, len(game_dates))
-
-                if completed_count % 5 == 0 or completed_count == len(game_dates):
-                    logger.info(f"Processed {completed_count}/{len(game_dates)} dates")
-
-                try:
-                    date_preds = future.result()
-                    if date_preds is not None and len(date_preds) > 0:
-                        all_predictions.append(date_preds)
-                except Exception as e:
-                    logger.error(f"Error processing {game_date}: {e}")
+            try:
+                # Run prediction for this date (using efficient batch fetch)
+                date_preds = self._run_date(game_date)
+                if date_preds is not None and len(date_preds) > 0:
+                    all_predictions.append(date_preds)
+            except Exception as e:
+                logger.error(f"Error processing {game_date}: {e}")
 
         # Combine all predictions
         if all_predictions:
@@ -229,35 +223,39 @@ class BacktestHarness:
             return [row[0] for row in result]
 
     def _run_date(self, game_date: date) -> pd.DataFrame | None:
-        """Run predictions for a single date."""
-        # Get games for this date
-        games = self._get_games_for_date(game_date)
-        if not games:
+        """Run predictions for a single date using efficient batch processing."""
+        # Batch fetch all features for this date (One Query Rule them all)
+        features_df = self.feature_store.get_features_for_date(game_date)
+
+        if features_df is None or features_df.empty:
+            logger.debug(f"No features returned for {game_date}")
             return None
 
-        # Get players expected to play
-        players = self._get_players_for_date(game_date)
-        if not players:
+        pre_filter_count = len(features_df)
+
+        # Filter for min minutes using rolling average (forward-looking safe)
+        if "player_avg_min_l5" in features_df.columns:
+            features_df = features_df[features_df["player_avg_min_l5"] >= self.min_minutes_avg]
+
+        if features_df.empty:
+            logger.debug(f"All {pre_filter_count} players filtered out for {game_date} (min_minutes_avg={self.min_minutes_avg})")
             return None
 
         all_predictions = []
+        prediction_samples = {}
 
-        for player in players:
+        # Convert to records for iteration
+        player_records = features_df.to_dict("records")
+
+        for player_row in player_records:
             try:
-                # Get features as of game date (time-travel safe)
-                features = self.feature_store.get_player_game_features(
-                    player_id=player["player_id"],
-                    game_id=player["game_id"],
-                    as_of_date=game_date,
-                )
-
-                if features is None:
-                    continue
+                # Features are just the row itself
+                features = player_row
 
                 # Generate predictions
                 preds = self.predictor.predict(
-                    player_id=player["player_id"],
-                    game_id=player["game_id"],
+                    player_id=player_row["player_id"],
+                    game_id=player_row["game_id"],
                     features=features,
                     stats=self.stats,
                 )
@@ -265,11 +263,11 @@ class BacktestHarness:
                 for stat, pred in preds.items():
                     all_predictions.append(
                         {
-                            "player_id": player["player_id"],
-                            "player_name": player.get("player_name"),
-                            "game_id": player["game_id"],
+                            "player_id": player_row["player_id"],
+                            "player_name": player_row.get("player_name"),
+                            "game_id": player_row["game_id"],
                             "game_date": game_date,
-                            "team_id": player.get("team_id"),
+                            "team_id": player_row.get("team_id"),
                             "stat": stat,
                             "pred_mean": pred.mean,
                             "pred_std": pred.samples.std(),
@@ -282,19 +280,24 @@ class BacktestHarness:
                         }
                     )
                     # Store samples separately to avoid DataFrame memory bloat
-                    prediction_samples[(player["player_id"], player["game_id"], stat)] = pred.samples
+                    prediction_samples[(player_row["player_id"], player_row["game_id"], stat)] = pred.samples
 
             except Exception as e:
-                logger.debug(f"Error predicting for player {player['player_id']}: {e}")
+                logger.warning(f"Error predicting for player {player_row.get('player_id')}: {e}")
                 continue
+
+        logger.info(f"  {game_date}: {len(player_records)} players -> {len(all_predictions)} predictions")
 
         if not all_predictions:
             return None
 
         predictions_df = pd.DataFrame(all_predictions)
 
+        # Get unique game IDs for fetching lines
+        game_ids = features_df["game_id"].unique().tolist()
+
         # Get prop lines and calculate edges
-        lines_df = self._get_lines_for_date(game_date, [g["game_id"] for g in games])
+        lines_df = self._get_lines_for_date(game_date, game_ids)
         if len(lines_df) > 0:
             predictions_df = self._calculate_edges(predictions_df, lines_df, prediction_samples)
 

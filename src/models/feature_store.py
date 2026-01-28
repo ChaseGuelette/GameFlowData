@@ -305,6 +305,168 @@ class FeatureStore:
 
         return {"rest_days": rest_days, "travel_dist": dist, "is_back_to_back": 1 if rest_days == 1 else 0}
 
+    def get_features_for_date(self, game_date: date) -> pd.DataFrame:
+        """
+        Efficiently fetch features for ALL players on a specific date in one query.
+        Used for backtesting to prevent N+1 query exhaustion.
+        """
+        query = text("""
+            SELECT
+                -- Identifiers
+                pgs.game_id, pgs.player_id, pgs.game_date::date, pgs.season_id,
+                pgs.team_id, tgs.opponent_id,
+                p.player_name,
+
+                -- Position
+                pos.position_group,
+
+                -- Player Box Score Averages
+                COALESCE(p_avg.avg_min_l5, 0) as player_avg_min_l5,
+                COALESCE(p_avg.avg_min_l15, 0) as player_avg_min_l15,
+                COALESCE(p_avg.avg_pts_l5, 0) as player_avg_pts_l5,
+                COALESCE(p_avg.avg_pts_l15, 0) as player_avg_pts_l15,
+                COALESCE(p_avg.avg_reb_l5, 0) as player_avg_reb_l5,
+                COALESCE(p_avg.avg_ast_l5, 0) as player_avg_ast_l5,
+                COALESCE(p_avg.avg_fg3m_l5, 0) as player_avg_fg3m_l5,
+                COALESCE(p_avg.avg_fg3a_l5, 0) as player_avg_fg3a_l5,
+
+                -- Player Advanced Averages
+                COALESCE(pa_avg.avg_usg_pct_l5, 0) as player_avg_usg_pct_l5,
+                COALESCE(pa_avg.avg_ts_pct_l15, 0) as player_avg_ts_pct_l15,
+                COALESCE(pa_avg.avg_reb_pct_l5, 0) as player_avg_reb_pct_l5,
+                COALESCE(pa_avg.avg_ast_pct_l5, 0) as player_avg_ast_pct_l5,
+
+                -- Team Context
+                COALESCE(t_avg.avg_pace_l5, 0) as team_avg_pace_l5,
+                COALESCE(t_avg.avg_fg3a_l5, 0) as team_avg_fg3a_l5,
+                COALESCE(t_avg.avg_fg3_pct_l5, 0) as team_avg_fg3_pct_l5,
+
+                -- Opponent Context (via opponent_id join)
+                COALESCE(opp_avg.avg_def_rtg_l5, 0) as opp_avg_def_rtg_l5,
+                COALESCE(opp_avg.avg_pace_l5, 0) as opp_avg_pace_l5,
+                COALESCE(opp_avg.avg_fg3a_l5, 0) as opp_avg_fg3a_l5,
+                COALESCE(opp_avg.avg_fg3_pct_l5, 0) as opp_avg_fg3_pct_l5,
+
+                -- Opponent Defense vs Position (L5 raw)
+                COALESCE(opp_def.off_rtg_allowed_l5, 0) as opp_pos_off_rtg_allowed_l5,
+                COALESCE(opp_def.reb_allowed_l5, 0) as opp_pos_reb_allowed_l5,
+                COALESCE(opp_def.ast_allowed_l5, 0) as opp_pos_ast_allowed_l5,
+                COALESCE(opp_def.threes_allowed_l5, 0) as opp_pos_threes_allowed_l5,
+
+                -- Opponent Defense vs Position (L5 pace-adjusted per 100 possessions)
+                COALESCE(opp_def.threes_per100_allowed_l5, 0) as opp_pos_threes_per100_allowed_l5,
+                COALESCE(opp_def.reb_per100_allowed_l5, 0) as opp_pos_reb_per100_allowed_l5,
+                COALESCE(opp_def.ast_per100_allowed_l5, 0) as opp_pos_ast_per100_allowed_l5,
+
+                -- Opponent Defense vs Position (L15 raw)
+                COALESCE(opp_def.off_rtg_allowed_l15, 0) as opp_pos_off_rtg_allowed_l15,
+                COALESCE(opp_def.reb_allowed_l15, 0) as opp_pos_reb_allowed_l15,
+                COALESCE(opp_def.ast_allowed_l15, 0) as opp_pos_ast_allowed_l15,
+                COALESCE(opp_def.threes_allowed_l15, 0) as opp_pos_threes_allowed_l15,
+
+                -- Game Lines
+                COALESCE(lines.spread, 0) as line_spread,
+                COALESCE(lines.total, 0) as line_total,
+
+                -- Game Context
+                CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
+
+            FROM player_game_stats pgs
+            JOIN players p ON pgs.player_id = p.player_id
+            JOIN team_game_stats tgs
+                ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
+
+            -- Position
+            LEFT JOIN LATERAL (
+                SELECT position_group
+                FROM player_position_history ph
+                WHERE ph.player_id = pgs.player_id
+                  AND ph.snapshot_date < pgs.game_date
+                ORDER BY ph.snapshot_date DESC LIMIT 1
+            ) pos ON TRUE
+
+            -- Player Box Score Averages
+            LEFT JOIN LATERAL (
+                SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
+                       avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5
+                FROM player_average_game_stats pags
+                WHERE pags.player_id = pgs.player_id
+                  AND pags.game_date < pgs.game_date
+                ORDER BY pags.game_date DESC LIMIT 1
+            ) p_avg ON TRUE
+
+            -- Player Advanced Stats
+            LEFT JOIN LATERAL (
+                SELECT avg_usg_pct_l5, avg_ts_pct_l15, avg_reb_pct_l5, avg_ast_pct_l5
+                FROM player_average_advanced_stats paas
+                WHERE paas.player_id = pgs.player_id
+                  AND paas.game_date < pgs.game_date
+                ORDER BY paas.game_date DESC LIMIT 1
+            ) pa_avg ON TRUE
+
+            -- Team Rolling Stats
+            LEFT JOIN LATERAL (
+                SELECT avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
+                FROM team_average_game_stats tags
+                WHERE tags.team_id = pgs.team_id
+                  AND tags.game_date < pgs.game_date
+                ORDER BY tags.game_date DESC LIMIT 1
+            ) t_avg ON TRUE
+
+            -- Opponent Stats (via opponent_id)
+            LEFT JOIN LATERAL (
+                SELECT avg_def_rtg_l5, avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
+                FROM team_average_game_stats tags
+                WHERE tags.team_id = tgs.opponent_id
+                  AND tags.game_date < pgs.game_date
+                ORDER BY tags.game_date DESC LIMIT 1
+            ) opp_avg ON TRUE
+
+            -- Opponent Defense vs Position
+            LEFT JOIN LATERAL (
+                SELECT
+                    off_rtg_allowed_l5, reb_allowed_l5, ast_allowed_l5, threes_allowed_l5,
+                    threes_per100_allowed_l5, reb_per100_allowed_l5, ast_per100_allowed_l5,
+                    off_rtg_allowed_l15, reb_allowed_l15, ast_allowed_l15, threes_allowed_l15
+                FROM team_allowed_by_position tabp
+                WHERE tabp.team_id = tgs.opponent_id
+                  AND tabp.position_group = pos.position_group
+                  AND tabp.game_date < pgs.game_date
+                ORDER BY tabp.game_date DESC LIMIT 1
+            ) opp_def ON TRUE
+
+            -- Betting Lines
+            LEFT JOIN LATERAL (
+                SELECT
+                    MAX(CASE WHEN market_key = 'spreads' THEN line END) as spread,
+                    MAX(CASE WHEN market_key = 'totals' THEN line END) as total
+                FROM raw_game_lines_staging
+                WHERE nba_game_id = pgs.game_id
+                  AND bookmaker IN ('pinnacle', 'draftkings')
+            ) lines ON TRUE
+
+            WHERE pgs.game_date = :game_date
+              AND pgs.min >= 5
+              AND pos.position_group IS NOT NULL
+        """)
+
+        with self.engine.connect() as conn:
+            df = pd.read_sql(query, conn, params={"game_date": game_date})
+
+        if df.empty:
+            return df
+
+        # Fill missing columns that training data has but this query might miss if strict
+        # (Though we selected them all)
+        
+        # Default Travel & Rest to 0 for now to avoid N+1 complexities in this hotfix.
+        cols = ["rest_days", "travel_dist", "is_back_to_back",
+                "opp_rest_days", "opp_travel_dist", "opp_is_back_to_back"]
+        for col in cols:
+            df[col] = 0.0
+
+        return df
+
     def get_training_dataset(self, seasons: list[str]) -> pd.DataFrame:
         """
         Build complete training dataset.

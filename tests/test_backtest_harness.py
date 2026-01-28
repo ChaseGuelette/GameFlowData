@@ -143,7 +143,7 @@ class TestBacktestHarness:
         assert players[0]["player_id"] == 1
 
     def test_calculate_edges(self, harness):
-        """Test edge calculation uses empirical CDF from Monte Carlo samples."""
+        """Test edge calculation uses empirical CDF from Monte Carlo samples dict."""
         # Create samples centered at 20 with std ~3 (line 19.5 should yield >50% over)
         rng = np.random.RandomState(42)
         samples = rng.normal(20.0, 3.0, 5000)
@@ -161,7 +161,6 @@ class TestBacktestHarness:
                     "pred_q50": 20.0,
                     "pred_q75": 22.0,
                     "pred_q90": 25.0,
-                    "samples": samples,
                 }
             ]
         )
@@ -179,7 +178,10 @@ class TestBacktestHarness:
             ]
         )
 
-        result = harness._calculate_edges(predictions_df, lines_df)
+        # Samples passed as dict keyed by (player_id, game_id, stat)
+        prediction_samples = {(1, "001", "pts"): samples}
+
+        result = harness._calculate_edges(predictions_df, lines_df, prediction_samples)
 
         assert "over_prob" in result.columns
         assert "under_prob" in result.columns
@@ -193,9 +195,6 @@ class TestBacktestHarness:
         expected_prob = float((samples > 19.5).mean())
         expected_prob = min(max(expected_prob, 0.05), 0.90)  # sanity caps
         assert abs(result.iloc[0]["over_prob"] - expected_prob) < 0.001
-
-        # Samples column should be dropped after edge calculation
-        assert "samples" not in result.columns
 
     def test_get_actuals(self, harness, mock_engine):
         """Test getting actual outcomes."""
