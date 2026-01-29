@@ -2,46 +2,10 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 
-import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
 
 logger = logging.getLogger(__name__)
-
-# ID: (Latitude, Longitude)
-# These are approximate stadium locations
-TEAM_LOCATIONS = {
-    1610612737: (33.7573, -84.3963),  # ATL (State Farm Arena)
-    1610612738: (42.3662, -71.0621),  # BOS (TD Garden)
-    1610612751: (40.6826, -73.9754),  # BKN (Barclays Center)
-    1610612766: (35.2251, -80.8392),  # CHA (Spectrum Center)
-    1610612741: (41.8807, -87.6742),  # CHI (United Center)
-    1610612739: (41.4965, -81.6881),  # CLE (Rocket Mortgage FieldHouse)
-    1610612742: (32.7905, -96.8103),  # DAL (American Airlines Center)
-    1610612743: (39.7487, -105.0076),  # DEN (Ball Arena)
-    1610612765: (42.3411, -83.0553),  # DET (Little Caesars Arena)
-    1610612744: (37.7680, -122.3877),  # GSW (Chase Center)
-    1610612745: (29.7508, -95.3621),  # HOU (Toyota Center)
-    1610612754: (39.7640, -86.1555),  # IND (Gainbridge Fieldhouse)
-    1610612746: (33.9425, -118.4081),  # LAC (Intuit Dome - broadly LA area)
-    1610612747: (34.0430, -118.2673),  # LAL (Crypto.com Arena)
-    1610612763: (35.1382, -90.0505),  # MEM (FedExForum)
-    1610612748: (25.7814, -80.1870),  # MIA (Kaseya Center)
-    1610612749: (43.0451, -87.9172),  # MIL (Fiserv Forum)
-    1610612750: (44.9795, -93.2761),  # MIN (Target Center)
-    1610612740: (29.9490, -90.0821),  # NOP (Smoothie King Center)
-    1610612752: (40.7505, -73.9934),  # NYK (Madison Square Garden)
-    1610612760: (35.4634, -97.5151),  # OKC (Paycom Center)
-    1610612753: (28.5392, -81.3839),  # ORL (Kia Center)
-    1610612755: (39.9012, -75.1720),  # PHI (Wells Fargo Center)
-    1610612756: (33.4457, -112.0712),  # PHX (Footprint Center)
-    1610612757: (45.5316, -122.6668),  # POR (Moda Center)
-    1610612758: (38.5802, -121.4997),  # SAC (Golden 1 Center)
-    1610612759: (29.4270, -98.4375),  # SAS (Frost Bank Center)
-    1610612761: (43.6435, -79.3791),  # TOR (Scotiabank Arena)
-    1610612762: (40.7683, -111.9011),  # UTA (Delta Center)
-    1610612764: (38.8982, -77.0209),  # WAS (Capital One Arena)
-}
 
 
 @dataclass
@@ -63,6 +27,16 @@ MINUTES_FEATURES = [
     "line_spread",
     "line_total",
     "is_home",
+    # B2: Rest/Schedule
+    "rest_days",
+    "is_back_to_back",
+    "games_in_last_7_days",
+    # B3: Short-window trend
+    "player_avg_min_l3",
+    # B4: Minutes stability
+    "player_min_std_l5",
+    "player_min_floor_l5",
+    "player_games_started_l5",
 ]
 
 RATE_FEATURES_PTS = [
@@ -75,6 +49,11 @@ RATE_FEATURES_PTS = [
     "opp_pos_off_rtg_allowed_l5",
     "opp_pos_off_rtg_allowed_l15",
     "is_home",
+    "prop_line_pts",
+    # B3: Trend + variability
+    "player_avg_pts_l3",
+    "player_pts_l3_l15_ratio",
+    "player_std_pts_l5",
 ]
 
 RATE_FEATURES_REB = [
@@ -86,6 +65,11 @@ RATE_FEATURES_REB = [
     "team_avg_pace_l5",
     "opp_avg_pace_l5",
     "is_home",
+    "prop_line_reb",
+    # B3: Trend + variability
+    "player_avg_reb_l3",
+    "player_reb_l3_l15_ratio",
+    "player_std_reb_l5",
 ]
 
 RATE_FEATURES_AST = [
@@ -97,6 +81,11 @@ RATE_FEATURES_AST = [
     "opp_pos_ast_allowed_l15",
     "team_avg_pace_l5",
     "is_home",
+    "prop_line_ast",
+    # B3: Trend + variability
+    "player_avg_ast_l3",
+    "player_ast_l3_l15_ratio",
+    "player_std_ast_l5",
 ]
 
 RATE_FEATURES_THREES = [
@@ -111,6 +100,11 @@ RATE_FEATURES_THREES = [
     "opp_avg_fg3_pct_l5",
     "team_avg_pace_l5",
     "is_home",
+    "prop_line_threes",
+    # B3: Trend + variability
+    "player_avg_fg3m_l3",
+    "player_fg3m_l3_l15_ratio",
+    "player_std_fg3m_l5",
 ]
 
 
@@ -127,88 +121,6 @@ class FeatureStore:
     def __init__(self, engine, config: FeatureConfig | None = None):
         self.engine = engine
         self.config = config or FeatureConfig()
-
-    @staticmethod
-    def _haversine(lat1, lon1, lat2, lon2):
-        """Vectorized Haversine distance calculation."""
-        lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-        dlon = lon2 - lon1
-        dlat = lat2 - lat1
-        a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-        c = 2 * np.arcsin(np.sqrt(a))
-        return c * 3956  # Miles
-
-    def _get_travel_and_rest_features(self, seasons: list[str]) -> pd.DataFrame:
-        """
-        Calculate rest days and travel distance for all games in the specified seasons.
-        Returns a DataFrame with columns: [game_id, team_id, rest_days, travel_dist, is_back_to_back]
-        """
-        with self.engine.connect() as conn:
-            # Get a simple schedule: Who played where and when?
-            query = text("""
-                SELECT
-                    team_id, game_id, game_date, matchup as team_matchup, season_id,
-                    CASE WHEN matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
-                FROM player_game_stats
-                WHERE season_id IN :seasons
-                GROUP BY team_id, game_id, game_date, matchup, season_id
-                ORDER BY team_id, game_date
-            """).bindparams(bindparam("seasons", expanding=True))
-            df = pd.read_sql(query, conn, params={"seasons": list(seasons)})
-
-        if df.empty:
-            return pd.DataFrame(columns=["game_id", "team_id", "rest_days", "travel_dist", "is_back_to_back"])
-
-        # 1. Setup Coordinates
-        df["game_date"] = pd.to_datetime(df["game_date"])
-
-        # Get My Location
-        team_lat = {k: v[0] for k, v in TEAM_LOCATIONS.items()}
-        team_lon = {k: v[1] for k, v in TEAM_LOCATIONS.items()}
-
-        df["my_lat"] = df["team_id"].map(team_lat)
-        df["my_lon"] = df["team_id"].map(team_lon)
-
-        # Get Opponent Location (If I am away, I am at opp location. If home, at mine)
-        # Self-join to get opponent info (rows where same game_id, diff team_id)
-        # We need opponent's team_id to look up their stadium.
-        # Since we grouped by team_id above, we have one row per team-game.
-        # We can self-merge on game_id.
-        df_opp = df[["game_id", "team_id", "my_lat", "my_lon"]].rename(
-            columns={"team_id": "opp_id", "my_lat": "opp_lat", "my_lon": "opp_lon"}
-        )
-        df = df.merge(df_opp, on="game_id")
-        df = df[df["team_id"] != df["opp_id"]].copy()  # Remove self-matches
-
-        # Determine Game Location
-        # If Home: Location = My Stadium
-        # If Away: Location = Opponent Stadium
-        df["loc_lat"] = np.where(df["is_home"] == 1, df["my_lat"], df["opp_lat"])
-        df["loc_lon"] = np.where(df["is_home"] == 1, df["my_lon"], df["opp_lon"])
-
-        # 2. Sort by Team sequence
-        df = df.sort_values(["team_id", "game_date"])
-
-        # 3. Calculate Lags (Previous Game info)
-        df["prev_date"] = df.groupby("team_id")["game_date"].shift(1)
-        df["prev_lat"] = df.groupby("team_id")["loc_lat"].shift(1)
-        df["prev_lon"] = df.groupby("team_id")["loc_lon"].shift(1)
-
-        # Fill First Game of Season (Assume Rest=7, Dist=0)
-        # Ideally we'd look at previous season, but for now we assume fresh start.
-        df["prev_date"] = df["prev_date"].fillna(df["game_date"] - pd.Timedelta(days=7))
-        df["prev_lat"] = df["prev_lat"].fillna(df["my_lat"])  # Start at home
-        df["prev_lon"] = df["prev_lon"].fillna(df["my_lon"])
-
-        # 4. Compute Metrics
-        df["rest_days"] = (df["game_date"] - df["prev_date"]).dt.days
-        # Clip rest days to max 7 to avoid outliers from all-star breaks/season start
-        df["rest_days"] = df["rest_days"].clip(0, 7)
-
-        df["travel_dist"] = self._haversine(df["prev_lat"], df["prev_lon"], df["loc_lat"], df["loc_lon"])
-        df["is_back_to_back"] = (df["rest_days"] == 1).astype(int)
-
-        return df[["game_id", "team_id", "rest_days", "travel_dist", "is_back_to_back"]]
 
     def get_player_game_features(self, player_id: int, game_id: str, as_of_date: date) -> dict | None:
         """
@@ -236,19 +148,15 @@ class FeatureStore:
             # 5. Betting Lines
             game_lines = self._get_game_lines(conn, game_id)
 
-            # 6. Travel & Rest Features
-            team_travel = self._get_travel_features_single(
-                conn, ctx["team_id"], as_of_date, ctx["is_home"] == 1, ctx["opponent_id"]
-            )
-            # For opponent: logic is reversed. If I am home, opponent is away (at my stadium).
-            # If I am away (at opp stadium), opponent is home.
-            opp_travel_raw = self._get_travel_features_single(
-                conn, ctx["opponent_id"], as_of_date, ctx["is_home"] == 0, ctx["team_id"]
-            )
-            opp_travel = {
-                "opp_rest_days": opp_travel_raw["rest_days"],
-                "opp_travel_dist": opp_travel_raw["travel_dist"],
-                "opp_is_back_to_back": opp_travel_raw["is_back_to_back"],
+            # 6. Player Prop Lines (centering features for rate models)
+            prop_lines = self._get_player_prop_lines(conn, player_id, game_id)
+
+            # Deprecated travel/opp features (not in any feature list, kept for column compat)
+            dead_features = {
+                "travel_dist": 0,
+                "opp_rest_days": 0,
+                "opp_travel_dist": 0,
+                "opp_is_back_to_back": 0,
             }
 
             return {
@@ -261,51 +169,9 @@ class FeatureStore:
                 **opp_stats,
                 **opp_pos_stats,
                 **game_lines,
-                **team_travel,
-                **opp_travel,
+                **prop_lines,
+                **dead_features,
             }
-
-    def _get_travel_features_single(self, conn, team_id, game_date, is_home, opponent_id):
-        """
-        Calculate travel/rest features for a single team-game context.
-        """
-        # 1. Get current game location
-        # If home, my lat/lon. If away, opp lat/lon.
-        my_lat, my_lon = TEAM_LOCATIONS.get(team_id, (0, 0))
-        opp_lat, opp_lon = TEAM_LOCATIONS.get(opponent_id, (0, 0))
-
-        curr_lat = my_lat if is_home else opp_lat
-        curr_lon = my_lon if is_home else opp_lon
-
-        # 2. Get previous game info
-        query = text("""
-            SELECT game_date, team_matchup, opponent_id
-            FROM team_game_stats
-            WHERE team_id = :team_id AND game_date < :game_date
-            ORDER BY game_date DESC LIMIT 1
-        """)
-        prev_game = conn.execute(query, {"team_id": team_id, "game_date": game_date}).fetchone()
-
-        if not prev_game:
-            # First game of season or no history
-            return {"rest_days": 7, "travel_dist": 0, "is_back_to_back": 0}
-
-        prev_date = prev_game.game_date
-        prev_is_home = "vs." in prev_game.team_matchup
-        prev_opp_id = prev_game.opponent_id
-
-        prev_opp_lat, prev_opp_lon = TEAM_LOCATIONS.get(prev_opp_id, (0, 0))
-
-        prev_lat = my_lat if prev_is_home else prev_opp_lat
-        prev_lon = my_lon if prev_is_home else prev_opp_lon
-
-        # 3. Calculate metrics
-        rest_days = (game_date - prev_date).days
-        rest_days = min(rest_days, 7)
-
-        dist = self._haversine(prev_lat, prev_lon, curr_lat, curr_lon)
-
-        return {"rest_days": rest_days, "travel_dist": dist, "is_back_to_back": 1 if rest_days == 1 else 0}
 
     def get_features_for_date(self, game_date: date) -> pd.DataFrame:
         """
@@ -370,6 +236,49 @@ class FeatureStore:
                 COALESCE(lines.spread, 0) as line_spread,
                 COALESCE(lines.total, 0) as line_total,
 
+                -- Player Prop Lines (centering features)
+                COALESCE(prop_lines.prop_line_pts, 0) as prop_line_pts,
+                COALESCE(prop_lines.prop_line_reb, 0) as prop_line_reb,
+                COALESCE(prop_lines.prop_line_ast, 0) as prop_line_ast,
+                COALESCE(prop_lines.prop_line_threes, 0) as prop_line_threes,
+
+                -- B3: L3 averages
+                COALESCE(p_avg.avg_min_l3, 0) as player_avg_min_l3,
+                COALESCE(p_avg.avg_pts_l3, 0) as player_avg_pts_l3,
+                COALESCE(p_avg.avg_reb_l3, 0) as player_avg_reb_l3,
+                COALESCE(p_avg.avg_ast_l3, 0) as player_avg_ast_l3,
+                COALESCE(p_avg.avg_fg3m_l3, 0) as player_avg_fg3m_l3,
+
+                -- B3: Momentum ratios (L3/L15 for PTS, L3/L5 for others)
+                CASE WHEN COALESCE(p_avg.avg_pts_l15, 0) > 0
+                     THEN COALESCE(p_avg.avg_pts_l3, 0) / p_avg.avg_pts_l15
+                     ELSE 1.0 END as player_pts_l3_l15_ratio,
+                CASE WHEN COALESCE(p_avg.avg_reb_l5, 0) > 0
+                     THEN COALESCE(p_avg.avg_reb_l3, 0) / p_avg.avg_reb_l5
+                     ELSE 1.0 END as player_reb_l3_l15_ratio,
+                CASE WHEN COALESCE(p_avg.avg_ast_l5, 0) > 0
+                     THEN COALESCE(p_avg.avg_ast_l3, 0) / p_avg.avg_ast_l5
+                     ELSE 1.0 END as player_ast_l3_l15_ratio,
+                CASE WHEN COALESCE(p_avg.avg_fg3m_l5, 0) > 0
+                     THEN COALESCE(p_avg.avg_fg3m_l3, 0) / p_avg.avg_fg3m_l5
+                     ELSE 1.0 END as player_fg3m_l3_l15_ratio,
+
+                -- B3/B4: L5 standard deviations
+                COALESCE(p_avg.std_min_l5, 0) as player_min_std_l5,
+                COALESCE(p_avg.std_pts_l5, 0) as player_std_pts_l5,
+                COALESCE(p_avg.std_reb_l5, 0) as player_std_reb_l5,
+                COALESCE(p_avg.std_ast_l5, 0) as player_std_ast_l5,
+                COALESCE(p_avg.std_fg3m_l5, 0) as player_std_fg3m_l5,
+
+                -- B4: Minutes stability
+                COALESCE(p_avg.min_floor_l5, 0) as player_min_floor_l5,
+                COALESCE(p_avg.games_started_l5, 0) as player_games_started_l5,
+
+                -- B2: Rest/schedule
+                LEAST(COALESCE(p_avg.rest_days, 3), 7) as rest_days,
+                CASE WHEN COALESCE(p_avg.rest_days, 3) = 1 THEN 1 ELSE 0 END as is_back_to_back,
+                COALESCE(p_avg.games_last_7d, 2) as games_in_last_7_days,
+
                 -- Game Context
                 CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
 
@@ -387,10 +296,14 @@ class FeatureStore:
                 ORDER BY ph.snapshot_date DESC LIMIT 1
             ) pos ON TRUE
 
-            -- Player Box Score Averages
+            -- Player Box Score Averages + B2/B3/B4 features
             LEFT JOIN LATERAL (
                 SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
-                       avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5
+                       avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5,
+                       avg_min_l3, avg_pts_l3, avg_reb_l3, avg_ast_l3, avg_fg3m_l3,
+                       std_min_l5, std_pts_l5, std_reb_l5, std_ast_l5, std_fg3m_l5,
+                       min_floor_l5, games_started_l5,
+                       rest_days, games_last_7d
                 FROM player_average_game_stats pags
                 WHERE pags.player_id = pgs.player_id
                   AND pags.game_date < pgs.game_date
@@ -447,6 +360,23 @@ class FeatureStore:
                   AND bookmaker IN ('pinnacle', 'draftkings')
             ) lines ON TRUE
 
+            -- Player Prop Lines (centering features for rate models)
+            LEFT JOIN LATERAL (
+                SELECT
+                    MAX(CASE WHEN sub.market_key = 'player_points' THEN sub.line END) as prop_line_pts,
+                    MAX(CASE WHEN sub.market_key = 'player_rebounds' THEN sub.line END) as prop_line_reb,
+                    MAX(CASE WHEN sub.market_key = 'player_assists' THEN sub.line END) as prop_line_ast,
+                    MAX(CASE WHEN sub.market_key = 'player_threes' THEN sub.line END) as prop_line_threes
+                FROM (
+                    SELECT DISTINCT ON (market_key) market_key, line
+                    FROM raw_player_props_combined
+                    WHERE player_id = pgs.player_id
+                      AND game_id = pgs.game_id
+                      AND bookmaker IN ('pinnacle', 'draftkings')
+                    ORDER BY market_key, snapshot_time DESC NULLS LAST
+                ) sub
+            ) prop_lines ON TRUE
+
             WHERE pgs.game_date = :game_date
               AND pgs.min >= 5
               AND pos.position_group IS NOT NULL
@@ -458,19 +388,8 @@ class FeatureStore:
         if df.empty:
             return df
 
-        # Fill missing columns that training data has but this query might miss if strict
-        # (Though we selected them all)
-
-        # Default Travel & Rest to 0 for now to avoid N+1 complexities in this hotfix.
-        cols = [
-            "rest_days",
-            "travel_dist",
-            "is_back_to_back",
-            "opp_rest_days",
-            "opp_travel_dist",
-            "opp_is_back_to_back",
-        ]
-        for col in cols:
+        # Deprecated travel/opp features (not in any feature list, kept for column compat)
+        for col in ["travel_dist", "opp_rest_days", "opp_travel_dist", "opp_is_back_to_back"]:
             df[col] = 0.0
 
         return df
@@ -552,6 +471,42 @@ class FeatureStore:
                     COALESCE(opp_def.threes_allowed_l15, 0) as opp_pos_threes_allowed_l15,
                     COALESCE(lines.spread, 0) as line_spread,
                     COALESCE(lines.total, 0) as line_total,
+                    COALESCE(prop_lines.prop_line_pts, 0) as prop_line_pts,
+                    COALESCE(prop_lines.prop_line_reb, 0) as prop_line_reb,
+                    COALESCE(prop_lines.prop_line_ast, 0) as prop_line_ast,
+                    COALESCE(prop_lines.prop_line_threes, 0) as prop_line_threes,
+                    -- B3: L3 averages
+                    COALESCE(p_avg.avg_min_l3, 0) as player_avg_min_l3,
+                    COALESCE(p_avg.avg_pts_l3, 0) as player_avg_pts_l3,
+                    COALESCE(p_avg.avg_reb_l3, 0) as player_avg_reb_l3,
+                    COALESCE(p_avg.avg_ast_l3, 0) as player_avg_ast_l3,
+                    COALESCE(p_avg.avg_fg3m_l3, 0) as player_avg_fg3m_l3,
+                    -- B3: Momentum ratios
+                    CASE WHEN COALESCE(p_avg.avg_pts_l15, 0) > 0
+                         THEN COALESCE(p_avg.avg_pts_l3, 0) / p_avg.avg_pts_l15
+                         ELSE 1.0 END as player_pts_l3_l15_ratio,
+                    CASE WHEN COALESCE(p_avg.avg_reb_l5, 0) > 0
+                         THEN COALESCE(p_avg.avg_reb_l3, 0) / p_avg.avg_reb_l5
+                         ELSE 1.0 END as player_reb_l3_l15_ratio,
+                    CASE WHEN COALESCE(p_avg.avg_ast_l5, 0) > 0
+                         THEN COALESCE(p_avg.avg_ast_l3, 0) / p_avg.avg_ast_l5
+                         ELSE 1.0 END as player_ast_l3_l15_ratio,
+                    CASE WHEN COALESCE(p_avg.avg_fg3m_l5, 0) > 0
+                         THEN COALESCE(p_avg.avg_fg3m_l3, 0) / p_avg.avg_fg3m_l5
+                         ELSE 1.0 END as player_fg3m_l3_l15_ratio,
+                    -- B3/B4: L5 standard deviations
+                    COALESCE(p_avg.std_min_l5, 0) as player_min_std_l5,
+                    COALESCE(p_avg.std_pts_l5, 0) as player_std_pts_l5,
+                    COALESCE(p_avg.std_reb_l5, 0) as player_std_reb_l5,
+                    COALESCE(p_avg.std_ast_l5, 0) as player_std_ast_l5,
+                    COALESCE(p_avg.std_fg3m_l5, 0) as player_std_fg3m_l5,
+                    -- B4: Minutes stability
+                    COALESCE(p_avg.min_floor_l5, 0) as player_min_floor_l5,
+                    COALESCE(p_avg.games_started_l5, 0) as player_games_started_l5,
+                    -- B2: Rest/schedule
+                    LEAST(COALESCE(p_avg.rest_days, 3), 7) as rest_days,
+                    CASE WHEN COALESCE(p_avg.rest_days, 3) = 1 THEN 1 ELSE 0 END as is_back_to_back,
+                    COALESCE(p_avg.games_last_7d, 2) as games_in_last_7_days,
                     CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
                 FROM player_game_stats pgs
                 JOIN players p ON pgs.player_id = p.player_id
@@ -566,7 +521,11 @@ class FeatureStore:
                 ) pos ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
-                           avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5
+                           avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5,
+                           avg_min_l3, avg_pts_l3, avg_reb_l3, avg_ast_l3, avg_fg3m_l3,
+                           std_min_l5, std_pts_l5, std_reb_l5, std_ast_l5, std_fg3m_l5,
+                           min_floor_l5, games_started_l5,
+                           rest_days, games_last_7d
                     FROM player_average_game_stats pags
                     WHERE pags.player_id = pgs.player_id
                       AND pags.game_date < pgs.game_date
@@ -612,6 +571,21 @@ class FeatureStore:
                     WHERE nba_game_id = pgs.game_id
                       AND bookmaker IN ('pinnacle', 'draftkings')
                 ) lines ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT
+                        MAX(CASE WHEN sub.market_key = 'player_points' THEN sub.line END) as prop_line_pts,
+                        MAX(CASE WHEN sub.market_key = 'player_rebounds' THEN sub.line END) as prop_line_reb,
+                        MAX(CASE WHEN sub.market_key = 'player_assists' THEN sub.line END) as prop_line_ast,
+                        MAX(CASE WHEN sub.market_key = 'player_threes' THEN sub.line END) as prop_line_threes
+                    FROM (
+                        SELECT DISTINCT ON (market_key) market_key, line
+                        FROM raw_player_props_combined
+                        WHERE player_id = pgs.player_id
+                          AND game_id = pgs.game_id
+                          AND bookmaker IN ('pinnacle', 'draftkings')
+                        ORDER BY market_key, snapshot_time DESC NULLS LAST
+                    ) sub
+                ) prop_lines ON TRUE
                 WHERE pgs.game_date >= :chunk_start
                   AND pgs.game_date <= :chunk_end
                   AND pgs.min >= 5
@@ -640,15 +614,8 @@ class FeatureStore:
 
         all_results = pd.concat(chunk_dfs, ignore_index=True)
 
-        # Add hardcoded rest/travel columns (same as get_features_for_date)
-        for col in [
-            "rest_days",
-            "travel_dist",
-            "is_back_to_back",
-            "opp_rest_days",
-            "opp_travel_dist",
-            "opp_is_back_to_back",
-        ]:
+        # Deprecated travel/opp features (not in any feature list, kept for column compat)
+        for col in ["travel_dist", "opp_rest_days", "opp_travel_dist", "opp_is_back_to_back"]:
             all_results[col] = 0.0
 
         # Ensure game_date is a proper date type for groupby
@@ -728,6 +695,49 @@ class FeatureStore:
                 COALESCE(lines.spread, 0) as line_spread,
                 COALESCE(lines.total, 0) as line_total,
 
+                -- Player Prop Lines (centering features)
+                COALESCE(prop_lines.prop_line_pts, 0) as prop_line_pts,
+                COALESCE(prop_lines.prop_line_reb, 0) as prop_line_reb,
+                COALESCE(prop_lines.prop_line_ast, 0) as prop_line_ast,
+                COALESCE(prop_lines.prop_line_threes, 0) as prop_line_threes,
+
+                -- B3: L3 averages
+                COALESCE(p_avg.avg_min_l3, 0) as player_avg_min_l3,
+                COALESCE(p_avg.avg_pts_l3, 0) as player_avg_pts_l3,
+                COALESCE(p_avg.avg_reb_l3, 0) as player_avg_reb_l3,
+                COALESCE(p_avg.avg_ast_l3, 0) as player_avg_ast_l3,
+                COALESCE(p_avg.avg_fg3m_l3, 0) as player_avg_fg3m_l3,
+
+                -- B3: Momentum ratios (L3/L15 for PTS, L3/L5 for others)
+                CASE WHEN COALESCE(p_avg.avg_pts_l15, 0) > 0
+                     THEN COALESCE(p_avg.avg_pts_l3, 0) / p_avg.avg_pts_l15
+                     ELSE 1.0 END as player_pts_l3_l15_ratio,
+                CASE WHEN COALESCE(p_avg.avg_reb_l5, 0) > 0
+                     THEN COALESCE(p_avg.avg_reb_l3, 0) / p_avg.avg_reb_l5
+                     ELSE 1.0 END as player_reb_l3_l15_ratio,
+                CASE WHEN COALESCE(p_avg.avg_ast_l5, 0) > 0
+                     THEN COALESCE(p_avg.avg_ast_l3, 0) / p_avg.avg_ast_l5
+                     ELSE 1.0 END as player_ast_l3_l15_ratio,
+                CASE WHEN COALESCE(p_avg.avg_fg3m_l5, 0) > 0
+                     THEN COALESCE(p_avg.avg_fg3m_l3, 0) / p_avg.avg_fg3m_l5
+                     ELSE 1.0 END as player_fg3m_l3_l15_ratio,
+
+                -- B3/B4: L5 standard deviations
+                COALESCE(p_avg.std_min_l5, 0) as player_min_std_l5,
+                COALESCE(p_avg.std_pts_l5, 0) as player_std_pts_l5,
+                COALESCE(p_avg.std_reb_l5, 0) as player_std_reb_l5,
+                COALESCE(p_avg.std_ast_l5, 0) as player_std_ast_l5,
+                COALESCE(p_avg.std_fg3m_l5, 0) as player_std_fg3m_l5,
+
+                -- B4: Minutes stability
+                COALESCE(p_avg.min_floor_l5, 0) as player_min_floor_l5,
+                COALESCE(p_avg.games_started_l5, 0) as player_games_started_l5,
+
+                -- B2: Rest/schedule
+                LEAST(COALESCE(p_avg.rest_days, 3), 7) as rest_days,
+                CASE WHEN COALESCE(p_avg.rest_days, 3) = 1 THEN 1 ELSE 0 END as is_back_to_back,
+                COALESCE(p_avg.games_last_7d, 2) as games_in_last_7_days,
+
                 -- Game Context
                 CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
 
@@ -744,10 +754,14 @@ class FeatureStore:
                 ORDER BY ph.snapshot_date DESC LIMIT 1
             ) pos ON TRUE
 
-            -- Player Box Score Averages
+            -- Player Box Score Averages + B2/B3/B4 features
             LEFT JOIN LATERAL (
                 SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
-                       avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5
+                       avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5,
+                       avg_min_l3, avg_pts_l3, avg_reb_l3, avg_ast_l3, avg_fg3m_l3,
+                       std_min_l5, std_pts_l5, std_reb_l5, std_ast_l5, std_fg3m_l5,
+                       min_floor_l5, games_started_l5,
+                       rest_days, games_last_7d
                 FROM player_average_game_stats pags
                 WHERE pags.player_id = pgs.player_id
                   AND pags.game_date < pgs.game_date
@@ -804,6 +818,23 @@ class FeatureStore:
                   AND bookmaker IN ('pinnacle', 'draftkings')
             ) lines ON TRUE
 
+            -- Player Prop Lines (centering features for rate models)
+            LEFT JOIN LATERAL (
+                SELECT
+                    MAX(CASE WHEN sub.market_key = 'player_points' THEN sub.line END) as prop_line_pts,
+                    MAX(CASE WHEN sub.market_key = 'player_rebounds' THEN sub.line END) as prop_line_reb,
+                    MAX(CASE WHEN sub.market_key = 'player_assists' THEN sub.line END) as prop_line_ast,
+                    MAX(CASE WHEN sub.market_key = 'player_threes' THEN sub.line END) as prop_line_threes
+                FROM (
+                    SELECT DISTINCT ON (market_key) market_key, line
+                    FROM raw_player_props_combined
+                    WHERE player_id = pgs.player_id
+                      AND game_id = pgs.game_id
+                      AND bookmaker IN ('pinnacle', 'draftkings')
+                    ORDER BY market_key, snapshot_time DESC NULLS LAST
+                ) sub
+            ) prop_lines ON TRUE
+
             WHERE pgs.season_id IN :seasons
               AND pgs.season_id NOT IN :excluded
               AND pgs.min > 0
@@ -820,48 +851,9 @@ class FeatureStore:
                 params={"seasons": list(seasons), "excluded": list(self.config.excluded_seasons)},
             )
 
-        # Calculate Travel & Rest
-        travel_df = self._get_travel_and_rest_features(seasons)
-
-        if not travel_df.empty:
-            # Merge Team's rest/travel
-            df = df.merge(
-                travel_df,
-                on=["game_id", "team_id"],
-                how="left",
-            )
-            df[["rest_days", "travel_dist", "is_back_to_back"]] = df[
-                ["rest_days", "travel_dist", "is_back_to_back"]
-            ].fillna(0)
-
-            # Merge Opponent's rest/travel
-            opp_travel = travel_df.rename(
-                columns={
-                    "team_id": "opponent_id",
-                    "rest_days": "opp_rest_days",
-                    "travel_dist": "opp_travel_dist",
-                    "is_back_to_back": "opp_is_back_to_back",
-                }
-            )
-            df = df.merge(
-                opp_travel,
-                on=["game_id", "opponent_id"],
-                how="left",
-            )
-            df[["opp_rest_days", "opp_travel_dist", "opp_is_back_to_back"]] = df[
-                ["opp_rest_days", "opp_travel_dist", "opp_is_back_to_back"]
-            ].fillna(0)
-        else:
-            print("Warning: No travel data found for selected seasons.")
-            for col in [
-                "rest_days",
-                "travel_dist",
-                "is_back_to_back",
-                "opp_rest_days",
-                "opp_travel_dist",
-                "opp_is_back_to_back",
-            ]:
-                df[col] = 0
+        # Deprecated travel/opp features (not in any feature list, kept for column compat)
+        for col in ["travel_dist", "opp_rest_days", "opp_travel_dist", "opp_is_back_to_back"]:
+            df[col] = 0.0
 
         # Validation
         print(f"Loaded {len(df):,} rows.")
@@ -901,7 +893,17 @@ class FeatureStore:
                 pags.avg_reb_l5, pags.avg_ast_l5,
                 pags.avg_fg3m_l5, pags.avg_fg3a_l5,
                 paas.avg_usg_pct_l5, paas.avg_ts_pct_l15,
-                paas.avg_reb_pct_l5, paas.avg_ast_pct_l5
+                paas.avg_reb_pct_l5, paas.avg_ast_pct_l5,
+                -- B3: L3 averages
+                pags.avg_min_l3, pags.avg_pts_l3, pags.avg_reb_l3,
+                pags.avg_ast_l3, pags.avg_fg3m_l3,
+                -- B3/B4: L5 standard deviations
+                pags.std_min_l5, pags.std_pts_l5, pags.std_reb_l5,
+                pags.std_ast_l5, pags.std_fg3m_l5,
+                -- B4: Minutes stability
+                pags.min_floor_l5, pags.games_started_l5,
+                -- B2: Rest/schedule
+                pags.rest_days AS stored_rest_days, pags.games_last_7d
             FROM player_average_game_stats pags
             LEFT JOIN player_average_advanced_stats paas
                 ON pags.player_id = paas.player_id AND pags.game_id = paas.game_id
@@ -912,20 +914,77 @@ class FeatureStore:
 
         if result is None:
             return {
-                "player_avg_min_l5": 0,
-                "player_avg_min_l15": 0,
-                "player_avg_pts_l5": 0,
-                "player_avg_pts_l15": 0,
-                "player_avg_reb_l5": 0,
-                "player_avg_ast_l5": 0,
-                "player_avg_fg3m_l5": 0,
-                "player_avg_fg3a_l5": 0,
-                "player_avg_usg_pct_l5": 0,
-                "player_avg_ts_pct_l15": 0,
-                "player_avg_reb_pct_l5": 0,
-                "player_avg_ast_pct_l5": 0,
+                "player_avg_min_l5": 0, "player_avg_min_l15": 0,
+                "player_avg_pts_l5": 0, "player_avg_pts_l15": 0,
+                "player_avg_reb_l5": 0, "player_avg_ast_l5": 0,
+                "player_avg_fg3m_l5": 0, "player_avg_fg3a_l5": 0,
+                "player_avg_usg_pct_l5": 0, "player_avg_ts_pct_l15": 0,
+                "player_avg_reb_pct_l5": 0, "player_avg_ast_pct_l5": 0,
+                # B3: L3 averages
+                "player_avg_min_l3": 0, "player_avg_pts_l3": 0,
+                "player_avg_reb_l3": 0, "player_avg_ast_l3": 0,
+                "player_avg_fg3m_l3": 0,
+                # B3: Momentum ratios (default = 1.0 = no trend)
+                "player_pts_l3_l15_ratio": 1.0, "player_reb_l3_l15_ratio": 1.0,
+                "player_ast_l3_l15_ratio": 1.0, "player_fg3m_l3_l15_ratio": 1.0,
+                # B3/B4: L5 standard deviations
+                "player_min_std_l5": 0, "player_std_pts_l5": 0,
+                "player_std_reb_l5": 0, "player_std_ast_l5": 0,
+                "player_std_fg3m_l5": 0,
+                # B4: Minutes stability
+                "player_min_floor_l5": 0, "player_games_started_l5": 0,
+                # B2: Rest/schedule
+                "rest_days": 3, "is_back_to_back": 0, "games_in_last_7_days": 2,
             }
-        return {f"player_{k}": v or 0 for k, v in result._mapping.items()}
+
+        row = result._mapping
+
+        # Standard player_* prefix columns
+        stats = {}
+        for k in [
+            "avg_min_l5", "avg_min_l15", "avg_pts_l5", "avg_pts_l15",
+            "avg_reb_l5", "avg_ast_l5", "avg_fg3m_l5", "avg_fg3a_l5",
+            "avg_usg_pct_l5", "avg_ts_pct_l15", "avg_reb_pct_l5", "avg_ast_pct_l5",
+            "avg_min_l3", "avg_pts_l3", "avg_reb_l3", "avg_ast_l3", "avg_fg3m_l3",
+        ]:
+            stats[f"player_{k}"] = row.get(k) or 0
+
+        # B3/B4: Std deviations (custom naming: std_min_l5 -> player_min_std_l5)
+        stats["player_min_std_l5"] = row.get("std_min_l5") or 0
+        stats["player_std_pts_l5"] = row.get("std_pts_l5") or 0
+        stats["player_std_reb_l5"] = row.get("std_reb_l5") or 0
+        stats["player_std_ast_l5"] = row.get("std_ast_l5") or 0
+        stats["player_std_fg3m_l5"] = row.get("std_fg3m_l5") or 0
+
+        # B4: Minutes stability
+        stats["player_min_floor_l5"] = row.get("min_floor_l5") or 0
+        stats["player_games_started_l5"] = row.get("games_started_l5") or 0
+
+        # B3: Momentum ratios (computed in Python — safe division, default 1.0)
+        pts_l3 = row.get("avg_pts_l3") or 0
+        pts_l15 = row.get("avg_pts_l15") or 0
+        stats["player_pts_l3_l15_ratio"] = (pts_l3 / pts_l15) if pts_l15 > 0 else 1.0
+
+        reb_l3 = row.get("avg_reb_l3") or 0
+        reb_l5 = row.get("avg_reb_l5") or 0
+        stats["player_reb_l3_l15_ratio"] = (reb_l3 / reb_l5) if reb_l5 > 0 else 1.0
+
+        ast_l3 = row.get("avg_ast_l3") or 0
+        ast_l5 = row.get("avg_ast_l5") or 0
+        stats["player_ast_l3_l15_ratio"] = (ast_l3 / ast_l5) if ast_l5 > 0 else 1.0
+
+        fg3m_l3 = row.get("avg_fg3m_l3") or 0
+        fg3m_l5 = row.get("avg_fg3m_l5") or 0
+        stats["player_fg3m_l3_l15_ratio"] = (fg3m_l3 / fg3m_l5) if fg3m_l5 > 0 else 1.0
+
+        # B2: Rest/schedule (no player_ prefix)
+        stored_rest = row.get("stored_rest_days")
+        rest = min(stored_rest, 7) if stored_rest is not None else 3
+        stats["rest_days"] = rest
+        stats["is_back_to_back"] = 1 if rest == 1 else 0
+        stats["games_in_last_7_days"] = row.get("games_last_7d") or 2
+
+        return stats
 
     def _get_team_rolling_stats(self, conn, team_id, as_of_date, is_opponent=False):
         prefix = "opp" if is_opponent else "team"
@@ -995,4 +1054,37 @@ class FeatureStore:
         return {
             "line_spread": result.spread if result and result.spread else 0,
             "line_total": result.total if result and result.total else 0,
+        }
+
+    def _get_player_prop_lines(self, conn, player_id, game_id):
+        """Fetch per-stat prop lines for a single player-game. Returns 0 if not found."""
+        query = text("""
+            SELECT
+                MAX(CASE WHEN sub.market_key = 'player_points' THEN sub.line END) as prop_line_pts,
+                MAX(CASE WHEN sub.market_key = 'player_rebounds' THEN sub.line END) as prop_line_reb,
+                MAX(CASE WHEN sub.market_key = 'player_assists' THEN sub.line END) as prop_line_ast,
+                MAX(CASE WHEN sub.market_key = 'player_threes' THEN sub.line END) as prop_line_threes
+            FROM (
+                SELECT DISTINCT ON (market_key) market_key, line
+                FROM raw_player_props_combined
+                WHERE player_id = :player_id
+                  AND game_id = :game_id
+                  AND bookmaker IN ('pinnacle', 'draftkings')
+                ORDER BY market_key, snapshot_time DESC NULLS LAST
+            ) sub
+        """)
+        result = conn.execute(query, {"player_id": player_id, "game_id": game_id}).fetchone()
+
+        if result is None:
+            return {
+                "prop_line_pts": 0,
+                "prop_line_reb": 0,
+                "prop_line_ast": 0,
+                "prop_line_threes": 0,
+            }
+        return {
+            "prop_line_pts": result.prop_line_pts or 0,
+            "prop_line_reb": result.prop_line_reb or 0,
+            "prop_line_ast": result.prop_line_ast or 0,
+            "prop_line_threes": result.prop_line_threes or 0,
         }

@@ -16,11 +16,30 @@ results into:
 Each table includes:
 - `game_number`, `games_l5`, `games_l15`, `games_szn`
 - Rolling averages for basic and advanced metrics (prefixed with `avg_`)
+- B2/B3/B4 features (see below)
 
 ## Key Logic
 - `calculate_games_in_window` counts prior games in each window.
-- `rolling_with_groupby` computes group-safe rolling means.
+- `rolling_with_groupby` computes group-safe rolling means (supports `agg` parameter: `"mean"`, `"std"`, `"min"`, `"sum"`).
+- `calculate_b2_b3_b4_features(df)` computes 14 new columns using shift(1) no-leakage pattern.
+- `_count_games_in_window(df, group_cols, days)` counts calendar-window prior games.
 - Insert functions truncate and bulk insert in batches (`BATCH_SIZE`).
+
+## B2/B3/B4 Features (14 columns)
+
+### B2: Rest & Schedule
+- `rest_days` — days since player's last game, clipped [0,7], default 3 for first game
+- `games_last_7d` — calendar-window count of games in prior 7 days
+
+### B3: Short-Window Trends
+- `avg_{min,pts,reb,ast,fg3m}_l3` — L3 rolling average (5 columns)
+- `std_{min,pts,reb,ast,fg3m}_l5` — L5 rolling standard deviation (5 columns)
+
+### B4: Minutes Stability
+- `min_floor_l5` — minimum minutes in last 5 games
+- `games_started_l5` — count of games with 20+ minutes in last 5 (starter proxy, threshold: `STARTER_MINUTES_THRESHOLD = 20`)
+
+All computed with `shift(1)` to ensure no data leakage from the current game.
 
 ## Usage
 ```bash
@@ -29,11 +48,13 @@ python src/processing/populate_average_stats.py --season 2024-25
 python src/processing/populate_average_stats.py --table player
 python src/processing/populate_average_stats.py --table player_advanced
 python src/processing/populate_average_stats.py --table team
+python src/processing/populate_average_stats.py --table player --from-year 2021
 ```
 
 ## Notes
 - The first game of a season will have null averages (no prior history).
 - Advanced stat column names are mapped via `PLAYER_ADVANCED_MAPPING`.
+- `game_date` from the DB arrives as Python `date` objects — converted to `datetime64` via `pd.to_datetime()` before date arithmetic.
 
 ## Related Documentation
 - [Documentation Index](index.md)

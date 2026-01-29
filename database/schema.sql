@@ -193,6 +193,24 @@ create table public.player_average_game_stats (
   avg_plus_minus_l5 numeric(6, 2) null,
   avg_plus_minus_l15 numeric(6, 2) null,
   avg_plus_minus_szn numeric(6, 2) null,
+  -- B3: L3 averages
+  avg_min_l3 numeric(5, 2) null,
+  avg_pts_l3 numeric(5, 2) null,
+  avg_reb_l3 numeric(5, 2) null,
+  avg_ast_l3 numeric(5, 2) null,
+  avg_fg3m_l3 numeric(5, 2) null,
+  -- B3/B4: L5 standard deviations
+  std_min_l5 numeric(5, 2) null,
+  std_pts_l5 numeric(5, 2) null,
+  std_reb_l5 numeric(5, 2) null,
+  std_ast_l5 numeric(5, 2) null,
+  std_fg3m_l5 numeric(5, 2) null,
+  -- B4: Minutes stability
+  min_floor_l5 numeric(5, 2) null,
+  games_started_l5 smallint null,
+  -- B2: Schedule density
+  rest_days smallint null,
+  games_last_7d smallint null,
   constraint pk_player_avg_game_stats primary key (player_id, game_id),
   constraint fk_player_avg_player foreign KEY (player_id) references players (player_id) on update CASCADE on delete CASCADE,
   constraint fk_player_avg_team foreign KEY (team_id) references teams (team_id) on update CASCADE on delete CASCADE

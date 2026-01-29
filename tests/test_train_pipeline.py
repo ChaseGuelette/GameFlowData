@@ -58,9 +58,9 @@ def sample_df():
             "reb_per_min": reb_per_min,
             "ast_per_min": ast_per_min,
             "threes_per_min": rng.normal(0.1, 0.05, n).clip(0, 0.5),
-            "pts": minutes * pts_per_min,
-            "reb": minutes * reb_per_min,
-            "ast": minutes * ast_per_min,
+            "actual_pts": minutes * pts_per_min,
+            "actual_reb": minutes * reb_per_min,
+            "actual_ast": minutes * ast_per_min,
             "line_spread": rng.choice([-5.5, -2.5, 0, 3.5, 8.0, 12.0], n),
             # Features the models expect
             "avg_minutes_10": rng.normal(28, 3, n),

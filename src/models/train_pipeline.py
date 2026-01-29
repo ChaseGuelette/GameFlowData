@@ -369,7 +369,7 @@ class TrainingOrchestrator:
         # Filter to valid rows with actual stats
         valid_mask = df["actual_minutes"] >= 10
         for stat in ["pts", "reb", "ast"]:
-            valid_mask &= df[stat].notna()
+            valid_mask &= df[f"actual_{stat}"].notna()
 
         eval_df = df[valid_mask].copy()
 
@@ -413,7 +413,7 @@ class TrainingOrchestrator:
                             "mean": preds[stat].mean,
                         }
                     )
-                    results[stat]["actuals"].append(row[stat])
+                    results[stat]["actuals"].append(row[f"actual_{stat}"])
             except Exception as e:
                 logger.debug(f"Prediction failed for row {idx}: {e}")
                 continue

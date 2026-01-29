@@ -271,8 +271,10 @@ def test_main_player_only_calls_player_flow(module, monkeypatch):
     player_df = pd.DataFrame({"player_id": [1]})
     fetch_basic = Mock(return_value=player_df)
     calc_basic = Mock(return_value=player_df)
+    calc_b2_b3_b4 = Mock(return_value=player_df)
     monkeypatch.setattr(module, "fetch_player_game_stats", fetch_basic)
     monkeypatch.setattr(module, "calculate_player_basic_averages", calc_basic)
+    monkeypatch.setattr(module, "calculate_b2_b3_b4_features", calc_b2_b3_b4)
     insert_basic = Mock()
     monkeypatch.setattr(module, "insert_player_basic_averages", insert_basic)
 
@@ -296,6 +298,111 @@ def test_main_player_only_calls_player_flow(module, monkeypatch):
 
     fetch_basic.assert_called_once_with(engine, "2024-25", None)
     calc_basic.assert_called_once_with(player_df)
+    calc_b2_b3_b4.assert_called_once_with(player_df)
     insert_basic.assert_called_once()
     fetch_adv.assert_not_called()
     fetch_team.assert_not_called()
+
+
+def test_calculate_b2_b3_b4_features_l3_no_leakage(module):
+    """L3 averages should use shift(1), so row 0 has NaN."""
+    df = pd.DataFrame(
+        {
+            "player_id": [1, 1, 1, 1, 1],
+            "season_id": ["2024"] * 5,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-03", "2024-10-04", "2024-10-05"]
+            ),
+            "min": [30, 32, 28, 35, 25],
+            "pts": [10, 20, 30, 40, 50],
+            "reb": [5, 6, 7, 8, 9],
+            "ast": [3, 4, 5, 6, 7],
+            "fg3m": [1, 2, 3, 4, 5],
+        }
+    )
+
+    result = module.calculate_b2_b3_b4_features(df)
+
+    # Row 0: no prior games → NaN
+    assert pd.isna(result["avg_pts_l3"].iloc[0])
+    # Row 1: only game 0 is prior → avg(10) = 10
+    assert result["avg_pts_l3"].iloc[1] == 10.0
+    # Row 3: prior games are 0,1,2 → last 3 = avg(10,20,30) = 20
+    assert result["avg_pts_l3"].iloc[3] == 20.0
+
+
+def test_calculate_b2_b3_b4_features_std_constant(module):
+    """Constant data should produce std ≈ 0."""
+    df = pd.DataFrame(
+        {
+            "player_id": [1] * 7,
+            "season_id": ["2024"] * 7,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-03", "2024-10-04",
+                 "2024-10-05", "2024-10-06", "2024-10-07"]
+            ),
+            "min": [30] * 7,
+            "pts": [20] * 7,
+            "reb": [5] * 7,
+            "ast": [3] * 7,
+            "fg3m": [2] * 7,
+        }
+    )
+
+    result = module.calculate_b2_b3_b4_features(df)
+
+    # After enough games, std of constant values = 0
+    last_row = result.iloc[-1]
+    assert last_row["std_pts_l5"] == 0.0
+    assert last_row["std_min_l5"] == 0.0
+
+
+def test_calculate_b2_b3_b4_features_rest_days(module):
+    """Rest days should be computed from game_date diffs."""
+    df = pd.DataFrame(
+        {
+            "player_id": [1, 1, 1],
+            "season_id": ["2024"] * 3,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-05"]
+            ),
+            "min": [30, 32, 28],
+            "pts": [10, 20, 30],
+            "reb": [5, 6, 7],
+            "ast": [3, 4, 5],
+            "fg3m": [1, 2, 3],
+        }
+    )
+
+    result = module.calculate_b2_b3_b4_features(df)
+
+    # Row 0: first game → default rest_days = 3
+    assert result["rest_days"].iloc[0] == 3
+    # Row 1: back-to-back (1 day gap)
+    assert result["rest_days"].iloc[1] == 1
+    # Row 2: 3-day gap
+    assert result["rest_days"].iloc[2] == 3
+
+
+def test_calculate_b2_b3_b4_features_games_started(module):
+    """Games started should count games with min >= 20."""
+    df = pd.DataFrame(
+        {
+            "player_id": [1] * 6,
+            "season_id": ["2024"] * 6,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-03",
+                 "2024-10-04", "2024-10-05", "2024-10-06"]
+            ),
+            "min": [25, 10, 30, 22, 15, 28],  # started: Y, N, Y, Y, N, Y
+            "pts": [10, 5, 20, 15, 8, 18],
+            "reb": [5, 2, 7, 6, 3, 8],
+            "ast": [3, 1, 5, 4, 2, 6],
+            "fg3m": [1, 0, 3, 2, 1, 4],
+        }
+    )
+
+    result = module.calculate_b2_b3_b4_features(df)
+
+    # Row 5 (last): prior games 0-4, last 5 started = [Y, N, Y, Y, N] = 3
+    assert result["games_started_l5"].iloc[5] == 3

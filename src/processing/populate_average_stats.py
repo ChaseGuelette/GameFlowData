@@ -31,9 +31,13 @@ WINDOWS = {
 }
 
 # Batch size for inserts
-# Player advanced: 57 cols, Player basic: 69 cols, Team: 104 cols
+# Player advanced: 57 cols, Player basic: 83 cols (69 + 14 B2/B3/B4), Team: 104 cols
 # 100 rows × 104 cols = 10,400 params (under PostgreSQL ~32k limit)
 BATCH_SIZE = 100
+
+# B2/B3/B4 feature configuration
+B3_B4_STATS = ["min", "pts", "reb", "ast", "fg3m"]
+STARTER_MINUTES_THRESHOLD = 20  # No start_position col in DB; proxy via minutes
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -111,12 +115,19 @@ def calculate_games_in_window(df: pd.DataFrame, group_cols: list[str], sort_col:
 
 
 def rolling_with_groupby(
-    series: pd.Series, group_keys: pd.Series, window: int | None, min_periods: int = 1
+    series: pd.Series,
+    group_keys: pd.Series,
+    window: int | None,
+    min_periods: int = 1,
+    agg: str = "mean",
 ) -> pd.Series:
     """
     Apply rolling window respecting group boundaries.
 
     More memory-efficient than the lambda approach for large datasets.
+
+    Args:
+        agg: Aggregation function — "mean", "std", "min", or "sum".
     """
     result = pd.Series(index=series.index, dtype=float)
 
@@ -124,10 +135,11 @@ def rolling_with_groupby(
         group_data = series.loc[group_idx]
 
         if window is None:
-            # Expanding window
+            # Expanding window (only supports mean)
             rolled = group_data.expanding(min_periods=min_periods).mean()
         else:
-            rolled = group_data.rolling(window=window, min_periods=min_periods).mean()
+            roller = group_data.rolling(window=window, min_periods=min_periods)
+            rolled = getattr(roller, agg)()
 
         result.loc[group_idx] = rolled
 
@@ -231,6 +243,82 @@ def calculate_player_basic_averages(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _count_games_in_window(df: pd.DataFrame, group_cols: list[str], days: int = 7) -> pd.Series:
+    """
+    Count prior games within a calendar window for each row.
+
+    Calendar-based (not game-count), so cannot use pandas rolling.
+    Iterates per group. Excludes the current game.
+    """
+    result = pd.Series(0, index=df.index, dtype=int)
+
+    for _, group in df.groupby(group_cols):
+        dates = pd.to_datetime(group["game_date"]).values
+        for i, idx in enumerate(group.index):
+            current_date = dates[i]
+            count = 0
+            for j in range(i - 1, -1, -1):
+                diff = (current_date - dates[j]) / pd.Timedelta(days=1)
+                if diff <= days:
+                    count += 1
+                else:
+                    break  # Sorted by date, so earlier games are further away
+            result.loc[idx] = count
+
+    return result
+
+
+def calculate_b2_b3_b4_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate B2 (rest/B2B), B3 (L3 avg + L5 std), B4 (minutes stability) features.
+
+    Must be called after calculate_player_basic_averages() since it operates on the
+    same DataFrame with raw stat columns available.
+
+    Uses shift(1) to ensure we only use PRIOR games (no data leakage).
+    """
+    logger.info("Calculating B2/B3/B4 features...")
+
+    group_cols = ["player_id", "season_id"]
+    df = df.sort_values(group_cols + ["game_date"]).copy()
+    group_key = df[group_cols].apply(lambda x: tuple(x), axis=1)
+
+    # === B3: L3 rolling averages ===
+    for stat in B3_B4_STATS:
+        shifted = df.groupby(group_cols)[stat].shift(1)
+        df[f"avg_{stat}_l3"] = rolling_with_groupby(shifted, group_key, window=3)
+
+    # === B3/B4: L5 rolling standard deviation ===
+    for stat in B3_B4_STATS:
+        shifted = df.groupby(group_cols)[stat].shift(1)
+        df[f"std_{stat}_l5"] = rolling_with_groupby(shifted, group_key, window=5, min_periods=2, agg="std")
+
+    # === B4: Minutes floor (L5 rolling min) ===
+    shifted_min = df.groupby(group_cols)["min"].shift(1)
+    df["min_floor_l5"] = rolling_with_groupby(shifted_min, group_key, window=5, agg="min")
+
+    # === B4: Games started L5 (min >= threshold proxy) ===
+    df["_is_starter"] = (df["min"] >= STARTER_MINUTES_THRESHOLD).astype(float)
+    shifted_starter = df.groupby(group_cols)["_is_starter"].shift(1)
+    df["games_started_l5"] = rolling_with_groupby(shifted_starter, group_key, window=5, agg="sum")
+    df.drop(columns=["_is_starter"], inplace=True)
+
+    # === B2: Rest days ===
+    game_dates = pd.to_datetime(df["game_date"])
+    df["_prev_date"] = game_dates.groupby([df[c] for c in group_cols]).shift(1)
+    df["rest_days"] = (game_dates - df["_prev_date"]).dt.days
+    df["rest_days"] = df["rest_days"].clip(0, 7)
+    # First game of season: NaN -> default 3 (mid-range rest)
+    df["rest_days"] = df["rest_days"].fillna(3).astype(int)
+    df.drop(columns=["_prev_date"], inplace=True)
+
+    # === B2: Games in last 7 days ===
+    df["games_last_7d"] = _count_games_in_window(df, group_cols, days=7)
+
+    logger.info("B2/B3/B4 features calculated")
+    return df
+
+
 def insert_player_basic_averages(engine, df: pd.DataFrame):
     """Insert player basic averages into database."""
     logger.info("Inserting player basic averages...")
@@ -254,11 +342,40 @@ def insert_player_basic_averages(engine, df: pd.DataFrame):
             if col in df.columns:
                 columns.append(col)
 
+    # B3: L3 averages
+    for stat in B3_B4_STATS:
+        col = f"avg_{stat}_l3"
+        if col in df.columns:
+            columns.append(col)
+
+    # B3/B4: L5 standard deviations
+    for stat in B3_B4_STATS:
+        col = f"std_{stat}_l5"
+        if col in df.columns:
+            columns.append(col)
+
+    # B4: Minutes stability
+    for col in ["min_floor_l5", "games_started_l5"]:
+        if col in df.columns:
+            columns.append(col)
+
+    # B2: Schedule density
+    for col in ["rest_days", "games_last_7d"]:
+        if col in df.columns:
+            columns.append(col)
+
     insert_df = df[columns].copy()
 
     # Round numeric columns for cleaner storage
     numeric_cols = [c for c in insert_df.columns if c.startswith("avg_")]
     insert_df[numeric_cols] = insert_df[numeric_cols].round(4)
+
+    std_cols = [c for c in insert_df.columns if c.startswith("std_")]
+    if std_cols:
+        insert_df[std_cols] = insert_df[std_cols].round(4)
+
+    if "min_floor_l5" in insert_df.columns:
+        insert_df["min_floor_l5"] = insert_df["min_floor_l5"].round(2)
 
     # Batch insert with upsert
     with engine.begin() as conn:
@@ -684,6 +801,7 @@ def main():
         if args.table in ["player", "all"]:
             df = fetch_player_game_stats(engine, season_filter, from_year)
             df = calculate_player_basic_averages(df)
+            df = calculate_b2_b3_b4_features(df)
             insert_player_basic_averages(engine, df)
             del df  # Free memory
 

@@ -48,8 +48,40 @@ Captures how well the specific opponent defends the player's specific role.
 * **Example:** If a player has `NULL` shooting stats, the model receives `league_off_rtg` (approx 110.0) instead of a crash or a zero.
 
 ### 3.4 Betting Market Context
-[cite_start]Fetches lines from `raw_game_lines_staging`[cite: 33].
+Fetches lines from `raw_game_lines_staging`.
 * **Optimization:** Uses a conditional aggregation query to scan the table only once per game, filtering strictly for sharp books (`pinnacle`, `draftkings`).
+* **Game Lines:** `line_spread` and `line_total` — game-level betting signals (spread, total). Used in `MINUTES_FEATURES`.
+
+### 3.5 Prop Line Centering Features
+Per-stat player prop lines from `raw_player_props_combined`, enabling residual modeling — the model learns deviations from market expectation rather than absolute values.
+
+* **Features:** `prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`
+* **Source:** `raw_player_props_combined` table, filtered to pinnacle/draftkings bookmakers
+* **Deduplication:** `DISTINCT ON (market_key)` ordered by `snapshot_time DESC` picks the most recent pre-game snapshot per stat
+* **Missing data:** COALESCE to 0 (consistent with `line_spread`/`line_total` pattern). Real prop lines are always > 0, so the model can learn that 0 means "no line available."
+* **Query paths:** LATERAL JOIN added to all 4 feature store methods (`get_training_dataset`, `get_features_for_date`, `get_features_for_date_range`). Single-player path uses `_get_player_prop_lines()` helper.
+* **Feature assignment:** Each `RATE_FEATURES_*` list includes only its corresponding `prop_line_*` (e.g., `RATE_FEATURES_PTS` includes `prop_line_pts` but not `prop_line_reb`).
+* **Database index:** `idx_props_player_game` on `(player_id, game_id)` for query performance.
+
+### 3.6 Rest & Schedule Features (B2)
+Pre-computed in `player_average_game_stats` from game date diffs. Added to `MINUTES_FEATURES`:
+- `rest_days` — days since player's last game (clipped [0,7], default 3)
+- `is_back_to_back` — binary flag (derived from `rest_days = 1` in SQL)
+- `games_in_last_7_days` — calendar-window count of prior games (default 2)
+
+### 3.7 Short-Window Trend Features (B3)
+Pre-computed in `player_average_game_stats` with `shift(1)` no-leakage pattern. Distributed across all feature lists:
+- **L3 rolling averages** (5): `player_avg_{min,pts,reb,ast,fg3m}_l3` — last 3 games, captures very recent form
+- **Momentum ratios** (4): `player_{pts,reb,ast,fg3m}_l3_l15_ratio` — L3/L15 ratio (>1.0 = trending up, default 1.0)
+- **L5 standard deviations** (5): `player_std_{pts,reb,ast,fg3m}_l5` + `player_min_std_l5` — consistency/variance signal
+
+Momentum ratios are computed in SQL as `CASE WHEN l15 > 0 THEN l3/l15 ELSE 1.0 END` to avoid division by zero.
+
+### 3.8 Minutes Stability Features (B4)
+Pre-computed in `player_average_game_stats`. Added to `MINUTES_FEATURES`:
+- `player_min_std_l5` — minutes variance over last 5 games (shared with B3 std)
+- `player_min_floor_l5` — minimum minutes in last 5 games (floor games indicator)
+- `player_games_started_l5` — games with 20+ minutes in last 5 (starter consistency proxy)
 
 ---
 

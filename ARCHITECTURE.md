@@ -121,8 +121,11 @@ Centralized engine for converting raw stats into model-ready features.
 - **Time-Travel Safety:** Strictly enforces `game_date < target_date` inequalities to prevent data leakage.
 - **Contextual Features:**
     - **Pace-Adjusted Opponent Defense:** e.g., "Opponent allows X threes per 100 possessions."
-    - **Rest & Travel:** Days rest, distance traveled (haversine), timezone shifts. Includes lat/lon for all 30 NBA teams.
+    - **Rest & Schedule (B2):** `rest_days`, `is_back_to_back`, `games_in_last_7_days` — pre-computed in `player_average_game_stats` from game date diffs.
+    - **Short-Window Trends (B3):** L3 rolling averages (`player_avg_{stat}_l3`), momentum ratios (`player_{stat}_l3_l15_ratio`), and L5 standard deviations (`player_std_{stat}_l5`) for all stats.
+    - **Minutes Stability (B4):** `player_min_std_l5`, `player_min_floor_l5`, `player_games_started_l5` — distinguishes locked-in starters from volatile rotation players.
     - **Betting Signals:** Implied totals and spreads as proxies for game script.
+    - **Prop Line Centering:** Per-stat player prop lines (`prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`) from `raw_player_props_combined`. Enables residual modeling — the model learns deviations from market expectation rather than absolute values.
 
 **API Methods:**
 - `get_player_game_features()` — Single player-game feature vector.
@@ -131,8 +134,8 @@ Centralized engine for converting raw stats into model-ready features.
 - `get_training_dataset()` — Full training data for season(s).
 
 **Feature Groups:**
-- `RATE_FEATURES_PTS` / `_REB` / `_AST` / `_THREES` — Per-stat rate model features.
-- `MINUTES_FEATURES` — Playing time prediction features.
+- `RATE_FEATURES_PTS` / `_REB` / `_AST` / `_THREES` — Per-stat rate model features. Each includes its corresponding `prop_line_*` centering feature plus B3 trend/variability features (`player_avg_{stat}_l3`, `player_{stat}_l3_l15_ratio`, `player_std_{stat}_l5`).
+- `MINUTES_FEATURES` — Playing time prediction features (includes `line_spread`, `line_total`, B2 rest/schedule, B3 minutes L3 trend, B4 minutes stability).
 - Configuration via `FeatureConfig` dataclass.
 
 ### 5. Machine Learning Pipeline (`src/models/`)
@@ -432,8 +435,8 @@ See `ACTIONITEMS.md` for full details.
 **Black-Litterman blending (A3) — Implemented (2026-01-28):** The BL blending layer is complete and integrated into the backtesting pipeline. Anchors model probabilities to the devigged market prior using log-odds space blending with per-prediction z-score confidence. Activated via `--bl-tau` flag (default: disabled). Needs validation backtest to confirm Brier score improvement and edge characteristics.
 
 **Active tracks:**
-- **Track A** (Critical): Probability recalibration — A3 (BL blending) implemented, A2 (remove line_total) and A4/A5 (residual modeling) pending.
-- **Track B** (Parallel): New signal sources — injury/lineup context, rest/back-to-back, short-window trends, minutes stability.
+- **Track A** (Critical): Probability recalibration — A1 (diagnostic), A2 (remove line_total), A3 (BL blending), A4 (prop line centering) all implemented. A5 (residual classifier) pending evaluation.
+- **Track B** (Parallel): New signal sources — B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented. B1 (injury/lineup context) pending data acquisition via RapidAPI.
 - **Track C**: Calibration refinement — Q10 over-coverage investigation.
 - **Track D**: Deprioritized model items (pending recalibration).
 - **Track E**: Go-live pipeline (blocked on demonstrated edge).

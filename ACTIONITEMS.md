@@ -98,10 +98,20 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
 
   **Next step**: Run validation backtest with `--bl-tau 0.05` to confirm Brier score improvement and characterize edge distribution. Tau sweep `[0.01, 0.02, 0.05, 0.10, 0.15, 0.20]` on held-out period.
 
-- [ ] **A4. Residual modeling (Option A — feature-based)**
-  Add the prop line as a centering feature to rate models. The model learns deviations from
-  market expectation rather than absolute values. Requires adding `prop_line` to feature store
-  from `raw_player_props_combined`, retraining, and re-backtesting.
+- [x] **A4. Residual modeling (Option A — feature-based)** *(IMPLEMENTED — 2026-01-28)*
+  Added per-stat prop lines (`prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`)
+  as centering features to all rate models. The model now sees market expectation and learns
+  deviations rather than absolute values.
+
+  **Implementation:**
+  - LATERAL JOIN to `raw_player_props_combined` in all 4 feature store query paths
+    (`get_training_dataset`, `get_features_for_date`, `get_features_for_date_range`, `get_player_game_features`)
+  - `DISTINCT ON (market_key)` deduplication: picks most recent snapshot per stat from pinnacle/draftkings
+  - New `_get_player_prop_lines()` helper for single-player inference path
+  - Each `RATE_FEATURES_*` list now includes its corresponding `prop_line_*`
+  - COALESCE to 0 for missing lines (consistent with `line_spread`/`line_total` pattern)
+  - Database index `idx_props_player_game` created on `(player_id, game_id)` for query performance
+  - **Note:** Models must be retrained for this change to take effect. Re-backtest after retraining.
 
 - [ ] **A5. Residual modeling (Option B — binary classifier)**
   Build a separate model that directly predicts P(over | features, line) trained on historical
@@ -135,30 +145,32 @@ where bookmaker attention is lower.
   - Ensure temporal integrity (use pre-game report only, never post-game)
   - Retrain with injury features and backtest
 
-- [ ] **B2. Rest days / back-to-back features** *(Easy Win)*
-  No schedule density features exist. Back-to-backs are one of the most studied effects in NBA
-  analytics. Trivial to compute from `game_date` in `player_game_stats`.
+- [x] **B2. Rest days / back-to-back features** *(IMPLEMENTED — 2026-01-29)*
+  Schedule density features pre-computed in `player_average_game_stats` via `calculate_b2_b3_b4_features()`.
+  Added to `MINUTES_FEATURES`: `rest_days`, `is_back_to_back`, `games_in_last_7_days`.
+  DB columns: `rest_days`, `games_last_7d`. `is_back_to_back` derived in SQL (`CASE WHEN rest_days = 1`).
+  All 4 feature store query paths updated. Defaults: rest=3, b2b=0, games_7d=2.
 
-  Features to add:
-  - `days_since_last_game` (0 = back-to-back)
-  - `games_in_last_7_days`
-  - `is_back_to_back` (binary flag)
+- [x] **B3. Short-window + trend features** *(IMPLEMENTED — 2026-01-29)*
+  L3 rolling averages and L5 std deviations pre-computed in `player_average_game_stats`.
 
-- [ ] **B3. Short-window + trend features** *(Easy Win)*
-  Model only has L5 and L15 averages. No way to capture recent momentum.
+  Features added (13 total across all feature lists):
+  - `player_avg_{stat}_l3` (5 stats) — last 3 games rolling average
+  - `player_{stat}_l3_l15_ratio` (4 stats: pts/reb/ast/fg3m) — momentum ratio (>1.0 = trending up)
+  - `player_std_{stat}_l5` / `player_min_std_l5` (5 stats) — L5 standard deviation (consistency signal)
 
-  Features to add:
-  - `player_avg_{stat}_l3` (last 3 games — captures very recent form)
-  - `player_l3_l15_ratio_{stat}` (momentum: >1.0 = trending up)
-  - `player_std_{stat}_l5` (consistency/variance signal)
+  DB columns: `avg_{stat}_l3` (5), `std_{stat}_l5` (5). Momentum ratios computed in SQL from L3/L15 averages.
+  Shift(1) no-leakage pattern ensures features only use prior games.
 
-- [ ] **B4. Minutes stability features** *(Medium Effort)*
-  Model doesn't distinguish locked-in starters from volatile rotation players.
+- [x] **B4. Minutes stability features** *(IMPLEMENTED — 2026-01-29)*
+  Minutes stability features pre-computed in `player_average_game_stats`.
 
-  Features to add:
-  - `player_min_std_l5` (minutes variance)
-  - `player_min_floor_l5` (minimum minutes in last 5 — floor games)
-  - `player_games_started_l5` (starter consistency)
+  Features added to `MINUTES_FEATURES`:
+  - `player_min_std_l5` — minutes variance (shared with B3 std computation)
+  - `player_min_floor_l5` — minimum minutes in last 5 games
+  - `player_games_started_l5` — games with 20+ minutes in last 5 (starter proxy)
+
+  DB columns: `min_floor_l5`, `games_started_l5`. Starter threshold = 20 minutes.
 
 ---
 
@@ -224,11 +236,11 @@ backtest with positive ROI.
 | ~~A1 (Market neutralization diagnostic)~~ | ~~Trivial~~ | ~~Critical~~ | **DONE** — R²=0.10, Brier 0.2705, overconfidence not correlation |
 | ~~A3 (Black-Litterman blending)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — Implemented in `black_litterman.py`, 39 tests passing. Needs validation backtest. |
 | ~~A2 (Remove line_total)~~ | ~~Low~~ | ~~High~~ | **DONE** — Removed from `RATE_FEATURES_PTS`. Needs retrain + re-backtest. |
-| B2 (Rest/B2B features) | Low | Medium-High | Known strong signal, easy to compute |
-| B3 (L3 + trend features) | Low | Medium | More granular than L5/L15 |
-| B1 (Injury features) | Medium-High | High | Biggest feature gap, needs data acquisition |
-| A4 (Residual modeling — features) | Medium | High | Structural decorrelation |
-| B4 (Minutes stability) | Low | Medium | Better bet filtering |
+| ~~B2 (Rest/B2B features)~~ | ~~Low~~ | ~~Medium-High~~ | **DONE** — `rest_days`, `is_back_to_back`, `games_in_last_7_days` in MINUTES_FEATURES. Needs retrain + re-backtest. |
+| ~~B3 (L3 + trend features)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — 13 features (L3 avg, momentum ratios, L5 std). Needs retrain + re-backtest. |
+| B1 (Injury features) | Medium-High | High | Biggest feature gap, needs data acquisition via RapidAPI |
+| ~~A4 (Residual modeling — features)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Prop line centering in all 4 query paths. Needs retrain + re-backtest. |
+| ~~B4 (Minutes stability)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — `min_std_l5`, `min_floor_l5`, `games_started_l5` in MINUTES_FEATURES. Needs retrain + re-backtest. |
 | C1 (Q10 investigation) | Low | Low-Medium | Calibration refinement |
 | A5 (Residual modeling — classifier) | High | High | Only if A4 isn't sufficient |
 | D1-D4 (Old model items) | Various | Low until recalibrated | Revisit after Track A |

@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--bl-tau` CLI flag on `run_backtest.py` to enable BL blending (disabled by default)
 - `posterior_prob` diagnostic field on `Bet` dataclass in `bet_simulator.py`
 - BL diagnostic columns in predictions CSV: `model_over/under`, `market_over/under`, `confidence`, `posterior_over/under`
+- **Prop line centering features (A4)** — per-stat player prop lines as rate model features
+  - `prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes` added to `RATE_FEATURES_*` lists
+  - LATERAL JOIN to `raw_player_props_combined` in all 4 feature store query paths
+  - New `_get_player_prop_lines()` helper for single-player inference path
+  - Database index `idx_props_player_game` on `(player_id, game_id)` for performance
+- **B2/B3/B4: Rest, Trend, and Minutes Stability features** — 20 new model features
+  - **B2 (Rest/Schedule):** `rest_days`, `is_back_to_back`, `games_in_last_7_days` added to `MINUTES_FEATURES`
+  - **B3 (Short-Window Trends):** L3 rolling averages (`player_avg_{stat}_l3`), momentum ratios (`player_{stat}_l3_l15_ratio`), and L5 std deviations (`player_std_{stat}_l5`) added to `RATE_FEATURES_*` and `MINUTES_FEATURES`
+  - **B4 (Minutes Stability):** `player_min_std_l5`, `player_min_floor_l5`, `player_games_started_l5` added to `MINUTES_FEATURES`
+  - 14 new columns in `player_average_game_stats` table
+  - New `calculate_b2_b3_b4_features()` in `populate_average_stats.py` with shift(1) no-leakage pattern
+  - All 4 feature store query paths updated with consistent SQL
+  - 4 new tests for B2/B3/B4 computation (no-leakage, std, rest_days, games_started)
 
 ### Changed
 
@@ -33,10 +46,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bet_simulator.py`: Added `posterior_prob` field to `Bet`, wired posterior storage in `evaluate_predictions()`
 - Updated ARCHITECTURE.md with Stage E (Probability Blending), updated data flow diagram, backtesting CLI docs, and Known Issues section
 - Marked A3 as implemented in ACTIONITEMS.md priority matrix
+- **A2**: Removed `line_total` from `RATE_FEATURES_PTS` to eliminate market leakage (remains in `MINUTES_FEATURES`)
+- **A4**: `feature_store.py` — added LATERAL JOINs and `prop_line_*` SELECT columns to `get_training_dataset()`, `get_features_for_date()`, `get_features_for_date_range()`; wired `_get_player_prop_lines()` into `get_player_game_features()`
+- Marked A2 and A4 as implemented in ACTIONITEMS.md priority matrix
+- Updated ARCHITECTURE.md Feature Store section with prop line centering documentation
+- **B2/B3/B4**: `feature_store.py` — updated all 5 feature lists, all 3 bulk SQL queries, `_get_player_rolling_stats()`, and `get_player_game_features()` for new features
+- **B2/B3/B4**: `populate_average_stats.py` — refactored `rolling_with_groupby()` to support `agg` parameter (std/min/sum), updated insert column list
+- Updated ARCHITECTURE.md Feature Store section with B2/B3/B4 documentation
 
 ### Fixed
 
+- **B2/B3/B4**: Fixed `AttributeError: Can only use .dt accessor with datetimelike values` in `calculate_b2_b3_b4_features()` — DB returns `date` objects, not `datetime64`. Added `pd.to_datetime()` conversion before date arithmetic in both `calculate_b2_b3_b4_features()` and `_count_games_in_window()`
+- **Feature Store**: Fixed hardcoded zeros bug in `get_features_for_date_range()` — `rest_days` and `is_back_to_back` were being overwritten to 0 instead of using SQL-computed values
+- **MCP Config**: Fixed `.mcp.json` RapidAPI server entry for Windows — changed `npx` to `cmd /c npx` wrapper pattern
+
 ### Removed
+
+- Removed `_get_travel_and_rest_features()` from `FeatureStore` — rest features now pre-computed in DB via backfill script
+- Removed `_get_travel_features_single()` from `FeatureStore` — same reason
+- Removed `TEAM_LOCATIONS` dict and `_haversine()` static method from `feature_store.py` — no longer needed after travel feature removal
+- Removed `numpy` import from `feature_store.py` — no longer used
 
 ### Changed
 - Refactored project structure and moved files

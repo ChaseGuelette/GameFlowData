@@ -376,7 +376,7 @@ class BacktestHarness:
                     odds_american,
                     snapshot_time,
                     ROW_NUMBER() OVER (
-                        PARTITION BY player_id, game_id, market_key, line
+                        PARTITION BY player_id, game_id, market_key, line, outcome_label
                         ORDER BY snapshot_time DESC
                     ) as rn
                 FROM raw_player_props_combined
@@ -466,7 +466,7 @@ class BacktestHarness:
                     rp.outcome_label,
                     rp.odds_american,
                     ROW_NUMBER() OVER (
-                        PARTITION BY rp.player_id, rp.game_id, rp.market_key, rp.line
+                        PARTITION BY rp.player_id, rp.game_id, rp.market_key, rp.line, rp.outcome_label
                         ORDER BY rp.snapshot_time DESC
                     ) as rn
                 FROM raw_player_props_combined rp
