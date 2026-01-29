@@ -28,13 +28,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New `_get_player_prop_lines()` helper for single-player inference path
   - Database index `idx_props_player_game` on `(player_id, game_id)` for performance
 - **B2/B3/B4: Rest, Trend, and Minutes Stability features** — 20 new model features
-  - **B2 (Rest/Schedule):** `rest_days`, `is_back_to_back`, `games_in_last_7_days` added to `MINUTES_FEATURES`
+  - **B2 (Rest/Schedule):** `rest_days`, `is_back_to_back`, `games_in_last_7_days` added to `MINUTES_FEATURES` and all 4 `RATE_FEATURES_*` lists
   - **B3 (Short-Window Trends):** L3 rolling averages (`player_avg_{stat}_l3`), momentum ratios (`player_{stat}_l3_l15_ratio`), and L5 std deviations (`player_std_{stat}_l5`) added to `RATE_FEATURES_*` and `MINUTES_FEATURES`
   - **B4 (Minutes Stability):** `player_min_std_l5`, `player_min_floor_l5`, `player_games_started_l5` added to `MINUTES_FEATURES`
   - 14 new columns in `player_average_game_stats` table
   - New `calculate_b2_b3_b4_features()` in `populate_average_stats.py` with shift(1) no-leakage pattern
   - All 4 feature store query paths updated with consistent SQL
   - 4 new tests for B2/B3/B4 computation (no-leakage, std, rest_days, games_started)
+- **B1: Injury/lineup context features** — 10 new features from `rapidapi_injuries` table
+  - Teammate injuries: `team_out_count`, `team_out_min_sum`, `team_out_pts_sum`, `team_out_reb_sum`, `team_out_ast_sum`, `team_out_usg_sum`
+  - Opponent injuries: `opp_out_count`, `opp_out_min_sum`
+  - Player status: `player_is_questionable`, `player_is_probable`
+  - SQL LATERAL JOINs in `feature_store.py` with temporal integrity (report_date ≤ game_date)
+  - Added to all 4 `RATE_FEATURES_*` lists and `MINUTES_FEATURES`
+- **Injury data pipeline** — RapidAPI historical backfill + fuzzy player linking
+  - `src/scrapers/rapidapi_injury_backfill.py` — backfills injury data from 2021-present (88K+ rows)
+  - `src/processing/link_injury_data.py` — 3-tier name matching cascade (manual CSV → exact → fuzzy SequenceMatcher)
+  - `data/linker_data/player_mappings.csv` — 11 manual mappings for truncated API names (suffixes like "III", "Jr.")
+  - Database cleanup: 142 garbage rows deleted, 99.3% of injury records fully linked
+- **C0: Gaussian copula for minutes-rate correlation** — replaces legacy post-hoc adjustment
+  - `MonteCarloPredictor` accepts `copula_params: dict[stat → Spearman ρ]`
+  - `_predict_copula()`: shared z_minutes, per-stat correlated z_rate via Cholesky decomposition
+  - Preserves both marginal distributions exactly while inducing correct rank dependency
+  - `compute_copula_params_from_data()` and `load_copula_params()` utility functions
+  - Training pipeline computes and saves `copula_params.json` as artifact
+  - `run_backtest.py` and `run_daily.py` auto-load copula params from model artifacts
+  - Falls back to legacy adjustment when copula params unavailable (backward compat)
+- **Backtest dashboard** — expanded `visualize_results.py` from 163 to 925 lines
+  - Self-contained HTML with Plotly charts (CDN) + vanilla JS for sorting/filtering
+  - Sections: portfolio performance, metrics summary cards, enriched bet log, bookmaker line comparison
+  - DB enrichment: resolves player_id/team_id/game_id to names/matchups via `player_game_stats` + `players` + `teams`
+  - Graceful degradation for missing columns (bookmaker, posterior_prob) and missing data files
 
 ### Changed
 
@@ -53,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **B2/B3/B4**: `feature_store.py` — updated all 5 feature lists, all 3 bulk SQL queries, `_get_player_rolling_stats()`, and `get_player_game_features()` for new features
 - **B2/B3/B4**: `populate_average_stats.py` — refactored `rolling_with_groupby()` to support `agg` parameter (std/min/sum), updated insert column list
 - Updated ARCHITECTURE.md Feature Store section with B2/B3/B4 documentation
+- **monte_carlo.py**: Added `copula_params` to `__init__`, new `_predict_copula()` method, `_build_extended_quantile_fn()`, `_map_uniforms_to_samples()` helpers, updated `predict_batch_for_date()` with copula branch
+- **train_pipeline.py**: Added `_compute_copula_params()` step to training pipeline, imports `compute_copula_params_from_data`
+- **run_backtest.py**: Auto-loads `copula_params.json` from model artifacts, passes to `MonteCarloPredictor`
+- **run_daily.py**: Same copula auto-loading for daily inference pipeline
+- Updated ARCHITECTURE.md with injury data, copula sampling, dashboard, and injury linker documentation
+- Updated ACTIONITEMS.md: B1 marked done, C0 (copula) added, A6 (conditional rate modeling) added as future option
 
 ### Fixed
 

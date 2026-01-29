@@ -37,6 +37,17 @@ MINUTES_FEATURES = [
     "player_min_std_l5",
     "player_min_floor_l5",
     "player_games_started_l5",
+    # Injury context
+    "team_out_count",
+    "team_out_min_sum",
+    "team_out_pts_sum",
+    "team_out_reb_sum",
+    "team_out_ast_sum",
+    "team_out_usg_sum",
+    "opp_out_count",
+    "opp_out_min_sum",
+    "player_is_questionable",
+    "player_is_probable",
 ]
 
 RATE_FEATURES_PTS = [
@@ -50,10 +61,23 @@ RATE_FEATURES_PTS = [
     "opp_pos_off_rtg_allowed_l15",
     "is_home",
     "prop_line_pts",
+    # B2: Rest/Schedule
+    "rest_days",
+    "is_back_to_back",
+    "games_in_last_7_days",
     # B3: Trend + variability
     "player_avg_pts_l3",
     "player_pts_l3_l15_ratio",
     "player_std_pts_l5",
+    # Injury context
+    "team_out_count",
+    "team_out_min_sum",
+    "team_out_pts_sum",
+    "team_out_reb_sum",
+    "team_out_ast_sum",
+    "team_out_usg_sum",
+    "opp_out_count",
+    "opp_out_min_sum",
 ]
 
 RATE_FEATURES_REB = [
@@ -66,10 +90,23 @@ RATE_FEATURES_REB = [
     "opp_avg_pace_l5",
     "is_home",
     "prop_line_reb",
+    # B2: Rest/Schedule
+    "rest_days",
+    "is_back_to_back",
+    "games_in_last_7_days",
     # B3: Trend + variability
     "player_avg_reb_l3",
     "player_reb_l3_l15_ratio",
     "player_std_reb_l5",
+    # Injury context
+    "team_out_count",
+    "team_out_min_sum",
+    "team_out_pts_sum",
+    "team_out_reb_sum",
+    "team_out_ast_sum",
+    "team_out_usg_sum",
+    "opp_out_count",
+    "opp_out_min_sum",
 ]
 
 RATE_FEATURES_AST = [
@@ -82,10 +119,23 @@ RATE_FEATURES_AST = [
     "team_avg_pace_l5",
     "is_home",
     "prop_line_ast",
+    # B2: Rest/Schedule
+    "rest_days",
+    "is_back_to_back",
+    "games_in_last_7_days",
     # B3: Trend + variability
     "player_avg_ast_l3",
     "player_ast_l3_l15_ratio",
     "player_std_ast_l5",
+    # Injury context
+    "team_out_count",
+    "team_out_min_sum",
+    "team_out_pts_sum",
+    "team_out_reb_sum",
+    "team_out_ast_sum",
+    "team_out_usg_sum",
+    "opp_out_count",
+    "opp_out_min_sum",
 ]
 
 RATE_FEATURES_THREES = [
@@ -101,10 +151,23 @@ RATE_FEATURES_THREES = [
     "team_avg_pace_l5",
     "is_home",
     "prop_line_threes",
+    # B2: Rest/Schedule
+    "rest_days",
+    "is_back_to_back",
+    "games_in_last_7_days",
     # B3: Trend + variability
     "player_avg_fg3m_l3",
     "player_fg3m_l3_l15_ratio",
     "player_std_fg3m_l5",
+    # Injury context
+    "team_out_count",
+    "team_out_min_sum",
+    "team_out_pts_sum",
+    "team_out_reb_sum",
+    "team_out_ast_sum",
+    "team_out_usg_sum",
+    "opp_out_count",
+    "opp_out_min_sum",
 ]
 
 
@@ -151,6 +214,11 @@ class FeatureStore:
             # 6. Player Prop Lines (centering features for rate models)
             prop_lines = self._get_player_prop_lines(conn, player_id, game_id)
 
+            # 7. Injury Context
+            injury_context = self._get_injury_context(
+                conn, player_id, ctx["team_id"], ctx["opponent_id"], as_of_date
+            )
+
             # Deprecated travel/opp features (not in any feature list, kept for column compat)
             dead_features = {
                 "travel_dist": 0,
@@ -170,6 +238,7 @@ class FeatureStore:
                 **opp_pos_stats,
                 **game_lines,
                 **prop_lines,
+                **injury_context,
                 **dead_features,
             }
 
@@ -280,7 +349,19 @@ class FeatureStore:
                 COALESCE(p_avg.games_last_7d, 2) as games_in_last_7_days,
 
                 -- Game Context
-                CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
+                CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home,
+
+                -- Injury Context
+                COALESCE(team_inj.out_count, 0) as team_out_count,
+                COALESCE(team_inj.out_min_sum, 0) as team_out_min_sum,
+                COALESCE(team_inj.out_pts_sum, 0) as team_out_pts_sum,
+                COALESCE(team_inj.out_reb_sum, 0) as team_out_reb_sum,
+                COALESCE(team_inj.out_ast_sum, 0) as team_out_ast_sum,
+                COALESCE(team_inj.out_usg_sum, 0) as team_out_usg_sum,
+                COALESCE(opp_inj.out_count, 0) as opp_out_count,
+                COALESCE(opp_inj.out_min_sum, 0) as opp_out_min_sum,
+                CASE WHEN player_inj.inj_status = 'Questionable' THEN 1 ELSE 0 END as player_is_questionable,
+                CASE WHEN player_inj.inj_status = 'Probable' THEN 1 ELSE 0 END as player_is_probable
 
             FROM player_game_stats pgs
             JOIN players p ON pgs.player_id = p.player_id
@@ -376,6 +457,64 @@ class FeatureStore:
                     ORDER BY market_key, snapshot_time DESC NULLS LAST
                 ) sub
             ) prop_lines ON TRUE
+
+            -- Team Injury Context (OUT players on this team)
+            LEFT JOIN LATERAL (
+                SELECT
+                    COUNT(*) as out_count,
+                    COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum,
+                    COALESCE(SUM(inj_sub.avg_pts_l5), 0) as out_pts_sum,
+                    COALESCE(SUM(inj_sub.avg_reb_l5), 0) as out_reb_sum,
+                    COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum,
+                    COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+                FROM (
+                    SELECT DISTINCT ON (ri.player_id)
+                        pags_inj.avg_min_l5, pags_inj.avg_pts_l5,
+                        pags_inj.avg_reb_l5, pags_inj.avg_ast_l5,
+                        paas_inj.avg_usg_pct_l5
+                    FROM rapidapi_injuries ri
+                    LEFT JOIN player_average_game_stats pags_inj
+                        ON pags_inj.player_id = ri.player_id
+                        AND pags_inj.game_date < pgs.game_date
+                    LEFT JOIN player_average_advanced_stats paas_inj
+                        ON paas_inj.player_id = ri.player_id
+                        AND paas_inj.game_date < pgs.game_date
+                    WHERE ri.nba_team_id = pgs.team_id
+                      AND ri.report_date = pgs.game_date
+                      AND ri.status = 'Out'
+                      AND ri.player_id IS NOT NULL
+                    ORDER BY ri.player_id, pags_inj.game_date DESC, paas_inj.game_date DESC
+                ) inj_sub
+            ) team_inj ON TRUE
+
+            -- Opponent Injury Context (OUT players on opponent)
+            LEFT JOIN LATERAL (
+                SELECT
+                    COUNT(*) as out_count,
+                    COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum
+                FROM (
+                    SELECT DISTINCT ON (ri.player_id)
+                        pags_inj.avg_min_l5
+                    FROM rapidapi_injuries ri
+                    LEFT JOIN player_average_game_stats pags_inj
+                        ON pags_inj.player_id = ri.player_id
+                        AND pags_inj.game_date < pgs.game_date
+                    WHERE ri.nba_team_id = tgs.opponent_id
+                      AND ri.report_date = pgs.game_date
+                      AND ri.status = 'Out'
+                      AND ri.player_id IS NOT NULL
+                    ORDER BY ri.player_id, pags_inj.game_date DESC
+                ) inj_sub
+            ) opp_inj ON TRUE
+
+            -- Player Injury Status
+            LEFT JOIN LATERAL (
+                SELECT status as inj_status
+                FROM rapidapi_injuries ri
+                WHERE ri.player_id = pgs.player_id
+                  AND ri.report_date = pgs.game_date
+                ORDER BY ri.id DESC LIMIT 1
+            ) player_inj ON TRUE
 
             WHERE pgs.game_date = :game_date
               AND pgs.min >= 5
@@ -507,7 +646,18 @@ class FeatureStore:
                     LEAST(COALESCE(p_avg.rest_days, 3), 7) as rest_days,
                     CASE WHEN COALESCE(p_avg.rest_days, 3) = 1 THEN 1 ELSE 0 END as is_back_to_back,
                     COALESCE(p_avg.games_last_7d, 2) as games_in_last_7_days,
-                    CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
+                    CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home,
+                    -- Injury Context
+                    COALESCE(team_inj.out_count, 0) as team_out_count,
+                    COALESCE(team_inj.out_min_sum, 0) as team_out_min_sum,
+                    COALESCE(team_inj.out_pts_sum, 0) as team_out_pts_sum,
+                    COALESCE(team_inj.out_reb_sum, 0) as team_out_reb_sum,
+                    COALESCE(team_inj.out_ast_sum, 0) as team_out_ast_sum,
+                    COALESCE(team_inj.out_usg_sum, 0) as team_out_usg_sum,
+                    COALESCE(opp_inj.out_count, 0) as opp_out_count,
+                    COALESCE(opp_inj.out_min_sum, 0) as opp_out_min_sum,
+                    CASE WHEN player_inj.inj_status = 'Questionable' THEN 1 ELSE 0 END as player_is_questionable,
+                    CASE WHEN player_inj.inj_status = 'Probable' THEN 1 ELSE 0 END as player_is_probable
                 FROM player_game_stats pgs
                 JOIN players p ON pgs.player_id = p.player_id
                 JOIN team_game_stats tgs
@@ -586,6 +736,61 @@ class FeatureStore:
                         ORDER BY market_key, snapshot_time DESC NULLS LAST
                     ) sub
                 ) prop_lines ON TRUE
+                -- Team Injury Context (OUT players on this team)
+                LEFT JOIN LATERAL (
+                    SELECT
+                        COUNT(*) as out_count,
+                        COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum,
+                        COALESCE(SUM(inj_sub.avg_pts_l5), 0) as out_pts_sum,
+                        COALESCE(SUM(inj_sub.avg_reb_l5), 0) as out_reb_sum,
+                        COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum,
+                        COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+                    FROM (
+                        SELECT DISTINCT ON (ri.player_id)
+                            pags_inj.avg_min_l5, pags_inj.avg_pts_l5,
+                            pags_inj.avg_reb_l5, pags_inj.avg_ast_l5,
+                            paas_inj.avg_usg_pct_l5
+                        FROM rapidapi_injuries ri
+                        LEFT JOIN player_average_game_stats pags_inj
+                            ON pags_inj.player_id = ri.player_id
+                            AND pags_inj.game_date < pgs.game_date
+                        LEFT JOIN player_average_advanced_stats paas_inj
+                            ON paas_inj.player_id = ri.player_id
+                            AND paas_inj.game_date < pgs.game_date
+                        WHERE ri.nba_team_id = pgs.team_id
+                          AND ri.report_date = pgs.game_date
+                          AND ri.status = 'Out'
+                          AND ri.player_id IS NOT NULL
+                        ORDER BY ri.player_id, pags_inj.game_date DESC, paas_inj.game_date DESC
+                    ) inj_sub
+                ) team_inj ON TRUE
+                -- Opponent Injury Context (OUT players on opponent)
+                LEFT JOIN LATERAL (
+                    SELECT
+                        COUNT(*) as out_count,
+                        COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum
+                    FROM (
+                        SELECT DISTINCT ON (ri.player_id)
+                            pags_inj.avg_min_l5
+                        FROM rapidapi_injuries ri
+                        LEFT JOIN player_average_game_stats pags_inj
+                            ON pags_inj.player_id = ri.player_id
+                            AND pags_inj.game_date < pgs.game_date
+                        WHERE ri.nba_team_id = tgs.opponent_id
+                          AND ri.report_date = pgs.game_date
+                          AND ri.status = 'Out'
+                          AND ri.player_id IS NOT NULL
+                        ORDER BY ri.player_id, pags_inj.game_date DESC
+                    ) inj_sub
+                ) opp_inj ON TRUE
+                -- Player Injury Status
+                LEFT JOIN LATERAL (
+                    SELECT status as inj_status
+                    FROM rapidapi_injuries ri
+                    WHERE ri.player_id = pgs.player_id
+                      AND ri.report_date = pgs.game_date
+                    ORDER BY ri.id DESC LIMIT 1
+                ) player_inj ON TRUE
                 WHERE pgs.game_date >= :chunk_start
                   AND pgs.game_date <= :chunk_end
                   AND pgs.min >= 5
@@ -739,7 +944,19 @@ class FeatureStore:
                 COALESCE(p_avg.games_last_7d, 2) as games_in_last_7_days,
 
                 -- Game Context
-                CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
+                CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home,
+
+                -- Injury Context
+                COALESCE(team_inj.out_count, 0) as team_out_count,
+                COALESCE(team_inj.out_min_sum, 0) as team_out_min_sum,
+                COALESCE(team_inj.out_pts_sum, 0) as team_out_pts_sum,
+                COALESCE(team_inj.out_reb_sum, 0) as team_out_reb_sum,
+                COALESCE(team_inj.out_ast_sum, 0) as team_out_ast_sum,
+                COALESCE(team_inj.out_usg_sum, 0) as team_out_usg_sum,
+                COALESCE(opp_inj.out_count, 0) as opp_out_count,
+                COALESCE(opp_inj.out_min_sum, 0) as opp_out_min_sum,
+                CASE WHEN player_inj.inj_status = 'Questionable' THEN 1 ELSE 0 END as player_is_questionable,
+                CASE WHEN player_inj.inj_status = 'Probable' THEN 1 ELSE 0 END as player_is_probable
 
             FROM player_game_stats pgs
             JOIN team_game_stats tgs
@@ -834,6 +1051,64 @@ class FeatureStore:
                     ORDER BY market_key, snapshot_time DESC NULLS LAST
                 ) sub
             ) prop_lines ON TRUE
+
+            -- Team Injury Context (OUT players on this team)
+            LEFT JOIN LATERAL (
+                SELECT
+                    COUNT(*) as out_count,
+                    COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum,
+                    COALESCE(SUM(inj_sub.avg_pts_l5), 0) as out_pts_sum,
+                    COALESCE(SUM(inj_sub.avg_reb_l5), 0) as out_reb_sum,
+                    COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum,
+                    COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+                FROM (
+                    SELECT DISTINCT ON (ri.player_id)
+                        pags_inj.avg_min_l5, pags_inj.avg_pts_l5,
+                        pags_inj.avg_reb_l5, pags_inj.avg_ast_l5,
+                        paas_inj.avg_usg_pct_l5
+                    FROM rapidapi_injuries ri
+                    LEFT JOIN player_average_game_stats pags_inj
+                        ON pags_inj.player_id = ri.player_id
+                        AND pags_inj.game_date < pgs.game_date
+                    LEFT JOIN player_average_advanced_stats paas_inj
+                        ON paas_inj.player_id = ri.player_id
+                        AND paas_inj.game_date < pgs.game_date
+                    WHERE ri.nba_team_id = pgs.team_id
+                      AND ri.report_date = pgs.game_date
+                      AND ri.status = 'Out'
+                      AND ri.player_id IS NOT NULL
+                    ORDER BY ri.player_id, pags_inj.game_date DESC, paas_inj.game_date DESC
+                ) inj_sub
+            ) team_inj ON TRUE
+
+            -- Opponent Injury Context (OUT players on opponent)
+            LEFT JOIN LATERAL (
+                SELECT
+                    COUNT(*) as out_count,
+                    COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum
+                FROM (
+                    SELECT DISTINCT ON (ri.player_id)
+                        pags_inj.avg_min_l5
+                    FROM rapidapi_injuries ri
+                    LEFT JOIN player_average_game_stats pags_inj
+                        ON pags_inj.player_id = ri.player_id
+                        AND pags_inj.game_date < pgs.game_date
+                    WHERE ri.nba_team_id = tgs.opponent_id
+                      AND ri.report_date = pgs.game_date
+                      AND ri.status = 'Out'
+                      AND ri.player_id IS NOT NULL
+                    ORDER BY ri.player_id, pags_inj.game_date DESC
+                ) inj_sub
+            ) opp_inj ON TRUE
+
+            -- Player Injury Status
+            LEFT JOIN LATERAL (
+                SELECT status as inj_status
+                FROM rapidapi_injuries ri
+                WHERE ri.player_id = pgs.player_id
+                  AND ri.report_date = pgs.game_date
+                ORDER BY ri.id DESC LIMIT 1
+            ) player_inj ON TRUE
 
             WHERE pgs.season_id IN :seasons
               AND pgs.season_id NOT IN :excluded
@@ -1088,3 +1363,100 @@ class FeatureStore:
             "prop_line_ast": result.prop_line_ast or 0,
             "prop_line_threes": result.prop_line_threes or 0,
         }
+
+    def _get_injury_context(self, conn, player_id, team_id, opponent_id, game_date):
+        """Fetch injury context: team/opponent OUT player aggregates + player injury status."""
+        defaults = {
+            "team_out_count": 0,
+            "team_out_min_sum": 0,
+            "team_out_pts_sum": 0,
+            "team_out_reb_sum": 0,
+            "team_out_ast_sum": 0,
+            "team_out_usg_sum": 0,
+            "opp_out_count": 0,
+            "opp_out_min_sum": 0,
+            "player_is_questionable": 0,
+            "player_is_probable": 0,
+        }
+
+        # Team injury context
+        team_query = text("""
+            SELECT
+                COUNT(*) as out_count,
+                COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum,
+                COALESCE(SUM(inj_sub.avg_pts_l5), 0) as out_pts_sum,
+                COALESCE(SUM(inj_sub.avg_reb_l5), 0) as out_reb_sum,
+                COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum,
+                COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+            FROM (
+                SELECT DISTINCT ON (ri.player_id)
+                    pags_inj.avg_min_l5, pags_inj.avg_pts_l5,
+                    pags_inj.avg_reb_l5, pags_inj.avg_ast_l5,
+                    paas_inj.avg_usg_pct_l5
+                FROM rapidapi_injuries ri
+                LEFT JOIN player_average_game_stats pags_inj
+                    ON pags_inj.player_id = ri.player_id
+                    AND pags_inj.game_date < :game_date
+                LEFT JOIN player_average_advanced_stats paas_inj
+                    ON paas_inj.player_id = ri.player_id
+                    AND paas_inj.game_date < :game_date
+                WHERE ri.nba_team_id = :team_id
+                  AND ri.report_date = :game_date
+                  AND ri.status = 'Out'
+                  AND ri.player_id IS NOT NULL
+                ORDER BY ri.player_id, pags_inj.game_date DESC, paas_inj.game_date DESC
+            ) inj_sub
+        """)
+        team_result = conn.execute(
+            team_query, {"team_id": team_id, "game_date": game_date}
+        ).fetchone()
+        if team_result:
+            defaults["team_out_count"] = team_result.out_count or 0
+            defaults["team_out_min_sum"] = float(team_result.out_min_sum or 0)
+            defaults["team_out_pts_sum"] = float(team_result.out_pts_sum or 0)
+            defaults["team_out_reb_sum"] = float(team_result.out_reb_sum or 0)
+            defaults["team_out_ast_sum"] = float(team_result.out_ast_sum or 0)
+            defaults["team_out_usg_sum"] = float(team_result.out_usg_sum or 0)
+
+        # Opponent injury context
+        opp_query = text("""
+            SELECT
+                COUNT(*) as out_count,
+                COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum
+            FROM (
+                SELECT DISTINCT ON (ri.player_id)
+                    pags_inj.avg_min_l5
+                FROM rapidapi_injuries ri
+                LEFT JOIN player_average_game_stats pags_inj
+                    ON pags_inj.player_id = ri.player_id
+                    AND pags_inj.game_date < :game_date
+                WHERE ri.nba_team_id = :opponent_id
+                  AND ri.report_date = :game_date
+                  AND ri.status = 'Out'
+                  AND ri.player_id IS NOT NULL
+                ORDER BY ri.player_id, pags_inj.game_date DESC
+            ) inj_sub
+        """)
+        opp_result = conn.execute(
+            opp_query, {"opponent_id": opponent_id, "game_date": game_date}
+        ).fetchone()
+        if opp_result:
+            defaults["opp_out_count"] = opp_result.out_count or 0
+            defaults["opp_out_min_sum"] = float(opp_result.out_min_sum or 0)
+
+        # Player injury status
+        player_query = text("""
+            SELECT status
+            FROM rapidapi_injuries
+            WHERE player_id = :player_id
+              AND report_date = :game_date
+            ORDER BY id DESC LIMIT 1
+        """)
+        player_result = conn.execute(
+            player_query, {"player_id": player_id, "game_date": game_date}
+        ).fetchone()
+        if player_result:
+            defaults["player_is_questionable"] = 1 if player_result.status == "Questionable" else 0
+            defaults["player_is_probable"] = 1 if player_result.status == "Probable" else 0
+
+        return defaults

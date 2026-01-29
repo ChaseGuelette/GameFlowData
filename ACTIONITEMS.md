@@ -118,6 +118,13 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
   over/under outcomes. Architecturally cleaner for decorrelation but a bigger lift than Option A.
   Evaluate after A4 results are in.
 
+- [ ] **A6. Conditional rate modeling (minutes as rate feature)**
+  Instead of modeling minutes and rates independently and combining via copula, pass the
+  sampled minutes value as a feature into the rate model at inference time. The MC loop would
+  sample minutes first, then condition rate predictions on sampled minutes. This directly models
+  the dependency rather than approximating it via copula. Consider if copula-based combined
+  calibration still shows drift after retraining.
+
 ---
 
 ## Track B: New Signal Sources (Parallel — High Impact)
@@ -125,29 +132,25 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
 These add information the market may price imperfectly, especially for non-star players
 where bookmaker attention is lower.
 
-- [ ] **B1. Injury/lineup context features** *(Highest Impact)*
-  The model has zero injury awareness. The ESPN injury scraper exists but was never deployed
-  (`espn_injuries` table doesn't exist). No historical injury data has been collected.
+- [x] **B1. Injury/lineup context features** *(IMPLEMENTED — 2026-01-29)*
+  Historical injury data acquired via RapidAPI (2021-present, 88K+ rows). Player name-to-ID
+  linking via 3-tier cascade (manual CSV → exact normalized → SequenceMatcher fuzzy, threshold 0.80).
+  99.3% of injury records fully linked. Garbage API entries cleaned (142 rows deleted).
 
-  **Sub-tasks:**
-  - Acquire historical injury data (2021-present). Options:
-    - RapidAPI NBA Injury Reports API (has historical backfill from 2021, 3x daily snapshots,
-      ~$10-20/mo). Provides date-queryable historical data needed for training/backtesting.
-    - ESPN scraper (free, already built) for ongoing daily collection going forward.
-    - Recommendation: Use RapidAPI for historical backfill, ESPN scraper for live.
-  - Build player name-to-ID mapping layer (API returns names, DB uses integer IDs)
-  - Design injury features for `feature_store.py`:
-    - `team_out_players_count` — players listed Out on game day
-    - `team_out_minutes_share` — % of team's recent minutes missing
-    - `team_out_pts_share` — % of team's recent scoring missing
-    - `player_injury_status` — is this player Questionable/Probable (affects own minutes)
-    - `teammate_out_usage_boost` — estimated usage increase when key teammates are out
-  - Ensure temporal integrity (use pre-game report only, never post-game)
-  - Retrain with injury features and backtest
+  **Features added to all rate models and minutes model (10 total):**
+  - `team_out_count` — players listed Out on player's team
+  - `team_out_min_sum` — total recent minutes of Out teammates
+  - `team_out_pts_sum`, `team_out_reb_sum`, `team_out_ast_sum`, `team_out_usg_sum` — production of Out teammates
+  - `opp_out_count`, `opp_out_min_sum` — opponent injury context
+  - `player_is_questionable`, `player_is_probable` — player's own injury status (binary)
+
+  Computed via SQL LATERAL JOINs in `feature_store.py`. Pre-game temporal integrity enforced
+  (uses report_date <= game_date). Manual mappings for truncated API names (suffixes like "III", "Jr.").
+  **Note:** Models must be retrained for these features to take effect.
 
 - [x] **B2. Rest days / back-to-back features** *(IMPLEMENTED — 2026-01-29)*
   Schedule density features pre-computed in `player_average_game_stats` via `calculate_b2_b3_b4_features()`.
-  Added to `MINUTES_FEATURES`: `rest_days`, `is_back_to_back`, `games_in_last_7_days`.
+  Added to `MINUTES_FEATURES` and all 4 `RATE_FEATURES_*` lists: `rest_days`, `is_back_to_back`, `games_in_last_7_days`.
   DB columns: `rest_days`, `games_last_7d`. `is_back_to_back` derived in SQL (`CASE WHEN rest_days = 1`).
   All 4 feature store query paths updated. Defaults: rest=3, b2b=0, games_7d=2.
 
@@ -175,6 +178,26 @@ where bookmaker attention is lower.
 ---
 
 ## Track C: Calibration Refinement (Parallel — Lower Priority)
+
+- [x] **C0. Gaussian copula for minutes-rate correlation** *(IMPLEMENTED — 2026-01-29)*
+  Replaced the legacy post-hoc correlation adjustment (hardcoded bucket-based rate factors) with
+  proper Gaussian copula sampling. This preserves both marginal distributions exactly while
+  capturing the empirical rank dependency between minutes and per-minute rates.
+
+  **Problem:** PTS (ρ=0.314) and AST (ρ=0.176) show significant minutes-rate correlation.
+  Independent sampling + post-hoc multiplicative adjustment distorted the rate distribution
+  and was the likely root cause of the AST Q10 combined calibration gap (+9.7%).
+
+  **Implementation:**
+  - `MonteCarloPredictor` accepts `copula_params: dict[stat → Spearman ρ]`
+  - Training pipeline computes Spearman rank correlations and saves `copula_params.json` as artifact
+  - `_predict_copula()`: shared z_minutes ~ N(0,1), per-stat z_rate = ρ·z_min + √(1-ρ²)·z_indep
+  - Uniform transform via Φ(z), then inverse CDF mapping through each marginal
+  - Both `predict()` and `predict_batch_for_date()` support copula path
+  - `run_backtest.py` and `run_daily.py` auto-load copula params from model artifacts
+  - Falls back to legacy adjustment when `copula_params.json` not present (backward compat)
+  - Helper: `compute_copula_params_from_data()`, `load_copula_params()`
+  - If copula still shows combined calibration drift, see A6 (conditional rate modeling)
 
 - [ ] **C1. Investigate Q10 over-coverage**
   Latest backtest shows Q10 at 13.2% vs 10% target (32% over-coverage). The lower tail is
@@ -238,11 +261,13 @@ backtest with positive ROI.
 | ~~A2 (Remove line_total)~~ | ~~Low~~ | ~~High~~ | **DONE** — Removed from `RATE_FEATURES_PTS`. Needs retrain + re-backtest. |
 | ~~B2 (Rest/B2B features)~~ | ~~Low~~ | ~~Medium-High~~ | **DONE** — `rest_days`, `is_back_to_back`, `games_in_last_7_days` in MINUTES_FEATURES. Needs retrain + re-backtest. |
 | ~~B3 (L3 + trend features)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — 13 features (L3 avg, momentum ratios, L5 std). Needs retrain + re-backtest. |
-| B1 (Injury features) | Medium-High | High | Biggest feature gap, needs data acquisition via RapidAPI |
+| ~~B1 (Injury features)~~ | ~~Medium-High~~ | ~~High~~ | **DONE** — 10 injury features via LATERAL JOIN. 99.3% linked. Needs retrain + re-backtest. |
 | ~~A4 (Residual modeling — features)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Prop line centering in all 4 query paths. Needs retrain + re-backtest. |
 | ~~B4 (Minutes stability)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — `min_std_l5`, `min_floor_l5`, `games_started_l5` in MINUTES_FEATURES. Needs retrain + re-backtest. |
+| ~~C0 (Gaussian copula)~~ | ~~Medium~~ | ~~Medium-High~~ | **DONE** — Replaces hardcoded rate factors with proper copula sampling. Needs retrain + re-backtest. |
 | C1 (Q10 investigation) | Low | Low-Medium | Calibration refinement |
 | A5 (Residual modeling — classifier) | High | High | Only if A4 isn't sufficient |
+| A6 (Conditional rate modeling) | Medium-High | Medium-High | Only if copula combined calibration still drifts |
 | D1-D4 (Old model items) | Various | Low until recalibrated | Revisit after Track A |
 | E1-E7 (Go-live) | Various | Blocked | Needs demonstrated edge first |
 

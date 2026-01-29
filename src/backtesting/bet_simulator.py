@@ -45,6 +45,9 @@ class Bet:
     implied_prob: float
     edge: float
 
+    # Line shopping info
+    bookmaker: str | None = None  # Bookmaker offering the best line
+
     # BL diagnostic (optional)
     posterior_prob: float | None = None  # BL-blended probability (when BL is enabled)
 
@@ -249,6 +252,9 @@ class BetSimulator:
                         model_prob=row["over_prob"],
                         implied_prob=row["implied_over"],
                     )
+                    # Store bookmaker if available (line shopping)
+                    if "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
+                        bet.bookmaker = row["bookmaker"]
                     # Store BL posterior if available
                     if "posterior_over" in row.index and not pd.isna(row.get("posterior_over")):
                         bet.posterior_prob = row["posterior_over"]
@@ -273,6 +279,9 @@ class BetSimulator:
                         model_prob=row["under_prob"],
                         implied_prob=row["implied_under"],
                     )
+                    # Store bookmaker if available (line shopping)
+                    if "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
+                        bet.bookmaker = row["bookmaker"]
                     # Store BL posterior if available
                     if "posterior_under" in row.index and not pd.isna(row.get("posterior_under")):
                         bet.posterior_prob = row["posterior_under"]
@@ -361,6 +370,7 @@ class BetSimulator:
                     "line": bet.line,
                     "odds": bet.odds,
                     "stake": bet.stake,
+                    "bookmaker": bet.bookmaker,
                     "model_prob": bet.model_prob,
                     "implied_prob": bet.implied_prob,
                     "edge": bet.edge,

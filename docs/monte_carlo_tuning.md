@@ -13,11 +13,12 @@ Two common calibration issues arise:
 - **Bias**: Systematic over/under-prediction (e.g., always predicting too high)
 - **Variance underestimation**: Distribution too narrow (overconfident)
 
-We provide two mechanisms to fix these:
+We provide mechanisms to fix these:
 
 | Issue | Fix | Parameter |
 |-------|-----|-----------|
-| Bias from minutes-rate correlation | Correlated Sampling | `correlation_config` |
+| Bias from minutes-rate correlation | **Gaussian Copula** (recommended) | `copula_params` |
+| Bias from minutes-rate correlation | Legacy Correlated Sampling (deprecated) | `correlation_config` |
 | Variance underestimation | Variance Inflation | `variance_inflation` |
 
 ---
@@ -90,11 +91,86 @@ predictor = MonteCarloPredictor(
 
 ---
 
-## Correlated Sampling
+## Gaussian Copula Sampling (Recommended)
 
 ### What it does
 
-Correlated sampling adjusts rate predictions based on predicted minutes. This fixes **bias** caused by the fact that players who play more minutes tend to have higher per-minute rates (for PTS and AST).
+Gaussian copula sampling is the **recommended** approach for handling minutes-rate correlation. It replaces the legacy correlated sampling with a principled statistical method that preserves both marginal distributions exactly while inducing the correct rank dependency between minutes and per-minute rates.
+
+**How it works:**
+1. Draw shared `z_minutes` from standard normal for all stats
+2. For each stat, generate correlated `z_rate` via Cholesky decomposition:
+   `z_rate = ρ·z_minutes + √(1-ρ²)·z_independent`
+3. Convert to uniforms via Φ(z) → [0,1]
+4. Map uniforms through marginal inverse CDFs (quantile functions) to get actual samples
+5. Combine: `total_stat = minutes × rate`
+
+**Key advantage:** The marginal distributions (minutes and rate) are preserved exactly — the copula only controls how they co-move. The legacy approach applied multiplicative rate factors that distorted the rate distribution.
+
+### When it's used
+
+Copula sampling is **automatically enabled** when `copula_params.json` exists in the model artifacts directory. The training pipeline computes and saves this file automatically.
+
+- `run_backtest.py`: Auto-loads from model dir
+- `run_daily.py`: Auto-loads from model dir
+- Falls back to legacy correlation adjustment when file is missing (backward compatible)
+
+### Copula parameters from training
+
+The training pipeline computes Spearman rank correlations from the training data:
+
+```
+=== Computing Gaussian Copula Parameters ===
+  PTS: Spearman ρ = 0.3140    (strong positive — high-minute games → higher pts/min)
+  REB: Spearman ρ = -0.0460   (negligible — rebounds independent of minutes)
+  AST: Spearman ρ = 0.1760    (moderate positive — playmakers get more minutes)
+  THREES: Spearman ρ = 0.1200  (mild positive)
+```
+
+These are converted to Pearson ρ via: `ρ_pearson = 2·sin(π·ρ_spearman / 6)`
+
+### How to customize
+
+```python
+from src.models.monte_carlo import MonteCarloPredictor
+
+# Copula is auto-loaded from artifacts, but you can override:
+predictor = MonteCarloPredictor(
+    pipeline,
+    copula_params={
+        "pts": 0.314,   # Spearman ρ
+        "reb": -0.046,
+        "ast": 0.176,
+        "threes": 0.12,
+    }
+)
+
+# Disable copula (falls back to legacy correlation adjustment)
+predictor = MonteCarloPredictor(pipeline, copula_params=None)
+```
+
+### Computing copula parameters from data
+
+```python
+from src.models.monte_carlo import compute_copula_params_from_data
+
+# Load your training data
+df = feature_store.get_training_dataset(["22023", "22024"])
+
+# Compute Spearman rank correlations
+params = compute_copula_params_from_data(df)
+# Returns: {"pts": 0.314, "reb": -0.046, "ast": 0.176, "threes": 0.12}
+```
+
+---
+
+## Legacy Correlated Sampling (Deprecated)
+
+> **Note:** This mechanism is superseded by Gaussian copula sampling. It remains as a fallback when `copula_params.json` is not available in the model artifacts.
+
+### What it does
+
+Correlated sampling adjusts rate predictions based on predicted minutes using hardcoded bucket-based multiplicative factors. This fixes **bias** caused by the fact that players who play more minutes tend to have higher per-minute rates (for PTS and AST).
 
 **Example:**
 - Player predicted to play 35 minutes → rate scaled UP by ~18%
@@ -102,10 +178,7 @@ Correlated sampling adjusts rate predictions based on predicted minutes. This fi
 
 ### When to use it
 
-Use correlated sampling when:
-- There's significant correlation between minutes and rate (|corr| > 0.1)
-- Calibration shows systematic bias (mean predicted ≠ mean actual)
-- Upper quantiles (Q75, Q90) show consistent under-coverage
+Only used when copula params are unavailable. For new training runs, the copula approach is preferred.
 
 ### Default configuration
 
@@ -352,15 +425,19 @@ The blowout factor primarily affects:
 ## Quick Reference
 
 ```python
-from src.models.monte_carlo import MonteCarloPredictor
+from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
+
+# Recommended: Load copula params from training artifacts
+copula_params = load_copula_params("src/models/artifacts/run_XXXXXXXX")
 
 # Full configuration example
 predictor = MonteCarloPredictor(
     model_pipeline=pipeline,
     n_samples=10000,                    # Monte Carlo samples
     random_state=42,                    # For reproducibility
-    use_correlated_sampling=True,       # Enable correlation adjustment
-    correlation_config=None,            # Use defaults (or provide custom)
+    copula_params=copula_params,        # Gaussian copula (recommended, auto-computed by training)
+    use_correlated_sampling=True,       # Legacy correlation fallback (ignored when copula is set)
+    correlation_config=None,            # Legacy config (ignored when copula is set)
     variance_inflation={                # Custom variance inflation
         "pts": 1.0,
         "reb": 1.15,
@@ -387,8 +464,8 @@ predictor = MonteCarloPredictor(
 |---------|--------------|-----|
 | Q90 gap negative (e.g., -6%) | Variance too narrow | Increase `variance_inflation` or `upper_tail_multiplier` |
 | Q10 gap positive (e.g., +8%) | Lower tail too short | Increase `lower_tail_multiplier` or enable `blowout_config` |
-| Mean predicted < Mean actual | Missing minutes-rate correlation | Enable `use_correlated_sampling` |
-| Mean predicted > Mean actual | Over-adjusted correlation | Reduce correlation `rate_factors` |
+| Mean predicted < Mean actual | Missing minutes-rate correlation | Enable copula (`copula_params`) or legacy `use_correlated_sampling` |
+| Mean predicted > Mean actual | Over-adjusted correlation | Check copula ρ values, or reduce legacy `rate_factors` |
 | High hit rate but negative ROI | Overconfident edges | Raise `edge_threshold` |
 | Low outcomes happening unexpectedly | Not modeling blowouts/fouls | Enable `blowout_config` with higher `probability` |
 | REB specifically has issues | REB has no correlation to leverage | Use `variance_inflation` for REB (default: 1.15) |

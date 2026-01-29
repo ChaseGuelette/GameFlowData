@@ -88,6 +88,11 @@ python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 220
    ├─ Run full inference: FeatureStore → Pipeline → MonteCarloPredictor
    └─ Assert: predictions positive, quantiles monotonic, values reasonable
 
+5d. Compute Copula Parameters
+   ├─ Compute Spearman ρ(minutes, rate) for each stat from training data
+   ├─ Save copula_params.json to run directory
+   └─ Used by MonteCarloPredictor for correlated sampling
+
 7. Save Artifacts
    └─ src/models/artifacts/run_YYYYMMDD_HHMMSS/
        ├─ minutes_model.joblib
@@ -98,7 +103,8 @@ python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 220
        ├─ feature_config.joblib
        ├─ selected_features.json
        ├─ run_config.json
-       └─ calibration_report.json
+       ├─ calibration_report.json
+       └─ copula_params.json          # Gaussian copula Spearman ρ per stat
 ```
 
 ### What Good Calibration Looks Like
@@ -152,7 +158,9 @@ python src/backtesting/run_backtest.py \
 | `--edge-threshold` | `0.05` | Minimum edge (5%) to place a simulated bet |
 | `--starting-bankroll` | `10000.0` | Initial bankroll for simulation |
 | `--kelly-fraction` | `0.125` | Fraction of Kelly stake (e.g., 0.125 = 1/8th Kelly) |
-| `--bookmaker` | `pinnacle` | Bookmaker for line comparison |
+| `--bookmakers` | all available | List of bookmakers to shop lines from |
+| `--allowed-bets` | all combos | Stat:side filter (e.g., `pts:under reb:over`) |
+| `--bl-tau` | None (disabled) | Black-Litterman tau (e.g., 0.05). Enables BL blending |
 
 ### Bankroll Management & Staking
 
@@ -167,29 +175,37 @@ The backtester now supports **Dynamic Bankroll Management** using the **Kelly Cr
 ### Logic Flow
 
 ```
-1. Load Models
-   └─ PlayerPropsModelPipeline.load_all(model_dir)
+1. Load Models & Copula
+   ├─ PlayerPropsModelPipeline.load_all(model_dir)
+   ├─ load_copula_params(model_dir) → copula_params.json (auto)
+   └─ MonteCarloPredictor(pipeline, copula_params=...)
 
-2. Get Game Dates in Range
+2. Configure Black-Litterman (Optional)
+   └─ If --bl-tau set: BlackLittermanBlender(BLConfig(tau=...))
+
+3. Get Game Dates in Range
    └─ Query distinct game dates from player_game_stats
 
-3. For Each Game Date:
+4. For Each Game Date:
    ├─ Resolve PENDING bets from previous day (Update Bankroll)
    ├─ Get all games and players who played that day
    ├─ For each player:
    │   ├─ FeatureStore.get_player_game_features(player, game, date)
    │   ├─ MonteCarloPredictor.predict() → distribution per stat
+   │   │   └─ Uses Gaussian copula if copula_params available
    │   └─ Store quantile predictions
-   ├─ Fetch prop lines (from raw_player_props_combined)
-   ├─ Calculate edges:
+   ├─ Fetch prop lines from ALL bookmakers (raw_player_props_combined)
+   ├─ Calculate edges (per bookmaker):
    │   ├─ P(over) from predicted distribution
+   │   ├─ If BL enabled: blend model prob with devigged market prior
    │   ├─ Implied prob from book odds
-   │   └─ Edge = P(over) - implied_prob
+   │   └─ Edge = P(over/under) - implied_prob
+   ├─ Select best line per player-stat (line shopping)
    ├─ Place bets where |edge| > threshold
    │   └─ Stake = Kelly Fraction * Current Bankroll
    └─ Store bets for next day resolution
 
-4. Calculate Performance Metrics
+5. Calculate Performance Metrics
    ├─ ROI (total profit / total wagered)
    ├─ Win rate
    ├─ Sharpe ratio (annualized to 170 NBA game-days)
@@ -197,11 +213,12 @@ The backtester now supports **Dynamic Bankroll Management** using the **Kelly Cr
    ├─ Win/loss streaks
    └─ Profit by stat, by edge bucket
 
-5. Save Results
+6. Save Results
    └─ output_dir/
-       ├─ predictions.csv   (all predictions with features)
-       ├─ bets.csv          (placed bets with outcomes)
-       └─ metrics.json      (summary performance)
+       ├─ predictions.csv          (all predictions with features)
+       ├─ bets.csv                 (placed bets with outcomes)
+       ├─ metrics.json             (summary performance)
+       └─ all_bookmaker_edges.csv  (all bookmaker lines evaluated)
 ```
 
 ### Interpreting Results
@@ -347,5 +364,7 @@ python src/orchestration/run_daily.py --date 2025-01-23 --scrape-injuries --scra
 | `src/backtesting/backtest_harness.py` | Backtest orchestration | Imported |
 | `src/backtesting/bet_simulator.py` | Bet tracking and resolution | Imported |
 | `src/backtesting/performance_metrics.py` | ROI, Sharpe, drawdown calculations | Imported |
+| `src/backtesting/visualize_results.py` | HTML dashboard from backtest results | `python -m` or direct |
+| `src/models/black_litterman.py` | Black-Litterman probability blending | Imported |
 | `src/orchestration/run_daily.py` | Daily pipeline (scrape + process + predict) | `python -m` or direct |
 | `src/db/client.py` | Database connection singleton | Imported |

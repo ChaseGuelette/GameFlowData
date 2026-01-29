@@ -11,7 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.db.client import get_engine
 from src.models.daily_runner import DailyPredictionRunner
 from src.models.feature_store import FeatureStore
-from src.models.monte_carlo import MonteCarloPredictor
+from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
 from src.models.quantile_trainer import PlayerPropsModelPipeline
 
 # Configure logging
@@ -134,7 +134,10 @@ def main():
             pipeline = PlayerPropsModelPipeline.load_all(str(model_path), feature_store)
 
             logger.info("Initializing Predictor...")
-            predictor = MonteCarloPredictor(pipeline, n_samples=10000)
+            copula_params = load_copula_params(str(model_path))
+            if copula_params:
+                logger.info(f"Loaded Gaussian copula params from model artifacts")
+            predictor = MonteCarloPredictor(pipeline, n_samples=10000, copula_params=copula_params)
 
             runner = DailyPredictionRunner(engine, feature_store, pipeline, predictor)
 

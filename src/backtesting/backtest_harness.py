@@ -26,6 +26,7 @@ class BacktestResult:
 
     predictions_df: pd.DataFrame
     bets_df: pd.DataFrame
+    all_edges_df: pd.DataFrame  # Pre-line-shopping edges across all bookmakers
     metrics: PerformanceMetrics
     start_date: date
     end_date: date
@@ -38,6 +39,10 @@ class BacktestResult:
 
         self.predictions_df.to_csv(output_path / "predictions.csv", index=False)
         self.bets_df.to_csv(output_path / "bets.csv", index=False)
+
+        # Save all bookmaker edges (pre-line-shopping) for analysis
+        if not self.all_edges_df.empty:
+            self.all_edges_df.to_csv(output_path / "all_bookmaker_edges.csv", index=False)
 
         # Save metrics as JSON (include config for visualization)
         metrics_output = self.metrics.to_dict()
@@ -64,7 +69,11 @@ class BacktestHarness:
     edge_threshold: float = 0.05
     starting_bankroll: float = 10000.0
     kelly_fraction: float = 0.125
-    bookmakers: list[str] = field(default_factory=lambda: ["pinnacle"])
+    bookmakers: list[str] = field(default_factory=lambda: [
+        "draftkings", "fanduel", "betmgm", "betrivers", "bovada",
+        "williamhill_us", "betonlineag", "unibet_us", "mybookieag",
+        "pointsbetus", "fanatics", "barstool", "wynnbet",
+    ])
     stats: list[str] = field(default_factory=lambda: ["pts", "reb", "ast"])
     min_minutes_avg: int = 10
     allowed_bets: list[tuple[str, str]] | None = None  # e.g., [("pts", "under"), ("reb", "over")]
@@ -122,6 +131,7 @@ class BacktestHarness:
         )
 
         all_predictions = []
+        all_bookmaker_edges = []
         completed_count = 0
 
         # Phase 1: Generate predictions (zero DB calls per date)
@@ -137,9 +147,11 @@ class BacktestHarness:
                 logger.info(f"Processed {completed_count}/{len(game_dates)} dates")
 
             try:
-                date_preds = self._run_date(game_date, prefetched_features, prefetched_lines)
+                date_preds, date_all_edges = self._run_date(game_date, prefetched_features, prefetched_lines)
                 if date_preds is not None and len(date_preds) > 0:
                     all_predictions.append(date_preds)
+                if date_all_edges is not None and len(date_all_edges) > 0:
+                    all_bookmaker_edges.append(date_all_edges)
             except Exception as e:
                 logger.error(f"Error processing {game_date}: {e}")
 
@@ -198,6 +210,14 @@ class BacktestHarness:
         if len(predictions_df) > 0 and len(actuals_df) > 0:
             predictions_df = self._merge_actuals(predictions_df, actuals_df)
 
+        # Combine all bookmaker edges (pre-line-shopping data)
+        if all_bookmaker_edges:
+            all_edges_df = pd.concat(all_bookmaker_edges, ignore_index=True)
+            all_edges_df = all_edges_df.sort_values(["game_date", "player_id", "stat", "bookmaker"])
+            logger.info(f"Total bookmaker edge rows (pre-line-shop): {len(all_edges_df)}")
+        else:
+            all_edges_df = pd.DataFrame()
+
         # Calculate metrics
         metrics = self._metrics_calc.calculate(predictions_df, bets_df, starting_bankroll=self.starting_bankroll)
 
@@ -206,6 +226,7 @@ class BacktestHarness:
         return BacktestResult(
             predictions_df=predictions_df,
             bets_df=bets_df,
+            all_edges_df=all_edges_df,
             metrics=metrics,
             start_date=start_date,
             end_date=end_date,
@@ -293,16 +314,27 @@ class BacktestHarness:
             game_ids = features_df["game_id"].unique().tolist()
             lines_df = self._get_lines_for_date(game_date, game_ids)
 
+        all_edges_df = pd.DataFrame()
         if len(lines_df) > 0:
             predictions_df = self._calculate_edges(predictions_df, lines_df, prediction_samples)
+
+            # Snapshot all bookmaker edges before filtering
+            all_edges_df = predictions_df.copy()
 
             # Filter to best line per player/stat (Line Shopping)
             predictions_df = self._filter_best_bets(predictions_df)
 
-        return predictions_df
+        return predictions_df, all_edges_df
 
     def _filter_best_bets(self, predictions_df: pd.DataFrame) -> pd.DataFrame:
-        """Select single best betting opportunity per player/game (One Bet Per Player)."""
+        """Line-shop across bookmakers, then select single best bet per player/game.
+
+        Stage 1 (Line Shopping): For each (player, game, stat), keep the bookmaker/line
+        combo offering the highest edge. This is the core line-shopping step.
+
+        Stage 2 (Bet Dedup): For each (player, game), keep only the single best stat.
+        This limits correlation risk to one bet per player per game.
+        """
         if predictions_df.empty:
             return predictions_df
 
@@ -312,9 +344,15 @@ class BacktestHarness:
         # Sort by max edge descending
         predictions_df = predictions_df.sort_values("max_edge", ascending=False)
 
-        # Deduplicate to keep best line per player (Limit Correlation Risk)
-        # Modified: Subset now excludes "stat" to ensure only ONE bet per player per game
-        predictions_df = predictions_df.drop_duplicates(subset=["player_id", "game_id"], keep="first")
+        # Stage 1: Line Shopping — best bookmaker/line per player/game/stat
+        predictions_df = predictions_df.drop_duplicates(
+            subset=["player_id", "game_id", "stat"], keep="first"
+        )
+
+        # Stage 2: Bet Dedup — one bet per player per game
+        predictions_df = predictions_df.drop_duplicates(
+            subset=["player_id", "game_id"], keep="first"
+        )
 
         return predictions_df
 
@@ -372,11 +410,12 @@ class BacktestHarness:
                     game_id,
                     market_key,
                     line,
+                    bookmaker,
                     outcome_label,
                     odds_american,
                     snapshot_time,
                     ROW_NUMBER() OVER (
-                        PARTITION BY player_id, game_id, market_key, line, outcome_label
+                        PARTITION BY player_id, game_id, market_key, line, bookmaker, outcome_label
                         ORDER BY snapshot_time DESC
                     ) as rn
                 FROM raw_player_props_combined
@@ -390,11 +429,12 @@ class BacktestHarness:
                 game_id,
                 market_key,
                 line,
+                bookmaker,
                 MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
                 MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
             FROM ranked_lines
             WHERE rn = 1
-            GROUP BY player_id, game_id, market_key, line
+            GROUP BY player_id, game_id, market_key, line, bookmaker
         """).bindparams(
             bindparam("game_ids", expanding=True),
             bindparam("markets", expanding=True),
@@ -463,10 +503,11 @@ class BacktestHarness:
                     gd.game_date,
                     rp.market_key,
                     rp.line,
+                    rp.bookmaker,
                     rp.outcome_label,
                     rp.odds_american,
                     ROW_NUMBER() OVER (
-                        PARTITION BY rp.player_id, rp.game_id, rp.market_key, rp.line, rp.outcome_label
+                        PARTITION BY rp.player_id, rp.game_id, rp.market_key, rp.line, rp.bookmaker, rp.outcome_label
                         ORDER BY rp.snapshot_time DESC
                     ) as rn
                 FROM raw_player_props_combined rp
@@ -481,11 +522,12 @@ class BacktestHarness:
                 game_date,
                 market_key,
                 line,
+                bookmaker,
                 MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
                 MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
             FROM ranked_lines
             WHERE rn = 1
-            GROUP BY player_id, game_id, game_date, market_key, line
+            GROUP BY player_id, game_id, game_date, market_key, line, bookmaker
         """).bindparams(
             bindparam("markets", expanding=True),
             bindparam("bookmakers", expanding=True),
@@ -547,9 +589,12 @@ class BacktestHarness:
         lines_df = lines_df.copy()
         lines_df["stat"] = lines_df["market_key"].map(market_to_stat)
 
-        # Merge predictions with lines
+        # Merge predictions with lines (one-to-many: each prediction gets one row per bookmaker/line)
+        line_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds"]
+        if "bookmaker" in lines_df.columns:
+            line_cols.append("bookmaker")
         merged = predictions_df.merge(
-            lines_df[["player_id", "game_id", "stat", "line", "over_odds", "under_odds"]],
+            lines_df[line_cols],
             on=["player_id", "game_id", "stat"],
             how="left",
         )

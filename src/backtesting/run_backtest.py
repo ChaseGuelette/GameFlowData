@@ -17,7 +17,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.backtesting.backtest_harness import BacktestHarness
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
-from src.models.monte_carlo import MonteCarloPredictor
+from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
 from src.models.quantile_trainer import PlayerPropsModelPipeline
 
 logging.basicConfig(
@@ -66,8 +66,12 @@ def main():
     parser.add_argument(
         "--bookmakers",
         nargs="+",
-        default=["draftkings", "fanduel", "betmgm"],
-        help="List of bookmakers to shop lines from",
+        default=[
+            "draftkings", "fanduel", "betmgm", "betrivers", "bovada",
+            "williamhill_us", "betonlineag", "unibet_us", "mybookieag",
+            "pointsbetus", "fanatics", "barstool", "wynnbet",
+        ],
+        help="List of bookmakers to shop lines from (default: all available)",
     )
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers")
     parser.add_argument(
@@ -114,8 +118,15 @@ def main():
     logger.info("Loading model pipeline...")
     pipeline = PlayerPropsModelPipeline.load_all(str(model_path), feature_store)
 
+    # Load copula parameters if available in model artifacts
+    copula_params = load_copula_params(str(model_path))
+    if copula_params:
+        logger.info(f"Loaded Gaussian copula params: { {k: f'{v:.4f}' for k, v in copula_params.items()} }")
+    else:
+        logger.info("No copula_params.json found, using legacy correlation adjustment")
+
     logger.info(f"Initializing Monte Carlo predictor (n_samples={args.n_samples})...")
-    predictor = MonteCarloPredictor(pipeline, n_samples=args.n_samples)
+    predictor = MonteCarloPredictor(pipeline, n_samples=args.n_samples, copula_params=copula_params)
 
     # Configure Black-Litterman blender (optional)
     bl_blender = None

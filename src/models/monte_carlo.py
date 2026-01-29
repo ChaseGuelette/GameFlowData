@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from scipy.stats import norm as sp_norm
 
 
 @dataclass
@@ -149,6 +150,7 @@ class MonteCarloPredictor:
         variance_inflation: dict | None = None,
         tail_adjustment: dict | None = None,
         blowout_config: dict | None = None,
+        copula_params: dict | None = None,
     ):
         """
         Initialize the Monte Carlo predictor.
@@ -159,7 +161,8 @@ class MonteCarloPredictor:
             random_state: Random seed for reproducibility
             correlation_config: Dict mapping stat -> {minutes_points, rate_factors, enabled}
                                If None, uses DEFAULT_CORRELATION_CONFIG
-            use_correlated_sampling: Whether to apply correlation adjustment
+            use_correlated_sampling: Whether to apply correlation adjustment (legacy).
+                                    Ignored when copula_params is provided.
             variance_inflation: Dict mapping stat -> inflation factor (e.g., {"reb": 1.15})
                                Values > 1.0 widen distribution, < 1.0 narrow it.
                                If None, uses DEFAULT_VARIANCE_INFLATION
@@ -167,6 +170,10 @@ class MonteCarloPredictor:
                             to extend tails more aggressively. If None, uses DEFAULT_TAIL_ADJUSTMENT
             blowout_config: Dict with {enabled, probability, minutes_reduction} for modeling
                            unexpected minutes cuts. If None, uses DEFAULT_BLOWOUT_CONFIG
+            copula_params: Dict mapping stat -> Spearman rank correlation between minutes
+                          and that stat's per-minute rate. When provided, uses Gaussian copula
+                          sampling instead of the legacy post-hoc correlation adjustment.
+                          Example: {"pts": 0.314, "reb": -0.046, "ast": 0.176, "threes": 0.10}
         """
         self.pipeline = model_pipeline
         self.n_samples = n_samples
@@ -176,7 +183,7 @@ class MonteCarloPredictor:
         # Quantile probabilities for interpolation
         self.quantile_probs = np.array([0.10, 0.25, 0.50, 0.75, 0.90])
 
-        # Load correlation config
+        # Load correlation config (legacy)
         self.correlation_config = correlation_config or DEFAULT_CORRELATION_CONFIG
 
         # Load variance inflation config
@@ -187,6 +194,9 @@ class MonteCarloPredictor:
 
         # Load blowout/foul config
         self.blowout_config = blowout_config or DEFAULT_BLOWOUT_CONFIG
+
+        # Gaussian copula parameters (replaces legacy correlation adjustment when set)
+        self.copula_params = copula_params
 
     def predict(
         self, player_id: int, game_id: str, features: dict, stats: list[str] = None
@@ -205,6 +215,11 @@ class MonteCarloPredictor:
         """
         stats = stats or ["pts", "reb", "ast"]
 
+        # Use copula path if params are available
+        if self.copula_params:
+            return self._predict_copula(player_id, game_id, features, stats)
+
+        # Legacy path: independent sampling with optional post-hoc adjustment
         # 1. Predict minutes distribution
         minutes_samples = self._sample_minutes(features)
 
@@ -226,6 +241,92 @@ class MonteCarloPredictor:
             stat_samples = self._apply_variance_inflation(stat_samples, stat)
 
             # 6. Build prediction object
+            predictions[stat] = PropPrediction(
+                player_id=player_id,
+                game_id=game_id,
+                stat=stat,
+                mean=stat_samples.mean(),
+                median=np.median(stat_samples),
+                q10=np.percentile(stat_samples, 10),
+                q25=np.percentile(stat_samples, 25),
+                q50=np.percentile(stat_samples, 50),
+                q75=np.percentile(stat_samples, 75),
+                q90=np.percentile(stat_samples, 90),
+                samples=stat_samples,
+            )
+
+        return predictions
+
+    def _predict_copula(
+        self, player_id: int, game_id: str, features: dict, stats: list[str]
+    ) -> dict[str, PropPrediction]:
+        """
+        Generate predictions using Gaussian copula for correlated sampling.
+
+        Instead of sampling minutes and rates independently and applying a post-hoc
+        adjustment, this generates correlated (minutes, rate) pairs that respect the
+        empirical rank correlation while preserving both marginal distributions exactly.
+
+        Algorithm:
+          1. Get minutes quantile predictions → build inverse CDF
+          2. Generate shared z_minutes ~ N(0,1) (same latent minutes for all stats)
+          3. For each stat:
+             a. Generate z_rate = ρ·z_minutes + √(1-ρ²)·z_independent
+             b. Transform to uniform: u = Φ(z)
+             c. Map through marginal inverse CDFs
+             d. Multiply: stat = minutes × rate
+        """
+        # Get minutes quantile predictions
+        X_min = self._prepare_features(features, self.pipeline.minutes_model.all_feature_names)
+        min_qdf = self.pipeline.minutes_model.predict_quantiles(X_min)
+        min_qvals = min_qdf.iloc[0].values
+        min_ext_probs, min_ext_vals = self._build_extended_quantile_fn(self.quantile_probs, min_qvals)
+
+        # Generate shared latent normal for minutes (same across all stats)
+        z_minutes = self.rng.standard_normal(self.n_samples)
+
+        predictions = {}
+        for stat in stats:
+            if stat not in self.pipeline.rate_models:
+                continue
+
+            # Get rank correlation for this stat (default 0 = independent)
+            rho_s = self.copula_params.get(stat, 0.0)
+
+            # Convert Spearman ρ to Gaussian copula parameter (Pearson ρ of the latent normals)
+            rho_p = 2 * np.sin(np.pi * rho_s / 6)
+            rho_p = np.clip(rho_p, -0.999, 0.999)
+
+            # Generate correlated latent normal for rate
+            z_indep = self.rng.standard_normal(self.n_samples)
+            z_rate = rho_p * z_minutes + np.sqrt(max(0, 1 - rho_p ** 2)) * z_indep
+
+            # Transform to uniform via Gaussian CDF
+            u_minutes = sp_norm.cdf(z_minutes)
+            u_rate = sp_norm.cdf(z_rate)
+
+            # Map minutes through inverse CDF
+            minutes_samples = self._map_uniforms_to_samples(u_minutes, min_ext_probs, min_ext_vals)
+            minutes_samples = np.maximum(minutes_samples, 0)
+            if self.blowout_config.get("enabled", False):
+                minutes_samples = self._apply_blowout_factor(minutes_samples)
+
+            # Get rate quantile predictions and map through inverse CDF
+            rate_model = self.pipeline.rate_models[stat]
+            X_rate = self._prepare_features(features, rate_model.all_feature_names)
+            rate_qdf = rate_model.predict_quantiles(X_rate)
+            rate_qvals = rate_qdf.iloc[0].values
+            rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(self.quantile_probs, rate_qvals)
+
+            rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
+            rate_samples = np.maximum(rate_samples, 0)
+
+            # Combine: stat = minutes × rate
+            stat_samples = minutes_samples * rate_samples
+
+            # Apply variance inflation if configured
+            stat_samples = self._apply_variance_inflation(stat_samples, stat)
+
             predictions[stat] = PropPrediction(
                 player_id=player_id,
                 game_id=game_id,
@@ -285,27 +386,58 @@ class MonteCarloPredictor:
         player_names = features_df["player_name"].values if "player_name" in features_df.columns else [None] * n_players
         team_ids = features_df["team_id"].values if "team_id" in features_df.columns else [None] * n_players
 
-        for i in range(n_players):
-            # Sample minutes for this player
-            minutes_qvals = minutes_quantiles_df.iloc[i].values
-            minutes_samples = self._inverse_transform_sample(self.quantile_probs, minutes_qvals)
+        use_copula = self.copula_params is not None
 
-            if self.blowout_config.get("enabled", False):
-                minutes_samples = self._apply_blowout_factor(minutes_samples)
-            minutes_samples = np.maximum(minutes_samples, 0)
+        for i in range(n_players):
+            minutes_qvals = minutes_quantiles_df.iloc[i].values
+
+            if use_copula:
+                # Copula path: build minutes inverse CDF, generate shared latent normal
+                min_ext_probs, min_ext_vals = self._build_extended_quantile_fn(
+                    self.quantile_probs, minutes_qvals
+                )
+                z_minutes = self.rng.standard_normal(self.n_samples)
+            else:
+                # Legacy path: sample minutes independently
+                minutes_samples = self._inverse_transform_sample(self.quantile_probs, minutes_qvals)
+                if self.blowout_config.get("enabled", False):
+                    minutes_samples = self._apply_blowout_factor(minutes_samples)
+                minutes_samples = np.maximum(minutes_samples, 0)
 
             for stat in stats:
                 if stat not in rate_quantiles:
                     continue
 
-                # Sample rate for this player
                 rate_qvals = rate_quantiles[stat].iloc[i].values
-                rate_samples = self._inverse_transform_sample(self.quantile_probs, rate_qvals)
-                rate_samples = np.maximum(rate_samples, 0)
 
-                # Apply correlation adjustment
-                if self.use_correlated_sampling:
-                    rate_samples = self._apply_correlation_adjustment(rate_samples, minutes_samples, stat)
+                if use_copula:
+                    # Generate correlated (minutes, rate) via Gaussian copula
+                    rho_s = self.copula_params.get(stat, 0.0)
+                    rho_p = 2 * np.sin(np.pi * rho_s / 6)
+                    rho_p = np.clip(rho_p, -0.999, 0.999)
+
+                    z_indep = self.rng.standard_normal(self.n_samples)
+                    z_rate = rho_p * z_minutes + np.sqrt(max(0, 1 - rho_p ** 2)) * z_indep
+
+                    u_minutes = sp_norm.cdf(z_minutes)
+                    u_rate = sp_norm.cdf(z_rate)
+
+                    minutes_samples = self._map_uniforms_to_samples(u_minutes, min_ext_probs, min_ext_vals)
+                    minutes_samples = np.maximum(minutes_samples, 0)
+                    if self.blowout_config.get("enabled", False):
+                        minutes_samples = self._apply_blowout_factor(minutes_samples)
+
+                    rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(
+                        self.quantile_probs, rate_qvals
+                    )
+                    rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
+                    rate_samples = np.maximum(rate_samples, 0)
+                else:
+                    # Legacy path: independent rate + post-hoc adjustment
+                    rate_samples = self._inverse_transform_sample(self.quantile_probs, rate_qvals)
+                    rate_samples = np.maximum(rate_samples, 0)
+                    if self.use_correlated_sampling:
+                        rate_samples = self._apply_correlation_adjustment(rate_samples, minutes_samples, stat)
 
                 # Combine: stat = minutes * rate
                 stat_samples = minutes_samples * rate_samples
@@ -471,6 +603,56 @@ class MonteCarloPredictor:
 
         return minutes_samples
 
+    def _build_extended_quantile_fn(
+        self, quantile_probs: np.ndarray, quantile_values: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Build extended probability and value arrays for inverse CDF mapping.
+
+        Extrapolates tails to p=0.01 and p=0.99 using linear extrapolation
+        with configurable tail multipliers.
+
+        Returns:
+            (extended_probs, extended_values) arrays for use with np.interp
+        """
+        lower_mult = self.tail_adjustment.get("lower_tail_multiplier", 1.0)
+        upper_mult = self.tail_adjustment.get("upper_tail_multiplier", 1.0)
+
+        extended_probs = np.concatenate([[0.01], quantile_probs, [0.99]])
+
+        lower_slope = (quantile_values[1] - quantile_values[0]) / (quantile_probs[1] - quantile_probs[0])
+        upper_slope = (quantile_values[-1] - quantile_values[-2]) / (quantile_probs[-1] - quantile_probs[-2])
+
+        lower_value = quantile_values[0] - (lower_slope * (quantile_probs[0] - 0.01) * lower_mult)
+        upper_value = quantile_values[-1] + (upper_slope * (0.99 - quantile_probs[-1]) * upper_mult)
+
+        extended_values = np.concatenate(
+            [
+                [max(0, lower_value)],
+                quantile_values,
+                [upper_value],
+            ]
+        )
+
+        return extended_probs, extended_values
+
+    def _map_uniforms_to_samples(
+        self, uniforms: np.ndarray, extended_probs: np.ndarray, extended_values: np.ndarray
+    ) -> np.ndarray:
+        """
+        Map uniform samples through an inverse CDF defined by extended quantile arrays.
+
+        Args:
+            uniforms: Uniform(0,1) samples (from copula or direct)
+            extended_probs: Probability grid (from _build_extended_quantile_fn)
+            extended_values: Value grid (from _build_extended_quantile_fn)
+
+        Returns:
+            Samples in the original stat/minutes space
+        """
+        clipped = np.clip(uniforms, 0.01, 0.99)
+        return np.interp(clipped, extended_probs, extended_values)
+
     def _sample_rate(self, features: dict, stat: str) -> np.ndarray:
         """Sample from the rate distribution for a specific stat."""
         if stat not in self.pipeline.rate_models:
@@ -565,6 +747,67 @@ class MonteCarloPredictor:
                 )
 
         return pd.DataFrame(results)
+
+
+def compute_copula_params_from_data(df: pd.DataFrame) -> dict:
+    """
+    Compute Gaussian copula parameters (Spearman rank correlations) from training data.
+
+    These parameters are used by MonteCarloPredictor to generate correlated
+    (minutes, rate) samples that preserve both marginal distributions while
+    capturing the empirical dependency structure.
+
+    Args:
+        df: Training dataframe with actual_minutes and {stat}_per_min columns
+
+    Returns:
+        Dict mapping stat -> Spearman rank correlation with minutes.
+        Example: {"pts": 0.314, "reb": -0.046, "ast": 0.176, "threes": 0.10}
+    """
+    from scipy.stats import spearmanr
+
+    valid_mask = df["actual_minutes"] >= 10
+    analysis_df = df[valid_mask].copy()
+
+    params = {}
+    for stat in ["pts", "reb", "ast", "threes"]:
+        rate_col = f"{stat}_per_min"
+
+        # Compute rate if needed
+        if rate_col not in analysis_df.columns:
+            actual_col = f"actual_{stat}"
+            if actual_col in analysis_df.columns:
+                analysis_df[rate_col] = analysis_df[actual_col] / analysis_df["actual_minutes"]
+            else:
+                continue
+
+        # Drop NaN/inf for clean correlation
+        valid = analysis_df[["actual_minutes", rate_col]].replace([np.inf, -np.inf], np.nan).dropna()
+        if len(valid) < 50:
+            params[stat] = 0.0
+            continue
+
+        rho, _ = spearmanr(valid["actual_minutes"], valid[rate_col])
+        params[stat] = round(float(rho), 4)
+
+    return params
+
+
+def load_copula_params(model_dir: str) -> dict | None:
+    """
+    Load copula parameters from a model artifacts directory.
+
+    Returns None if no copula_params.json exists (backward compatible).
+    """
+    import json
+    from pathlib import Path
+
+    path = Path(model_dir) / "copula_params.json"
+    if not path.exists():
+        return None
+
+    with open(path) as f:
+        return json.load(f)
 
 
 def compute_correlation_config_from_data(df: pd.DataFrame) -> dict:

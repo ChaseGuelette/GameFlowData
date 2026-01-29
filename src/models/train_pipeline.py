@@ -15,7 +15,7 @@ import numpy as np
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
 from src.models.hyperparameter_tuner import QuantileHyperparameterTuner
-from src.models.monte_carlo import MonteCarloPredictor
+from src.models.monte_carlo import MonteCarloPredictor, compute_copula_params_from_data
 from src.models.quantile_trainer import PlayerPropsModelPipeline
 from src.processing.feature_selection import FeatureSelector, get_candidate_columns
 
@@ -102,6 +102,9 @@ class TrainingOrchestrator:
 
         # 5c. Minutes-Rate Correlation Analysis
         self._analyze_minutes_rate_correlation(cal_df)
+
+        # 5d. Compute and save Gaussian copula parameters
+        self._compute_copula_params(train_df)
 
         # 6. Save Artifacts
         pipeline.save_all(str(self.run_dir))
@@ -550,6 +553,28 @@ class TrainingOrchestrator:
             json.dump(correlations, f, indent=4)
 
         return correlations
+
+    def _compute_copula_params(self, df: pd.DataFrame) -> dict:
+        """
+        Compute Gaussian copula parameters from training data and save as artifact.
+
+        Computes Spearman rank correlations between actual_minutes and per-minute rates
+        for each stat. These are used by MonteCarloPredictor for correlated sampling
+        that preserves marginal distributions while capturing minutes-rate dependency.
+        """
+        logger.info("\n=== Computing Gaussian Copula Parameters ===")
+
+        copula_params = compute_copula_params_from_data(df)
+
+        for stat, rho in copula_params.items():
+            logger.info(f"  {stat.upper()}: Spearman ρ = {rho:.4f}")
+
+        # Save as artifact
+        with open(self.run_dir / "copula_params.json", "w") as f:
+            json.dump(copula_params, f, indent=4)
+
+        logger.info(f"Saved copula parameters to {self.run_dir / 'copula_params.json'}")
+        return copula_params
 
     def _run_sanity_check(self, pipeline: PlayerPropsModelPipeline, df: pd.DataFrame):
         """

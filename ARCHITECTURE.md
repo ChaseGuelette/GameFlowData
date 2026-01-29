@@ -73,7 +73,7 @@ GameFlowData/
 The system ingests data from two distinct worlds that don't natively share identifiers:
 1.  **Official NBA Data:** (Via `nba_api`) Game stats, player bios, team box scores.
 2.  **Sportsbook Data:** (Via The Odds API) Player props, game lines, futures.
-3.  **Injury Data:** (Via ESPN) Player injury reports and status.
+3.  **Injury Data:** (Via RapidAPI + ESPN) Historical injury backfill from 2021 via RapidAPI NBA Injury Reports API; ongoing daily collection via ESPN scraper.
 
 #### Scrapers (`src/scrapers/`)
 
@@ -91,6 +91,7 @@ The system ingests data from two distinct worlds that don't natively share ident
 | `update_player_position_history.py` | Historical player position tracking |
 | `player_prop_scraper.py` | Alternate player props source |
 | `game_lines_scraper.py` | Historical game lines |
+| `rapidapi_injury_backfill.py` | Historical injury data backfill from RapidAPI (2021-present, 88K+ rows) |
 
 #### The NBA Linker (`src/processing/nba_linker_local.py`)
 
@@ -111,6 +112,7 @@ Serves as the bridge between NBA and sportsbook data:
 | `backfill_league_priors.py` | Computes league-wide Bayesian priors → `league_priors_history` table. |
 | `backfill_team_ids.py` | Validates and links team IDs across data sources. |
 | `feature_selection.py` | `ImprovedFeatureSelector` — per-quantile feature selection with time-series aware 3-split CV and permutation importance. |
+| `link_injury_data.py` | Links RapidAPI injury records to NBA player/team IDs via 3-tier cascade: manual CSV overrides → exact normalized match → SequenceMatcher fuzzy match (threshold 0.80, +0.15 last name bonus). 99.3% coverage. |
 
 ### 4. Feature Store (`src/models/feature_store.py`)
 
@@ -124,6 +126,7 @@ Centralized engine for converting raw stats into model-ready features.
     - **Rest & Schedule (B2):** `rest_days`, `is_back_to_back`, `games_in_last_7_days` — pre-computed in `player_average_game_stats` from game date diffs.
     - **Short-Window Trends (B3):** L3 rolling averages (`player_avg_{stat}_l3`), momentum ratios (`player_{stat}_l3_l15_ratio`), and L5 standard deviations (`player_std_{stat}_l5`) for all stats.
     - **Minutes Stability (B4):** `player_min_std_l5`, `player_min_floor_l5`, `player_games_started_l5` — distinguishes locked-in starters from volatile rotation players.
+    - **Injury Context (B1):** `team_out_count`, `team_out_min_sum`, `team_out_pts_sum`, `team_out_reb_sum`, `team_out_ast_sum`, `team_out_usg_sum` (teammate injuries), `opp_out_count`, `opp_out_min_sum` (opponent injuries), `player_is_questionable`, `player_is_probable` (player's own status). Computed via SQL LATERAL JOINs to `rapidapi_injuries` table with temporal integrity (report_date ≤ game_date).
     - **Betting Signals:** Implied totals and spreads as proxies for game script.
     - **Prop Line Centering:** Per-stat player prop lines (`prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`) from `raw_player_props_combined`. Enables residual modeling — the model learns deviations from market expectation rather than absolute values.
 
@@ -165,6 +168,13 @@ The modeling engine predicts the probability distribution of player stats.
     1.  **Minutes Model:** Predicts playing time distribution.
     2.  **Rate Model:** Predicts stats-per-minute distribution.
 - Simulates 10,000+ outcomes per player to generate a final probability density function.
+- **Gaussian Copula Sampling (C0):** Minutes and per-minute rates are correlated (PTS ρ=0.314, AST ρ=0.176). Rather than sampling independently and applying a post-hoc hack, the predictor uses a Gaussian copula:
+    1. Shared latent normal `z_minutes ~ N(0,1)` across all stats
+    2. Per-stat: `z_rate = ρ·z_minutes + √(1-ρ²)·z_independent`
+    3. Transform to uniform via `Φ(z)`, map through marginal inverse CDFs
+    4. This preserves both marginal distributions exactly while inducing the correct rank dependency
+    - Copula parameters (Spearman ρ) are computed at training time and saved as `copula_params.json` artifact
+    - Falls back to legacy post-hoc adjustment when copula params unavailable (backward compat)
 - **Output:** Exact probabilities for any line (e.g., "Probability of 20+ points").
 - **Betting utilities:** `prob_over(line)`, `prob_under(line)`, `expected_value_over/under(line, odds)`.
 
@@ -202,7 +212,9 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 - `TrainingOrchestrator` class — orchestrates full training workflow.
 - Optional Optuna hyperparameter tuning.
 - Feature selection integration.
-- Calibration validation.
+- Calibration validation (individual + combined minutes×rate).
+- Minutes-rate correlation analysis with Spearman rank correlations.
+- Computes and saves Gaussian copula parameters (`copula_params.json`) for MC inference.
 - Model persistence via `joblib`.
 
 #### Daily Runner (`daily_runner.py`)
@@ -227,7 +239,7 @@ A simulation environment to validate betting strategies.
 | `bet_simulator.py` | `Bet` and `BetOutcome` classes. `BetSide` enum (OVER/UNDER). P&L tracking per bet. Stores BL `posterior_prob` diagnostic. |
 | `performance_metrics.py` | `PerformanceMetrics` dataclass — ROI, hit rate, Sharpe ratio, drawdown, Brier score. |
 | `run_backtest.py` | CLI entry point. Accepts date range, model paths, output directory. |
-| `visualize_results.py` | Plotly-based visualization — equity curves, P&L distribution, quantile coverage. |
+| `visualize_results.py` | Self-contained HTML dashboard: bankroll growth chart, daily P&L bars, metrics summary cards, enriched bet log table (player names/teams from DB), other bookmaker lines comparison. Sortable/filterable via vanilla JS. |
 
 **Key Capabilities:**
 - **Historical Replay:** Iterates through past seasons day-by-day.
@@ -261,6 +273,9 @@ A simulation environment to validate betting strategies.
 
 ### Historical Priors
 - `league_priors_history`: League-average baselines used for Bayesian shrinkage when player sample size is low (rookies/injuries).
+
+### Injury Data
+- `rapidapi_injuries`: Historical injury reports (88K+ rows, 2021-present). Columns: `player_name`, `player_id`, `team_id`, `status` (Out/Questionable/Probable/Day-To-Day), `report_date`. Linked to NBA IDs via `link_injury_data.py` (99.3% coverage).
 
 ### Betting Data
 - `raw_game_lines_staging`: Spreads and totals.
@@ -435,8 +450,10 @@ See `ACTIONITEMS.md` for full details.
 **Black-Litterman blending (A3) — Implemented (2026-01-28):** The BL blending layer is complete and integrated into the backtesting pipeline. Anchors model probabilities to the devigged market prior using log-odds space blending with per-prediction z-score confidence. Activated via `--bl-tau` flag (default: disabled). Needs validation backtest to confirm Brier score improvement and edge characteristics.
 
 **Active tracks:**
-- **Track A** (Critical): Probability recalibration — A1 (diagnostic), A2 (remove line_total), A3 (BL blending), A4 (prop line centering) all implemented. A5 (residual classifier) pending evaluation.
-- **Track B** (Parallel): New signal sources — B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented. B1 (injury/lineup context) pending data acquisition via RapidAPI.
-- **Track C**: Calibration refinement — Q10 over-coverage investigation.
+- **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option.
+- **Track B** (Complete): New signal sources — B1 (injury context, 10 features), B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented. All features available for retraining.
+- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented. C1 (Q10 over-coverage) and C2 (per-stat calibration) pending.
 - **Track D**: Deprioritized model items (pending recalibration).
 - **Track E**: Go-live pipeline (blocked on demonstrated edge).
+
+**Ready for retraining:** All feature engineering (Tracks A-B) and calibration infrastructure (C0) are complete. Next step is to retrain models, which will automatically compute copula parameters, run feature selection on all new features (injury, rest, trends, stability, prop lines), and save artifacts.

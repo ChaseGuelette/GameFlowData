@@ -93,7 +93,7 @@ class ScraperBot:
         params = {
             "apiKey": self.api_key,
             "date": date_str,
-            "regions": "us,uk",  # UK region often includes Pinnacle
+            "regions": "us2,us_ex",  # Secondary US books + US exchanges
             "markets": ",".join(target_markets),
             "oddsFormat": "american",
             "dateFormat": "iso",

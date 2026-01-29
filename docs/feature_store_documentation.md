@@ -83,6 +83,29 @@ Pre-computed in `player_average_game_stats`. Added to `MINUTES_FEATURES`:
 - `player_min_floor_l5` — minimum minutes in last 5 games (floor games indicator)
 - `player_games_started_l5` — games with 20+ minutes in last 5 (starter consistency proxy)
 
+### 3.9 Injury/Lineup Context Features (B1)
+Injury-driven features from `rapidapi_injuries` table, capturing how teammate and opponent absences affect a player's expected production.
+
+**Teammate injuries (6 features):**
+- `team_out_count` — number of teammates listed as "Out"
+- `team_out_min_sum` — sum of season-avg minutes for missing teammates
+- `team_out_pts_sum` / `team_out_reb_sum` / `team_out_ast_sum` — stats vacated by absent teammates
+- `team_out_usg_sum` — usage rate vacated (opportunity proxy)
+
+**Opponent injuries (2 features):**
+- `opp_out_count` — number of opposing players listed as "Out"
+- `opp_out_min_sum` — sum of season-avg minutes for missing opponents
+
+**Player status (2 features):**
+- `player_is_questionable` — binary flag if player's own status is "Questionable"
+- `player_is_probable` — binary flag if player's own status is "Probable"
+
+**Implementation:**
+- SQL LATERAL JOINs in `feature_store.py` with temporal integrity (`report_date <= game_date`)
+- Injury data linked to NBA player IDs via `link_injury_data.py` (3-tier cascade: manual CSV → exact match → fuzzy SequenceMatcher)
+- Added to all 4 `RATE_FEATURES_*` lists and `MINUTES_FEATURES`
+- COALESCE to 0 for all injury features (no injury data = no injuries reported)
+
 ---
 
 ## 4. Derived Features & Formulas
