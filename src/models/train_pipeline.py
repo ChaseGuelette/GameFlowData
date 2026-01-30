@@ -2,7 +2,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -65,15 +65,24 @@ class TrainingOrchestrator:
         elif hyperparams_path:
             logger.info(f"Loading hyperparams from: {hyperparams_path}")
 
-    def run(self, train_seasons: list[str], calibration_season: str):
+    def run(self, train_seasons: list[str], calibration_season: str, cal_end_date: date | None = None):
         """
         Execute full training pipeline with strict train/calibration split.
+
+        Args:
+            train_seasons: Season IDs for training data.
+            calibration_season: Season ID for calibration holdout.
+            cal_end_date: Optional end date for calibration data (exclusive).
+                          Filters cal data to game_date < cal_end_date.
+                          Useful for reserving recent games for backtesting.
         """
         # Save run configuration
-        self._save_run_config(train_seasons, calibration_season)
+        self._save_run_config(train_seasons, calibration_season, cal_end_date)
 
         logger.info(f"Training Seasons: {train_seasons}")
         logger.info(f"Calibration Season: {calibration_season}")
+        if cal_end_date:
+            logger.info(f"Calibration End Date: {cal_end_date} (exclusive)")
 
         # 1. Load Data
         logger.info("Loading datasets...")
@@ -83,7 +92,12 @@ class TrainingOrchestrator:
 
         # Load Calibration Data (Holdout)
         cal_df = self.feature_store.get_training_dataset([calibration_season])
-        logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows")
+        if cal_end_date:
+            pre_filter = len(cal_df)
+            cal_df = cal_df[cal_df["game_date"] < cal_end_date].reset_index(drop=True)
+            logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows (filtered from {pre_filter:,}, end date {cal_end_date})")
+        else:
+            logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows")
 
         # 2. Feature Selection (on Training Data ONLY)
         selected_features = self._run_feature_selection(train_df)
@@ -118,11 +132,12 @@ class TrainingOrchestrator:
 
         logger.info(f"Training pipeline completed successfully. Artifacts in {self.run_dir}")
 
-    def _save_run_config(self, train_seasons, calibration_season):
+    def _save_run_config(self, train_seasons, calibration_season, cal_end_date=None):
         """Save run configuration for reproducibility."""
         config = {
             "train_seasons": train_seasons,
             "calibration_season": calibration_season,
+            "cal_end_date": str(cal_end_date) if cal_end_date else None,
             "timestamp": self.timestamp.isoformat(),
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
@@ -634,8 +649,14 @@ class TrainingOrchestrator:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Player Props Models")
-    parser.add_argument("--train-seasons", nargs="+", default=["22022", "22023"], help="Seasons for training")
-    parser.add_argument("--cal-season", default="22024", help="Season for calibration (holdout)")
+    parser.add_argument("--train-seasons", nargs="+", default=["22023", "22024"], help="Seasons for training")
+    parser.add_argument("--cal-season", default="22025", help="Season for calibration (holdout)")
+    parser.add_argument(
+        "--cal-end-date",
+        type=str,
+        default=None,
+        help="End date for calibration data (exclusive, YYYY-MM-DD). Reserves later dates for backtesting.",
+    )
 
     # Hyperparameter tuning options
     parser.add_argument("--tune", action="store_true", help="Enable hyperparameter tuning before training")
@@ -657,4 +678,5 @@ if __name__ == "__main__":
         tuning_per_quantile=args.tuning_per_quantile,
         hyperparams_path=args.hyperparams_path,
     )
-    orchestrator.run(train_seasons=args.train_seasons, calibration_season=args.cal_season)
+    cal_end = datetime.strptime(args.cal_end_date, "%Y-%m-%d").date() if args.cal_end_date else None
+    orchestrator.run(train_seasons=args.train_seasons, calibration_season=args.cal_season, cal_end_date=cal_end)

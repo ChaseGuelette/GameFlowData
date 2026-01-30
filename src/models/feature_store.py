@@ -832,10 +832,116 @@ class FeatureStore:
     def get_training_dataset(self, seasons: list[str]) -> pd.DataFrame:
         """
         Build complete training dataset.
-        Streamlined feature set - no derived per100 features.
+        Loads each season individually for progress visibility and query performance,
+        then concatenates and enriches with injury features via efficient bulk queries.
         """
-        print(f"Generating training data for seasons: {seasons}")
+        import time
 
+        print(f"Generating training data for seasons: {seasons}")
+        season_dfs = []
+
+        for i, season in enumerate(seasons, 1):
+            season_start = time.time()
+            print(f"  Loading season {i}/{len(seasons)}: {season} ...")
+
+            df_season = self._load_single_season_training(season)
+
+            elapsed = time.time() - season_start
+            print(f"  Season {season}: {len(df_season):,} rows in {elapsed:.1f}s")
+            season_dfs.append(df_season)
+
+        df = pd.concat(season_dfs, ignore_index=True)
+        print(f"  Combined: {len(df):,} total rows across {len(seasons)} seasons")
+
+        # --- Injury features (loaded separately for performance) ---
+        inj_start = time.time()
+        print("  Loading injury context features ...")
+        game_dates = df["game_date"].tolist()
+
+        # Team/opponent injury aggregations
+        team_inj = self._load_injury_features_bulk(game_dates, [])
+        if not team_inj.empty:
+            # Merge for teammate injuries (team_id -> team_out_*)
+            team_inj_renamed = team_inj.rename(columns={
+                "nba_team_id": "_inj_team_id", "report_date": "_inj_date",
+                "out_count": "team_out_count", "out_min_sum": "team_out_min_sum",
+                "out_pts_sum": "team_out_pts_sum", "out_reb_sum": "team_out_reb_sum",
+                "out_ast_sum": "team_out_ast_sum", "out_usg_sum": "team_out_usg_sum",
+            })
+            df = df.merge(
+                team_inj_renamed,
+                left_on=["team_id", "game_date"],
+                right_on=["_inj_team_id", "_inj_date"],
+                how="left",
+            ).drop(columns=["_inj_team_id", "_inj_date"], errors="ignore")
+
+            # Merge for opponent injuries (opponent_id -> opp_out_*)
+            opp_inj_renamed = team_inj[["nba_team_id", "report_date", "out_count", "out_min_sum"]].rename(columns={
+                "nba_team_id": "_inj_team_id", "report_date": "_inj_date",
+                "out_count": "opp_out_count", "out_min_sum": "opp_out_min_sum",
+            })
+            df = df.merge(
+                opp_inj_renamed,
+                left_on=["opponent_id", "game_date"],
+                right_on=["_inj_team_id", "_inj_date"],
+                how="left",
+            ).drop(columns=["_inj_team_id", "_inj_date"], errors="ignore")
+        else:
+            for col in ["team_out_count", "team_out_min_sum", "team_out_pts_sum",
+                         "team_out_reb_sum", "team_out_ast_sum", "team_out_usg_sum",
+                         "opp_out_count", "opp_out_min_sum"]:
+                df[col] = 0
+
+        # Player injury status
+        player_inj = self._load_player_injury_status_bulk(game_dates)
+        if not player_inj.empty:
+            df = df.merge(
+                player_inj.rename(columns={"report_date": "_inj_date"}),
+                left_on=["player_id", "game_date"],
+                right_on=["player_id", "_inj_date"],
+                how="left",
+            ).drop(columns=["_inj_date"], errors="ignore")
+            df["player_is_questionable"] = (df["inj_status"] == "Questionable").astype(int)
+            df["player_is_probable"] = (df["inj_status"] == "Probable").astype(int)
+            df.drop(columns=["inj_status"], inplace=True, errors="ignore")
+        else:
+            df["player_is_questionable"] = 0
+            df["player_is_probable"] = 0
+
+        # Fill any NaN injury features with 0
+        injury_cols = [
+            "team_out_count", "team_out_min_sum", "team_out_pts_sum",
+            "team_out_reb_sum", "team_out_ast_sum", "team_out_usg_sum",
+            "opp_out_count", "opp_out_min_sum",
+            "player_is_questionable", "player_is_probable",
+        ]
+        for col in injury_cols:
+            df[col] = df[col].fillna(0)
+
+        inj_elapsed = time.time() - inj_start
+        print(f"  Injury features merged in {inj_elapsed:.1f}s")
+
+        # Deprecated travel/opp features (not in any feature list, kept for column compat)
+        for col in ["travel_dist", "opp_rest_days", "opp_travel_dist", "opp_is_back_to_back"]:
+            df[col] = 0.0
+
+        # Validation
+        print(f"Loaded {len(df):,} rows.")
+        if len(df) < 10000:
+            raise ValueError(f"Suspiciously few rows: {len(df)}. Check query/season_ids.")
+
+        if not df["position_group"].notna().all():
+            raise ValueError("CRITICAL: Position Group has NULLs. Filter logic failed.")
+
+        # Rate targets for training
+        mask = df["actual_minutes"] >= self.config.min_minutes_for_rate
+        for stat in ["pts", "reb", "ast", "threes"]:
+            df.loc[mask, f"{stat}_per_min"] = df.loc[mask, f"actual_{stat}"] / df.loc[mask, "actual_minutes"]
+
+        return df
+
+    def _load_single_season_training(self, season: str) -> pd.DataFrame:
+        """Load training features for a single season."""
         query = text("""
             SELECT
                 -- Identifiers
@@ -944,19 +1050,7 @@ class FeatureStore:
                 COALESCE(p_avg.games_last_7d, 2) as games_in_last_7_days,
 
                 -- Game Context
-                CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home,
-
-                -- Injury Context
-                COALESCE(team_inj.out_count, 0) as team_out_count,
-                COALESCE(team_inj.out_min_sum, 0) as team_out_min_sum,
-                COALESCE(team_inj.out_pts_sum, 0) as team_out_pts_sum,
-                COALESCE(team_inj.out_reb_sum, 0) as team_out_reb_sum,
-                COALESCE(team_inj.out_ast_sum, 0) as team_out_ast_sum,
-                COALESCE(team_inj.out_usg_sum, 0) as team_out_usg_sum,
-                COALESCE(opp_inj.out_count, 0) as opp_out_count,
-                COALESCE(opp_inj.out_min_sum, 0) as opp_out_min_sum,
-                CASE WHEN player_inj.inj_status = 'Questionable' THEN 1 ELSE 0 END as player_is_questionable,
-                CASE WHEN player_inj.inj_status = 'Probable' THEN 1 ELSE 0 END as player_is_probable
+                CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
 
             FROM player_game_stats pgs
             JOIN team_game_stats tgs
@@ -1052,70 +1146,11 @@ class FeatureStore:
                 ) sub
             ) prop_lines ON TRUE
 
-            -- Team Injury Context (OUT players on this team)
-            LEFT JOIN LATERAL (
-                SELECT
-                    COUNT(*) as out_count,
-                    COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum,
-                    COALESCE(SUM(inj_sub.avg_pts_l5), 0) as out_pts_sum,
-                    COALESCE(SUM(inj_sub.avg_reb_l5), 0) as out_reb_sum,
-                    COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum,
-                    COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
-                FROM (
-                    SELECT DISTINCT ON (ri.player_id)
-                        pags_inj.avg_min_l5, pags_inj.avg_pts_l5,
-                        pags_inj.avg_reb_l5, pags_inj.avg_ast_l5,
-                        paas_inj.avg_usg_pct_l5
-                    FROM rapidapi_injuries ri
-                    LEFT JOIN player_average_game_stats pags_inj
-                        ON pags_inj.player_id = ri.player_id
-                        AND pags_inj.game_date < pgs.game_date
-                    LEFT JOIN player_average_advanced_stats paas_inj
-                        ON paas_inj.player_id = ri.player_id
-                        AND paas_inj.game_date < pgs.game_date
-                    WHERE ri.nba_team_id = pgs.team_id
-                      AND ri.report_date = pgs.game_date
-                      AND ri.status = 'Out'
-                      AND ri.player_id IS NOT NULL
-                    ORDER BY ri.player_id, pags_inj.game_date DESC, paas_inj.game_date DESC
-                ) inj_sub
-            ) team_inj ON TRUE
-
-            -- Opponent Injury Context (OUT players on opponent)
-            LEFT JOIN LATERAL (
-                SELECT
-                    COUNT(*) as out_count,
-                    COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum
-                FROM (
-                    SELECT DISTINCT ON (ri.player_id)
-                        pags_inj.avg_min_l5
-                    FROM rapidapi_injuries ri
-                    LEFT JOIN player_average_game_stats pags_inj
-                        ON pags_inj.player_id = ri.player_id
-                        AND pags_inj.game_date < pgs.game_date
-                    WHERE ri.nba_team_id = tgs.opponent_id
-                      AND ri.report_date = pgs.game_date
-                      AND ri.status = 'Out'
-                      AND ri.player_id IS NOT NULL
-                    ORDER BY ri.player_id, pags_inj.game_date DESC
-                ) inj_sub
-            ) opp_inj ON TRUE
-
-            -- Player Injury Status
-            LEFT JOIN LATERAL (
-                SELECT status as inj_status
-                FROM rapidapi_injuries ri
-                WHERE ri.player_id = pgs.player_id
-                  AND ri.report_date = pgs.game_date
-                ORDER BY ri.id DESC LIMIT 1
-            ) player_inj ON TRUE
-
-            WHERE pgs.season_id IN :seasons
+            WHERE pgs.season_id = :season
               AND pgs.season_id NOT IN :excluded
               AND pgs.min > 0
               AND pos.position_group IS NOT NULL
         """).bindparams(
-            bindparam("seasons", expanding=True),
             bindparam("excluded", expanding=True),
         )
 
@@ -1123,27 +1158,91 @@ class FeatureStore:
             df = pd.read_sql(
                 query,
                 conn,
-                params={"seasons": list(seasons), "excluded": list(self.config.excluded_seasons)},
+                params={"season": season, "excluded": list(self.config.excluded_seasons)},
             )
 
-        # Deprecated travel/opp features (not in any feature list, kept for column compat)
-        for col in ["travel_dist", "opp_rest_days", "opp_travel_dist", "opp_is_back_to_back"]:
-            df[col] = 0.0
-
-        # Validation
-        print(f"Loaded {len(df):,} rows.")
-        if len(df) < 10000:
-            raise ValueError(f"Suspiciously few rows: {len(df)}. Check query/season_ids.")
-
-        if not df["position_group"].notna().all():
-            raise ValueError("CRITICAL: Position Group has NULLs. Filter logic failed.")
-
-        # Rate targets for training
-        mask = df["actual_minutes"] >= self.config.min_minutes_for_rate
-        for stat in ["pts", "reb", "ast", "threes"]:
-            df.loc[mask, f"{stat}_per_min"] = df.loc[mask, f"actual_{stat}"] / df.loc[mask, "actual_minutes"]
-
         return df
+
+    def _load_injury_features_bulk(self, game_dates: list, team_ids: list) -> pd.DataFrame:
+        """
+        Pre-aggregate injury features for all (team, date) pairs in one pass.
+        Returns DataFrame keyed by (nba_team_id, report_date) with team injury aggregations.
+
+        Much more efficient than per-row LATERAL JOINs: iterates over injury records (~20K)
+        instead of player-game rows (~26K × 3 nested subqueries).
+        """
+        import numpy as np
+
+        query = text("""
+            SELECT
+                ri.nba_team_id,
+                ri.report_date,
+                ri.player_id as inj_player_id,
+                pags_l.avg_min_l5,
+                pags_l.avg_pts_l5,
+                pags_l.avg_reb_l5,
+                pags_l.avg_ast_l5,
+                paas_l.avg_usg_pct_l5
+            FROM (
+                SELECT DISTINCT ON (nba_team_id, report_date, player_id)
+                    nba_team_id, report_date, player_id
+                FROM rapidapi_injuries
+                WHERE status = 'Out'
+                  AND player_id IS NOT NULL
+                  AND report_date = ANY(:dates)
+                ORDER BY nba_team_id, report_date, player_id, id DESC
+            ) ri
+            LEFT JOIN LATERAL (
+                SELECT avg_min_l5, avg_pts_l5, avg_reb_l5, avg_ast_l5
+                FROM player_average_game_stats
+                WHERE player_id = ri.player_id
+                  AND game_date < ri.report_date
+                ORDER BY game_date DESC LIMIT 1
+            ) pags_l ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT avg_usg_pct_l5
+                FROM player_average_advanced_stats
+                WHERE player_id = ri.player_id
+                  AND game_date < ri.report_date
+                ORDER BY game_date DESC LIMIT 1
+            ) paas_l ON TRUE
+        """)
+
+        with self.engine.connect() as conn:
+            inj_df = pd.read_sql(query, conn, params={"dates": list(set(game_dates))})
+
+        if inj_df.empty:
+            return pd.DataFrame(columns=[
+                "nba_team_id", "report_date",
+                "out_count", "out_min_sum", "out_pts_sum",
+                "out_reb_sum", "out_ast_sum", "out_usg_sum",
+            ])
+
+        # Aggregate per (team, date)
+        agg = inj_df.groupby(["nba_team_id", "report_date"]).agg(
+            out_count=("inj_player_id", "nunique"),
+            out_min_sum=("avg_min_l5", lambda x: np.nansum(x)),
+            out_pts_sum=("avg_pts_l5", lambda x: np.nansum(x)),
+            out_reb_sum=("avg_reb_l5", lambda x: np.nansum(x)),
+            out_ast_sum=("avg_ast_l5", lambda x: np.nansum(x)),
+            out_usg_sum=("avg_usg_pct_l5", lambda x: np.nansum(x)),
+        ).reset_index()
+
+        return agg
+
+    def _load_player_injury_status_bulk(self, game_dates: list) -> pd.DataFrame:
+        """Load player injury statuses for all (player, date) pairs."""
+        query = text("""
+            SELECT DISTINCT ON (player_id, report_date)
+                player_id, report_date, status as inj_status
+            FROM rapidapi_injuries
+            WHERE player_id IS NOT NULL
+              AND report_date = ANY(:dates)
+            ORDER BY player_id, report_date, id DESC
+        """)
+
+        with self.engine.connect() as conn:
+            return pd.read_sql(query, conn, params={"dates": list(set(game_dates))})
 
     def _get_context_snapshots(self, conn, game_id, player_id, as_of_date):
         query = text("""
