@@ -141,6 +141,7 @@ class QuantileModelSuite:
                 colsample_bytree=self.config.colsample_bytree,
                 min_child_weight=self.config.min_child_weight,
                 random_state=self.config.random_state,
+                early_stopping_rounds=self.config.early_stopping_rounds,
                 n_jobs=-1,
             )
 
@@ -150,7 +151,6 @@ class QuantileModelSuite:
                 sample_weight=w_train,
                 eval_set=[(X_val_q, y_val)],
                 verbose=False,
-                early_stopping_rounds=self.config.early_stopping_rounds,
             )
 
             train_preds = model.predict(X_train_q)

@@ -24,14 +24,45 @@ Writes rows to `raw_player_props_staging_v2` with the following key fields:
 - `parse_and_store` inserts every valid snapshot row; skips outcomes missing player names.
 - `generate_snapshot_timestamps` builds the seasonal snapshot schedule and skips Jul-Sep.
 
+## Market Selection
+- `CORE_MARKETS`: player_points, player_rebounds, player_assists, player_threes, player_blocks, player_steals, player_turnovers
+- `COMBO_MARKETS`: player_points_rebounds_assists, player_points_rebounds, player_points_assists, player_rebounds_assists, player_double_double, player_triple_double
+
+## Resume Capability
+- Progress file format: `{"markets": "<sorted_markets_key>", "processed": [[ts, eid], ...]}`
+- Market-aware: different market sets use independent progress tracking. If the markets key differs from the stored file, progress is discarded and scraping starts fresh.
+- Events already in `processed_ids` are skipped in the main loop.
+- Progress is saved after each snapshot and on interrupt/error for reliable resumption.
+- `--no-resume` flag deletes the progress file before starting.
+
 ## Usage
 ```bash
+# Full backfill with core markets (default)
 python src/scrapers/player_prop_scraper.py
+
+# Core + combo markets
+python src/scrapers/player_prop_scraper.py --combos
+
+# Only combo markets
+python src/scrapers/player_prop_scraper.py --combos-only
+
+# Specific markets
+python src/scrapers/player_prop_scraper.py --markets player_double_double player_triple_double
+
+# Date range + dry run (credit estimation)
+python src/scrapers/player_prop_scraper.py --start-date 2025-01-01 --end-date 2025-06-30 --dry-run
+
+# Resume from where you left off (default behavior)
+python src/scrapers/player_prop_scraper.py --combos
+
+# Start fresh (ignore progress file)
+python src/scrapers/player_prop_scraper.py --combos --no-resume
 ```
 
 ## Notes
 - Rate limiting is enforced with sleep calls and exponential backoff on 429 responses.
-- The local progress file enables resumable runs.
+- 401 with "OUT_OF_USAGE_CREDITS" triggers save_progress and raises an exception.
+- Credit cost: ~10 credits per market per event per region call.
 
 ## Related Documentation
 - [Documentation Index](index.md)

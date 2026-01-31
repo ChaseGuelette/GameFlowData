@@ -5,6 +5,90 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-01-31] — Prediction Storage, Daily Runner Refactor, Scraper Resume
+
+### Added
+
+- **`src/models/prediction_store.py`** — Storage and retrieval module for daily MC predictions
+  - `store_predictions()` — bulk upsert via `psycopg2.extras.execute_values` with `ON CONFLICT DO UPDATE`
+  - `store_samples()` — gzip-compressed float64 numpy arrays stored as PostgreSQL BYTEA (~20-40KB per prediction)
+  - `get_predictions()` — filtered retrieval by date/player/stat
+  - `get_samples()` — decompress and return as np.ndarray
+  - `get_player_id_by_name()` — fuzzy name lookup (case-insensitive LIKE)
+- **`src/tools/query_player.py`** — CLI tool for querying stored daily predictions
+  - Mode 1: Player + stat + line → compute over/under probability from MC samples + optional EV calculation
+  - Mode 2: Player overview → all predictions for a player on a date
+  - Mode 3: Top N edges → best absolute edges for a date with model vs market breakdown
+- **DB migration: `create_daily_predictions_tables`** — two new tables:
+  - `daily_predictions` — quantile predictions, edges, implied probabilities. UNIQUE on `(prediction_date, player_id, game_id, stat)`.
+  - `daily_prediction_samples` — gzip-compressed MC sample arrays. UNIQUE on `(prediction_date, player_id, game_id, stat)`.
+  - 3 indexes for query performance
+- `--skip-storage` CLI flag on `run_daily.py` to skip DB persistence
+
+### Changed
+
+- **`daily_runner.py` — major refactor:**
+  - `_get_games_for_date()` → NBA API ScoreboardV2 as primary, DB fallback for past dates
+  - `_filter_injured_players()` → `rapidapi_injuries` with `player_id` integer matching (was `espn_injuries` with string name matching)
+  - `_get_current_lines()` → `ROW_NUMBER() OVER (... ORDER BY snapshot_time DESC)` for latest snapshot per line
+  - `_calculate_edges()` → MC samples empirical CDF with quantile interpolation fallback (was quantile-only)
+  - `run_for_date()` → returns `(pd.DataFrame, dict[tuple, np.ndarray])` tuple instead of `pd.DataFrame`
+  - New `_build_features_df()` and `_enrich_predictions()` helper methods
+  - Uses `predict_batch_for_date()` (4 XGBoost calls) instead of per-player predict
+- **`run_daily.py`** — wired `PredictionStore` for predictions + samples storage after inference
+- **`player_prop_scraper.py`** — resume capability with market-aware progress file format
+  - Progress file format: `{"markets": "...", "processed": [[ts, eid], ...]}` (was flat list)
+  - Skip logic in main loop for already-processed events
+  - Progress saving after each snapshot and on interrupt/error
+  - `--no-resume` flag to start fresh
+
+### Fixed
+
+- **`test_daily_runner.py`** — updated all 7 failing tests for new return types, injury source, edge calc, and batch predict path. Added 4 new tests: NBA API primary, MC samples edge calc, quantile fallback, build_features_df, enrich_predictions.
+- **`test_player_prop_scraper.py`** — updated 2 tests for new market-aware progress file format
+
+---
+
+## [2026-01-30] — Bug Fix Sweep, Parameter Sweep Tool, Scraper Improvements
+
+### Added
+
+- **ISSUES.md** — Comprehensive 28-issue audit of the core pipeline (12 fixed, 16 open)
+- **`src/backtesting/run_sweep.py`** (778 lines) — Parameter sweep tool for BL tau, edge threshold, and Kelly fraction
+  - Runs Phase 0-1 (DB fetch + MC predictions) once, replays edge calc + bet sim per config
+  - Cartesian grid of `(tau, edge_threshold, kelly_fraction)` values
+  - Per-config subdirectories with bets.csv, predictions.csv, metrics.json (compatible with `visualize_results.py`)
+  - Comparison table with per-stat breakdown
+- **`tests/test_run_sweep.py`** (651 lines) — Tests for sweep grid builder, shared phases, single-config execution, output formatting, and save logic
+- 11 additional US2/us_ex bookmakers added to defaults: ballybet, betopenly, betparx, espnbet, fliff, hardrockbet, novig, polymarket, prophetx, rebet, windcreek
+- **Scraper CLI improvements:**
+  - `daily_player_props_scraper.py`: `--combos`, `--combos-only`, `--markets` flags for market selection; shared `CORE_MARKETS` and `COMBO_MARKETS` presets
+  - `player_prop_scraper.py`: `--start-date`, `--end-date` date range filters; `--combos`, `--combos-only`, `--markets` flags; `--dry-run` credit estimation; argparse-based CLI
+
+### Fixed
+
+- **ISS-001** (CRITICAL): Minutes model now uses tuned hyperparams — `self.config` → `config` in `quantile_trainer.py:374`
+- **ISS-002** (HIGH): `_run_date()` early-exit paths return `(None, pd.DataFrame())` instead of `None` — prevents `TypeError` unpacking
+- **ISS-003** (HIGH): Non-BL edge path now uses multiplicative devigging in both `backtest_harness.py` and `daily_runner.py` — previously used vigged implied probabilities, understating edges by ~2-3%
+- **ISS-004** (HIGH): Injury LATERAL JOIN split into two separate subqueries (game stats + advanced stats) — eliminates N×M cross-product and incorrect `ORDER BY` across tables. Applied to all 4 feature store query paths + single-player inference.
+- **ISS-005** (HIGH): Training query filter `min > 0` → `min >= 5` — matches inference threshold, removes noisy low-minute samples
+- **ISS-006** (HIGH): `early_stopping_rounds` now passed to `model.fit()` in `quantile_trainer.py` — previously configured but never applied
+- **ISS-007** (MEDIUM): Combined calibration now evaluates the copula inference path — reordered `train_pipeline.py` steps so copula params are computed before combined calibration and passed to `MonteCarloPredictor`
+- **ISS-008** (MEDIUM): `line_spread` now team-directional — negative for home (favored) team via `CASE WHEN matchup LIKE '%vs.%'` across all query paths; single-player path updated to apply sign from `is_home` context
+- **ISS-009** (MEDIUM): COALESCE defaults changed from 0 to league averages — `avg_pace_l5=99.5`, `avg_def_rtg_l5=112.0`, `avg_fg3a_l5=34.0`, `avg_fg3_pct_l5=0.36`, `avg_usg_pct_l5=0.20`, `avg_ts_pct_l15=0.56`, etc. Applied to all bulk and single-player query paths.
+- **ISS-011** (MEDIUM): Inference path advanced stats JOIN changed from exact `game_id` match to date-based LATERAL lookup (`game_date < :as_of_date ORDER BY game_date DESC LIMIT 1`) — matches bulk training/backtesting pattern
+- **ISS-015** (MEDIUM): `_filter_best_bets` now selects best over and best under lines independently per (player, game, stat) — previously picked one row by max single-side edge, discarding valid opposite-side bets from other bookmakers
+- **ISS-016** (MEDIUM): Combined calibration prediction failures tracked and logged as `WARNING` with count — previously swallowed at `DEBUG` level
+
+### Changed
+
+- `daily_runner.py`: `_get_current_lines()` now fetches all bookmakers and selects the sharpest (lowest-vig) line per player/game/market via booksum minimization; implied probabilities devigged via multiplicative normalization
+- `backtest_harness.py`: `_run_date()` return type changed from `pd.DataFrame | None` to `tuple[pd.DataFrame | None, pd.DataFrame]`
+- `train_pipeline.py`: Pipeline step ordering — copula params (5b) now computed before combined calibration (5c), correlation analysis moved to (5d)
+- `player_prop_scraper.py`: Extended 2025-26 Regular season end date from 2026-01-23 to 2026-04-15
+
+---
+
 ## [Unreleased]
 
 ### Added

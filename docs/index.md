@@ -17,6 +17,9 @@
 - [Feature Store](feature_store_documentation.md) - Training and inference feature assembly.
 - [Black-Litterman Blending](black_litterman_documentation.md) - Probability blending with market prior.
 
+## Tools
+- [Query Player](query_player_documentation.md) - CLI tool for querying stored predictions.
+
 ## Database and Tables
 - [DB Client](db_client_documentation.md) - Database engine access and connectivity checks.
 - [League Priors History](league_priors_history.md) - League baseline snapshots by position.

@@ -50,30 +50,42 @@ ALL_MARKETS = CORE_MARKETS + COMBO_MARKETS
 
 
 class ScraperBot:
-    def __init__(self, api_key, db_engine):
+    def __init__(self, api_key, db_engine, markets=None):
         self.api_key = api_key
         self.engine = db_engine
         self.session = requests.Session()
+        self.markets_key = ",".join(sorted(markets or CORE_MARKETS))
         self.processed_ids = self._load_processed_ids()
 
     def _load_processed_ids(self):
-        """
-        Load history to prevent duplicate scraping.
-        Checks local JSON file first, then falls back to DB check if needed.
-        """
+        """Load progress from JSON file. Only resumes if markets match."""
         if os.path.exists(PROGRESS_FILE):
             try:
                 with open(PROGRESS_FILE) as f:
                     data = json.load(f)
-                    return set(tuple(x) for x in data)
+                # New format: {"markets": "...", "processed": [[ts, eid], ...]}
+                if isinstance(data, dict) and "markets" in data:
+                    if data["markets"] == self.markets_key:
+                        ids = set(tuple(x) for x in data["processed"])
+                        print(f"Resumed progress: {len(ids)} events already scraped.")
+                        return ids
+                    else:
+                        print(f"Progress file markets differ (stored: {data['markets'][:60]}...). Starting fresh.")
+                        return set()
+                # Legacy format: [[ts, eid], ...] — ignore, start fresh
+                print("Legacy progress file found. Starting fresh.")
             except Exception as e:
                 print(f"Warning: Failed to load progress: {e}")
         return set()
 
     def save_progress(self):
         """Save processed IDs to local JSON file for resume capability."""
+        data = {
+            "markets": self.markets_key,
+            "processed": [list(x) for x in self.processed_ids],
+        }
         with open(PROGRESS_FILE, "w") as f:
-            json.dump(list(self.processed_ids), f)
+            json.dump(data, f)
 
     def get_events_for_date(self, date_str):
         """
@@ -342,6 +354,10 @@ Examples:
         "--dry-run", action="store_true",
         help="Show snapshot count and estimated credits without scraping",
     )
+    parser.add_argument(
+        "--no-resume", action="store_true",
+        help="Ignore progress file and scrape everything from scratch",
+    )
 
     args = parser.parse_args()
 
@@ -380,12 +396,19 @@ Examples:
         print(f"\nNote: Actual cost may be lower — API only charges for markets with data in the response.")
         exit(0)
 
-    # Initialize Bot
-    bot = ScraperBot(API_KEY, engine)
+    # Handle --no-resume: delete progress file before loading
+    if args.no_resume and os.path.exists(PROGRESS_FILE):
+        os.remove(PROGRESS_FILE)
+        print("Progress file deleted (--no-resume).")
+
+    # Initialize Bot (pass markets so progress file is market-aware)
+    bot = ScraperBot(API_KEY, engine, markets=markets)
 
     print(f"Starting backfill scrape ({len(markets)} markets).")
     print(f"Markets: {', '.join(markets)}")
     print(f"Snapshots: {len(snapshots)}")
+    if bot.processed_ids:
+        print(f"Resuming: {len(bot.processed_ids)} events already completed.")
     if start_from:
         print(f"Resuming from: {args.start_date}")
     if end_at:
@@ -393,6 +416,9 @@ Examples:
 
     total_credits = 0
     pbar_snaps = tqdm(snapshots, desc="Snapshots", unit="snap")
+
+    total_rows = 0
+    skipped = 0
 
     try:
         for snapshot in pbar_snaps:
@@ -405,20 +431,39 @@ Examples:
             for event in events_list:
                 game_id = event["id"]
 
+                # Skip if already processed (resume capability)
+                if (ts, game_id) in bot.processed_ids:
+                    skipped += 1
+                    continue
+
                 # Scrape Props for this game
                 data, credits = bot.scrape_event_props(ts, game_id, markets=markets)
                 total_credits += credits
 
                 if data:
                     rows = bot.parse_and_store(data, ts)
-                    pbar_snaps.set_description(f"Saved: {rows} rows | Creds: {total_credits}")
+                    total_rows += rows
+
+                # Mark as processed regardless of whether data was returned
+                # (422/empty means no props exist — no need to retry)
+                bot.processed_ids.add((ts, game_id))
+
+                pbar_snaps.set_description(
+                    f"Rows: {total_rows} | Creds: {total_credits} | Skip: {skipped}"
+                )
 
                 # Rate limiting sleep (Essential to avoid 429s)
                 time.sleep(0.15)
 
+            # Save progress after each snapshot (all games for that timestamp)
+            bot.save_progress()
+
     except KeyboardInterrupt:
-        print(f"\nStopped by user. Credits used: {total_credits}")
+        bot.save_progress()
+        print(f"\nStopped by user. Progress saved. Credits used: {total_credits}")
     except Exception as e:
-        print(f"\nCritical Error: {e}. Credits used: {total_credits}")
+        bot.save_progress()
+        print(f"\nCritical Error: {e}. Progress saved. Credits used: {total_credits}")
 
     print(f"\nSession Complete. Total Credits Used: {total_credits}")
+    print(f"Total Rows Inserted: {total_rows} | Events Skipped (resume): {skipped}")

@@ -71,7 +71,13 @@ def bot(scraper_module, tmp_path, monkeypatch):
 
 def test_load_processed_ids_from_file(scraper_module, tmp_path, monkeypatch):
     progress_path = tmp_path / "progress.json"
-    progress_path.write_text(json.dumps([["2024-01-01", "game1"], ["2024-01-02", "game2"]]))
+    # New format: {"markets": "...", "processed": [[ts, eid], ...]}
+    default_markets_key = ",".join(sorted(scraper_module.CORE_MARKETS))
+    progress_data = {
+        "markets": default_markets_key,
+        "processed": [["2024-01-01", "game1"], ["2024-01-02", "game2"]],
+    }
+    progress_path.write_text(json.dumps(progress_data))
     monkeypatch.setattr(scraper_module, "PROGRESS_FILE", str(progress_path))
 
     scraper = scraper_module.ScraperBot("test-key", Mock())
@@ -99,7 +105,10 @@ def test_save_progress_writes_json(scraper_module, tmp_path, monkeypatch):
     scraper.save_progress()
 
     data = json.loads(progress_path.read_text())
-    assert set(tuple(x) for x in data) == scraper.processed_ids
+    # New format: {"markets": "...", "processed": [[ts, eid], ...]}
+    assert "markets" in data
+    assert "processed" in data
+    assert set(tuple(x) for x in data["processed"]) == scraper.processed_ids
 
 
 def test_get_events_for_date_returns_data(bot):

@@ -1,5 +1,87 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-01-31)
+
+### What We Did
+
+**Prediction storage + query tool.** Built full prediction persistence pipeline:
+- `src/models/prediction_store.py` — stores daily predictions and gzip-compressed MC samples to PostgreSQL
+- DB migration: `daily_predictions` (quantiles + edges) and `daily_prediction_samples` (compressed bytea) tables
+- `src/tools/query_player.py` — CLI tool for querying stored predictions (line probability, player overview, top edges)
+- `src/orchestration/run_daily.py` — wired `PredictionStore` into daily pipeline with `--skip-storage` flag
+
+**Daily runner audit + refactor.** Comprehensive audit found 4 issues; all fixed:
+- **Game discovery:** Replaced `team_game_stats` query (only has post-game data) with NBA API ScoreboardV2 as primary source. DB query retained as fallback for past dates.
+- **Injury filtering:** Switched from `espn_injuries` (string name matching) to `rapidapi_injuries` (integer `player_id` matching), consistent with feature store and backtest harness.
+- **Edge calculation:** Switched from 5-point quantile interpolation to MC samples empirical CDF (`(samples > line).mean()`) with quantile fallback. Consistent with backtest harness.
+- **Line freshness:** Added `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY snapshot_time DESC)` to `_get_current_lines()` to use only the latest snapshot per line.
+
+**Scraper resume capability.** Completed resume capability in `player_prop_scraper.py`:
+- Market-aware progress file format (`{"markets": "...", "processed": [...]}`)
+- Skip logic in main loop for already-processed events
+- Progress saving after each snapshot and on interrupt/error
+- `--no-resume` flag to start fresh
+
+### Next Step
+
+Run comprehensive BL parameter sweep backtest via `run_sweep.py` on the out-of-sample period
+(2025-10-22 to 2026-01-29) to find optimal `(tau, edge_threshold, kelly_fraction)` configuration
+and evaluate whether the model + BL blending produces positive edge.
+
+---
+
+## Session Summary (2026-01-30)
+
+### What We Did
+
+**Comprehensive bug fix sweep.** Created `ISSUES.md` with 28-issue pipeline audit. Fixed 12 issues
+in a single commit — 1 critical, 5 high, 6 medium:
+
+| Fixed | Severity | Summary |
+|-------|----------|---------|
+| ISS-001 | CRITICAL | Minutes model now uses tuned hyperparams (`self.config` → `config`) |
+| ISS-002 | HIGH | `_run_date()` returns proper tuple instead of `None` |
+| ISS-003 | HIGH | Non-BL edge path now devigs implied probabilities (was understating edges ~2-3%) |
+| ISS-004 | HIGH | Injury LATERAL JOIN split into 2 subqueries (eliminates cross-product) |
+| ISS-005 | HIGH | Training `min > 0` → `min >= 5` (matches inference threshold) |
+| ISS-006 | HIGH | `early_stopping_rounds` now actually passed to `model.fit()` |
+| ISS-007 | MEDIUM | Copula params computed before combined calibration; passed to MC predictor |
+| ISS-008 | MEDIUM | Spread now team-directional (negative = player's team favored) |
+| ISS-009 | MEDIUM | COALESCE defaults changed from 0 to league averages across all paths |
+| ISS-011 | MEDIUM | Inference advanced stats JOIN matches bulk LATERAL pattern |
+| ISS-015 | MEDIUM | Line shopping selects best over and best under independently |
+| ISS-016 | MEDIUM | Calibration prediction failures logged as WARNING with count |
+
+16 issues remain open (mostly low-priority). See `ISSUES.md` for details.
+
+**Built parameter sweep tool.** `src/backtesting/run_sweep.py` (778 lines) — runs Phase 0-1
+(DB fetch + MC predictions) once, then sweeps the full cartesian grid of `(tau, edge_threshold,
+kelly_fraction)` configurations. Per-config output directories compatible with `visualize_results.py`.
+651 lines of tests in `tests/test_run_sweep.py`.
+
+**Expanded bookmaker coverage.** Added 11 US2/us_ex bookmakers to default lists: ballybet,
+betopenly, betparx, espnbet, fliff, hardrockbet, novig, polymarket, prophetx, rebet, windcreek.
+
+**Improved scraper CLI.** Both `daily_player_props_scraper.py` and `player_prop_scraper.py`
+now support `--combos`, `--combos-only`, `--markets` flags. Historical scraper adds `--start-date`,
+`--end-date`, and `--dry-run` (credit estimation without scraping).
+
+**Daily runner sharpest-book selection.** `daily_runner.py` now fetches all bookmakers and selects
+the lowest-vig (smallest booksum) line per player/game/market. Implied probabilities devigged.
+
+**Models retrained.** Latest complete artifact: `run_20260129_205540` (trained on 22023+22024,
+calibrated on 22025 through 2026-01-01). Includes all bug fixes, new features, copula params,
+and feature selection. Models have early stopping active, use `min >= 5` threshold, and include
+all B1-B4 + A4 features.
+
+### Next Step
+
+Run comprehensive BL parameter sweep backtest via `run_sweep.py` on the out-of-sample period
+(2025-10-22 to 2026-01-29) to find optimal `(tau, edge_threshold, kelly_fraction)` configuration
+and evaluate whether the model + BL blending produces positive edge.
+
+---
+
 ## Session Summary (2026-01-28)
 
 ### What We Learned
@@ -76,8 +158,7 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
   `line_total` (Vegas game total) was in `RATE_FEATURES_PTS`. Removed it to eliminate market
   leakage. `line_total` remains in `MINUTES_FEATURES` (genuinely predicts playing time).
   `line_spread` remains in `MINUTES_FEATURES` only.
-  **Note:** Existing model artifacts were trained WITH `line_total` in PTS features. Models
-  must be retrained for this change to take effect. Re-backtest after retraining.
+  **Retrained** in `run_20260129_205540` — `line_total` removed from PTS rate features (though feature selection may still select it for other stats/quantiles where it provides signal).
 
 - [x] **A3. Implement Black-Litterman blending layer** *(IMPLEMENTED — 2026-01-28)*
   New module `src/models/black_litterman.py` between `MonteCarloPredictor` and `BetSimulator`.
@@ -96,7 +177,7 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
   - **Diagnostics**: Extra columns in predictions CSV: `model_over/under`, `market_over/under`, `confidence`, `posterior_over/under`
   - **Tests**: 39 unit tests in `tests/test_black_litterman.py` (all passing)
 
-  **Next step**: Run validation backtest with `--bl-tau 0.05` to confirm Brier score improvement and characterize edge distribution. Tau sweep `[0.01, 0.02, 0.05, 0.10, 0.15, 0.20]` on held-out period.
+  **Next step**: Run comprehensive parameter sweep via `run_sweep.py` with expanded tau/edge/kelly grid on OOS period (2025-10-22 to 2026-01-29).
 
 - [x] **A4. Residual modeling (Option A — feature-based)** *(IMPLEMENTED — 2026-01-28)*
   Added per-stat prop lines (`prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`)
@@ -111,7 +192,7 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
   - Each `RATE_FEATURES_*` list now includes its corresponding `prop_line_*`
   - COALESCE to 0 for missing lines (consistent with `line_spread`/`line_total` pattern)
   - Database index `idx_props_player_game` created on `(player_id, game_id)` for query performance
-  - **Note:** Models must be retrained for this change to take effect. Re-backtest after retraining.
+  - **Retrained** in `run_20260129_205540` — prop line features active and selected across all models.
 
 - [ ] **A5. Residual modeling (Option B — binary classifier)**
   Build a separate model that directly predicts P(over | features, line) trained on historical
@@ -146,7 +227,7 @@ where bookmaker attention is lower.
 
   Computed via SQL LATERAL JOINs in `feature_store.py`. Pre-game temporal integrity enforced
   (uses report_date <= game_date). Manual mappings for truncated API names (suffixes like "III", "Jr.").
-  **Note:** Models must be retrained for these features to take effect.
+  **Retrained** in `run_20260129_205540` — injury features active and selected by feature selection.
 
 - [x] **B2. Rest days / back-to-back features** *(IMPLEMENTED — 2026-01-29)*
   Schedule density features pre-computed in `player_average_game_stats` via `calculate_b2_b3_b4_features()`.
@@ -258,13 +339,14 @@ backtest with positive ROI.
 |------|--------|----------------|-------|
 | ~~A1 (Market neutralization diagnostic)~~ | ~~Trivial~~ | ~~Critical~~ | **DONE** — R²=0.10, Brier 0.2705, overconfidence not correlation |
 | ~~A3 (Black-Litterman blending)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — Implemented in `black_litterman.py`, 39 tests passing. Needs validation backtest. |
-| ~~A2 (Remove line_total)~~ | ~~Low~~ | ~~High~~ | **DONE** — Removed from `RATE_FEATURES_PTS`. Needs retrain + re-backtest. |
-| ~~B2 (Rest/B2B features)~~ | ~~Low~~ | ~~Medium-High~~ | **DONE** — `rest_days`, `is_back_to_back`, `games_in_last_7_days` in MINUTES_FEATURES. Needs retrain + re-backtest. |
-| ~~B3 (L3 + trend features)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — 13 features (L3 avg, momentum ratios, L5 std). Needs retrain + re-backtest. |
-| ~~B1 (Injury features)~~ | ~~Medium-High~~ | ~~High~~ | **DONE** — 10 injury features via LATERAL JOIN. 99.3% linked. Needs retrain + re-backtest. |
-| ~~A4 (Residual modeling — features)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Prop line centering in all 4 query paths. Needs retrain + re-backtest. |
-| ~~B4 (Minutes stability)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — `min_std_l5`, `min_floor_l5`, `games_started_l5` in MINUTES_FEATURES. Needs retrain + re-backtest. |
-| ~~C0 (Gaussian copula)~~ | ~~Medium~~ | ~~Medium-High~~ | **DONE** — Replaces hardcoded rate factors with proper copula sampling. Needs retrain + re-backtest. |
+| ~~A2 (Remove line_total)~~ | ~~Low~~ | ~~High~~ | **DONE** — Removed from `RATE_FEATURES_PTS`. Retrained. |
+| ~~B2 (Rest/B2B features)~~ | ~~Low~~ | ~~Medium-High~~ | **DONE** — `rest_days`, `is_back_to_back`, `games_in_last_7_days`. Retrained. |
+| ~~B3 (L3 + trend features)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — 13 features (L3 avg, momentum ratios, L5 std). Retrained. |
+| ~~B1 (Injury features)~~ | ~~Medium-High~~ | ~~High~~ | **DONE** — 10 injury features via LATERAL JOIN. 99.3% linked. Retrained. |
+| ~~A4 (Residual modeling — features)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Prop line centering in all 4 query paths. Retrained. |
+| ~~B4 (Minutes stability)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — `min_std_l5`, `min_floor_l5`, `games_started_l5`. Retrained. |
+| ~~C0 (Gaussian copula)~~ | ~~Medium~~ | ~~Medium-High~~ | **DONE** — Replaces hardcoded rate factors with proper copula sampling. Retrained. |
+| **BL Sweep** | Medium | **Critical** | **NEXT** — Run `run_sweep.py` with comprehensive tau/edge/kelly grid on OOS period |
 | C1 (Q10 investigation) | Low | Low-Medium | Calibration refinement |
 | A5 (Residual modeling — classifier) | High | High | Only if A4 isn't sufficient |
 | A6 (Conditional rate modeling) | Medium-High | Medium-High | Only if copula combined calibration still drifts |

@@ -353,23 +353,31 @@ The `BLConfig` dataclass has no validation. A negative tau produces a negative w
 
 ---
 
-## Recommended Priority Fixes
+## Remaining Open Issues
 
-### Immediate (one-line or few-line fixes)
-
-1. **ISS-001** — `quantile_trainer.py:374`: Change `self.config` → `config`
-2. **ISS-002** — `backtest_harness.py:275,287,297,305`: Change `return None` → `return None, pd.DataFrame()`
-3. **ISS-006** — `quantile_trainer.py:147`: Pass `early_stopping_rounds` to `model.fit()`
+12 of 28 issues have been fixed. The following 16 remain open:
 
 ### Short-term (targeted fixes)
 
-4. **ISS-003** — `backtest_harness.py:690`: Devig implied probabilities in the non-BL path
-5. **ISS-005** — `feature_store.py:1151`: Change `min > 0` → `min >= 5` in training query
-6. **ISS-013** — `monte_carlo.py:190-196`: Use `.copy()` on default dicts
-7. **ISS-010** — `feature_store.py:813-815`: Track and warn on failed chunks
+1. **ISS-013** — `monte_carlo.py:190-196`: Use `.copy()` on mutable default dicts
+2. **ISS-010** — `feature_store.py:813-815`: Track and warn on failed date-range chunks
 
 ### Medium-term (require more design)
 
-8. **ISS-004** — Split injury LATERAL JOIN into two subqueries
-9. **ISS-007** — Reorder pipeline steps and pass copula params to calibration
-10. **ISS-015** — Split line shopping for over/under independently
+3. **ISS-012** — Move blowout factor outside per-stat loop (dormant — `enabled=False`)
+4. **ISS-014** — Extend MC quantile function beyond [0.01, 0.99] for extreme lines
+5. **ISS-023** — Split Stage 2 dedup to allow uncorrelated multi-stat bets per player
+
+### Low priority / cosmetic
+
+6. **ISS-017** — Fix misleading ratio column names (`l3_l15_ratio` computes L3/L5)
+7. **ISS-018** — Pre-game inference requires game row to exist in `player_game_stats`
+8. **ISS-019** — Dead `team_ids` parameter in `_load_injury_features_bulk`
+9. **ISS-020** — `validate_features=False` disables XGBoost feature-order safety
+10. **ISS-021** — Vectorize slow row-by-row monotonicity enforcement loop
+11. **ISS-022** — `prob_over + prob_under != 1.0` strict inequality
+12. **ISS-024** — `reset()` doesn't reset `current_bankroll` (dormant)
+13. **ISS-025** — Dead `side` parameter in `should_bet()`
+14. **ISS-026** — `--workers` CLI arg accepted but parallelism never used
+15. **ISS-027** — No date format validation at CLI level
+16. **ISS-028** — No `--bl-tau` range validation; negative values invert blending

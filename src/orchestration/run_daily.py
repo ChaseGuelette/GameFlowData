@@ -12,6 +12,7 @@ from src.db.client import get_engine
 from src.models.daily_runner import DailyPredictionRunner
 from src.models.feature_store import FeatureStore
 from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
+from src.models.prediction_store import PredictionStore
 from src.models.quantile_trainer import PlayerPropsModelPipeline
 
 # Configure logging
@@ -53,6 +54,7 @@ def main():
     parser.add_argument("--scrape-injuries", action="store_true", help="Scrape current injuries from ESPN")
     parser.add_argument("--skip-processing", action="store_true", help="Skip the processing/update step")
     parser.add_argument("--skip-inference", action="store_true", help="Skip the prediction step")
+    parser.add_argument("--skip-storage", action="store_true", help="Skip storing predictions to database")
     parser.add_argument("--model-dir", type=str, default="src/models/artifacts", help="Path to model artifacts")
 
     args = parser.parse_args()
@@ -141,10 +143,19 @@ def main():
 
             runner = DailyPredictionRunner(engine, feature_store, pipeline, predictor)
 
-            preds = runner.run_for_date(target_date)
+            preds, samples = runner.run_for_date(target_date)
 
             if not preds.empty:
                 logger.info(f"Generated {len(preds)} predictions.")
+
+                # Store to database
+                if not args.skip_storage:
+                    store = PredictionStore(engine)
+                    store.store_predictions(preds, target_date)
+                    store.store_samples(samples, target_date)
+                    logger.info(f"Stored {len(preds)} predictions + {len(samples)} sample arrays to database.")
+
+                # Save CSV for backwards compat
                 output_file = f"predictions_{target_date}.csv"
                 preds.to_csv(output_file, index=False)
                 logger.info(f"Saved predictions to {output_file}")

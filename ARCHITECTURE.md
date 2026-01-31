@@ -41,8 +41,9 @@ GameFlowData/
 │   ├── db/                     # Database connection layer
 │   ├── scrapers/               # Data ingestion (13 modules)
 │   ├── processing/             # Data pipeline: linking, averages, backfill
-│   ├── models/                 # ML core: features, training, inference
+│   ├── models/                 # ML core: features, training, inference, storage
 │   ├── backtesting/            # Historical replay and bet simulation
+│   ├── tools/                  # CLI query tools
 │   └── orchestration/          # Daily workflow coordination
 ├── tests/                      # Unit and integration tests (33 modules)
 ├── docs/                       # Component-level documentation
@@ -126,9 +127,11 @@ Centralized engine for converting raw stats into model-ready features.
     - **Rest & Schedule (B2):** `rest_days`, `is_back_to_back`, `games_in_last_7_days` — pre-computed in `player_average_game_stats` from game date diffs.
     - **Short-Window Trends (B3):** L3 rolling averages (`player_avg_{stat}_l3`), momentum ratios (`player_{stat}_l3_l15_ratio`), and L5 standard deviations (`player_std_{stat}_l5`) for all stats.
     - **Minutes Stability (B4):** `player_min_std_l5`, `player_min_floor_l5`, `player_games_started_l5` — distinguishes locked-in starters from volatile rotation players.
-    - **Injury Context (B1):** `team_out_count`, `team_out_min_sum`, `team_out_pts_sum`, `team_out_reb_sum`, `team_out_ast_sum`, `team_out_usg_sum` (teammate injuries), `opp_out_count`, `opp_out_min_sum` (opponent injuries), `player_is_questionable`, `player_is_probable` (player's own status). Computed via SQL LATERAL JOINs to `rapidapi_injuries` table with temporal integrity (report_date ≤ game_date).
-    - **Betting Signals:** Implied totals and spreads as proxies for game script.
+    - **Injury Context (B1):** `team_out_count`, `team_out_min_sum`, `team_out_pts_sum`, `team_out_reb_sum`, `team_out_ast_sum`, `team_out_usg_sum` (teammate injuries), `opp_out_count`, `opp_out_min_sum` (opponent injuries), `player_is_questionable`, `player_is_probable` (player's own status). Computed via two separate SQL LATERAL JOINs (game stats + advanced stats) to `rapidapi_injuries` table with temporal integrity (report_date ≤ game_date).
+    - **Betting Signals:** Implied totals and team-directional spreads as proxies for game script. `line_spread` is negative when the player's team is favored (home games with `matchup LIKE '%vs.%'`).
     - **Prop Line Centering:** Per-stat player prop lines (`prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`) from `raw_player_props_combined`. Enables residual modeling — the model learns deviations from market expectation rather than absolute values.
+- **League-Average Defaults:** Missing feature values default to league averages instead of 0 — `avg_pace_l5=99.5`, `avg_def_rtg_l5=112.0`, `avg_fg3a_l5=34.0`, `avg_fg3_pct_l5=0.36`, `avg_usg_pct_l5=0.20`, `avg_ts_pct_l15=0.56`, `avg_reb_pct_l5=0.10`, `avg_ast_pct_l5=0.15`, `off_rtg_allowed=112.0`. Prevents extreme outlier feature values for early-season games and rookies.
+- **Train/Serve Consistency:** All 4 query paths (training, date, date_range, single-player) use identical SQL patterns — date-based LATERAL JOINs for rolling stats, matching thresholds (`min >= 5`), and consistent COALESCE defaults.
 
 **API Methods:**
 - `get_player_game_features()` — Single player-game feature vector.
@@ -220,7 +223,26 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 #### Daily Runner (`daily_runner.py`)
 
 - `DailyPredictionRunner` class — production inference pipeline.
-- Workflow: get today's games → filter injured players → generate features → run predictions → apply betting thresholds → output.
+- Workflow: get today's games (NBA API ScoreboardV2) → filter injured players (`rapidapi_injuries`) → build features → batch predict (4 XGBoost calls) → enrich with opponents → fetch prop lines → calculate edges → return `(predictions_df, samples_dict)`.
+- **Game Discovery:** Primary source is `nba_api.stats.endpoints.ScoreboardV2` (works for scheduled/future games). Falls back to `team_game_stats` DB query for past dates when NBA API is unavailable.
+- **Injury Filtering:** Queries `rapidapi_injuries` table by `player_id` (integer matching). Uses most recent `report_date` on or before target date. Filters players with `status = 'Out'`.
+- **Batch Prediction:** Uses `predict_batch_for_date()` — 4 total XGBoost calls (1 minutes + 3 rates) for all players, instead of N per-player calls.
+- **Sharpest-Book Selection:** Fetches lines from all bookmakers via `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY snapshot_time DESC)` to get only the latest snapshot, then selects the lowest-vig (smallest booksum) line per player/game/market. Applies multiplicative devigging to implied probabilities for edge calculation.
+- **Edge Calculation:** Uses MC samples empirical CDF (`(samples > line).mean()`) for probability estimation. Falls back to 5-point quantile interpolation when samples are unavailable.
+
+#### Prediction Storage (`prediction_store.py`)
+
+- `PredictionStore` class — stores and retrieves daily predictions and MC samples.
+- **Predictions:** Upserted to `daily_predictions` table via `psycopg2.extras.execute_values` with `ON CONFLICT DO UPDATE`. Stores quantiles, edges, implied probabilities, and prop line info.
+- **MC Samples:** Gzip-compressed `float64` numpy arrays stored as PostgreSQL `BYTEA` in `daily_prediction_samples` table (~20-40KB per prediction for 10K samples).
+- **Retrieval:** `get_predictions()` for filtered queries, `get_samples()` for decompressing arrays, `get_player_id_by_name()` for fuzzy name lookup.
+
+#### Query Tool (`src/tools/query_player.py`)
+
+CLI tool for querying stored daily predictions. Three modes:
+1. **Line query:** Player + stat + line → compute over/under probability from stored MC samples + optional EV at given odds.
+2. **Player overview:** All predictions for a player on a date.
+3. **Top edges:** Top N predictions by absolute edge for a date.
 
 #### Analysis & Diagnostics
 
@@ -239,22 +261,30 @@ A simulation environment to validate betting strategies.
 | `bet_simulator.py` | `Bet` and `BetOutcome` classes. `BetSide` enum (OVER/UNDER). P&L tracking per bet. Stores BL `posterior_prob` diagnostic. |
 | `performance_metrics.py` | `PerformanceMetrics` dataclass — ROI, hit rate, Sharpe ratio, drawdown, Brier score. |
 | `run_backtest.py` | CLI entry point. Accepts date range, model paths, output directory. |
+| `run_sweep.py` | Parameter sweep tool — runs Phase 0-1 once, then sweeps `(tau, edge_threshold, kelly_fraction)` grid. Saves per-config subdirectories compatible with `visualize_results.py`. |
 | `visualize_results.py` | Self-contained HTML dashboard: bankroll growth chart, daily P&L bars, metrics summary cards, enriched bet log table (player names/teams from DB), other bookmaker lines comparison. Sortable/filterable via vanilla JS. |
 
 **Key Capabilities:**
 - **Historical Replay:** Iterates through past seasons day-by-day.
 - **Blind Predictions:** Models only see data available *before* tip-off.
 - **Betting Simulation:**
-    - **Line Shopping:** Selects the best available line across bookmakers.
+    - **Line Shopping:** Independently selects best over line and best under line across bookmakers per (player, game, stat), ensuring both sides are considered even when they come from different bookmakers.
     - **Kelly Criterion:** Sizes bets based on calculated edge and bankroll.
     - **ROI Analysis:** Tracks bankroll growth, drawdown, and win rates.
-- **Edge Calculation:** `_calculate_edges()` method determines bet eligibility. Supports two modes:
-    - **Default (BL disabled):** Raw empirical CDF → edge vs raw implied probability.
+- **Edge Calculation:** `_calculate_edges()` method determines bet eligibility. Both paths use multiplicative devigging to remove bookmaker vig before computing edges:
+    - **Default (BL disabled):** Raw empirical CDF → edge vs devigged implied probability.
     - **BL enabled (`--bl-tau`):** Devigged market prior + log-odds BL blending → edge = posterior_prob - devigged_market_prob. Adds diagnostic columns: `model_over/under`, `market_over/under`, `confidence`, `posterior_over/under`.
+- **Parameter Sweep:** `run_sweep.py` enables efficient grid search across BL tau, edge threshold, and Kelly fraction values by caching all shared data (features, lines, actuals, MC predictions/samples) and replaying only edge calculation + bet simulation per configuration.
 
-### 7. Orchestration (`src/orchestration/`)
+### 7. Query Tools (`src/tools/`)
 
-**`run_daily.py`** — Daily workflow coordinator. Triggers the full pipeline: data scraping → linking → feature store → predictions → backtesting.
+| Module | Purpose |
+|--------|---------|
+| `query_player.py` | CLI tool for querying stored predictions. Modes: line probability, player overview, top edges. |
+
+### 8. Orchestration (`src/orchestration/`)
+
+**`run_daily.py`** — Daily workflow coordinator. Triggers the full pipeline: data scraping → linking → feature store → predictions → storage → CSV export. Supports `--skip-storage` to skip DB persistence. Stores predictions to `daily_predictions` and MC samples to `daily_prediction_samples` via `PredictionStore`.
 
 ---
 
@@ -280,6 +310,10 @@ A simulation environment to validate betting strategies.
 ### Betting Data
 - `raw_game_lines_staging`: Spreads and totals.
 - `raw_player_props_combined`: Player prop lines and odds.
+
+### Predictions
+- `daily_predictions`: Stored daily prediction quantiles, edges, and implied probabilities. Unique on `(prediction_date, player_id, game_id, stat)`. Supports upsert for re-runs.
+- `daily_prediction_samples`: Gzip-compressed MC sample arrays (10K float64 values per prediction, ~20-40KB). Unique on `(prediction_date, player_id, game_id, stat)`.
 
 ### Reference
 - `players`: Player reference data.
@@ -325,6 +359,8 @@ graph TD
         BetSim[Bet Simulator]
         PerfMetrics[Performance Metrics]
         Daily[Daily Runner]
+        PredStore[Prediction Store]
+        QueryTool[Query Tool CLI]
         Viz[Visualize Results]
         DB[(PostgreSQL)]
     end
@@ -352,6 +388,9 @@ graph TD
     MC --> BL
     BL --> Backtest
     MC --> Backtest
+    Daily --> PredStore
+    PredStore --> DB
+    DB --> QueryTool
     Backtest --> BetSim
     BetSim --> PerfMetrics
     PerfMetrics --> Viz
@@ -364,7 +403,8 @@ graph TD
 ### Scrapers
 ```bash
 python src/scrapers/nba_unified_scraper.py [--season YYYY-YY] [--season-type TYPE] [--skip-team] [--skip-advanced]
-python src/scrapers/daily_player_props_scraper.py
+python src/scrapers/daily_player_props_scraper.py [--live|--date YYYY-MM-DD] [--combos|--combos-only|--markets M1 M2]
+python src/scrapers/player_prop_scraper.py [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--combos|--combos-only] [--dry-run]
 python src/scrapers/daily_game_lines_scraper.py
 ```
 
@@ -388,11 +428,38 @@ python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD
 python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD --bl-tau 0.05  # Enable BL blending
 python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD --allowed-bets pts:under reb:over
 python src/backtesting/visualize_results.py --results-dir backtest_results/
+
+# Parameter sweep (BL tau × edge threshold × Kelly fraction)
+python src/backtesting/run_sweep.py \
+    --start YYYY-MM-DD --end YYYY-MM-DD \
+    --model-dir src/models/artifacts/run_YYYYMMDD_HHMMSS \
+    --tau none 0.03 0.05 0.09 0.15 \
+    --edge 0.03 0.05 0.07 \
+    --kelly 0.10 0.125 0.15 \
+    --n-samples 10000 --stats pts reb ast
 ```
 
 ### Daily Workflow
 ```bash
-python src/orchestration/run_daily.py
+python src/orchestration/run_daily.py [--date YYYY-MM-DD] [--skip-scraping] [--skip-processing] [--skip-inference] [--skip-storage]
+```
+
+### Query Predictions
+```bash
+# Probability of a player scoring over a line
+python src/tools/query_player.py --player "Cade Cunningham" --stat pts --line 25.5
+
+# Same query with EV at given odds
+python src/tools/query_player.py --player "Cade Cunningham" --stat pts --line 25.5 --odds -110
+
+# All predictions for a player
+python src/tools/query_player.py --player "Cade Cunningham"
+
+# Top edges for today
+python src/tools/query_player.py --top 20
+
+# Top edges for a specific date
+python src/tools/query_player.py --date 2026-01-29 --top 10
 ```
 
 ---
@@ -447,13 +514,17 @@ See `ACTIONITEMS.md` for full details.
 
 **Root finding (2026-01-28):** The model is catastrophically overconfident on probability estimates. Quantile calibration (Q10–Q90) is good, but translating MC distributions into betting probabilities via `(samples > line).mean()` amplifies small mean shifts into extreme P(over) values. Brier score 0.2705 (worse than naive 0.2500).
 
-**Black-Litterman blending (A3) — Implemented (2026-01-28):** The BL blending layer is complete and integrated into the backtesting pipeline. Anchors model probabilities to the devigged market prior using log-odds space blending with per-prediction z-score confidence. Activated via `--bl-tau` flag (default: disabled). Needs validation backtest to confirm Brier score improvement and edge characteristics.
+**Black-Litterman blending (A3) — Implemented (2026-01-28):** The BL blending layer is complete and integrated into the backtesting pipeline. Anchors model probabilities to the devigged market prior using log-odds space blending with per-prediction z-score confidence. Activated via `--bl-tau` flag (default: disabled). Needs validation backtest via `run_sweep.py` to find optimal tau, edge, and Kelly parameters.
+
+**Bug fix sweep (2026-01-30):** 12 issues fixed from comprehensive pipeline audit — see `ISSUES.md`. Key fixes: minutes model hyperparameters (ISS-001), early stopping (ISS-006), devigged edge calculation (ISS-003), injury query cross-product (ISS-004), train/serve threshold alignment (ISS-005), team-directional spread (ISS-008), league-average defaults (ISS-009), independent over/under line shopping (ISS-015). 16 issues remain open (mostly low-priority).
 
 **Active tracks:**
 - **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option.
-- **Track B** (Complete): New signal sources — B1 (injury context, 10 features), B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented. All features available for retraining.
-- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented. C1 (Q10 over-coverage) and C2 (per-stat calibration) pending.
+- **Track B** (Complete): New signal sources — B1 (injury context, 10 features), B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented and included in latest training run.
+- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) and C2 (per-stat calibration) pending.
 - **Track D**: Deprioritized model items (pending recalibration).
 - **Track E**: Go-live pipeline (blocked on demonstrated edge).
 
-**Ready for retraining:** All feature engineering (Tracks A-B) and calibration infrastructure (C0) are complete. Next step is to retrain models, which will automatically compute copula parameters, run feature selection on all new features (injury, rest, trends, stability, prop lines), and save artifacts.
+**Prediction storage + query tool (2026-01-31):** Daily predictions and MC samples now persisted to PostgreSQL (`daily_predictions` + `daily_prediction_samples` tables). CLI query tool (`src/tools/query_player.py`) enables ad-hoc probability queries against stored distributions. Daily runner refactored: NBA API ScoreboardV2 for game discovery, `rapidapi_injuries` for injury filtering, MC samples for edge calculation, `ROW_NUMBER` snapshot ranking for line freshness.
+
+**Current state (2026-01-31):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260129_205540`. Daily inference pipeline fully wired to DB storage. Next step: run comprehensive BL parameter sweep backtest via `run_sweep.py` to find optimal (tau, edge_threshold, kelly_fraction) configuration.
