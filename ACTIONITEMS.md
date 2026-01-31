@@ -319,17 +319,40 @@ probabilities and zero independent signal. Revisit after Tracks A and B are comp
 
 ## Track E: Go-Live Pipeline (Blocked — Needs Edge First)
 
-These items from the original Track A are blocked until the model demonstrates real edge
-under the correct empirical CDF calculation. Do not pursue until Tracks A+B produce a
-backtest with positive ROI.
+These items are blocked until the BL parameter sweep demonstrates positive ROI on the
+out-of-sample period. Do not pursue E4+ until sweep results are in.
 
-- [ ] **E1. Run filtered in-sample backtest** (after model improvements)
-- [ ] **E2. Run out-of-sample backtest** (Oct 2025 – Jan 2026)
-- [ ] **E3. Analyze OOS results**
-- [ ] **E4. Build/verify live pipeline**
-- [ ] **E5. Paper trade**
-- [ ] **E6. Go live — minimum flat stakes**
-- [ ] **E7. Scale to Kelly sizing**
+- [ ] **E1. Retrain models** — XGBoost 3.x `early_stopping_rounds` fix applied. Retrain with current data.
+- [ ] **E2. Run BL parameter sweep** — `run_sweep.py` on OOS period (2025-10-22 to 2026-01-29). Grid: tau × edge × kelly.
+- [ ] **E3. Analyze sweep results** — Find optimal config, evaluate if positive ROI exists.
+- [ ] **E4. Fix daily injury pipeline** *(CRITICAL for live)* — `daily_runner.py` reads `rapidapi_injuries` but `run_daily.py --scrape-injuries` writes to `espn_injuries`. Need daily RapidAPI injury scraper:
+  - Option A (recommended): Adapt `rapidapi_injury_backfill.py` to run for today's date, wire into orchestrator
+  - Option B: Switch daily runner back to `espn_injuries` (loses `player_id` matching advantage)
+  - Must run `link_injury_data.py` after scrape to populate `player_id` column
+- [ ] **E5. Paper trade infrastructure** — Convert stored `daily_predictions` into paper bets:
+  - Bet selection logic (apply edge threshold + Kelly sizing from sweep results)
+  - Outcome resolution (pull next-day box scores, mark bets won/lost)
+  - P&L tracking table + dashboard
+- [ ] **E6. Scheduling** — Automate daily pipeline (cron/Task Scheduler):
+  - ~11am: Scrape game results, props, injuries
+  - ~12pm: Run processing + feature store + predictions
+  - ~6pm: Re-scrape props for line movement, re-run edge calc
+- [ ] **E7. Paper trade** — Run live for 2-4 weeks, validate predictions vs outcomes
+- [ ] **E8. Go live — minimum flat stakes**
+- [ ] **E9. Scale to Kelly sizing**
+
+---
+
+## Track F: Market Expansion (Future — After Demonstrated Edge)
+
+New market data scraped (2.6M rows, 2026-01-31) but not yet modeled. Expand when core
+pts/reb/ast shows profitability.
+
+- [ ] **F1. Backfill new markets further** — Currently scraped for recent window only. Extend `player_prop_scraper.py` run with `--markets player_field_goals player_frees_made player_frees_attempts player_blocks_steals` + combos back to 2024-10-22.
+- [ ] **F2. Add FG/FT/BLK+STL rate features** — New `RATE_FEATURES_FG`, `RATE_FEATURES_FT`, `RATE_FEATURES_BLK_STL` in feature store. Need new `actual_*` target columns in training data.
+- [ ] **F3. Train expanded models** — Add `fg`, `ft_made`, `ft_attempts`, `blk_stl` as stat targets. Train + calibrate.
+- [ ] **F4. Add combo market edges** — PRA, P+R, P+A, R+A are sums of individual predictions. Compute from existing MC samples without additional models.
+- [ ] **F5. DD/TD markets** — Binary outcomes, need separate classifier (not quantile regression). `player_double_double`, `player_triple_double`.
 
 ---
 
@@ -346,12 +369,16 @@ backtest with positive ROI.
 | ~~A4 (Residual modeling — features)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Prop line centering in all 4 query paths. Retrained. |
 | ~~B4 (Minutes stability)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — `min_std_l5`, `min_floor_l5`, `games_started_l5`. Retrained. |
 | ~~C0 (Gaussian copula)~~ | ~~Medium~~ | ~~Medium-High~~ | **DONE** — Replaces hardcoded rate factors with proper copula sampling. Retrained. |
-| **BL Sweep** | Medium | **Critical** | **NEXT** — Run `run_sweep.py` with comprehensive tau/edge/kelly grid on OOS period |
+| **E1 (Retrain)** | Low | **Critical** | **NOW** — XGBoost 3.x fix applied, retrain immediately |
+| **E2 (BL Sweep)** | Medium | **Critical** | **NEXT** — Run `run_sweep.py` on OOS period after retrain |
+| **E4 (Daily injury pipeline)** | Medium | **Critical** | **BLOCKED on E3** — `rapidapi_injuries` not updated daily, must fix before live |
+| E5 (Paper trade infra) | Medium | High | Blocked on E3 — bet selection, outcome resolution, P&L tracking |
+| E6 (Scheduling) | Low | High | Blocked on E5 — cron/Task Scheduler automation |
 | C1 (Q10 investigation) | Low | Low-Medium | Calibration refinement |
 | A5 (Residual modeling — classifier) | High | High | Only if A4 isn't sufficient |
 | A6 (Conditional rate modeling) | Medium-High | Medium-High | Only if copula combined calibration still drifts |
 | D1-D4 (Old model items) | Various | Low until recalibrated | Revisit after Track A |
-| E1-E7 (Go-live) | Various | Blocked | Needs demonstrated edge first |
+| F1-F5 (Market expansion) | Various | Medium | After demonstrated edge on core markets |
 
 ---
 
