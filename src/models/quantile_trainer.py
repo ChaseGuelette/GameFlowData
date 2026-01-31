@@ -150,6 +150,7 @@ class QuantileModelSuite:
                 sample_weight=w_train,
                 eval_set=[(X_val_q, y_val)],
                 verbose=False,
+                early_stopping_rounds=self.config.early_stopping_rounds,
             )
 
             train_preds = model.predict(X_train_q)
@@ -371,7 +372,7 @@ class PlayerPropsModelPipeline:
         print(f"Training on {len(X):,} samples")
 
         # Train
-        self.minutes_model = QuantileModelSuite(self.config)
+        self.minutes_model = QuantileModelSuite(config)
         results = self.minutes_model.train(X, y, per_q_available)
 
         return results

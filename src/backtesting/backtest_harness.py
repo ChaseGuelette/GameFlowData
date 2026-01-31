@@ -70,9 +70,14 @@ class BacktestHarness:
     starting_bankroll: float = 10000.0
     kelly_fraction: float = 0.125
     bookmakers: list[str] = field(default_factory=lambda: [
+        # US market (original)
         "draftkings", "fanduel", "betmgm", "betrivers", "bovada",
         "williamhill_us", "betonlineag", "unibet_us", "mybookieag",
         "pointsbetus", "fanatics", "barstool", "wynnbet",
+        # US2 / us_ex markets
+        "ballybet", "betopenly", "betparx", "espnbet", "fliff",
+        "hardrockbet", "novig", "polymarket", "prophetx", "rebet",
+        "windcreek",
     ])
     stats: list[str] = field(default_factory=lambda: ["pts", "reb", "ast"])
     min_minutes_avg: int = 10
@@ -260,7 +265,7 @@ class BacktestHarness:
         game_date: date,
         prefetched_features: dict | None = None,
         prefetched_lines: dict | None = None,
-    ) -> pd.DataFrame | None:
+    ) -> tuple[pd.DataFrame | None, pd.DataFrame]:
         """Run predictions for a single date using efficient batch processing."""
         # Get features (from prefetch dict or single-date DB query)
         if prefetched_features is not None:
@@ -272,7 +277,7 @@ class BacktestHarness:
 
         if features_df is None or features_df.empty:
             logger.debug(f"No features returned for {game_date}")
-            return None
+            return None, pd.DataFrame()
 
         pre_filter_count = len(features_df)
 
@@ -284,7 +289,7 @@ class BacktestHarness:
             logger.debug(
                 f"All {pre_filter_count} players filtered out for {game_date} (min_minutes_avg={self.min_minutes_avg})"
             )
-            return None
+            return None, pd.DataFrame()
 
         # Sort for deterministic RNG ordering across query strategies
         features_df = features_df.sort_values(["player_id", "game_id"]).reset_index(drop=True)
@@ -294,7 +299,7 @@ class BacktestHarness:
             predictions_list, prediction_samples = self.predictor.predict_batch_for_date(features_df, stats=self.stats)
         except Exception as e:
             logger.error(f"Error in batch prediction for {game_date}: {e}")
-            return None
+            return None, pd.DataFrame()
 
         # Add game_date to each prediction
         for pred in predictions_list:
@@ -303,7 +308,7 @@ class BacktestHarness:
         logger.info(f"  {game_date}: {len(features_df)} players -> {len(predictions_list)} predictions")
 
         if not predictions_list:
-            return None
+            return None, pd.DataFrame()
 
         predictions_df = pd.DataFrame(predictions_list)
 
@@ -329,8 +334,9 @@ class BacktestHarness:
     def _filter_best_bets(self, predictions_df: pd.DataFrame) -> pd.DataFrame:
         """Line-shop across bookmakers, then select single best bet per player/game.
 
-        Stage 1 (Line Shopping): For each (player, game, stat), keep the bookmaker/line
-        combo offering the highest edge. This is the core line-shopping step.
+        Stage 1 (Line Shopping): For each (player, game, stat), independently select
+        the best over line and best under line. This ensures a good over from Bookmaker A
+        and a good under from Bookmaker B are both considered.
 
         Stage 2 (Bet Dedup): For each (player, game), keep only the single best stat.
         This limits correlation risk to one bet per player per game.
@@ -338,18 +344,51 @@ class BacktestHarness:
         if predictions_df.empty:
             return predictions_df
 
-        # Calculate max potential edge (over or under)
-        predictions_df["max_edge"] = predictions_df[["over_edge", "under_edge"]].max(axis=1)
+        dedup_key = ["player_id", "game_id", "stat"]
 
-        # Sort by max edge descending
-        predictions_df = predictions_df.sort_values("max_edge", ascending=False)
-
-        # Stage 1: Line Shopping — best bookmaker/line per player/game/stat
-        predictions_df = predictions_df.drop_duplicates(
-            subset=["player_id", "game_id", "stat"], keep="first"
+        # Stage 1: Line Shopping — best over and best under independently per player/game/stat
+        best_over = (
+            predictions_df.sort_values("over_edge", ascending=False)
+            .drop_duplicates(subset=dedup_key, keep="first")[dedup_key + ["over_edge"]]
+            .rename(columns={"over_edge": "best_over_edge"})
+        )
+        best_under = (
+            predictions_df.sort_values("under_edge", ascending=False)
+            .drop_duplicates(subset=dedup_key, keep="first")[dedup_key + ["under_edge"]]
+            .rename(columns={"under_edge": "best_under_edge"})
         )
 
+        # Merge best edges back, then pick the winning side's full row
+        best_edges = best_over.merge(best_under, on=dedup_key)
+        best_edges["best_side"] = (best_edges["best_over_edge"] >= best_edges["best_under_edge"]).map(
+            {True: "over", False: "under"}
+        )
+        best_edges["max_edge"] = best_edges[["best_over_edge", "best_under_edge"]].max(axis=1)
+
+        # For each (player, game, stat), pick the row that provided the winning side's edge
+        rows = []
+        for _, edge_row in best_edges.iterrows():
+            pid, gid, stat = edge_row["player_id"], edge_row["game_id"], edge_row["stat"]
+            mask = (
+                (predictions_df["player_id"] == pid)
+                & (predictions_df["game_id"] == gid)
+                & (predictions_df["stat"] == stat)
+            )
+            candidates = predictions_df[mask]
+            if edge_row["best_side"] == "over":
+                best = candidates.sort_values("over_edge", ascending=False).iloc[0]
+            else:
+                best = candidates.sort_values("under_edge", ascending=False).iloc[0]
+            rows.append(best)
+
+        if not rows:
+            return predictions_df.iloc[0:0]
+
+        predictions_df = pd.DataFrame(rows)
+        predictions_df["max_edge"] = predictions_df[["over_edge", "under_edge"]].max(axis=1)
+
         # Stage 2: Bet Dedup — one bet per player per game
+        predictions_df = predictions_df.sort_values("max_edge", ascending=False)
         predictions_df = predictions_df.drop_duplicates(
             subset=["player_id", "game_id"], keep="first"
         )
@@ -687,8 +726,12 @@ class BacktestHarness:
             merged["over_prob"] = merged.apply(estimate_over_prob, axis=1)
             merged["under_prob"] = 1 - merged["over_prob"]
 
-            merged["implied_over"] = merged["over_odds"].apply(odds_to_prob)
-            merged["implied_under"] = merged["under_odds"].apply(odds_to_prob)
+            raw_over = merged["over_odds"].apply(odds_to_prob)
+            raw_under = merged["under_odds"].apply(odds_to_prob)
+            booksum = raw_over + raw_under
+            # Multiplicative devigging: divide each raw prob by the booksum
+            merged["implied_over"] = raw_over / booksum
+            merged["implied_under"] = raw_under / booksum
 
         # Calculate edges (works for both paths)
         merged["over_edge"] = merged["over_prob"] - merged["implied_over"]

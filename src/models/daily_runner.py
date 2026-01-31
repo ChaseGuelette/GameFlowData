@@ -217,7 +217,8 @@ class DailyPredictionRunner:
             return players
 
     def _get_current_lines(self, games: list[dict], stats: list[str]) -> pd.DataFrame:
-        """Fetch current prop lines from database."""
+        """Fetch current prop lines from all bookmakers, then select the sharpest
+        (lowest-vig) line per player/game/market for edge calculation."""
         game_ids = [g["game_id"] for g in games]
 
         if not game_ids:
@@ -235,6 +236,7 @@ class DailyPredictionRunner:
             SELECT
                 player_id,
                 game_id,
+                bookmaker,
                 market_key,
                 line,
                 MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
@@ -242,15 +244,39 @@ class DailyPredictionRunner:
             FROM raw_player_props_combined
             WHERE game_id IN :game_ids
               AND market_key IN :markets
-              AND bookmaker = 'pinnacle'
-            GROUP BY player_id, game_id, market_key, line
+            GROUP BY player_id, game_id, bookmaker, market_key, line
         """).bindparams(
             bindparam("game_ids", expanding=True),
             bindparam("markets", expanding=True),
         )
 
         with self.engine.connect() as conn:
-            return pd.read_sql(query, conn, params={"game_ids": list(game_ids), "markets": list(markets)})
+            all_lines = pd.read_sql(query, conn, params={"game_ids": list(game_ids), "markets": list(markets)})
+
+        if all_lines.empty:
+            return all_lines
+
+        # Select the sharpest book per player/game/market (lowest booksum = lowest vig)
+        def _odds_to_prob(odds):
+            if pd.isna(odds):
+                return None
+            if odds > 0:
+                return 100 / (odds + 100)
+            else:
+                return abs(odds) / (abs(odds) + 100)
+
+        all_lines["_raw_over"] = all_lines["over_odds"].apply(_odds_to_prob)
+        all_lines["_raw_under"] = all_lines["under_odds"].apply(_odds_to_prob)
+        all_lines["_booksum"] = all_lines["_raw_over"] + all_lines["_raw_under"]
+
+        # Drop rows missing either side
+        all_lines = all_lines.dropna(subset=["_booksum"])
+
+        # Keep the row with the lowest booksum (sharpest) per player/game/market
+        idx = all_lines.groupby(["player_id", "game_id", "market_key"])["_booksum"].idxmin()
+        best_lines = all_lines.loc[idx].drop(columns=["_raw_over", "_raw_under", "_booksum", "bookmaker"])
+
+        return best_lines.reset_index(drop=True)
 
     def _calculate_edges(self, predictions_df: pd.DataFrame, lines_df: pd.DataFrame) -> pd.DataFrame:
         """Add edge calculations to predictions."""
@@ -304,8 +330,12 @@ class DailyPredictionRunner:
             else:
                 return abs(odds) / (abs(odds) + 100)
 
-        merged["implied_over"] = merged["over_odds"].apply(odds_to_prob)
-        merged["implied_under"] = merged["under_odds"].apply(odds_to_prob)
+        raw_over = merged["over_odds"].apply(odds_to_prob)
+        raw_under = merged["under_odds"].apply(odds_to_prob)
+        booksum = raw_over + raw_under
+        # Multiplicative devigging: divide each raw prob by the booksum
+        merged["implied_over"] = raw_over / booksum
+        merged["implied_under"] = raw_under / booksum
 
         # Edges
         merged["over_edge"] = merged["over_prob"] - merged["implied_over"]

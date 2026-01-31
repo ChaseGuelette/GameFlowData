@@ -227,6 +227,10 @@ class FeatureStore:
                 "opp_is_back_to_back": 0,
             }
 
+            # Make spread team-directional (negative = player's team favored)
+            raw_spread = game_lines.pop("line_spread_raw", 0)
+            game_lines["line_spread"] = -raw_spread if ctx.get("is_home") else raw_spread
+
             return {
                 "player_id": player_id,
                 "game_id": game_id,
@@ -268,24 +272,24 @@ class FeatureStore:
                 COALESCE(p_avg.avg_fg3a_l5, 0) as player_avg_fg3a_l5,
 
                 -- Player Advanced Averages
-                COALESCE(pa_avg.avg_usg_pct_l5, 0) as player_avg_usg_pct_l5,
-                COALESCE(pa_avg.avg_ts_pct_l15, 0) as player_avg_ts_pct_l15,
-                COALESCE(pa_avg.avg_reb_pct_l5, 0) as player_avg_reb_pct_l5,
-                COALESCE(pa_avg.avg_ast_pct_l5, 0) as player_avg_ast_pct_l5,
+                COALESCE(pa_avg.avg_usg_pct_l5, 0.20) as player_avg_usg_pct_l5,
+                COALESCE(pa_avg.avg_ts_pct_l15, 0.56) as player_avg_ts_pct_l15,
+                COALESCE(pa_avg.avg_reb_pct_l5, 0.10) as player_avg_reb_pct_l5,
+                COALESCE(pa_avg.avg_ast_pct_l5, 0.15) as player_avg_ast_pct_l5,
 
                 -- Team Context
-                COALESCE(t_avg.avg_pace_l5, 0) as team_avg_pace_l5,
-                COALESCE(t_avg.avg_fg3a_l5, 0) as team_avg_fg3a_l5,
-                COALESCE(t_avg.avg_fg3_pct_l5, 0) as team_avg_fg3_pct_l5,
+                COALESCE(t_avg.avg_pace_l5, 99.5) as team_avg_pace_l5,
+                COALESCE(t_avg.avg_fg3a_l5, 34.0) as team_avg_fg3a_l5,
+                COALESCE(t_avg.avg_fg3_pct_l5, 0.36) as team_avg_fg3_pct_l5,
 
                 -- Opponent Context (via opponent_id join)
-                COALESCE(opp_avg.avg_def_rtg_l5, 0) as opp_avg_def_rtg_l5,
-                COALESCE(opp_avg.avg_pace_l5, 0) as opp_avg_pace_l5,
-                COALESCE(opp_avg.avg_fg3a_l5, 0) as opp_avg_fg3a_l5,
-                COALESCE(opp_avg.avg_fg3_pct_l5, 0) as opp_avg_fg3_pct_l5,
+                COALESCE(opp_avg.avg_def_rtg_l5, 112.0) as opp_avg_def_rtg_l5,
+                COALESCE(opp_avg.avg_pace_l5, 99.5) as opp_avg_pace_l5,
+                COALESCE(opp_avg.avg_fg3a_l5, 34.0) as opp_avg_fg3a_l5,
+                COALESCE(opp_avg.avg_fg3_pct_l5, 0.36) as opp_avg_fg3_pct_l5,
 
                 -- Opponent Defense vs Position (L5 raw)
-                COALESCE(opp_def.off_rtg_allowed_l5, 0) as opp_pos_off_rtg_allowed_l5,
+                COALESCE(opp_def.off_rtg_allowed_l5, 112.0) as opp_pos_off_rtg_allowed_l5,
                 COALESCE(opp_def.reb_allowed_l5, 0) as opp_pos_reb_allowed_l5,
                 COALESCE(opp_def.ast_allowed_l5, 0) as opp_pos_ast_allowed_l5,
                 COALESCE(opp_def.threes_allowed_l5, 0) as opp_pos_threes_allowed_l5,
@@ -296,13 +300,15 @@ class FeatureStore:
                 COALESCE(opp_def.ast_per100_allowed_l5, 0) as opp_pos_ast_per100_allowed_l5,
 
                 -- Opponent Defense vs Position (L15 raw)
-                COALESCE(opp_def.off_rtg_allowed_l15, 0) as opp_pos_off_rtg_allowed_l15,
+                COALESCE(opp_def.off_rtg_allowed_l15, 112.0) as opp_pos_off_rtg_allowed_l15,
                 COALESCE(opp_def.reb_allowed_l15, 0) as opp_pos_reb_allowed_l15,
                 COALESCE(opp_def.ast_allowed_l15, 0) as opp_pos_ast_allowed_l15,
                 COALESCE(opp_def.threes_allowed_l15, 0) as opp_pos_threes_allowed_l15,
 
-                -- Game Lines
-                COALESCE(lines.spread, 0) as line_spread,
+                -- Game Lines (spread is team-directional: negative = player's team favored)
+                CASE WHEN pgs.matchup LIKE '%vs.%'
+                     THEN -COALESCE(lines.spread, 0)
+                     ELSE COALESCE(lines.spread, 0) END as line_spread,
                 COALESCE(lines.total, 0) as line_total,
 
                 -- Player Prop Lines (centering features)
@@ -357,7 +363,7 @@ class FeatureStore:
                 COALESCE(team_inj.out_pts_sum, 0) as team_out_pts_sum,
                 COALESCE(team_inj.out_reb_sum, 0) as team_out_reb_sum,
                 COALESCE(team_inj.out_ast_sum, 0) as team_out_ast_sum,
-                COALESCE(team_inj.out_usg_sum, 0) as team_out_usg_sum,
+                COALESCE(team_inj_adv.out_usg_sum, 0) as team_out_usg_sum,
                 COALESCE(opp_inj.out_count, 0) as opp_out_count,
                 COALESCE(opp_inj.out_min_sum, 0) as opp_out_min_sum,
                 CASE WHEN player_inj.inj_status = 'Questionable' THEN 1 ELSE 0 END as player_is_questionable,
@@ -458,24 +464,38 @@ class FeatureStore:
                 ) sub
             ) prop_lines ON TRUE
 
-            -- Team Injury Context (OUT players on this team)
+            -- Team Injury Context: game stats (OUT players on this team)
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) as out_count,
                     COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum,
                     COALESCE(SUM(inj_sub.avg_pts_l5), 0) as out_pts_sum,
                     COALESCE(SUM(inj_sub.avg_reb_l5), 0) as out_reb_sum,
-                    COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum,
-                    COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+                    COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum
                 FROM (
                     SELECT DISTINCT ON (ri.player_id)
                         pags_inj.avg_min_l5, pags_inj.avg_pts_l5,
-                        pags_inj.avg_reb_l5, pags_inj.avg_ast_l5,
-                        paas_inj.avg_usg_pct_l5
+                        pags_inj.avg_reb_l5, pags_inj.avg_ast_l5
                     FROM rapidapi_injuries ri
                     LEFT JOIN player_average_game_stats pags_inj
                         ON pags_inj.player_id = ri.player_id
                         AND pags_inj.game_date < pgs.game_date
+                    WHERE ri.nba_team_id = pgs.team_id
+                      AND ri.report_date = pgs.game_date
+                      AND ri.status = 'Out'
+                      AND ri.player_id IS NOT NULL
+                    ORDER BY ri.player_id, pags_inj.game_date DESC
+                ) inj_sub
+            ) team_inj ON TRUE
+
+            -- Team Injury Context: advanced stats (OUT players on this team)
+            LEFT JOIN LATERAL (
+                SELECT
+                    COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+                FROM (
+                    SELECT DISTINCT ON (ri.player_id)
+                        paas_inj.avg_usg_pct_l5
+                    FROM rapidapi_injuries ri
                     LEFT JOIN player_average_advanced_stats paas_inj
                         ON paas_inj.player_id = ri.player_id
                         AND paas_inj.game_date < pgs.game_date
@@ -483,9 +503,9 @@ class FeatureStore:
                       AND ri.report_date = pgs.game_date
                       AND ri.status = 'Out'
                       AND ri.player_id IS NOT NULL
-                    ORDER BY ri.player_id, pags_inj.game_date DESC, paas_inj.game_date DESC
+                    ORDER BY ri.player_id, paas_inj.game_date DESC
                 ) inj_sub
-            ) team_inj ON TRUE
+            ) team_inj_adv ON TRUE
 
             -- Opponent Injury Context (OUT players on opponent)
             LEFT JOIN LATERAL (
@@ -597,14 +617,14 @@ class FeatureStore:
                     COALESCE(opp_avg.avg_pace_l5, 0) as opp_avg_pace_l5,
                     COALESCE(opp_avg.avg_fg3a_l5, 0) as opp_avg_fg3a_l5,
                     COALESCE(opp_avg.avg_fg3_pct_l5, 0) as opp_avg_fg3_pct_l5,
-                    COALESCE(opp_def.off_rtg_allowed_l5, 0) as opp_pos_off_rtg_allowed_l5,
+                    COALESCE(opp_def.off_rtg_allowed_l5, 112.0) as opp_pos_off_rtg_allowed_l5,
                     COALESCE(opp_def.reb_allowed_l5, 0) as opp_pos_reb_allowed_l5,
                     COALESCE(opp_def.ast_allowed_l5, 0) as opp_pos_ast_allowed_l5,
                     COALESCE(opp_def.threes_allowed_l5, 0) as opp_pos_threes_allowed_l5,
                     COALESCE(opp_def.threes_per100_allowed_l5, 0) as opp_pos_threes_per100_allowed_l5,
                     COALESCE(opp_def.reb_per100_allowed_l5, 0) as opp_pos_reb_per100_allowed_l5,
                     COALESCE(opp_def.ast_per100_allowed_l5, 0) as opp_pos_ast_per100_allowed_l5,
-                    COALESCE(opp_def.off_rtg_allowed_l15, 0) as opp_pos_off_rtg_allowed_l15,
+                    COALESCE(opp_def.off_rtg_allowed_l15, 112.0) as opp_pos_off_rtg_allowed_l15,
                     COALESCE(opp_def.reb_allowed_l15, 0) as opp_pos_reb_allowed_l15,
                     COALESCE(opp_def.ast_allowed_l15, 0) as opp_pos_ast_allowed_l15,
                     COALESCE(opp_def.threes_allowed_l15, 0) as opp_pos_threes_allowed_l15,
@@ -653,7 +673,7 @@ class FeatureStore:
                     COALESCE(team_inj.out_pts_sum, 0) as team_out_pts_sum,
                     COALESCE(team_inj.out_reb_sum, 0) as team_out_reb_sum,
                     COALESCE(team_inj.out_ast_sum, 0) as team_out_ast_sum,
-                    COALESCE(team_inj.out_usg_sum, 0) as team_out_usg_sum,
+                    COALESCE(team_inj_adv.out_usg_sum, 0) as team_out_usg_sum,
                     COALESCE(opp_inj.out_count, 0) as opp_out_count,
                     COALESCE(opp_inj.out_min_sum, 0) as opp_out_min_sum,
                     CASE WHEN player_inj.inj_status = 'Questionable' THEN 1 ELSE 0 END as player_is_questionable,
@@ -736,24 +756,37 @@ class FeatureStore:
                         ORDER BY market_key, snapshot_time DESC NULLS LAST
                     ) sub
                 ) prop_lines ON TRUE
-                -- Team Injury Context (OUT players on this team)
+                -- Team Injury Context: game stats (OUT players on this team)
                 LEFT JOIN LATERAL (
                     SELECT
                         COUNT(*) as out_count,
                         COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum,
                         COALESCE(SUM(inj_sub.avg_pts_l5), 0) as out_pts_sum,
                         COALESCE(SUM(inj_sub.avg_reb_l5), 0) as out_reb_sum,
-                        COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum,
-                        COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+                        COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum
                     FROM (
                         SELECT DISTINCT ON (ri.player_id)
                             pags_inj.avg_min_l5, pags_inj.avg_pts_l5,
-                            pags_inj.avg_reb_l5, pags_inj.avg_ast_l5,
-                            paas_inj.avg_usg_pct_l5
+                            pags_inj.avg_reb_l5, pags_inj.avg_ast_l5
                         FROM rapidapi_injuries ri
                         LEFT JOIN player_average_game_stats pags_inj
                             ON pags_inj.player_id = ri.player_id
                             AND pags_inj.game_date < pgs.game_date
+                        WHERE ri.nba_team_id = pgs.team_id
+                          AND ri.report_date = pgs.game_date
+                          AND ri.status = 'Out'
+                          AND ri.player_id IS NOT NULL
+                        ORDER BY ri.player_id, pags_inj.game_date DESC
+                    ) inj_sub
+                ) team_inj ON TRUE
+                -- Team Injury Context: advanced stats (OUT players on this team)
+                LEFT JOIN LATERAL (
+                    SELECT
+                        COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+                    FROM (
+                        SELECT DISTINCT ON (ri.player_id)
+                            paas_inj.avg_usg_pct_l5
+                        FROM rapidapi_injuries ri
                         LEFT JOIN player_average_advanced_stats paas_inj
                             ON paas_inj.player_id = ri.player_id
                             AND paas_inj.game_date < pgs.game_date
@@ -761,9 +794,9 @@ class FeatureStore:
                           AND ri.report_date = pgs.game_date
                           AND ri.status = 'Out'
                           AND ri.player_id IS NOT NULL
-                        ORDER BY ri.player_id, pags_inj.game_date DESC, paas_inj.game_date DESC
+                        ORDER BY ri.player_id, paas_inj.game_date DESC
                     ) inj_sub
-                ) team_inj ON TRUE
+                ) team_inj_adv ON TRUE
                 -- Opponent Injury Context (OUT players on opponent)
                 LEFT JOIN LATERAL (
                     SELECT
@@ -969,24 +1002,24 @@ class FeatureStore:
                 COALESCE(p_avg.avg_fg3a_l5, 0) as player_avg_fg3a_l5,
 
                 -- Player Advanced Averages
-                COALESCE(pa_avg.avg_usg_pct_l5, 0) as player_avg_usg_pct_l5,
-                COALESCE(pa_avg.avg_ts_pct_l15, 0) as player_avg_ts_pct_l15,
-                COALESCE(pa_avg.avg_reb_pct_l5, 0) as player_avg_reb_pct_l5,
-                COALESCE(pa_avg.avg_ast_pct_l5, 0) as player_avg_ast_pct_l5,
+                COALESCE(pa_avg.avg_usg_pct_l5, 0.20) as player_avg_usg_pct_l5,
+                COALESCE(pa_avg.avg_ts_pct_l15, 0.56) as player_avg_ts_pct_l15,
+                COALESCE(pa_avg.avg_reb_pct_l5, 0.10) as player_avg_reb_pct_l5,
+                COALESCE(pa_avg.avg_ast_pct_l5, 0.15) as player_avg_ast_pct_l5,
 
                 -- Team Context
-                COALESCE(t_avg.avg_pace_l5, 0) as team_avg_pace_l5,
-                COALESCE(t_avg.avg_fg3a_l5, 0) as team_avg_fg3a_l5,
-                COALESCE(t_avg.avg_fg3_pct_l5, 0) as team_avg_fg3_pct_l5,
+                COALESCE(t_avg.avg_pace_l5, 99.5) as team_avg_pace_l5,
+                COALESCE(t_avg.avg_fg3a_l5, 34.0) as team_avg_fg3a_l5,
+                COALESCE(t_avg.avg_fg3_pct_l5, 0.36) as team_avg_fg3_pct_l5,
 
                 -- Opponent Context (via opponent_id join)
-                COALESCE(opp_avg.avg_def_rtg_l5, 0) as opp_avg_def_rtg_l5,
-                COALESCE(opp_avg.avg_pace_l5, 0) as opp_avg_pace_l5,
-                COALESCE(opp_avg.avg_fg3a_l5, 0) as opp_avg_fg3a_l5,
-                COALESCE(opp_avg.avg_fg3_pct_l5, 0) as opp_avg_fg3_pct_l5,
+                COALESCE(opp_avg.avg_def_rtg_l5, 112.0) as opp_avg_def_rtg_l5,
+                COALESCE(opp_avg.avg_pace_l5, 99.5) as opp_avg_pace_l5,
+                COALESCE(opp_avg.avg_fg3a_l5, 34.0) as opp_avg_fg3a_l5,
+                COALESCE(opp_avg.avg_fg3_pct_l5, 0.36) as opp_avg_fg3_pct_l5,
 
                 -- Opponent Defense vs Position (L5 raw)
-                COALESCE(opp_def.off_rtg_allowed_l5, 0) as opp_pos_off_rtg_allowed_l5,
+                COALESCE(opp_def.off_rtg_allowed_l5, 112.0) as opp_pos_off_rtg_allowed_l5,
                 COALESCE(opp_def.reb_allowed_l5, 0) as opp_pos_reb_allowed_l5,
                 COALESCE(opp_def.ast_allowed_l5, 0) as opp_pos_ast_allowed_l5,
                 COALESCE(opp_def.threes_allowed_l5, 0) as opp_pos_threes_allowed_l5,
@@ -997,13 +1030,15 @@ class FeatureStore:
                 COALESCE(opp_def.ast_per100_allowed_l5, 0) as opp_pos_ast_per100_allowed_l5,
 
                 -- Opponent Defense vs Position (L15 raw)
-                COALESCE(opp_def.off_rtg_allowed_l15, 0) as opp_pos_off_rtg_allowed_l15,
+                COALESCE(opp_def.off_rtg_allowed_l15, 112.0) as opp_pos_off_rtg_allowed_l15,
                 COALESCE(opp_def.reb_allowed_l15, 0) as opp_pos_reb_allowed_l15,
                 COALESCE(opp_def.ast_allowed_l15, 0) as opp_pos_ast_allowed_l15,
                 COALESCE(opp_def.threes_allowed_l15, 0) as opp_pos_threes_allowed_l15,
 
-                -- Game Lines
-                COALESCE(lines.spread, 0) as line_spread,
+                -- Game Lines (spread is team-directional: negative = player's team favored)
+                CASE WHEN pgs.matchup LIKE '%vs.%'
+                     THEN -COALESCE(lines.spread, 0)
+                     ELSE COALESCE(lines.spread, 0) END as line_spread,
                 COALESCE(lines.total, 0) as line_total,
 
                 -- Player Prop Lines (centering features)
@@ -1148,7 +1183,7 @@ class FeatureStore:
 
             WHERE pgs.season_id = :season
               AND pgs.season_id NOT IN :excluded
-              AND pgs.min > 0
+              AND pgs.min >= 5
               AND pos.position_group IS NOT NULL
         """).bindparams(
             bindparam("excluded", expanding=True),
@@ -1279,8 +1314,13 @@ class FeatureStore:
                 -- B2: Rest/schedule
                 pags.rest_days AS stored_rest_days, pags.games_last_7d
             FROM player_average_game_stats pags
-            LEFT JOIN player_average_advanced_stats paas
-                ON pags.player_id = paas.player_id AND pags.game_id = paas.game_id
+            LEFT JOIN LATERAL (
+                SELECT avg_usg_pct_l5, avg_ts_pct_l15, avg_reb_pct_l5, avg_ast_pct_l5
+                FROM player_average_advanced_stats
+                WHERE player_id = pags.player_id
+                  AND game_date < :as_of_date
+                ORDER BY game_date DESC LIMIT 1
+            ) paas ON TRUE
             WHERE pags.player_id = :player_id AND pags.game_date < :as_of_date
             ORDER BY pags.game_date DESC LIMIT 1
         """)
@@ -1292,8 +1332,8 @@ class FeatureStore:
                 "player_avg_pts_l5": 0, "player_avg_pts_l15": 0,
                 "player_avg_reb_l5": 0, "player_avg_ast_l5": 0,
                 "player_avg_fg3m_l5": 0, "player_avg_fg3a_l5": 0,
-                "player_avg_usg_pct_l5": 0, "player_avg_ts_pct_l15": 0,
-                "player_avg_reb_pct_l5": 0, "player_avg_ast_pct_l5": 0,
+                "player_avg_usg_pct_l5": 0.20, "player_avg_ts_pct_l15": 0.56,
+                "player_avg_reb_pct_l5": 0.10, "player_avg_ast_pct_l5": 0.15,
                 # B3: L3 averages
                 "player_avg_min_l3": 0, "player_avg_pts_l3": 0,
                 "player_avg_reb_l3": 0, "player_avg_ast_l3": 0,
@@ -1370,14 +1410,15 @@ class FeatureStore:
         """)
         result = conn.execute(query, {"team_id": team_id, "as_of_date": as_of_date}).fetchone()
 
+        defaults = {
+            "avg_pace_l5": 99.5,
+            "avg_def_rtg_l5": 112.0,
+            "avg_fg3a_l5": 34.0,
+            "avg_fg3_pct_l5": 0.36,
+        }
         if result is None:
-            return {
-                f"{prefix}_avg_pace_l5": 0,
-                f"{prefix}_avg_def_rtg_l5": 0,
-                f"{prefix}_avg_fg3a_l5": 0,
-                f"{prefix}_avg_fg3_pct_l5": 0,
-            }
-        return {f"{prefix}_{k}": v or 0 for k, v in result._mapping.items()}
+            return {f"{prefix}_{k}": v for k, v in defaults.items()}
+        return {f"{prefix}_{k}": v if v is not None else defaults.get(k, 0) for k, v in result._mapping.items()}
 
     def _get_opponent_positional_stats(self, conn, opponent_id, position_group, as_of_date):
         """Fetch opponent's positional defense stats. Returns 0 if not found."""
@@ -1397,21 +1438,25 @@ class FeatureStore:
             {"opponent_id": opponent_id, "position_group": position_group, "as_of_date": as_of_date},
         ).fetchone()
 
+        opp_pos_defaults = {
+            "off_rtg_allowed_l5": 112.0,
+            "off_rtg_allowed_l15": 112.0,
+        }
         if result is None:
             return {
-                "opp_pos_off_rtg_allowed_l5": 0,
+                "opp_pos_off_rtg_allowed_l5": 112.0,
                 "opp_pos_reb_allowed_l5": 0,
                 "opp_pos_ast_allowed_l5": 0,
                 "opp_pos_threes_allowed_l5": 0,
                 "opp_pos_threes_per100_allowed_l5": 0,
                 "opp_pos_reb_per100_allowed_l5": 0,
                 "opp_pos_ast_per100_allowed_l5": 0,
-                "opp_pos_off_rtg_allowed_l15": 0,
+                "opp_pos_off_rtg_allowed_l15": 112.0,
                 "opp_pos_reb_allowed_l15": 0,
                 "opp_pos_ast_allowed_l15": 0,
                 "opp_pos_threes_allowed_l15": 0,
             }
-        return {f"opp_pos_{k}": v or 0 for k, v in result._mapping.items()}
+        return {f"opp_pos_{k}": v if v is not None else opp_pos_defaults.get(k, 0) for k, v in result._mapping.items()}
 
     def _get_game_lines(self, conn, game_id):
         """Fetch spread/total from betting lines. Returns 0 if not found."""
@@ -1426,7 +1471,7 @@ class FeatureStore:
         result = conn.execute(query, {"game_id": game_id}).fetchone()
 
         return {
-            "line_spread": result.spread if result and result.spread else 0,
+            "line_spread_raw": result.spread if result and result.spread else 0,
             "line_total": result.total if result and result.total else 0,
         }
 
@@ -1478,24 +1523,47 @@ class FeatureStore:
             "player_is_probable": 0,
         }
 
-        # Team injury context
-        team_query = text("""
+        # Team injury context: game stats
+        team_game_query = text("""
             SELECT
                 COUNT(*) as out_count,
                 COALESCE(SUM(inj_sub.avg_min_l5), 0) as out_min_sum,
                 COALESCE(SUM(inj_sub.avg_pts_l5), 0) as out_pts_sum,
                 COALESCE(SUM(inj_sub.avg_reb_l5), 0) as out_reb_sum,
-                COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum,
-                COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+                COALESCE(SUM(inj_sub.avg_ast_l5), 0) as out_ast_sum
             FROM (
                 SELECT DISTINCT ON (ri.player_id)
                     pags_inj.avg_min_l5, pags_inj.avg_pts_l5,
-                    pags_inj.avg_reb_l5, pags_inj.avg_ast_l5,
-                    paas_inj.avg_usg_pct_l5
+                    pags_inj.avg_reb_l5, pags_inj.avg_ast_l5
                 FROM rapidapi_injuries ri
                 LEFT JOIN player_average_game_stats pags_inj
                     ON pags_inj.player_id = ri.player_id
                     AND pags_inj.game_date < :game_date
+                WHERE ri.nba_team_id = :team_id
+                  AND ri.report_date = :game_date
+                  AND ri.status = 'Out'
+                  AND ri.player_id IS NOT NULL
+                ORDER BY ri.player_id, pags_inj.game_date DESC
+            ) inj_sub
+        """)
+        team_game_result = conn.execute(
+            team_game_query, {"team_id": team_id, "game_date": game_date}
+        ).fetchone()
+        if team_game_result:
+            defaults["team_out_count"] = team_game_result.out_count or 0
+            defaults["team_out_min_sum"] = float(team_game_result.out_min_sum or 0)
+            defaults["team_out_pts_sum"] = float(team_game_result.out_pts_sum or 0)
+            defaults["team_out_reb_sum"] = float(team_game_result.out_reb_sum or 0)
+            defaults["team_out_ast_sum"] = float(team_game_result.out_ast_sum or 0)
+
+        # Team injury context: advanced stats
+        team_adv_query = text("""
+            SELECT
+                COALESCE(SUM(inj_sub.avg_usg_pct_l5), 0) as out_usg_sum
+            FROM (
+                SELECT DISTINCT ON (ri.player_id)
+                    paas_inj.avg_usg_pct_l5
+                FROM rapidapi_injuries ri
                 LEFT JOIN player_average_advanced_stats paas_inj
                     ON paas_inj.player_id = ri.player_id
                     AND paas_inj.game_date < :game_date
@@ -1503,19 +1571,14 @@ class FeatureStore:
                   AND ri.report_date = :game_date
                   AND ri.status = 'Out'
                   AND ri.player_id IS NOT NULL
-                ORDER BY ri.player_id, pags_inj.game_date DESC, paas_inj.game_date DESC
+                ORDER BY ri.player_id, paas_inj.game_date DESC
             ) inj_sub
         """)
-        team_result = conn.execute(
-            team_query, {"team_id": team_id, "game_date": game_date}
+        team_adv_result = conn.execute(
+            team_adv_query, {"team_id": team_id, "game_date": game_date}
         ).fetchone()
-        if team_result:
-            defaults["team_out_count"] = team_result.out_count or 0
-            defaults["team_out_min_sum"] = float(team_result.out_min_sum or 0)
-            defaults["team_out_pts_sum"] = float(team_result.out_pts_sum or 0)
-            defaults["team_out_reb_sum"] = float(team_result.out_reb_sum or 0)
-            defaults["team_out_ast_sum"] = float(team_result.out_ast_sum or 0)
-            defaults["team_out_usg_sum"] = float(team_result.out_usg_sum or 0)
+        if team_adv_result:
+            defaults["team_out_usg_sum"] = float(team_adv_result.out_usg_sum or 0)
 
         # Opponent injury context
         opp_query = text("""

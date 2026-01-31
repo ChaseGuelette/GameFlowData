@@ -111,14 +111,14 @@ class TrainingOrchestrator:
         # 5. Calibration Evaluation (on Holdout Season)
         self._evaluate_calibration(pipeline, cal_df)
 
-        # 5b. Combined Calibration (Minutes × Rate → Total)
-        self._evaluate_combined_calibration(pipeline, cal_df)
+        # 5b. Compute and save Gaussian copula parameters (before combined calibration)
+        copula_params = self._compute_copula_params(train_df)
 
-        # 5c. Minutes-Rate Correlation Analysis
+        # 5c. Combined Calibration (Minutes × Rate → Total)
+        self._evaluate_combined_calibration(pipeline, cal_df, copula_params=copula_params)
+
+        # 5d. Minutes-Rate Correlation Analysis
         self._analyze_minutes_rate_correlation(cal_df)
-
-        # 5d. Compute and save Gaussian copula parameters
-        self._compute_copula_params(train_df)
 
         # 6. Save Artifacts
         pipeline.save_all(str(self.run_dir))
@@ -374,8 +374,9 @@ class TrainingOrchestrator:
         with open(self.run_dir / filename, "w") as f:
             json.dump(reports, f, indent=4)
 
-    def _evaluate_combined_calibration(
-        self, pipeline: PlayerPropsModelPipeline, df: pd.DataFrame, sample_size: int = 2000
+    def _evaluate_combined_calibration(  # noqa: C901
+        self, pipeline: PlayerPropsModelPipeline, df: pd.DataFrame, sample_size: int = 2000,
+        copula_params: dict | None = None,
     ) -> dict:
         """
         Evaluate end-to-end calibration: Monte Carlo (minutes × rate) vs actual totals.
@@ -398,10 +399,11 @@ class TrainingOrchestrator:
         logger.info(f"Evaluating {len(eval_df)} samples...")
 
         # Create predictor
-        mc = MonteCarloPredictor(pipeline, n_samples=1000, random_state=42)
+        mc = MonteCarloPredictor(pipeline, n_samples=1000, random_state=42, copula_params=copula_params)
 
         # Collect predictions and actuals
         results = {stat: {"predictions": [], "actuals": []} for stat in ["pts", "reb", "ast"]}
+        failure_count = 0
 
         for idx, row in eval_df.iterrows():
             # Build feature dict from row
@@ -433,8 +435,14 @@ class TrainingOrchestrator:
                     )
                     results[stat]["actuals"].append(row[f"actual_{stat}"])
             except Exception as e:
+                failure_count += 1
                 logger.debug(f"Prediction failed for row {idx}: {e}")
                 continue
+
+        if failure_count > 0:
+            logger.warning(
+                f"{failure_count} of {len(eval_df)} predictions failed during combined calibration"
+            )
 
         # Calculate calibration for each stat
         reports = {}

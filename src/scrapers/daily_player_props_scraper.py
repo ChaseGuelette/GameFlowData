@@ -30,12 +30,25 @@ if not DATABASE_URL or not API_KEY:
 
 engine = create_engine(DATABASE_URL)
 
+# Market presets (shared with player_prop_scraper.py)
+CORE_MARKETS = [
+    "player_points", "player_rebounds", "player_assists",
+    "player_threes", "player_blocks", "player_steals",
+]
+
+COMBO_MARKETS = [
+    "player_points_rebounds_assists", "player_points_rebounds",
+    "player_points_assists", "player_rebounds_assists",
+    "player_double_double", "player_triple_double",
+]
+
 
 class DailyPlayerPropsScraper:
-    def __init__(self, api_key, db_engine):
+    def __init__(self, api_key, db_engine, markets=None):
         self.api_key = api_key
         self.engine = db_engine
         self.session = requests.Session()
+        self.markets = markets or CORE_MARKETS
 
     def get_live_events(self):
         """Get list of current/upcoming NBA games."""
@@ -69,12 +82,14 @@ class DailyPlayerPropsScraper:
         If is_live=True, use live endpoint (date_str ignored).
         If is_live=False, use historical endpoint with date_str.
         """
+        markets_str = ",".join(self.markets)
+
         if is_live:
             url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
             params = {
                 "apiKey": self.api_key,
                 "regions": "us2,us_ex",
-                "markets": "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals",
+                "markets": markets_str,
                 "oddsFormat": "american",
                 "dateFormat": "iso",
             }
@@ -84,7 +99,7 @@ class DailyPlayerPropsScraper:
                 "apiKey": self.api_key,
                 "date": date_str,
                 "regions": "us2,us_ex",
-                "markets": "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals",
+                "markets": markets_str,
                 "oddsFormat": "american",
                 "dateFormat": "iso",
             }
@@ -241,9 +256,35 @@ if __name__ == "__main__":
     parser.add_argument("--live", action="store_true", help="Scrape live props to raw_player_props_live")
     parser.add_argument("--date", type=str, help="Scrape historical props (12pm/6pm) to raw_player_props_combined")
 
+    # Market selection
+    market_group = parser.add_mutually_exclusive_group()
+    market_group.add_argument(
+        "--combos", action="store_true",
+        help="Add combo markets (PRA, P+R, P+A, R+A, DD, TD) to core markets",
+    )
+    market_group.add_argument(
+        "--combos-only", action="store_true",
+        help="Scrape ONLY combo markets (skip core markets)",
+    )
+    market_group.add_argument(
+        "--markets", nargs="+", default=None,
+        help="Explicit list of market keys to scrape",
+    )
+
     args = parser.parse_args()
 
-    scraper = DailyPlayerPropsScraper(API_KEY, engine)
+    # Resolve markets
+    if args.markets:
+        markets = args.markets
+    elif args.combos_only:
+        markets = list(COMBO_MARKETS)
+    elif args.combos:
+        markets = CORE_MARKETS + COMBO_MARKETS
+    else:
+        markets = list(CORE_MARKETS)
+
+    scraper = DailyPlayerPropsScraper(API_KEY, engine, markets=markets)
+    logger.info(f"Markets ({len(markets)}): {', '.join(markets)}")
 
     if args.live:
         run_live_scrape(scraper)

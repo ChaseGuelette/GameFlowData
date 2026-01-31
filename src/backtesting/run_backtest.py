@@ -67,9 +67,14 @@ def main():
         "--bookmakers",
         nargs="+",
         default=[
+            # US market (original)
             "draftkings", "fanduel", "betmgm", "betrivers", "bovada",
             "williamhill_us", "betonlineag", "unibet_us", "mybookieag",
             "pointsbetus", "fanatics", "barstool", "wynnbet",
+            # US2 / us_ex markets
+            "ballybet", "betopenly", "betparx", "espnbet", "fliff",
+            "hardrockbet", "novig", "polymarket", "prophetx", "rebet",
+            "windcreek",
         ],
         help="List of bookmakers to shop lines from (default: all available)",
     )
