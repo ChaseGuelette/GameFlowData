@@ -126,6 +126,45 @@ The `Bet` dataclass has an optional `posterior_prob` field that stores the BL-bl
 - **Full pipeline**: Output keys, probability ranges, realistic NBA scenarios
 - **Config**: Defaults, custom values, None handling
 
+## Known Issue: Confidence Function Structural Flaw (2026-01-31)
+
+A comprehensive parameter sweep (40 configs across tau × edge threshold × Kelly fraction) revealed that **all BL-enabled configurations produce 0-12 bets**, while no-BL configs produce 600-873 bets at +3% ROI.
+
+### Root Cause
+
+The confidence formula `confidence = 1 - exp(-0.5 * z²)` is structurally too conservative for realistic betting edges:
+
+| P(over) | Raw Edge | z-score | Confidence | w (tau=0.10) | Edge After BL |
+|---------|----------|---------|------------|--------------|---------------|
+| 0.55 | 3.0% | ~0.13 | 0.008 | 0.0008 | 0.006% |
+| 0.60 | 8.0% | ~0.26 | 0.033 | 0.003 | 0.07% |
+| 0.70 | 18.0% | ~0.53 | 0.131 | 0.013 | 0.6% |
+| 0.80 | 28.0% | ~1.05 | 0.423 | 0.042 | 3.4% |
+
+The formula requires z > 1.0 for meaningful weight (confidence > 0.39), but profitable edges in betting markets typically have z < 0.5. This means the BL layer crushes all realistic edges below any practical threshold.
+
+### Mathematical Proof
+
+For a profitable bet at -110 odds, the model needs P(over) ≈ 0.55 (3% edge). The MC distribution has mean ≈ line and std ≈ several points, giving z = |mean - line| / std ≈ 0.13. At this z-score:
+
+```
+confidence = 1 - exp(-0.5 × 0.13²) = 1 - exp(-0.0085) ≈ 0.008
+w = min(0.10 × 0.008, 0.50) = 0.0008
+edge_after_BL = 0.0008 × 0.03 = 0.000024 (0.002%)
+```
+
+This is the fundamental issue — the BL layer was designed assuming model disagreement would produce z > 1.0, but the MC distribution is well-calibrated (mean near line), so genuine edges manifest as small z-scores.
+
+### Proposed Fixes
+
+1. **Fixed-weight tau:** Use `w = tau` directly (skip confidence scaling). Simpler, gives the model a constant voice.
+2. **Linear confidence ramp:** `confidence = min(z / z_max, 1.0)` where `z_max ≈ 1.0`. Proportional response to disagreement.
+3. **Sizing-only BL:** Use BL posterior only for Kelly sizing, not edge filtering. Let the no-BL path determine bet eligibility.
+
+### Current Recommendation
+
+Use the **no-BL path** for betting decisions until the confidence function is redesigned. The model shows genuine edge without BL (+3% ROI, REB +7.9%).
+
 ## References
 
 - Black & Litterman (1992), "Global Portfolio Optimization"

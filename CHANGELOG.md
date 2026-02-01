@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-01-31 Session 8] — Calibration Fixes, BL Sweep Analysis
+
+### Added
+
+- **Conformal recalibration** in `quantile_trainer.py` — post-training offset from validation residuals when coverage gap exceeds 3%
+  - `RECALIBRATION_GAP_THRESHOLD = 0.03` class constant
+  - `calibration_offsets: dict[float, float]` computed per quantile, applied at `predict_quantiles()` time
+  - Persisted in model artifacts via `save()`/`load()`
+- **Zero-snap handling** in `monte_carlo.py` — `ZERO_SNAP_THRESHOLD = 1e-3` snaps near-zero inverse CDF values to exactly 0
+  - Applied in `_build_extended_quantile_fn()` for both copula and non-copula paths
+
+### Changed
+
+- `train_pipeline.py` — `_evaluate_combined_calibration()` now dynamically evaluates all trained rate models (`[s for s in ["pts", "reb", "ast", "threes"] if s in pipeline.rate_models]`) instead of hardcoded `["pts", "reb", "ast"]`
+- `train_pipeline.py` — `_analyze_minutes_rate_correlation()` loop includes `"threes"` alongside `"pts"`, `"reb"`, `"ast"`
+- `monte_carlo.py` — `_inverse_transform_sample()` refactored to use `_build_extended_quantile_fn()` instead of duplicating logic
+
+### Analysis
+
+- **BL parameter sweep (40 configs):** No-BL shows +3% ROI (600-873 bets, REB +7.9%). ALL BL configs produce 0-12 bets due to structural confidence function issue — `1 - exp(-0.5 * z²)` near-zero for realistic edges (z < 0.5)
+
+---
+
 ## [2026-01-31] — Prediction Storage, Daily Runner Refactor, Scraper Resume
 
 ### Added

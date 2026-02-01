@@ -1,6 +1,29 @@
 # GameFlowData — Roadmap
 
-## Session Summary (2026-01-31)
+## Session Summary (2026-01-31 — Session 8)
+
+### What We Did
+
+**Calibration fixes for zero-inflated distributions.** Training showed THREES rate model Q0.10 with +20.4% calibration gap (coverage 0.352 vs target 0.10). Root cause: zero-inflated distribution where 35%+ of `threes_per_min` is exactly 0. Three fixes applied:
+1. **Conformal recalibration** (`quantile_trainer.py`) — computes validation residual offset when coverage gap > 3%, applied at prediction time. Standard technique in probabilistic forecasting.
+2. **Zero-snap handling** (`monte_carlo.py`) — snaps quantile values below 1e-3 to exactly 0 in `_build_extended_quantile_fn()`. Ensures MC samples in zero-mass region map to 0 instead of tiny positive interpolated values.
+3. **Threes in combined calibration** (`train_pipeline.py`) — `_evaluate_combined_calibration()` now dynamically evaluates all trained rate models instead of hardcoded `["pts", "reb", "ast"]`.
+
+**BL parameter sweep analysis.** Ran full BL parameter sweep (40 configs across tau × edge × kelly):
+- **No-BL configs profitable:** +3% ROI, 600-873 bets. REB is strongest at +7.9% ROI.
+- **All BL configs eliminated:** 0-12 bets across all tau values (0.01-0.30).
+- **Root cause identified:** BL confidence formula `1 - exp(-0.5 * z²)` produces near-zero confidence for realistic edges. For P(over)=0.55, z~0.13, confidence~0.008, w=tau*0.008 → edge crushed from 3% to 0.006%.
+- **Conclusion:** Model DOES find edges (visible in no-BL results). BL confidence function is structurally broken for this use case — it demands z > 1.0 for meaningful weight, but profitable edges have z < 0.5.
+
+### Next Step
+
+Retrain models with calibration fixes (conformal recalibration + zero-snap). Then either:
+1. Proceed to paper trading with no-BL strategy (model shows +3% ROI, REB +7.9%)
+2. Redesign BL confidence function (fixed-weight tau, or linear confidence ramp) and re-sweep
+
+---
+
+## Session Summary (2026-01-31 — Session 7)
 
 ### What We Did
 
@@ -160,7 +183,7 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
   `line_spread` remains in `MINUTES_FEATURES` only.
   **Retrained** in `run_20260129_205540` — `line_total` removed from PTS rate features (though feature selection may still select it for other stats/quantiles where it provides signal).
 
-- [x] **A3. Implement Black-Litterman blending layer** *(IMPLEMENTED — 2026-01-28)*
+- [x] **A3. Implement Black-Litterman blending layer** *(IMPLEMENTED — 2026-01-28, STRUCTURAL ISSUE FOUND — 2026-01-31)*
   New module `src/models/black_litterman.py` between `MonteCarloPredictor` and `BetSimulator`.
   The A1 diagnostic proved this is the correct fix: the model's raw P(over) is useless
   (Brier 0.2705), but the market is well-calibrated (Brier 0.2495). BL anchors to the market
@@ -177,7 +200,12 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
   - **Diagnostics**: Extra columns in predictions CSV: `model_over/under`, `market_over/under`, `confidence`, `posterior_over/under`
   - **Tests**: 39 unit tests in `tests/test_black_litterman.py` (all passing)
 
-  **Next step**: Run comprehensive parameter sweep via `run_sweep.py` with expanded tau/edge/kelly grid on OOS period (2025-10-22 to 2026-01-29).
+  **Structural issue found (2026-01-31):** BL parameter sweep (40 configs) showed ALL BL configs produce 0-12 bets while no-BL shows 600-873 bets at +3% ROI. The confidence formula `1 - exp(-0.5 * z²)` is near-zero for realistic edges (z < 0.5). For a 3% edge: z~0.13, confidence~0.008, w~0.0008. The BL layer demands z > 1.0 for meaningful weight, but profitable edges exist in the z < 0.5 range. This is a design flaw, not a model quality issue.
+
+  **Fix options (pending):**
+  1. Use tau as fixed blending weight (remove confidence scaling)
+  2. Replace exponential confidence with linear or sigmoid ramp (e.g., `confidence = min(z / z_max, 1.0)`)
+  3. Use BL only for position sizing, not edge filtering
 
 - [x] **A4. Residual modeling (Option A — feature-based)** *(IMPLEMENTED — 2026-01-28)*
   Added per-stat prop lines (`prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`)
@@ -280,10 +308,19 @@ where bookmaker attention is lower.
   - Helper: `compute_copula_params_from_data()`, `load_copula_params()`
   - If copula still shows combined calibration drift, see A6 (conditional rate modeling)
 
-- [ ] **C1. Investigate Q10 over-coverage**
-  Latest backtest shows Q10 at 13.2% vs 10% target (32% over-coverage). The lower tail is
-  thinner than reality. Check whether this is concentrated in one stat (PTS vs REB vs AST).
-  If PTS-specific, may need per-stat tail adjustment rather than global `lower_tail_multiplier`.
+- [x] **C1. Investigate Q10 over-coverage** *(PARTIALLY ADDRESSED — 2026-01-31)*
+  Training showed THREES rate model Q0.10 at 35.2% coverage (worst case). Root cause: zero-inflated
+  distribution — 35%+ of `threes_per_min` samples are exactly 0, which XGBoost's `quantileerror`
+  cannot learn. Combined THREES Q0.10 showed +20.4% gap on holdout data. Combined AST Q0.10 showed
+  +10.4% gap from discrete spike at 0 assists.
+
+  **Fixes applied:**
+  - Conformal recalibration in `quantile_trainer.py` — closes gaps > 3% via validation residual offset
+  - Zero-snap in `monte_carlo.py` — values < 1e-3 snapped to 0 in inverse CDF
+  - Dynamic stat inclusion in `train_pipeline.py` — combined calibration now evaluates all trained rate models
+
+  **Status:** Code changes applied. Models need retraining to incorporate conformal offsets. Zero-snap
+  and combined eval fixes will take effect on next retrain.
 
 - [ ] **C2. Per-stat calibration breakdown**
   Run `analyze_calibration_drift.py` with the current model to get per-stat quantile coverage.
@@ -322,9 +359,9 @@ probabilities and zero independent signal. Revisit after Tracks A and B are comp
 These items are blocked until the BL parameter sweep demonstrates positive ROI on the
 out-of-sample period. Do not pursue E4+ until sweep results are in.
 
-- [ ] **E1. Retrain models** — XGBoost 3.x `early_stopping_rounds` fix applied. Retrain with current data.
-- [ ] **E2. Run BL parameter sweep** — `run_sweep.py` on OOS period (2025-10-22 to 2026-01-29). Grid: tau × edge × kelly.
-- [ ] **E3. Analyze sweep results** — Find optimal config, evaluate if positive ROI exists.
+- [x] **E1. Retrain models** — *(DONE — 2026-01-30)* Retrained with all bug fixes and new features. Artifact: `run_20260129_205540`. Needs another retrain to incorporate calibration fixes from session 8.
+- [x] **E2. Run BL parameter sweep** — *(DONE — 2026-01-31)* Ran `run_sweep.py` on OOS period (2025-10-22 to 2026-01-29). 40 configs: tau × edge × kelly.
+- [x] **E3. Analyze sweep results** — *(DONE — 2026-01-31)* **Key finding:** No-BL is profitable (+3% ROI, REB +7.9%). BL confidence function is structurally broken — kills all edges. See A3 for details and fix options.
 - [ ] **E4. Fix daily injury pipeline** *(CRITICAL for live)* — `daily_runner.py` reads `rapidapi_injuries` but `run_daily.py --scrape-injuries` writes to `espn_injuries`. Need daily RapidAPI injury scraper:
   - Option A (recommended): Adapt `rapidapi_injury_backfill.py` to run for today's date, wire into orchestrator
   - Option B: Switch daily runner back to `espn_injuries` (loses `player_id` matching advantage)
@@ -369,12 +406,15 @@ pts/reb/ast shows profitability.
 | ~~A4 (Residual modeling — features)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Prop line centering in all 4 query paths. Retrained. |
 | ~~B4 (Minutes stability)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — `min_std_l5`, `min_floor_l5`, `games_started_l5`. Retrained. |
 | ~~C0 (Gaussian copula)~~ | ~~Medium~~ | ~~Medium-High~~ | **DONE** — Replaces hardcoded rate factors with proper copula sampling. Retrained. |
-| **E1 (Retrain)** | Low | **Critical** | **NOW** — XGBoost 3.x fix applied, retrain immediately |
-| **E2 (BL Sweep)** | Medium | **Critical** | **NEXT** — Run `run_sweep.py` on OOS period after retrain |
-| **E4 (Daily injury pipeline)** | Medium | **Critical** | **BLOCKED on E3** — `rapidapi_injuries` not updated daily, must fix before live |
-| E5 (Paper trade infra) | Medium | High | Blocked on E3 — bet selection, outcome resolution, P&L tracking |
-| E6 (Scheduling) | Low | High | Blocked on E5 — cron/Task Scheduler automation |
-| C1 (Q10 investigation) | Low | Low-Medium | Calibration refinement |
+| ~~E1 (Retrain)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — `run_20260129_205540`. Needs re-retrain with calibration fixes. |
+| ~~E2 (BL Sweep)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — No-BL profitable (+3% ROI). BL kills all edges (confidence function flaw). |
+| ~~E3 (Analyze sweep)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — REB +7.9%, model finds genuine edges without BL. |
+| **E1b (Retrain with calibration fixes)** | Low | **High** | Conformal recalibration + zero-snap need retraining to take effect |
+| **A3b (Fix BL confidence)** | Medium | **High** | Redesign confidence function — see A3 fix options |
+| **E4 (Daily injury pipeline)** | Medium | **Critical** | `rapidapi_injuries` not updated daily, must fix before live |
+| E5 (Paper trade infra) | Medium | High | Bet selection, outcome resolution, P&L tracking |
+| E6 (Scheduling) | Low | High | cron/Task Scheduler automation |
+| ~~C1 (Q10 investigation)~~ | ~~Low~~ | ~~Low-Medium~~ | **PARTIALLY DONE** — Root cause identified (zero-inflation), conformal recalibration applied |
 | A5 (Residual modeling — classifier) | High | High | Only if A4 isn't sufficient |
 | A6 (Conditional rate modeling) | Medium-High | Medium-High | Only if copula combined calibration still drifts |
 | D1-D4 (Old model items) | Various | Low until recalibrated | Revisit after Track A |

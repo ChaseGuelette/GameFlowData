@@ -155,6 +155,7 @@ The modeling engine predicts the probability distribution of player stats.
 - **Per-Quantile Optimization:** Each quantile (10th, 25th, 50th, 75th, 90th) selects its own optimal feature set.
     - *Example:* "Floor" (Q10) models might prioritize minutes played, while "Ceiling" (Q90) models prioritize usage rate and pace.
 - **Isotonic Calibration:** Post-processing step to ensure monotonic predictions (`Q10 <= Q25 <= ...`).
+- **Conformal Recalibration:** After training each quantile, computes validation residuals `(y_val - pred)`. If coverage gap exceeds 3%, applies a conformal offset `delta = np.quantile(residuals, q)` at prediction time. Addresses zero-inflated distributions (e.g., `threes_per_min`) where XGBoost's `quantileerror` objective cannot learn the correct quantile. Offsets persisted in model artifacts.
 - Default hyperparameters: `n_estimators=1000`, `max_depth=5`, `learning_rate=0.03`, `early_stopping_rounds=50`.
 
 #### Stage B: Hyperparameter Tuning (`hyperparameter_tuner.py`)
@@ -178,6 +179,7 @@ The modeling engine predicts the probability distribution of player stats.
     4. This preserves both marginal distributions exactly while inducing the correct rank dependency
     - Copula parameters (Spearman ρ) are computed at training time and saved as `copula_params.json` artifact
     - Falls back to legacy post-hoc adjustment when copula params unavailable (backward compat)
+- **Zero-Inflation Handling:** `_build_extended_quantile_fn()` snaps quantile values below `ZERO_SNAP_THRESHOLD` (1e-3) to exactly 0. Ensures MC samples in the zero-mass region of discrete distributions (e.g., threes_per_min) map to 0 instead of tiny positive interpolated values. Works in both copula and non-copula paths.
 - **Output:** Exact probabilities for any line (e.g., "Probability of 20+ points").
 - **Betting utilities:** `prob_over(line)`, `prob_under(line)`, `expected_value_over/under(line, odds)`.
 
@@ -518,13 +520,24 @@ See `ACTIONITEMS.md` for full details.
 
 **Bug fix sweep (2026-01-30):** 12 issues fixed from comprehensive pipeline audit — see `ISSUES.md`. Key fixes: minutes model hyperparameters (ISS-001), early stopping (ISS-006), devigged edge calculation (ISS-003), injury query cross-product (ISS-004), train/serve threshold alignment (ISS-005), team-directional spread (ISS-008), league-average defaults (ISS-009), independent over/under line shopping (ISS-015). 16 issues remain open (mostly low-priority).
 
+**Calibration fixes (2026-01-31):** THREES rate model Q0.10 had +20.4% calibration gap during training (coverage 0.352 vs target 0.10). Root cause: zero-inflated distribution — 35%+ of `threes_per_min` samples are exactly 0, which XGBoost's `quantileerror` objective cannot learn. Three fixes applied:
+1. **Conformal recalibration** (quantile_trainer.py) — post-training offset from validation residuals closes coverage gaps > 3%.
+2. **Zero-snap handling** (monte_carlo.py) — values below 1e-3 in inverse CDF snapped to exactly 0.
+3. **Threes in combined calibration** (train_pipeline.py) — combined calibration eval now includes all trained rate models, not just `[pts, reb, ast]`.
+
+**BL parameter sweep results (2026-01-31):** Comprehensive sweep revealed:
+- **No-BL configs are profitable:** +3% ROI, 600-873 bets across edge/Kelly combinations. REB is the strongest stat at +7.9% ROI.
+- **ALL BL configs produce 0-12 bets:** The BL confidence formula `confidence = 1 - exp(-0.5 * z²)` produces near-zero values for realistic betting edges. For a 3% raw edge (P(over)=0.55), z~0.13, confidence~0.008. Combined with tau, `w = tau * confidence` is vanishingly small (~0.0008), crushing edges below any practical threshold.
+- **Structural issue:** The BL layer as currently designed cannot pass through profitable edges — this is a design flaw in the confidence function, not a model quality issue. The model DOES find edges (visible in no-BL results), but BL destroys them.
+- **Recommended fix (pending):** Use tau as a fixed blending weight (skip confidence scaling), change the confidence function to be less aggressive, or use BL only for position sizing rather than edge filtering.
+
 **Active tracks:**
-- **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option.
+- **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option. BL (A3) has structural confidence function issue — see above.
 - **Track B** (Complete): New signal sources — B1 (injury context, 10 features), B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented and included in latest training run.
-- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) and C2 (per-stat calibration) pending.
+- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration) pending.
 - **Track D**: Deprioritized model items (pending recalibration).
-- **Track E**: Go-live pipeline (blocked on demonstrated edge).
+- **Track E**: Go-live pipeline — no-BL path shows positive ROI (+3%). BL fix needed before BL-based edge filtering is viable.
 
 **Prediction storage + query tool (2026-01-31):** Daily predictions and MC samples now persisted to PostgreSQL (`daily_predictions` + `daily_prediction_samples` tables). CLI query tool (`src/tools/query_player.py`) enables ad-hoc probability queries against stored distributions. Daily runner refactored: NBA API ScoreboardV2 for game discovery, `rapidapi_injuries` for injury filtering, MC samples for edge calculation, `ROW_NUMBER` snapshot ranking for line freshness.
 
-**Current state (2026-01-31):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260129_205540`. Daily inference pipeline fully wired to DB storage. Next step: run comprehensive BL parameter sweep backtest via `run_sweep.py` to find optimal (tau, edge_threshold, kelly_fraction) configuration.
+**Current state (2026-01-31):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260129_205540`. Daily inference pipeline fully wired to DB storage. Calibration fixes (conformal recalibration, zero-snap, threes eval) applied but models need retraining to incorporate. No-BL backtest shows +3% ROI (REB +7.9%). BL blending has structural confidence function issue that kills all edges — needs redesign before use. Next step: retrain with calibration fixes, then evaluate no-BL strategy for paper trading or fix BL confidence function.

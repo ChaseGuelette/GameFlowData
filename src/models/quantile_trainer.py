@@ -71,10 +71,16 @@ class QuantileModelSuite:
     Supports per-quantile feature sets.
     """
 
+    # Only apply recalibration when coverage gap exceeds this threshold
+    RECALIBRATION_GAP_THRESHOLD = 0.03
+
     def __init__(self, config: QuantileModelConfig | None = None):
         self.config = config or QuantileModelConfig()
         self.models: dict[float, xgb.XGBRegressor] = {}
         self.feature_names_per_quantile: dict[float, list[str]] = {}
+        # Conformal calibration offsets: {quantile: delta}
+        # Applied at predict time: calibrated = raw + delta
+        self.calibration_offsets: dict[float, float] = {}
 
     @property
     def all_feature_names(self) -> list[str]:
@@ -166,10 +172,27 @@ class QuantileModelSuite:
             )
 
             self.models[q] = model
+
+            # Conformal recalibration: compute offset from validation residuals
+            # delta = q-th quantile of (y_val - pred), so P(Y <= pred + delta) ≈ q
+            coverage_gap = abs(val_coverage - q)
+            if coverage_gap > self.RECALIBRATION_GAP_THRESHOLD:
+                residuals = y_val.values - val_preds
+                delta = float(np.quantile(residuals, q))
+                self.calibration_offsets[q] = delta
+                recal_coverage = (y_val <= (val_preds + delta)).mean()
+                print(
+                    f"  Recalibration applied: delta={delta:+.4f} | "
+                    f"Adjusted cov={recal_coverage:.3f} (was {val_coverage:.3f})"
+                )
+            else:
+                self.calibration_offsets[q] = 0.0
+
             results[q] = {
                 "train_coverage": train_coverage,
                 "val_coverage": val_coverage,
                 "gap": train_coverage - val_coverage,
+                "calibration_offset": self.calibration_offsets[q],
             }
 
         return results
@@ -245,6 +268,7 @@ class QuantileModelSuite:
         X should contain the union of all per-quantile features (use all_feature_names).
 
         Returns DataFrame with columns ['q10', 'q25', 'q50', 'q75', 'q90'].
+        Applies conformal calibration offsets if they were computed during training.
         """
         predictions = {}
 
@@ -254,7 +278,14 @@ class QuantileModelSuite:
             # validate_features=False works around pandas 3.0 compat issue
             # where XGBoost DMatrix can't extract feature names from the new
             # str-typed Index. Feature order is guaranteed correct by the caller.
-            predictions[f"q{int(q * 100):02d}"] = model.predict(X_q, validate_features=False)
+            raw_preds = model.predict(X_q, validate_features=False)
+
+            # Apply conformal calibration offset
+            offset = self.calibration_offsets.get(q, 0.0)
+            if offset != 0.0:
+                raw_preds = raw_preds + offset
+
+            predictions[f"q{int(q * 100):02d}"] = raw_preds
 
         result = pd.DataFrame(predictions)
 
@@ -293,6 +324,7 @@ class QuantileModelSuite:
             "models": {q: model for q, model in self.models.items()},
             "config": self.config,
             "feature_names_per_quantile": self.feature_names_per_quantile,
+            "calibration_offsets": self.calibration_offsets,
         }
         joblib.dump(save_dict, path)
         print(f"Saved quantile model suite to {path}")
@@ -305,6 +337,7 @@ class QuantileModelSuite:
         suite = cls(config=save_dict["config"])
         suite.models = save_dict["models"]
         suite.feature_names_per_quantile = save_dict.get("feature_names_per_quantile", {})
+        suite.calibration_offsets = save_dict.get("calibration_offsets", {})
 
         return suite
 

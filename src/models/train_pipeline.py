@@ -382,12 +382,16 @@ class TrainingOrchestrator:
         Evaluate end-to-end calibration: Monte Carlo (minutes × rate) vs actual totals.
 
         This catches calibration drift from multiplying two uncertain quantities.
+        Evaluates all trained stats including threes.
         """
         logger.info("\n=== Combined Calibration (Minutes × Rate → Total) ===")
 
+        # Evaluate all stats that have trained rate models
+        eval_stats = [s for s in ["pts", "reb", "ast", "threes"] if s in pipeline.rate_models]
+
         # Filter to valid rows with actual stats
         valid_mask = df["actual_minutes"] >= 10
-        for stat in ["pts", "reb", "ast"]:
+        for stat in eval_stats:
             valid_mask &= df[f"actual_{stat}"].notna()
 
         eval_df = df[valid_mask].copy()
@@ -402,13 +406,13 @@ class TrainingOrchestrator:
         mc = MonteCarloPredictor(pipeline, n_samples=1000, random_state=42, copula_params=copula_params)
 
         # Collect predictions and actuals
-        results = {stat: {"predictions": [], "actuals": []} for stat in ["pts", "reb", "ast"]}
+        results = {stat: {"predictions": [], "actuals": []} for stat in eval_stats}
         failure_count = 0
 
         for idx, row in eval_df.iterrows():
             # Build feature dict from row
             features = {col: row[col] for col in pipeline.minutes_model.all_feature_names if col in row.index}
-            for stat in ["pts", "reb", "ast"]:
+            for stat in eval_stats:
                 if stat in pipeline.rate_models:
                     for feat in pipeline.rate_models[stat].all_feature_names:
                         if feat in row.index:
@@ -419,10 +423,10 @@ class TrainingOrchestrator:
                     player_id=int(row["player_id"]),
                     game_id=str(row["game_id"]),
                     features=features,
-                    stats=["pts", "reb", "ast"],
+                    stats=eval_stats,
                 )
 
-                for stat in ["pts", "reb", "ast"]:
+                for stat in eval_stats:
                     results[stat]["predictions"].append(
                         {
                             "q10": preds[stat].q10,
@@ -447,7 +451,7 @@ class TrainingOrchestrator:
         # Calculate calibration for each stat
         reports = {}
 
-        for stat in ["pts", "reb", "ast"]:
+        for stat in eval_stats:
             if not results[stat]["predictions"]:
                 logger.warning(f"No predictions for {stat}")
                 continue
@@ -511,7 +515,7 @@ class TrainingOrchestrator:
 
         correlations = {}
 
-        for stat in ["pts", "reb", "ast"]:
+        for stat in ["pts", "reb", "ast", "threes"]:
             rate_col = f"{stat}_per_min"
             if rate_col not in analysis_df.columns:
                 continue

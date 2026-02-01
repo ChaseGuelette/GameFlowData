@@ -603,6 +603,12 @@ class MonteCarloPredictor:
 
         return minutes_samples
 
+    # Rate values below this threshold are snapped to exactly 0.
+    # Handles zero-inflated distributions (e.g., threes_per_min) where many true
+    # values are 0 but inverse CDF interpolation produces tiny positive values.
+    # 1e-3 per minute × 30 min = 0.03 combined — negligible for integer-valued stats.
+    ZERO_SNAP_THRESHOLD = 1e-3
+
     def _build_extended_quantile_fn(
         self, quantile_probs: np.ndarray, quantile_values: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -611,6 +617,10 @@ class MonteCarloPredictor:
 
         Extrapolates tails to p=0.01 and p=0.99 using linear extrapolation
         with configurable tail multipliers.
+
+        Handles zero-inflated distributions: when lower quantile values are at
+        or near zero, snaps them to exactly 0 so that uniform samples in that
+        range map to 0 instead of tiny positive interpolated values.
 
         Returns:
             (extended_probs, extended_values) arrays for use with np.interp
@@ -632,6 +642,15 @@ class MonteCarloPredictor:
                 quantile_values,
                 [upper_value],
             ]
+        )
+
+        # Zero-inflation handling: snap near-zero values to exactly 0.
+        # This ensures uniform samples in the zero-mass region map to 0 instead
+        # of tiny positive values from linear interpolation.
+        extended_values = np.where(
+            extended_values < self.ZERO_SNAP_THRESHOLD,
+            0.0,
+            extended_values,
         )
 
         return extended_probs, extended_values
@@ -675,31 +694,9 @@ class MonteCarloPredictor:
         Sample from a distribution defined by quantiles
         using inverse transform sampling with linear interpolation.
 
-        Uses tail_adjustment to extend tails more aggressively for fat-tailed distributions.
+        Uses _build_extended_quantile_fn for tail extrapolation and zero-snap handling.
         """
-        # Get tail adjustment multipliers
-        lower_mult = self.tail_adjustment.get("lower_tail_multiplier", 1.0)
-        upper_mult = self.tail_adjustment.get("upper_tail_multiplier", 1.0)
-
-        # Extend to handle tails
-        # Add pseudo-quantiles at 0.01 and 0.99 using linear extrapolation
-        extended_probs = np.concatenate([[0.01], quantile_probs, [0.99]])
-
-        # Extrapolate values for tails with adjustment multipliers
-        lower_slope = (quantile_values[1] - quantile_values[0]) / (quantile_probs[1] - quantile_probs[0])
-        upper_slope = (quantile_values[-1] - quantile_values[-2]) / (quantile_probs[-1] - quantile_probs[-2])
-
-        # Apply tail multipliers to extend tails more aggressively
-        lower_value = quantile_values[0] - (lower_slope * (quantile_probs[0] - 0.01) * lower_mult)
-        upper_value = quantile_values[-1] + (upper_slope * (0.99 - quantile_probs[-1]) * upper_mult)
-
-        extended_values = np.concatenate(
-            [
-                [max(0, lower_value)],  # Floor at 0
-                quantile_values,
-                [upper_value],
-            ]
-        )
+        extended_probs, extended_values = self._build_extended_quantile_fn(quantile_probs, quantile_values)
 
         # Sample uniform and interpolate
         u = self.rng.uniform(0.01, 0.99, self.n_samples)

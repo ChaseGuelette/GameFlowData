@@ -16,6 +16,8 @@
 ## Models
 - [Feature Store](feature_store_documentation.md) - Training and inference feature assembly.
 - [Black-Litterman Blending](black_litterman_documentation.md) - Probability blending with market prior.
+- [Model Pipeline Runbook](model_pipeline_runbook.md) - Training, backtesting, and daily prediction guide.
+- [Monte Carlo Tuning](monte_carlo_tuning.md) - MC simulation parameter tuning notes.
 
 ## Tools
 - [Query Player](query_player_documentation.md) - CLI tool for querying stored predictions.
