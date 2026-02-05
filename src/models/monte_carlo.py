@@ -390,11 +390,13 @@ class MonteCarloPredictor:
 
         for stat in stats:
             if stat in hurdle_models:
-                # Hurdle model: batch predict p_zero and quantiles
+                # Hurdle model: batch predict p_zero and positive-only quantiles
+                # IMPORTANT: Use predict_positive_quantiles() for MC sampling to avoid
+                # double-counting zeros (Bernoulli draw handles zero mass separately)
                 hurdle_model = hurdle_models[stat]
-                X_rate = self._prepare_features_batch(features_df, hurdle_model.feature_names)
+                X_rate = self._prepare_features_batch(features_df, hurdle_model.all_feature_names)
                 p_zero_arr = hurdle_model.predict_p_zero(X_rate)
-                quantile_df = hurdle_model.predict_quantiles(X_rate)
+                quantile_df = hurdle_model.predict_positive_quantiles(X_rate)
                 hurdle_data[stat] = (p_zero_arr, quantile_df)
             elif stat in self.pipeline.rate_models:
                 X_rate = self._prepare_features_batch(features_df, self.pipeline.rate_models[stat].all_feature_names)
@@ -764,10 +766,11 @@ class MonteCarloPredictor:
         n_positive = (~is_zero).sum()
 
         if n_positive > 0:
-            # Step 2: For positive samples, get quantile predictions from positive model
-            quantile_df = hurdle_model.predict_quantiles(X)
-            # Get the positive-only distribution quantiles (after hurdle transformation)
-            # We need the raw positive quantiles before the p_zero adjustment
+            # Step 2: For positive samples, get raw quantiles from positive-only models
+            # IMPORTANT: Use predict_positive_quantiles(), NOT predict_quantiles()
+            # predict_quantiles() returns combined quantiles with zeros for q <= p_zero,
+            # which would double-count zeros when combined with the Bernoulli draw above.
+            quantile_df = hurdle_model.predict_positive_quantiles(X)
             quantile_values = np.array([
                 quantile_df.iloc[0][f"q{int(q * 100):02d}"]
                 for q in hurdle_model.quantiles

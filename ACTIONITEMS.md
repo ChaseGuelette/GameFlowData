@@ -579,6 +579,25 @@ probabilities and zero independent signal. Revisit after Tracks A and B are comp
 - [ ] **D4. Explore adding THREES** *(Unknown Value)*
   Model supports `threes` but wasn't in recent backtests. Revisit after core model improvements.
 
+- [ ] **D5. Hurdle-specific hyperparameter tuning** *(Future — After C3 Validation)*
+  Current hyperparameter tuning tunes THREES as regular quantile regression on ALL data (including zeros), then applies those hyperparams to the hurdle model. This is suboptimal because:
+  1. The classifier is a binary classification problem (not quantile regression)
+  2. The positive rate models train on filtered data (positive samples only)
+
+  **To implement:** Modify `hyperparameter_tuner.py` to:
+  1. Tune the zero classifier separately with binary objective (logloss)
+  2. Tune the positive quantile models on filtered positive-only data
+
+  **Priority:** Low — validate C3 hurdle model works first with transferred hyperparams. Only pursue if calibration gaps remain after hurdle model retraining.
+
+- [ ] **D6. Add steals/blocks models** *(Future — After C3 Validation)*
+  Steals and blocks have good historical data (1.7M+ rows each, May 2023+). However:
+  - Severely zero-inflated (many players get 0 per game)
+  - Would require hurdle model architecture (like THREES)
+  - Very noisy/random events — harder to predict than volume stats
+
+  **Priority:** Low — validate THREES hurdle model works first, then apply same architecture.
+
 ---
 
 ## Track E: Go-Live Pipeline (Blocked — Needs Edge First)

@@ -404,6 +404,28 @@ class HurdleQuantileModel:
         result = pd.DataFrame(results)
         return self._enforce_monotonicity(result)
 
+    def predict_positive_quantiles(self, X: pd.DataFrame) -> pd.DataFrame:
+        """
+        Predict raw quantiles from positive-only models (for MC sampling).
+
+        Unlike predict_quantiles(), this does NOT apply the p_zero adjustment.
+        Use this for Monte Carlo sampling where the Bernoulli draw handles
+        zero mass separately.
+
+        Returns DataFrame with columns ['q10', 'q25', 'q50', 'q75', 'q90'].
+        """
+        n = len(X)
+        results = {}
+
+        for q in self.quantiles:
+            q_features = self.positive_feature_names_per_quantile[q]
+            preds = self.positive_quantile_models[q].predict(X[q_features])
+            preds = preds + self.calibration_offsets.get(q, 0.0)
+            results[f"q{int(q * 100):02d}"] = np.maximum(preds, 0)
+
+        result = pd.DataFrame(results)
+        return self._enforce_monotonicity(result)
+
     def _interpolate_positive_quantile(self, X: pd.DataFrame, target_q: float) -> float:
         """Interpolate positive distribution quantile."""
         # Clamp to valid range
