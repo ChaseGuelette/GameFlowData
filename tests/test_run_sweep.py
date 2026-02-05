@@ -28,7 +28,11 @@ from src.backtesting.performance_metrics import PerformanceMetrics, CalibrationR
 class TestSweepConfig:
     def test_label_with_tau(self):
         config = SweepConfig(tau=0.05, edge_threshold=0.05, kelly_fraction=0.125)
-        assert config.label == "tau=0.05 | edge=0.05 | kelly=0.125"
+        assert config.label == "tau=0.05 z_max=1.0 | edge=0.05 | kelly=0.125"
+
+    def test_label_with_tau_custom_zmax(self):
+        config = SweepConfig(tau=0.05, edge_threshold=0.05, kelly_fraction=0.125, z_max=0.5)
+        assert config.label == "tau=0.05 z_max=0.5 | edge=0.05 | kelly=0.125"
 
     def test_label_no_bl(self):
         config = SweepConfig(tau=None, edge_threshold=0.03, kelly_fraction=0.25)
@@ -37,12 +41,21 @@ class TestSweepConfig:
     def test_to_dict(self):
         config = SweepConfig(tau=0.10, edge_threshold=0.05, kelly_fraction=0.125)
         d = config.to_dict()
-        assert d == {"tau": 0.10, "edge_threshold": 0.05, "kelly_fraction": 0.125}
+        assert d == {"tau": 0.10, "z_max": 1.0, "edge_threshold": 0.05, "kelly_fraction": 0.125}
 
     def test_to_dict_none_tau(self):
         config = SweepConfig(tau=None, edge_threshold=0.05, kelly_fraction=0.125)
         d = config.to_dict()
         assert d["tau"] is None
+        assert d["z_max"] == 1.0
+
+    def test_default_z_max(self):
+        config = SweepConfig(tau=0.10, edge_threshold=0.05, kelly_fraction=0.125)
+        assert config.z_max == 1.0
+
+    def test_custom_z_max(self):
+        config = SweepConfig(tau=0.10, edge_threshold=0.05, kelly_fraction=0.125, z_max=2.0)
+        assert config.z_max == 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -56,10 +69,11 @@ class TestBuildSweepGrid:
         assert configs[0].tau is None
         assert configs[0].edge_threshold == 0.05
         assert configs[0].kelly_fraction == 0.125
+        assert configs[0].z_max == 1.0  # default
 
     def test_cartesian_product(self):
         configs = build_sweep_grid([None, 0.05], [0.03, 0.05], [0.125])
-        assert len(configs) == 4  # 2 x 2 x 1
+        assert len(configs) == 4  # 2 x 2 x 1 (z_max defaults to [1.0])
 
     def test_full_grid(self):
         taus = [None, 0.03, 0.05]
@@ -76,6 +90,26 @@ class TestBuildSweepGrid:
     def test_preserves_order(self):
         configs = build_sweep_grid([None, 0.03, 0.10], [0.05], [0.125])
         assert [c.tau for c in configs] == [None, 0.03, 0.10]
+
+    def test_z_max_sweep(self):
+        """z_max should only multiply configs for non-None tau."""
+        configs = build_sweep_grid([0.10], [0.05], [0.125], [0.5, 1.0, 2.0])
+        assert len(configs) == 3  # 1 tau x 1 edge x 1 kelly x 3 z_max
+        assert [c.z_max for c in configs] == [0.5, 1.0, 2.0]
+
+    def test_z_max_ignored_for_no_bl(self):
+        """no-BL configs should only appear once regardless of z_max values."""
+        configs = build_sweep_grid([None, 0.10], [0.05], [0.125], [0.5, 1.0])
+        # None: 1 config (z_max ignored), 0.10: 2 configs (one per z_max)
+        assert len(configs) == 3
+        no_bl_configs = [c for c in configs if c.tau is None]
+        assert len(no_bl_configs) == 1
+
+    def test_z_max_defaults_to_one(self):
+        """When z_max_values not provided, default to [1.0]."""
+        configs = build_sweep_grid([0.10], [0.05], [0.125])
+        assert len(configs) == 1
+        assert configs[0].z_max == 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +579,7 @@ class TestSaveResults:
 
         # Check config subdirectories exist
         config1_dir = tmp_path / "config_01_no_BL_edge0.05_kelly0.125"
-        config2_dir = tmp_path / "config_02_tau0.05_edge0.05_kelly0.125"
+        config2_dir = tmp_path / "config_02_tau0.05_zmax1.0_edge0.05_kelly0.125"
 
         assert config1_dir.is_dir()
         assert config2_dir.is_dir()
@@ -574,7 +608,7 @@ class TestSaveResults:
             stats=["pts", "reb"],
         )
 
-        config_dir = tmp_path / "config_01_tau0.1_edge0.05_kelly0.125"
+        config_dir = tmp_path / "config_01_tau0.1_zmax1.0_edge0.05_kelly0.125"
         with open(config_dir / "metrics.json") as f:
             data = json.load(f)
 
@@ -582,6 +616,7 @@ class TestSaveResults:
         assert "config" in data
         assert data["config"]["starting_bankroll"] == 15000.0
         assert data["config"]["bl_tau"] == 0.10
+        assert data["config"]["bl_z_max"] == 1.0
         assert data["config"]["edge_threshold"] == 0.05
         assert data["config"]["kelly_fraction"] == 0.125
         assert data["config"]["bookmakers"] == ["draftkings", "fanduel"]
@@ -644,7 +679,11 @@ class TestConfigDirName:
 
     def test_with_tau(self):
         config = SweepConfig(tau=0.10, edge_threshold=0.03, kelly_fraction=0.15)
-        assert _config_dir_name(3, config) == "config_03_tau0.1_edge0.03_kelly0.15"
+        assert _config_dir_name(3, config) == "config_03_tau0.1_zmax1.0_edge0.03_kelly0.15"
+
+    def test_with_tau_custom_zmax(self):
+        config = SweepConfig(tau=0.10, edge_threshold=0.03, kelly_fraction=0.15, z_max=0.5)
+        assert _config_dir_name(3, config) == "config_03_tau0.1_zmax0.5_edge0.03_kelly0.15"
 
     def test_zero_padded_index(self):
         config = SweepConfig(tau=0.05, edge_threshold=0.05, kelly_fraction=0.125)

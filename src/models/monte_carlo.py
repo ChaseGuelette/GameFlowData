@@ -1,10 +1,16 @@
 # inference/monte_carlo.py
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from scipy.stats import norm as sp_norm
+
+if TYPE_CHECKING:
+    from src.models.quantile_trainer import HurdleQuantileModel
 
 
 @dataclass
@@ -287,7 +293,9 @@ class MonteCarloPredictor:
 
         predictions = {}
         for stat in stats:
-            if stat not in self.pipeline.rate_models:
+            # Check for hurdle model first (e.g., THREES)
+            is_hurdle = stat in getattr(self.pipeline, "hurdle_models", {})
+            if not is_hurdle and stat not in self.pipeline.rate_models:
                 continue
 
             # Get rank correlation for this stat (default 0 = independent)
@@ -311,15 +319,21 @@ class MonteCarloPredictor:
             if self.blowout_config.get("enabled", False):
                 minutes_samples = self._apply_blowout_factor(minutes_samples)
 
-            # Get rate quantile predictions and map through inverse CDF
-            rate_model = self.pipeline.rate_models[stat]
-            X_rate = self._prepare_features(features, rate_model.all_feature_names)
-            rate_qdf = rate_model.predict_quantiles(X_rate)
-            rate_qvals = rate_qdf.iloc[0].values
-            rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(self.quantile_probs, rate_qvals)
+            if is_hurdle:
+                # Use hurdle sampling for zero-inflated stats (THREES)
+                hurdle_model = self.pipeline.hurdle_models[stat]
+                X_rate = self._prepare_features(features, hurdle_model.feature_names)
+                rate_samples = self._sample_hurdle(hurdle_model, X_rate, u_rate)
+            else:
+                # Get rate quantile predictions and map through inverse CDF
+                rate_model = self.pipeline.rate_models[stat]
+                X_rate = self._prepare_features(features, rate_model.all_feature_names)
+                rate_qdf = rate_model.predict_quantiles(X_rate)
+                rate_qvals = rate_qdf.iloc[0].values
+                rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(self.quantile_probs, rate_qvals)
 
-            rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
-            rate_samples = np.maximum(rate_samples, 0)
+                rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
+                rate_samples = np.maximum(rate_samples, 0)
 
             # Combine: stat = minutes × rate
             stat_samples = minutes_samples * rate_samples
@@ -371,11 +385,20 @@ class MonteCarloPredictor:
 
         # 2. Batch rate predictions (1 XGBoost call per stat)
         rate_quantiles = {}
+        hurdle_data = {}  # Store (p_zero, quantile_df) for hurdle models
+        hurdle_models = getattr(self.pipeline, "hurdle_models", {})
+
         for stat in stats:
-            if stat not in self.pipeline.rate_models:
-                continue
-            X_rate = self._prepare_features_batch(features_df, self.pipeline.rate_models[stat].all_feature_names)
-            rate_quantiles[stat] = self.pipeline.rate_models[stat].predict_quantiles(X_rate)
+            if stat in hurdle_models:
+                # Hurdle model: batch predict p_zero and quantiles
+                hurdle_model = hurdle_models[stat]
+                X_rate = self._prepare_features_batch(features_df, hurdle_model.feature_names)
+                p_zero_arr = hurdle_model.predict_p_zero(X_rate)
+                quantile_df = hurdle_model.predict_quantiles(X_rate)
+                hurdle_data[stat] = (p_zero_arr, quantile_df)
+            elif stat in self.pipeline.rate_models:
+                X_rate = self._prepare_features_batch(features_df, self.pipeline.rate_models[stat].all_feature_names)
+                rate_quantiles[stat] = self.pipeline.rate_models[stat].predict_quantiles(X_rate)
 
         # 3. Per-player sampling loop (fast numpy, not XGBoost)
         predictions_list = []
@@ -405,10 +428,10 @@ class MonteCarloPredictor:
                 minutes_samples = np.maximum(minutes_samples, 0)
 
             for stat in stats:
-                if stat not in rate_quantiles:
+                # Check if this is a hurdle model or regular rate model
+                is_hurdle = stat in hurdle_data
+                if not is_hurdle and stat not in rate_quantiles:
                     continue
-
-                rate_qvals = rate_quantiles[stat].iloc[i].values
 
                 if use_copula:
                     # Generate correlated (minutes, rate) via Gaussian copula
@@ -427,17 +450,37 @@ class MonteCarloPredictor:
                     if self.blowout_config.get("enabled", False):
                         minutes_samples = self._apply_blowout_factor(minutes_samples)
 
-                    rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(
-                        self.quantile_probs, rate_qvals
-                    )
-                    rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
-                    rate_samples = np.maximum(rate_samples, 0)
+                    if is_hurdle:
+                        # Hurdle model sampling
+                        p_zero_arr, quantile_df = hurdle_data[stat]
+                        p_zero = float(p_zero_arr[i])
+                        rate_qvals = quantile_df.iloc[i].values
+                        rate_samples = self._sample_hurdle_from_quantiles(
+                            p_zero, self.quantile_probs, rate_qvals, u_rate
+                        )
+                    else:
+                        # Regular rate model sampling
+                        rate_qvals = rate_quantiles[stat].iloc[i].values
+                        rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(
+                            self.quantile_probs, rate_qvals
+                        )
+                        rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
+                        rate_samples = np.maximum(rate_samples, 0)
                 else:
                     # Legacy path: independent rate + post-hoc adjustment
-                    rate_samples = self._inverse_transform_sample(self.quantile_probs, rate_qvals)
-                    rate_samples = np.maximum(rate_samples, 0)
-                    if self.use_correlated_sampling:
-                        rate_samples = self._apply_correlation_adjustment(rate_samples, minutes_samples, stat)
+                    if is_hurdle:
+                        p_zero_arr, quantile_df = hurdle_data[stat]
+                        p_zero = float(p_zero_arr[i])
+                        rate_qvals = quantile_df.iloc[i].values
+                        rate_samples = self._sample_hurdle_from_quantiles(
+                            p_zero, self.quantile_probs, rate_qvals, None
+                        )
+                    else:
+                        rate_qvals = rate_quantiles[stat].iloc[i].values
+                        rate_samples = self._inverse_transform_sample(self.quantile_probs, rate_qvals)
+                        rate_samples = np.maximum(rate_samples, 0)
+                        if self.use_correlated_sampling:
+                            rate_samples = self._apply_correlation_adjustment(rate_samples, minutes_samples, stat)
 
                 # Combine: stat = minutes * rate
                 stat_samples = minutes_samples * rate_samples
@@ -688,6 +731,105 @@ class MonteCarloPredictor:
 
         # Floor at 0 (can't have negative rate)
         return np.maximum(samples, 0)
+
+    def _sample_hurdle(
+        self,
+        hurdle_model: HurdleQuantileModel,
+        X: pd.DataFrame,
+        u_rate: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """
+        Sample from a hurdle model distribution (e.g., THREES).
+
+        Two-stage sampling:
+        1. Bernoulli draw: is this sample zero or positive?
+        2. For positive samples: map through positive distribution inverse CDF
+
+        Args:
+            hurdle_model: Trained HurdleQuantileModel
+            X: Feature DataFrame (single row)
+            u_rate: Optional uniform samples from copula (for correlated sampling).
+                   If None, generates fresh uniforms for positive samples.
+
+        Returns:
+            Rate samples from hurdle distribution (zero-inflated)
+        """
+        # Get calibrated P(zero)
+        p_zero = hurdle_model.predict_p_zero(X)[0]
+
+        # Step 1: Bernoulli draw for zero vs positive (independent of copula)
+        is_zero = self.rng.random(self.n_samples) < p_zero
+
+        samples = np.zeros(self.n_samples)
+        n_positive = (~is_zero).sum()
+
+        if n_positive > 0:
+            # Step 2: For positive samples, get quantile predictions from positive model
+            quantile_df = hurdle_model.predict_quantiles(X)
+            # Get the positive-only distribution quantiles (after hurdle transformation)
+            # We need the raw positive quantiles before the p_zero adjustment
+            quantile_values = np.array([
+                quantile_df.iloc[0][f"q{int(q * 100):02d}"]
+                for q in hurdle_model.quantiles
+            ])
+
+            # Build extended inverse CDF for positive distribution
+            ext_probs, ext_vals = self._build_extended_quantile_fn(
+                np.array(hurdle_model.quantiles), quantile_values
+            )
+
+            if u_rate is not None:
+                # Use copula-correlated uniforms for positive samples only
+                u_positive = u_rate[~is_zero]
+            else:
+                # Independent sampling
+                u_positive = self.rng.random(n_positive)
+
+            # Map through inverse CDF
+            positive_samples = self._map_uniforms_to_samples(u_positive, ext_probs, ext_vals)
+            samples[~is_zero] = np.maximum(positive_samples, 0)
+
+        return samples
+
+    def _sample_hurdle_from_quantiles(
+        self,
+        p_zero: float,
+        quantile_probs: np.ndarray,
+        quantile_values: np.ndarray,
+        u_rate: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """
+        Sample from hurdle distribution using pre-computed quantiles.
+
+        Used in batch prediction where quantiles are already computed.
+
+        Args:
+            p_zero: Calibrated probability of zero
+            quantile_probs: Quantile probabilities (e.g., [0.10, 0.25, 0.50, 0.75, 0.90])
+            quantile_values: Corresponding quantile values
+            u_rate: Optional uniform samples from copula
+
+        Returns:
+            Rate samples from hurdle distribution
+        """
+        # Step 1: Bernoulli draw (independent of copula)
+        is_zero = self.rng.random(self.n_samples) < p_zero
+
+        samples = np.zeros(self.n_samples)
+        n_positive = (~is_zero).sum()
+
+        if n_positive > 0:
+            ext_probs, ext_vals = self._build_extended_quantile_fn(quantile_probs, quantile_values)
+
+            if u_rate is not None:
+                u_positive = u_rate[~is_zero]
+            else:
+                u_positive = self.rng.random(n_positive)
+
+            positive_samples = self._map_uniforms_to_samples(u_positive, ext_probs, ext_vals)
+            samples[~is_zero] = np.maximum(positive_samples, 0)
+
+        return samples
 
     def _inverse_transform_sample(self, quantile_probs: np.ndarray, quantile_values: np.ndarray) -> np.ndarray:
         """

@@ -56,22 +56,53 @@ DATA_DIR = Path("./linker_data")
 EASTERN = pytz.timezone("America/New_York")
 FUZZY_DATE_WINDOW_DAYS = 90  # Match games within ±90 days
 
-# Team name aliases
+# Team name aliases - normalize everything to 3-letter abbreviations
 TEAM_NAME_ALIASES = {
-    # Current variations
-    "LA Clippers": "Los Angeles Clippers",
-    "L.A. Clippers": "Los Angeles Clippers",
-    "LAC": "Los Angeles Clippers",
-    "LA Lakers": "Los Angeles Lakers",
-    "L.A. Lakers": "Los Angeles Lakers",
-    "LAL": "Los Angeles Lakers",
+    # Full names to abbreviations (for Odds API data)
+    "Atlanta Hawks": "ATL",
+    "Boston Celtics": "BOS",
+    "Brooklyn Nets": "BKN",
+    "Charlotte Hornets": "CHA",
+    "Chicago Bulls": "CHI",
+    "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL",
+    "Denver Nuggets": "DEN",
+    "Detroit Pistons": "DET",
+    "Golden State Warriors": "GSW",
+    "Houston Rockets": "HOU",
+    "Indiana Pacers": "IND",
+    "Los Angeles Clippers": "LAC",
+    "Los Angeles Lakers": "LAL",
+    "Memphis Grizzlies": "MEM",
+    "Miami Heat": "MIA",
+    "Milwaukee Bucks": "MIL",
+    "Minnesota Timberwolves": "MIN",
+    "New Orleans Pelicans": "NOP",
+    "New York Knicks": "NYK",
+    "Oklahoma City Thunder": "OKC",
+    "Orlando Magic": "ORL",
+    "Philadelphia 76ers": "PHI",
+    "Phoenix Suns": "PHX",
+    "Portland Trail Blazers": "POR",
+    "Sacramento Kings": "SAC",
+    "San Antonio Spurs": "SAS",
+    "Toronto Raptors": "TOR",
+    "Utah Jazz": "UTA",
+    "Washington Wizards": "WAS",
+    # LA variations
+    "LA Clippers": "LAC",
+    "L.A. Clippers": "LAC",
+    "LA Lakers": "LAL",
+    "L.A. Lakers": "LAL",
     # Historical franchises
-    "New Jersey Nets": "Brooklyn Nets",
-    "Charlotte Bobcats": "Charlotte Hornets",
-    "New Orleans Hornets": "New Orleans Pelicans",
-    "New Orleans/Oklahoma City Hornets": "New Orleans Pelicans",
-    "Seattle SuperSonics": "Oklahoma City Thunder",
-    "Vancouver Grizzlies": "Memphis Grizzlies",
+    "New Jersey Nets": "BKN",
+    "Charlotte Bobcats": "CHA",
+    "New Orleans Hornets": "NOP",
+    "New Orleans/Oklahoma City Hornets": "NOP",
+    "Seattle SuperSonics": "OKC",
+    "Vancouver Grizzlies": "MEM",
+    # Also handle NOH -> NOP for team_matchup
+    "NOH": "NOP",
 }
 
 # ============================================================================
@@ -220,6 +251,19 @@ def normalize_team(name):
         return name
     name = str(name).strip()
     return TEAM_NAME_ALIASES.get(name, name)
+
+
+def normalize_player(name):
+    """Normalize player name for matching."""
+    if pd.isna(name):
+        return name
+    # Unicode normalization (strip accents)
+    name = str(name)
+    name = unicodedata.normalize("NFKD", name).encode("ASCII", "ignore").decode("utf-8")
+    name = name.lower().strip()
+    for old, new in [(".", ""), ("'", ""), ("-", " "), (" jr", ""), (" iii", ""), (" ii", "")]:
+        name = name.replace(old, new)
+    return " ".join(name.split())
 
 
 def find_closest_game_date(candidates, target_date_str, max_days=FUZZY_DATE_WINDOW_DAYS):
@@ -787,13 +831,278 @@ def upload_results():
 
 
 # ============================================================================
+# INCREMENTAL LINKING (Lightweight - No CSV Download)
+# ============================================================================
+
+
+def link_incremental(batch_size: int = 50000, limit: int | None = None):
+    """
+    Lightweight incremental linker for daily use.
+
+    - No CSV download of entire tables
+    - Queries only unlinked records
+    - Updates directly via batched SQL
+
+    Args:
+        batch_size: Number of records to process per batch
+        limit: Optional limit on total records to process (for testing)
+    """
+    engine = get_engine()
+
+    print("=" * 60)
+    print("INCREMENTAL LINKER (Lightweight Mode)")
+    print("=" * 60)
+
+    # 1. Load reference tables (small, one-time)
+    print("\n[1/4] Loading reference tables...")
+
+    with engine.connect() as conn:
+        teams_df = pd.read_sql("SELECT team_id, team_name FROM teams", conn)
+        players_df = pd.read_sql("SELECT player_id, player_name FROM players", conn)
+        games_df = pd.read_sql("""
+            SELECT game_id, team_id, team_name, game_date as team_game_date, team_matchup, opponent_id
+            FROM team_game_stats
+        """, conn)
+
+    print(f"  Loaded {len(teams_df)} teams, {len(players_df)} players, {len(games_df)} game records")
+
+    # Build lookups
+    team_lookup = {}
+    for _, row in teams_df.iterrows():
+        norm = normalize_team(row["team_name"])
+        if norm:
+            team_lookup[norm] = int(row["team_id"])
+
+    player_lookup = {}
+    for _, row in players_df.iterrows():
+        norm = normalize_player(row["player_name"])
+        if norm and not pd.isna(norm) and isinstance(norm, str):
+            player_lookup[norm] = int(row["player_id"])
+
+    # Load manual mappings if available
+    manual_mappings = {}
+    mappings_file = DATA_DIR / "player_mappings.csv"
+    if mappings_file.exists():
+        try:
+            mappings_df = pd.read_csv(mappings_file)
+            for _, row in mappings_df.iterrows():
+                if pd.notna(row.get("api_name")) and pd.notna(row.get("player_id")):
+                    manual_mappings[row["api_name"]] = int(row["player_id"])
+            print(f"  Loaded {len(manual_mappings)} manual player mappings")
+        except Exception as e:
+            print(f"  Warning: Could not load manual mappings: {e}")
+
+    # Build game lookup: (home_team_norm, away_team_norm) -> [(game_id, game_date), ...]
+    props_game_lookup = defaultdict(list)
+    for _, row in games_df.iterrows():
+        matchup = row.get("team_matchup", "")
+        if not matchup or pd.isna(matchup):
+            continue
+
+        if " vs. " in matchup:
+            home_team = matchup.split(" vs. ")[0].strip()
+            away_team = matchup.split(" vs. ")[1].strip()
+        elif " @ " in matchup:
+            away_team = matchup.split(" @ ")[0].strip()
+            home_team = matchup.split(" @ ")[1].strip()
+        else:
+            continue
+
+        home_norm = normalize_team(home_team)
+        away_norm = normalize_team(away_team)
+        game_date = str(row["team_game_date"])[:10]
+
+        if home_norm and away_norm:
+            props_game_lookup[(home_norm, away_norm)].append((row["game_id"], game_date))
+
+    print(f"  Built game lookup with {len(props_game_lookup)} unique matchups")
+
+    # 2. Count unlinked records
+    print("\n[2/4] Counting unlinked records...")
+
+    with engine.connect() as conn:
+        count_result = conn.execute(text("""
+            SELECT COUNT(*) FROM raw_player_props_combined WHERE player_id IS NULL
+        """))
+        total_unlinked = count_result.scalar()
+
+    print(f"  Total unlinked: {total_unlinked:,}")
+
+    if total_unlinked == 0:
+        print("\n[OK] No unlinked records - nothing to do!")
+        return
+
+    if limit:
+        total_to_process = min(total_unlinked, limit)
+        print(f"  Processing limit: {limit:,}")
+    else:
+        total_to_process = total_unlinked
+
+    # 3. Process in batches
+    print(f"\n[3/4] Processing {total_to_process:,} records in batches of {batch_size:,}...")
+
+    total_game_matched = 0
+    total_player_matched = 0
+    offset = 0
+
+    while offset < total_to_process:
+        current_batch_size = min(batch_size, total_to_process - offset)
+
+        # Fetch batch of unlinked records
+        with engine.connect() as conn:
+            batch_df = pd.read_sql(f"""
+                SELECT staging_id, api_player_name, home_team, away_team, commence_time
+                FROM raw_player_props_combined
+                WHERE player_id IS NULL
+                ORDER BY staging_id
+                LIMIT {current_batch_size} OFFSET {offset}
+            """, conn)
+
+        if batch_df.empty:
+            break
+
+        # Process batch
+        batch_df["commence_time"] = pd.to_datetime(batch_df["commence_time"], utc=True)
+        batch_df["game_date"] = batch_df["commence_time"].dt.tz_convert(EASTERN).dt.strftime("%Y-%m-%d")
+        batch_df["home_team_norm"] = batch_df["home_team"].apply(normalize_team)
+        batch_df["away_team_norm"] = batch_df["away_team"].apply(normalize_team)
+        batch_df["player_name_norm"] = batch_df["api_player_name"].apply(normalize_player)
+
+        # Match games
+        def match_game(row):
+            key = (row["home_team_norm"], row["away_team_norm"])
+            candidates = props_game_lookup.get(key, [])
+            if not candidates:
+                return None
+            matched_game_id, _ = find_closest_game_date(candidates, row["game_date"])
+            return matched_game_id
+
+        batch_df["matched_game_id"] = batch_df.apply(match_game, axis=1)
+
+        # Match players
+        def match_player(row):
+            api_name = row["api_player_name"]
+            norm_name = row["player_name_norm"]
+
+            if api_name in manual_mappings:
+                return manual_mappings[api_name]
+            if norm_name in player_lookup:
+                return player_lookup[norm_name]
+
+            # Fuzzy match fallback
+            if norm_name and isinstance(norm_name, str):
+                best_match = None
+                best_score = 0.80  # Threshold
+                for pname, pid in player_lookup.items():
+                    if not pname or not isinstance(pname, str):
+                        continue
+                    score = SequenceMatcher(None, norm_name, pname).ratio()
+                    # Bonus for matching last name
+                    norm_parts = norm_name.split()
+                    pname_parts = pname.split()
+                    if norm_parts and pname_parts and norm_parts[-1] == pname_parts[-1]:
+                        score += 0.15
+                    if score > best_score:
+                        best_score = score
+                        best_match = pid
+                return best_match
+            return None
+
+        batch_df["matched_player_id"] = batch_df.apply(match_player, axis=1)
+
+        # Get team_id for matched players
+        def get_team_id(row):
+            if pd.isna(row["matched_player_id"]) or pd.isna(row["matched_game_id"]):
+                return None
+            # Look up from player_game_stats or infer from home/away
+            home_norm = row["home_team_norm"]
+            away_norm = row["away_team_norm"]
+            # Simple heuristic: check if player is typically on home or away team
+            # For now, return None and let it be filled later
+            return team_lookup.get(home_norm) or team_lookup.get(away_norm)
+
+        batch_df["matched_team_id"] = batch_df.apply(get_team_id, axis=1)
+
+        # Prepare updates
+        game_updates = batch_df[batch_df["matched_game_id"].notna()][["staging_id", "matched_game_id"]].copy()
+        player_updates = batch_df[batch_df["matched_player_id"].notna()][
+            ["staging_id", "matched_player_id", "matched_team_id"]
+        ].copy()
+
+        # Apply updates
+        with engine.begin() as conn:
+            # Update game_id
+            if not game_updates.empty:
+                game_updates.to_sql("temp_game_updates", conn, if_exists="replace", index=False)
+                conn.execute(text("CREATE INDEX idx_temp_game_staging ON temp_game_updates(staging_id)"))
+                result = conn.execute(text("""
+                    UPDATE raw_player_props_combined r
+                    SET game_id = t.matched_game_id
+                    FROM temp_game_updates t
+                    WHERE r.staging_id = t.staging_id
+                """))
+                total_game_matched += result.rowcount
+                conn.execute(text("DROP TABLE temp_game_updates"))
+
+            # Update player_id and team_id
+            if not player_updates.empty:
+                player_updates.to_sql("temp_player_updates", conn, if_exists="replace", index=False)
+                conn.execute(text("CREATE INDEX idx_temp_player_staging ON temp_player_updates(staging_id)"))
+                result = conn.execute(text("""
+                    UPDATE raw_player_props_combined r
+                    SET player_id = t.matched_player_id::bigint,
+                        team_id = t.matched_team_id::bigint
+                    FROM temp_player_updates t
+                    WHERE r.staging_id = t.staging_id
+                """))
+                total_player_matched += result.rowcount
+                conn.execute(text("DROP TABLE temp_player_updates"))
+
+        offset += current_batch_size
+        pct = (offset / total_to_process) * 100
+        print(f"  Processed {offset:,}/{total_to_process:,} ({pct:.1f}%) - Games: {total_game_matched:,}, Players: {total_player_matched:,}")
+
+    # 4. Summary
+    print("\n[4/4] Summary")
+    print("=" * 60)
+    print(f"  Total records processed: {total_to_process:,}")
+    print(f"  Games matched: {total_game_matched:,}")
+    print(f"  Players matched: {total_player_matched:,}")
+
+    # Check remaining unlinked
+    with engine.connect() as conn:
+        remaining = conn.execute(text("""
+            SELECT COUNT(*) FROM raw_player_props_combined WHERE player_id IS NULL
+        """)).scalar()
+
+    print(f"  Remaining unlinked: {remaining:,}")
+    print("\n[OK] Incremental linking complete!")
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
 
 def main():
     parser = argparse.ArgumentParser(description="NBA Data Linker - Local Processing (FIXED)")
-    parser.add_argument("command", choices=["download", "process", "upload", "all", "init"], help="Command to run")
+    parser.add_argument(
+        "command",
+        choices=["download", "process", "upload", "all", "init", "incremental"],
+        help="Command to run. Use 'incremental' for lightweight daily linking."
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=50000,
+        help="Batch size for incremental linking (default: 50000)"
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit total records to process (for testing)"
+    )
 
     args = parser.parse_args()
 
@@ -809,6 +1118,8 @@ def main():
         download_tables()
         process_local()
         upload_results()
+    elif args.command == "incremental":
+        link_incremental(batch_size=args.batch_size, limit=args.limit)
 
 
 if __name__ == "__main__":

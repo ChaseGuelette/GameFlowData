@@ -44,9 +44,12 @@ def module(monkeypatch):
 
 
 def test_normalize_team_aliases(module):
-    assert module.normalize_team("LA Lakers") == "Los Angeles Lakers"
-    assert module.normalize_team("New Jersey Nets") == "Brooklyn Nets"
-    assert module.normalize_team("Boston Celtics") == "Boston Celtics"
+    # Updated: normalize_team now returns 3-letter abbreviations for all teams
+    assert module.normalize_team("LA Lakers") == "LAL"
+    assert module.normalize_team("Los Angeles Lakers") == "LAL"
+    assert module.normalize_team("New Jersey Nets") == "BKN"
+    assert module.normalize_team("Boston Celtics") == "BOS"
+    assert module.normalize_team("ATL") == "ATL"  # Abbreviations pass through
     assert pd.isna(module.normalize_team(pd.NA))
 
 

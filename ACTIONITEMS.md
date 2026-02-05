@@ -1,5 +1,85 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-05 — Session 12)
+
+### What We Did
+
+**Implemented lightweight incremental linker.** Added `incremental` command to `nba_linker_local.py` for daily automated linking without downloading the full 25M+ row `raw_player_props_combined` table.
+
+**Changes to `src/processing/nba_linker_local.py`:**
+- Added `link_incremental()` function (~240 lines)
+- Added `normalize_player()` at module level (was previously a local function)
+- Expanded `TEAM_NAME_ALIASES` to map all team names to 3-letter abbreviations (e.g., "Atlanta Hawks" → "ATL")
+- Added `--batch-size` and `--limit` CLI arguments
+- Incremental mode: queries only unlinked records (`WHERE player_id IS NULL`), matches against reference tables, updates directly via batched SQL
+
+**Changes to `src/orchestration/run_daily.py`:**
+- Fixed broken linker call on line 114 (was missing command argument)
+- Changed to use `incremental` command for automated daily pipeline
+
+**Test updates:**
+- Updated `test_normalize_team_aliases` to expect 3-letter abbreviations
+- All 518 tests pass (5 pre-existing failures unrelated to this work)
+
+**Test results:**
+- Player match rate: 99.3% (4,963/5,000)
+- Game match rate: 40.7% (2,037/5,000) — lower because many props are for future games not yet in DB
+- Total unlinked: ~2.8M records
+
+### Next Step
+
+1. **Retrain models** — Run training pipeline to generate hurdle model for THREES
+2. **Validate C3** — Check THREES calibration gaps < 5% on holdout
+3. **Run full incremental linker** — Link all ~2.8M unlinked combo market records
+4. **E6** — Automate daily scheduling
+
+---
+
+## Session Summary (2026-02-05 — Session 11)
+
+### What We Did
+
+**Fixed BL confidence function (A3b).** Replaced the exponential confidence formula with linear ramp to enable meaningful BL blending weights for realistic betting edges.
+
+**Implemented THREES hurdle model (C3).** Two-stage architecture for zero-inflated THREES distribution that can correctly predict Q0.10 = 0 when ~35% of samples are exactly zero.
+
+**Changes to `src/models/black_litterman.py`:**
+- Added `z_max` parameter to `BLConfig` (default 1.0)
+- Changed `compute_confidence()` from `1 - exp(-0.5 * z²)` to `min(z / z_max, 1.0)`
+- Added `--z-max` to sweep parameter grid
+
+**Changes to `src/models/quantile_trainer.py`:**
+- Added `HurdleQuantileModel` dataclass with two-stage architecture
+- Added `train_hurdle_model()` function for training hurdle models
+- Modified `PlayerPropsModelPipeline.train_rate_models()` to use hurdle for THREES
+- Updated `save_all()` and `load_all()` to handle hurdle model artifacts
+- Hurdle model includes isotonic regression calibration for P(zero) classifier
+
+**Changes to `src/models/monte_carlo.py`:**
+- Added `_sample_hurdle()` and `_sample_hurdle_from_quantiles()` methods
+- Modified `_predict_copula()` to detect and use hurdle models
+- Modified `predict_batch_for_date()` to handle hurdle models
+- Bernoulli draw (zero vs positive) is independent of copula; copula affects positive rate magnitude only
+
+**Changes to `src/models/train_pipeline.py`:**
+- Added `_calibrate_hurdle_model()` method with zero-accuracy diagnostics
+- Updated `_evaluate_calibration()` to evaluate hurdle models
+- Updated `_evaluate_combined_calibration()` to include hurdle stats
+
+**Test updates:**
+- All 42 BL tests pass
+- 518 of 523 tests pass (5 pre-existing failures unrelated to hurdle model)
+
+**Impact:** THREES Q0.10 should now correctly return 0 when P(zero) > 0.10, fixing the +20.4% calibration gap. Enables betting on 4th stat.
+
+### Next Step
+
+1. **Retrain models** — Run training pipeline to generate hurdle model for THREES
+2. **Validate C3** — Check THREES calibration gaps < 5% on holdout
+3. **E6** — Automate daily scheduling
+
+---
+
 ## Session Summary (2026-02-05 — Session 10)
 
 ### What We Did
@@ -270,22 +350,21 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
 
   **Structural issue found (2026-01-31):** BL parameter sweep (40 configs) showed ALL BL configs produce 0-12 bets while no-BL shows 600-873 bets at +3% ROI. The confidence formula `1 - exp(-0.5 * z²)` is near-zero for realistic edges (z < 0.5). For a 3% edge: z~0.13, confidence~0.008, w~0.0008. The BL layer demands z > 1.0 for meaningful weight, but profitable edges exist in the z < 0.5 range. This is a design flaw, not a model quality issue.
 
-  **Fix options (pending):**
-  1. Use tau as fixed blending weight (remove confidence scaling)
-  2. Replace exponential confidence with linear or sigmoid ramp (e.g., `confidence = min(z / z_max, 1.0)`)
-  3. Use BL only for position sizing, not edge filtering
+  **Fix applied (2026-02-05):** Replaced exponential confidence with linear ramp.
 
-- [ ] **A3b. Fix BL confidence function** *(SPEC READY — 2026-02-05)*
-  Replace exponential confidence with linear ramp. Spec: `.session/specs/A3b_BL_confidence_fix.md`
+- [x] **A3b. Fix BL confidence function** *(IMPLEMENTED — 2026-02-05)*
+  Replaced exponential confidence formula with linear ramp in `black_litterman.py`.
 
-  **Implementation:**
-  - Change `_calculate_confidence()` in `black_litterman.py`: `confidence = min(z / z_max, 1.0)`
-  - Add `z_max` parameter to `BLConfig` (default 1.0)
-  - Expected: z=0.13 → confidence=0.13 (vs 0.008 currently)
+  **Changes:**
+  - Added `z_max` parameter to `BLConfig` (default 1.0)
+  - Changed `compute_confidence()`: `confidence = min(z / z_max, 1.0)`
+  - Updated 3 existing tests with new expected values
+  - Added 4 new tests for linear ramp behavior
 
-  **Verification:**
-  - Backtest with `--bl-sizing-tau 0.10` should produce non-zero stakes
-  - Backtest with `--bl-tau 0.10` should produce >100 bets
+  **Result:** At z=0.13 (3% edge), confidence now equals 0.13 instead of 0.008.
+  This is a 16x improvement in effective weight for realistic betting edges.
+
+  **Next step:** Run backtest with `--bl-tau 0.10` to verify meaningful bet counts
 
 - [x] **A4. Residual modeling (Option A — feature-based)** *(IMPLEMENTED — 2026-01-28)*
   Added per-stat prop lines (`prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`)
@@ -406,27 +485,26 @@ where bookmaker attention is lower.
   Run `analyze_calibration_drift.py` with the current model to get per-stat quantile coverage.
   This informs whether rate_factors or tail adjustments need stat-specific tuning.
 
-- [ ] **C3. Zero-inflated hurdle model for THREES** *(SPEC READY — 2026-02-05)*
-  Implement two-stage hurdle architecture to handle 35%+ zero mass in THREES distribution.
+- [x] **C3. Zero-inflated hurdle model for THREES** *(IMPLEMENTED — 2026-02-05)*
+  Two-stage hurdle architecture to handle 35%+ zero mass in THREES distribution.
   Spec: `.session/specs/C3_THREES_hurdle_model.md`
 
-  **Problem:** THREES Q0.10 has +20.4% calibration gap. XGBoost quantile regression cannot
+  **Problem:** THREES Q0.10 had +20.4% calibration gap. XGBoost quantile regression cannot
   learn Q0.10 = 0 when it always predicts positive values. Conformal recalibration (offsets)
   cannot fix this — you can't offset a positive prediction to exactly 0.
 
-  **Solution:**
-  - **Stage 1:** Binary classifier predicting P(threes = 0 | features)
+  **Solution implemented:**
+  - **Stage 1:** Binary classifier predicting P(threes = 0 | features) with isotonic calibration
   - **Stage 2:** Quantile regression on positive samples only (threes | threes > 0)
-  - **Inference:** If q ≤ p_zero → quantile = 0, else map to positive distribution
+  - **Inference:** If q ≤ p_zero → quantile = 0, else interpolate positive distribution
+  - **MC sampling:** Bernoulli draw independent of copula; copula affects positive rate magnitude
 
-  **Files to modify:**
-  - `src/models/quantile_trainer.py` — Add `HurdleQuantileModel` class
-  - `src/models/monte_carlo.py` — Add `_sample_hurdle()` method
-  - `train_pipeline.py` — Train hurdle model for THREES stat
+  **Files modified:**
+  - `src/models/quantile_trainer.py` — Added `HurdleQuantileModel` class, `train_hurdle_model()`, pipeline integration
+  - `src/models/monte_carlo.py` — Added `_sample_hurdle()`, `_sample_hurdle_from_quantiles()`, copula integration
+  - `src/models/train_pipeline.py` — Added `_calibrate_hurdle_model()`, hurdle evaluation
 
-  **Acceptance criteria:**
-  - THREES Q0.10 calibration gap < 5%
-  - Backtest with `--stats pts reb ast threes` shows no degradation
+  **Next:** Retrain to validate THREES Q0.10 gap < 5%
 
 ---
 
@@ -509,8 +587,8 @@ pts/reb/ast shows profitability.
 | ~~E1 (Retrain)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — `run_20260129_205540`. Needs re-retrain with calibration fixes. |
 | ~~E2 (BL Sweep)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — No-BL profitable (+3% ROI). BL kills all edges (confidence function flaw). |
 | ~~E3 (Analyze sweep)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — REB +7.9%, model finds genuine edges without BL. |
-| **A3b (Fix BL confidence)** | **Low** | **High** | Linear ramp confidence — spec ready, 1 file change |
-| **C3 (THREES hurdle model)** | **Medium-High** | **High** | Zero-inflated model — spec ready, enables 4th stat |
+| ~~A3b (Fix BL confidence)~~ | ~~Low~~ | ~~High~~ | **DONE** — Linear ramp confidence. 42 tests passing. |
+| ~~C3 (THREES hurdle model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE** — Two-stage hurdle model implemented. Needs retraining to validate. |
 | E1b (Retrain with calibration fixes) | Low | Medium | Conformal recalibration + zero-snap need retraining to take effect |
 | ~~E4 (Daily injury pipeline)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — `--scrape-injuries` now uses RapidAPI + linker |
 | ~~E5 (Paper trade infra)~~ | ~~Medium~~ | ~~High~~ | **DONE** — `PaperTrader` class, CLI scripts, 20 tests |

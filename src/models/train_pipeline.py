@@ -313,6 +313,20 @@ class TrainingOrchestrator:
             )
             all_reports[stat] = reports
 
+        # Hurdle models (e.g., THREES)
+        hurdle_models = getattr(pipeline, "hurdle_models", {})
+        for stat, hurdle_model in hurdle_models.items():
+            logger.info(f"Evaluating {stat.upper()} Hurdle Model...")
+            mask = (df["actual_minutes"] >= 10) & (df[f"{stat}_per_min"].notna())
+            reports = self._calibrate_hurdle_model(
+                model=hurdle_model,
+                df=df,
+                actual_col=f"{stat}_per_min",
+                filter_mask=mask,
+                name=f"{stat}_hurdle",
+            )
+            all_reports[stat] = reports
+
         # Check for failures
         all_gaps = [r["gap"] for model_reports in all_reports.values() for r in model_reports]
         worst_gap = max((abs(g) for g in all_gaps), default=0)
@@ -369,6 +383,44 @@ class TrainingOrchestrator:
 
         return reports
 
+    def _calibrate_hurdle_model(self, model, df, actual_col, filter_mask, name) -> list[dict]:
+        """Evaluate calibration for a hurdle model (e.g., THREES)."""
+        filtered = df[filter_mask].copy().reset_index(drop=True)
+
+        X = filtered[model.all_feature_names].fillna(0)
+        y_actual = filtered[actual_col].values
+
+        if X.empty:
+            logger.warning(f"No validation data for {name}")
+            return []
+
+        # Predict quantiles using hurdle model
+        preds = model.predict_quantiles(X)
+
+        # Analyze zero prediction accuracy
+        p_zero = model.predict_p_zero(X)
+        actual_zeros = (y_actual == 0)
+        predicted_zeros = p_zero > 0.5  # Threshold at 0.5
+        zero_accuracy = (actual_zeros == predicted_zeros).mean()
+        actual_zero_rate = actual_zeros.mean()
+        pred_zero_rate = p_zero.mean()
+
+        logger.info(f"  Zero prediction: accuracy={zero_accuracy:.3f}, actual_rate={actual_zero_rate:.3f}, pred_rate={pred_zero_rate:.3f}")
+
+        reports = []
+        for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
+            pred_col = f"q{int(q * 100):02d}"
+
+            coverage = (y_actual <= preds[pred_col].values).mean()
+            gap = coverage - q
+
+            status = "OK" if abs(gap) <= self.CALIBRATION_TOLERANCE else f"GAP {gap:+.3f}"
+            logger.info(f"  Q{q:.2f}: Act={coverage:.3f} [{status}]")
+
+            reports.append({"quantile": q, "coverage": coverage, "gap": gap})
+
+        return reports
+
     def _save_calibration_report(self, reports: dict, suffix: str = ""):
         filename = f"calibration_report{suffix}.json" if suffix else "calibration_report.json"
         with open(self.run_dir / filename, "w") as f:
@@ -386,8 +438,9 @@ class TrainingOrchestrator:
         """
         logger.info("\n=== Combined Calibration (Minutes × Rate → Total) ===")
 
-        # Evaluate all stats that have trained rate models
-        eval_stats = [s for s in ["pts", "reb", "ast", "threes"] if s in pipeline.rate_models]
+        # Evaluate all stats that have trained rate models (including hurdle models)
+        hurdle_models = getattr(pipeline, "hurdle_models", {})
+        eval_stats = [s for s in ["pts", "reb", "ast", "threes"] if s in pipeline.rate_models or s in hurdle_models]
 
         # Filter to valid rows with actual stats
         valid_mask = df["actual_minutes"] >= 10
@@ -415,6 +468,10 @@ class TrainingOrchestrator:
             for stat in eval_stats:
                 if stat in pipeline.rate_models:
                     for feat in pipeline.rate_models[stat].all_feature_names:
+                        if feat in row.index:
+                            features[feat] = row[feat]
+                elif stat in hurdle_models:
+                    for feat in hurdle_models[stat].feature_names:
                         if feat in row.index:
                             features[feat] = row[feat]
 

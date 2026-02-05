@@ -111,7 +111,7 @@ def main():
     # 2. Processing (Update Derived Stats)
     if not args.skip_processing:
         # Order matters!
-        run_command("python src/processing/nba_linker_local.py", "Linking Players (NBA Linker)")
+        run_command("python src/processing/nba_linker_local.py incremental", "Linking Players (Incremental)")
         run_command("python src/processing/backfill_team_ids.py", "Backfilling Team IDs")
         run_command("python src/scrapers/update_player_position_history.py", "Updating Player Position History")
         run_command("python src/scrapers/update_league_position_averages.py", "Updating League Position Averages")

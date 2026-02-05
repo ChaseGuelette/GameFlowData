@@ -275,7 +275,7 @@ class FeatureStore:
                 COALESCE(pa_avg.avg_usg_pct_l5, 0.20) as player_avg_usg_pct_l5,
                 COALESCE(pa_avg.avg_ts_pct_l15, 0.56) as player_avg_ts_pct_l15,
                 COALESCE(pa_avg.avg_reb_pct_l5, 0.10) as player_avg_reb_pct_l5,
-                COALESCE(pa_avg.avg_ast_pct_l5, 0.15) as player_avg_ast_pct_l5,
+                COALESCE(pa_avg.avg_ast_pct_l5, 0.12) as player_avg_ast_pct_l5,
 
                 -- Team Context
                 COALESCE(t_avg.avg_pace_l5, 99.5) as team_avg_pace_l5,
@@ -588,6 +588,7 @@ class FeatureStore:
         logger.info(f"Fetching features in {len(chunks)} chunks (chunk_size={chunk_size})")
 
         chunk_dfs = []
+        failed_chunks: list[dict] = []  # Track failed chunks for summary
         for chunk_idx, chunk_dates in enumerate(chunks):
             chunk_start = chunk_dates[0]
             chunk_end = chunk_dates[-1]
@@ -606,10 +607,10 @@ class FeatureStore:
                     COALESCE(p_avg.avg_ast_l5, 0) as player_avg_ast_l5,
                     COALESCE(p_avg.avg_fg3m_l5, 0) as player_avg_fg3m_l5,
                     COALESCE(p_avg.avg_fg3a_l5, 0) as player_avg_fg3a_l5,
-                    COALESCE(pa_avg.avg_usg_pct_l5, 0) as player_avg_usg_pct_l5,
-                    COALESCE(pa_avg.avg_ts_pct_l15, 0) as player_avg_ts_pct_l15,
-                    COALESCE(pa_avg.avg_reb_pct_l5, 0) as player_avg_reb_pct_l5,
-                    COALESCE(pa_avg.avg_ast_pct_l5, 0) as player_avg_ast_pct_l5,
+                    COALESCE(pa_avg.avg_usg_pct_l5, 0.20) as player_avg_usg_pct_l5,
+                    COALESCE(pa_avg.avg_ts_pct_l15, 0.56) as player_avg_ts_pct_l15,
+                    COALESCE(pa_avg.avg_reb_pct_l5, 0.10) as player_avg_reb_pct_l5,
+                    COALESCE(pa_avg.avg_ast_pct_l5, 0.12) as player_avg_ast_pct_l5,
                     COALESCE(t_avg.avg_pace_l5, 0) as team_avg_pace_l5,
                     COALESCE(t_avg.avg_fg3a_l5, 0) as team_avg_fg3a_l5,
                     COALESCE(t_avg.avg_fg3_pct_l5, 0) as team_avg_fg3_pct_l5,
@@ -845,7 +846,28 @@ class FeatureStore:
                     chunk_dfs.append(chunk_df)
             except Exception as e:
                 logger.error(f"  Feature chunk {chunk_idx + 1}/{len(chunks)} failed: {e}")
+                failed_chunks.append({
+                    "chunk_idx": chunk_idx + 1,
+                    "dates": chunk_dates,
+                    "start": chunk_start,
+                    "end": chunk_end,
+                    "error": str(e),
+                })
                 continue
+
+        # Log summary of chunk processing results
+        successful_chunks = len(chunks) - len(failed_chunks)
+        if failed_chunks:
+            failed_date_count = sum(len(c["dates"]) for c in failed_chunks)
+            logger.warning(
+                f"CHUNK FAILURES: {len(failed_chunks)}/{len(chunks)} chunks failed, "
+                f"dropping {failed_date_count}/{len(all_dates)} dates from result. "
+                f"Failed chunk indices: {[c['chunk_idx'] for c in failed_chunks]}"
+            )
+            for fc in failed_chunks:
+                logger.warning(f"  Chunk {fc['chunk_idx']}: {fc['start']} to {fc['end']} - {fc['error']}")
+        else:
+            logger.info(f"All {len(chunks)} chunks succeeded ({len(all_dates)} dates)")
 
         if not chunk_dfs:
             return {}
@@ -1005,7 +1027,7 @@ class FeatureStore:
                 COALESCE(pa_avg.avg_usg_pct_l5, 0.20) as player_avg_usg_pct_l5,
                 COALESCE(pa_avg.avg_ts_pct_l15, 0.56) as player_avg_ts_pct_l15,
                 COALESCE(pa_avg.avg_reb_pct_l5, 0.10) as player_avg_reb_pct_l5,
-                COALESCE(pa_avg.avg_ast_pct_l5, 0.15) as player_avg_ast_pct_l5,
+                COALESCE(pa_avg.avg_ast_pct_l5, 0.12) as player_avg_ast_pct_l5,
 
                 -- Team Context
                 COALESCE(t_avg.avg_pace_l5, 99.5) as team_avg_pace_l5,
@@ -1333,7 +1355,7 @@ class FeatureStore:
                 "player_avg_reb_l5": 0, "player_avg_ast_l5": 0,
                 "player_avg_fg3m_l5": 0, "player_avg_fg3a_l5": 0,
                 "player_avg_usg_pct_l5": 0.20, "player_avg_ts_pct_l15": 0.56,
-                "player_avg_reb_pct_l5": 0.10, "player_avg_ast_pct_l5": 0.15,
+                "player_avg_reb_pct_l5": 0.10, "player_avg_ast_pct_l5": 0.12,
                 # B3: L3 averages
                 "player_avg_min_l3": 0, "player_avg_pts_l3": 0,
                 "player_avg_reb_l3": 0, "player_avg_ast_l3": 0,

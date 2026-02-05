@@ -102,25 +102,25 @@ class TestComputeConfidence:
         assert confidence < 0.05  # Very low confidence
 
     def test_line_one_std_away(self):
-        """Line 1 std from center → confidence ≈ 0.39."""
+        """Line 1 std from center → confidence = 1.0 (z=1, z_max=1)."""
         rng = np.random.RandomState(42)
         samples = rng.normal(20.0, 5.0, size=10000)
         confidence = self.blender.compute_confidence(samples, 25.0)  # 1 std away
-        assert confidence == pytest.approx(0.39, abs=0.05)
+        assert confidence == pytest.approx(1.0, abs=0.05)
 
     def test_line_two_std_away(self):
-        """Line 2 std from center → confidence ≈ 0.86."""
+        """Line 2 std from center → confidence = 1.0 (z=2, capped at 1.0)."""
         rng = np.random.RandomState(42)
         samples = rng.normal(20.0, 5.0, size=10000)
         confidence = self.blender.compute_confidence(samples, 30.0)  # 2 std away
-        assert confidence == pytest.approx(0.86, abs=0.05)
+        assert confidence == pytest.approx(1.0, abs=0.01)
 
     def test_line_three_std_away(self):
-        """Line 3 std from center → confidence ≈ 0.99."""
+        """Line 3 std from center → confidence = 1.0 (z=3, capped at 1.0)."""
         rng = np.random.RandomState(42)
         samples = rng.normal(20.0, 5.0, size=10000)
         confidence = self.blender.compute_confidence(samples, 35.0)  # 3 std away
-        assert confidence > 0.95
+        assert confidence == pytest.approx(1.0, abs=0.01)
 
     def test_degenerate_std_zero(self):
         """All identical samples (std=0) → confidence = 0 (safe fallback)."""
@@ -149,6 +149,33 @@ class TestComputeConfidence:
         conf_above = self.blender.compute_confidence(samples, 25.0)
         conf_below = self.blender.compute_confidence(samples, 15.0)
         assert conf_above == pytest.approx(conf_below, abs=0.05)
+
+    def test_linear_confidence_at_half_z_max(self):
+        """Line 0.5 std from center → confidence = 0.5 (linear ramp)."""
+        rng = np.random.RandomState(42)
+        samples = rng.normal(20.0, 5.0, size=10000)
+        # 0.5 std away = 2.5 points
+        confidence = self.blender.compute_confidence(samples, 22.5)
+        assert confidence == pytest.approx(0.5, abs=0.05)
+
+    def test_custom_z_max(self):
+        """Custom z_max=2.0 → confidence at z=1 should be 0.5."""
+        blender = BlackLittermanBlender(BLConfig(z_max=2.0))
+        rng = np.random.RandomState(42)
+        samples = rng.normal(20.0, 5.0, size=10000)
+        # 1 std away (z=1), with z_max=2.0 → confidence = 0.5
+        confidence = blender.compute_confidence(samples, 25.0)
+        assert confidence == pytest.approx(0.5, abs=0.05)
+
+    def test_linear_ramp_proportional(self):
+        """Confidence should be proportional to z for z < z_max."""
+        rng = np.random.RandomState(42)
+        samples = rng.normal(20.0, 5.0, size=10000)
+        # Test at z=0.2 (1 point away from mean of 20, std=5)
+        conf_02 = self.blender.compute_confidence(samples, 21.0)  # z ≈ 0.2
+        conf_04 = self.blender.compute_confidence(samples, 22.0)  # z ≈ 0.4
+        # conf_04 should be approximately 2x conf_02
+        assert conf_04 == pytest.approx(2 * conf_02, abs=0.1)
 
 
 class TestBlend:
@@ -321,13 +348,15 @@ class TestBLConfig:
         assert config.max_weight == 0.50
         assert config.min_prob == 0.01
         assert config.max_prob == 0.99
+        assert config.z_max == 1.0
 
     def test_custom_config(self):
         """Custom config values propagate correctly."""
-        config = BLConfig(tau=0.20, max_weight=0.30)
+        config = BLConfig(tau=0.20, max_weight=0.30, z_max=2.0)
         blender = BlackLittermanBlender(config)
         assert blender.config.tau == 0.20
         assert blender.config.max_weight == 0.30
+        assert blender.config.z_max == 2.0
 
     def test_none_config_uses_defaults(self):
         """Passing None creates default config."""

@@ -39,6 +39,9 @@ class BLConfig:
     max_prob: float = 0.99
     """Ceiling for probabilities to avoid log(0)."""
 
+    z_max: float = 1.0
+    """Z-score at which confidence saturates to 1.0. Lower = more aggressive."""
+
 
 class BlackLittermanBlender:
     """Blends model probabilities with market prior using log-odds BL.
@@ -107,15 +110,14 @@ class BlackLittermanBlender:
     def compute_confidence(self, samples: np.ndarray, line: float) -> float:
         """Compute per-prediction confidence from MC distribution properties.
 
-        Uses z-score of the line relative to the distribution center:
+        Uses linear ramp based on z-score of the line relative to distribution center:
             z = |mean(samples) - line| / std(samples)
-            confidence = 1 - exp(-0.5 * z^2)
+            confidence = min(z / z_max, 1.0)
 
-        This naturally captures:
-            - z~0 (line at center): confidence ~0 -> posterior = market
-            - z~1: confidence ~0.39
-            - z~2: confidence ~0.86
-            - z~3: confidence ~0.99 -> posterior shifts toward model
+        This gives meaningful weight even at low z-scores where profitable edges exist:
+            - z=0 (line at center): confidence=0 -> posterior = market
+            - z=0.5*z_max: confidence=0.5
+            - z>=z_max: confidence=1.0 -> full model weight (capped by max_weight)
 
         Args:
             samples: Monte Carlo samples from the predictor (shape: (n_samples,)).
@@ -134,7 +136,7 @@ class BlackLittermanBlender:
             return 0.0
 
         z = abs(mean - line) / std
-        return float(1.0 - np.exp(-0.5 * z * z))
+        return float(min(z / self.config.z_max, 1.0))
 
     def blend(self, model_prob: float, market_prob: float, confidence: float) -> float:
         """Blend model and market probabilities in log-odds space.

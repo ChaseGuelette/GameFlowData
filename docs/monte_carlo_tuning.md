@@ -164,6 +164,62 @@ params = compute_copula_params_from_data(df)
 
 ---
 
+## Hurdle Model Sampling (Zero-Inflated Distributions)
+
+### What it does
+
+For stats with significant zero mass (like THREES, where ~35% of samples are exactly 0), the Monte Carlo predictor uses **hurdle model sampling** instead of standard quantile inverse CDF sampling.
+
+**Two-stage sampling:**
+1. **Bernoulli draw:** Is this sample zero or positive? Uses calibrated P(zero) from the classifier.
+2. **Positive sampling:** For non-zero samples, map through the positive-only distribution inverse CDF.
+
+**Key insight:** The Bernoulli zero/positive decision is **independent of the copula**. The copula correlation only affects the positive rate magnitude — a player who plays more minutes isn't necessarily more or less likely to score zero 3s (that's driven by role/position), but *given* they score at least one, higher minutes may correlate with higher rate.
+
+### When it's used
+
+Hurdle model sampling is **automatically enabled** when:
+1. The model artifacts contain `threes_is_hurdle.json` flag file
+2. The stat being predicted has a `HurdleQuantileModel` in the pipeline
+
+The training pipeline automatically creates hurdle models for THREES (and potentially other zero-inflated stats).
+
+### Artifacts
+
+Hurdle model artifacts:
+- `threes_zero_classifier.joblib` — XGBoost binary classifier for P(zero)
+- `threes_zero_calibrator.joblib` — Isotonic regression calibrator for P(zero)
+- `threes_rate_model.joblib` — Quantile models trained on positive samples only
+- `threes_is_hurdle.json` — Flag file indicating hurdle architecture
+
+### How it differs from standard sampling
+
+| Aspect | Standard Quantile | Hurdle Model |
+|--------|------------------|--------------|
+| Zero handling | Continuous CDF (may not predict exact 0) | Explicit P(zero) + positive distribution |
+| Quantile Q ≤ P(zero) | Returns small positive number | Returns exactly 0 |
+| Copula integration | Correlated uniform for rate | Bernoulli independent; copula affects positive samples only |
+| Calibration target | Q0.10 coverage ≈ 10% | Q0.10 = 0 when P(zero) > 10% |
+
+### Example
+
+```python
+# Automatic detection — no configuration needed
+predictor = MonteCarloPredictor(pipeline, copula_params=copula_params)
+
+# For a player with P(zero) = 0.35:
+# - Q0.10 = 0 (10% < 35%)
+# - Q0.25 = 0 (25% < 35%)
+# - Q0.50 = positive_model.predict(adjusted_q=0.23)  # (50-35)/(1-35) = 0.23
+
+# MC sampling:
+# - ~35% of samples are exactly 0
+# - ~65% of samples come from positive distribution
+# - Positive samples use copula-correlated uniforms
+```
+
+---
+
 ## Legacy Correlated Sampling (Deprecated)
 
 > **Note:** This mechanism is superseded by Gaussian copula sampling. It remains as a fallback when `copula_params.json` is not available in the model artifacts.

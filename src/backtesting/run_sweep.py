@@ -57,15 +57,18 @@ class SweepConfig:
     tau: float | None  # None = no BL blending (baseline)
     edge_threshold: float
     kelly_fraction: float
+    z_max: float = 1.0  # BL confidence saturation point
 
     @property
     def label(self) -> str:
-        tau_str = f"tau={self.tau}" if self.tau is not None else "no_BL"
-        return f"{tau_str} | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
+        if self.tau is None:
+            return f"no_BL | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
+        return f"tau={self.tau} z_max={self.z_max} | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
 
     def to_dict(self) -> dict:
         return {
             "tau": self.tau,
+            "z_max": self.z_max,
             "edge_threshold": self.edge_threshold,
             "kelly_fraction": self.kelly_fraction,
         }
@@ -91,11 +94,22 @@ def build_sweep_grid(
     tau_values: list[float | None],
     edge_thresholds: list[float],
     kelly_fractions: list[float],
+    z_max_values: list[float] | None = None,
 ) -> list[SweepConfig]:
-    """Generate Cartesian product of parameter values."""
+    """Generate Cartesian product of parameter values.
+
+    Note: z_max only applies when tau is not None. For no-BL configs,
+    z_max is ignored but we still include one config per (edge, kelly) pair.
+    """
+    if z_max_values is None:
+        z_max_values = [1.0]
+
     configs = []
-    for tau, edge, kelly in itertools.product(tau_values, edge_thresholds, kelly_fractions):
-        configs.append(SweepConfig(tau=tau, edge_threshold=edge, kelly_fraction=kelly))
+    for tau, edge, kelly, z_max in itertools.product(tau_values, edge_thresholds, kelly_fractions, z_max_values):
+        # For no-BL, z_max doesn't matter, so only add one config per (edge, kelly)
+        if tau is None and z_max != z_max_values[0]:
+            continue
+        configs.append(SweepConfig(tau=tau, edge_threshold=edge, kelly_fraction=kelly, z_max=z_max))
     return configs
 
 
@@ -217,7 +231,7 @@ def run_single_config(
     # Create BL blender for this config
     bl_blender = None
     if config.tau is not None:
-        bl_blender = BlackLittermanBlender(BLConfig(tau=config.tau))
+        bl_blender = BlackLittermanBlender(BLConfig(tau=config.tau, z_max=config.z_max))
 
     # Create a lightweight harness to reuse _calculate_edges and _filter_best_bets
     config_harness = BacktestHarness(
@@ -400,8 +414,9 @@ def print_comparison_table(
 
 def _config_dir_name(idx: int, config: SweepConfig) -> str:
     """Generate a filesystem-safe directory name for a sweep config."""
-    tau_str = "no_BL" if config.tau is None else f"tau{config.tau}"
-    return f"config_{idx:02d}_{tau_str}_edge{config.edge_threshold}_kelly{config.kelly_fraction}"
+    if config.tau is None:
+        return f"config_{idx:02d}_no_BL_edge{config.edge_threshold}_kelly{config.kelly_fraction}"
+    return f"config_{idx:02d}_tau{config.tau}_zmax{config.z_max}_edge{config.edge_threshold}_kelly{config.kelly_fraction}"
 
 
 def save_results(
@@ -456,6 +471,7 @@ def save_results(
 
         row = {
             "tau": r.config.tau,
+            "z_max": r.config.z_max,
             "edge_threshold": r.config.edge_threshold,
             "kelly_fraction": r.config.kelly_fraction,
             "total_bets": m.total_bets,
@@ -507,6 +523,7 @@ def save_results(
             "starting_bankroll": starting_bankroll,
             "kelly_fraction": r.config.kelly_fraction,
             "bl_tau": r.config.tau,
+            "bl_z_max": r.config.z_max,
             "bookmakers": bookmakers or [],
             "stats": stats or [],
             "allowed_bets": (
@@ -566,6 +583,10 @@ Examples:
   python src/backtesting/run_sweep.py --start 2026-01-01 --end 2026-01-29 \\
       --tau none 0.03 0.05 0.10 --edge 0.03 0.05 0.07
 
+  # Sweep z_max (confidence sensitivity)
+  python src/backtesting/run_sweep.py --start 2026-01-01 --end 2026-01-29 \\
+      --tau 0.10 --z-max 0.5 1.0 2.0 --edge 0.05
+
   # Full grid sweep
   python src/backtesting/run_sweep.py --start 2026-01-01 --end 2026-01-29 \\
       --tau none 0.05 0.10 --edge 0.03 0.05 0.08 --kelly 0.10 0.125 0.15
@@ -591,6 +612,11 @@ Examples:
         "--kelly", type=float, nargs="+",
         default=[0.125],
         help="Kelly fraction values to sweep (default: 0.125)",
+    )
+    parser.add_argument(
+        "--z-max", type=float, nargs="+",
+        default=[1.0],
+        help="BL z_max values to sweep (confidence saturation point). Lower=more aggressive. (default: 1.0)",
     )
 
     # Model / data config (mirrors run_backtest.py)
@@ -646,7 +672,7 @@ Examples:
     end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
 
     # Build sweep grid
-    configs = build_sweep_grid(tau_values, args.edge, args.kelly)
+    configs = build_sweep_grid(tau_values, args.edge, args.kelly, args.z_max)
     logger.info(f"Sweep grid: {len(configs)} configurations")
     for i, c in enumerate(configs, 1):
         logger.info(f"  Config {i}: {c.label}")

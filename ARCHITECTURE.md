@@ -98,11 +98,16 @@ The system ingests data from two distinct worlds that don't natively share ident
 
 Serves as the bridge between NBA and sportsbook data:
 - **Fuzzy Matching:** Matches variations of player names (e.g., "Luka Doncic" vs "Luka Dončić") and team names.
+- **Team Normalization:** All team names normalized to 3-letter abbreviations (e.g., "Atlanta Hawks" → "ATL", "Los Angeles Lakers" → "LAL") for consistent matching between Odds API full names and NBA API abbreviations.
 - **Date Alignment:** Handles timezone differences and scheduling quirks (e.g., ±90 day fuzzy windows for futures).
 - **Staging Tables:** Data first lands in `raw_*_staging` tables before being linked to official `game_id` and `player_id`.
 - **Manual Overrides:** `data/linker_data/player_mappings.csv` for edge cases.
 - **Unmatched Output:** Writes `unmatched_*.csv` files for human review.
-- **Commands:** `download`, `process`, `upload`.
+- **Commands:**
+  - `download` — Pull full tables to local CSV (one-time bulk operation)
+  - `process` — Match IDs locally using downloaded CSVs
+  - `upload` — Push linked results back to database
+  - `incremental` — **Lightweight daily mode**: queries only unlinked records (`WHERE player_id IS NULL`), matches against reference tables, updates directly via batched SQL. No CSV download. Used by `run_daily.py` for automated pipelines. Options: `--batch-size` (default 50000), `--limit` (optional cap on records to process).
 
 ### 3. Processing Pipeline (`src/processing/`)
 
@@ -156,6 +161,12 @@ The modeling engine predicts the probability distribution of player stats.
     - *Example:* "Floor" (Q10) models might prioritize minutes played, while "Ceiling" (Q90) models prioritize usage rate and pace.
 - **Isotonic Calibration:** Post-processing step to ensure monotonic predictions (`Q10 <= Q25 <= ...`).
 - **Conformal Recalibration:** After training each quantile, computes validation residuals `(y_val - pred)`. If coverage gap exceeds 3%, applies a conformal offset `delta = np.quantile(residuals, q)` at prediction time. Addresses zero-inflated distributions (e.g., `threes_per_min`) where XGBoost's `quantileerror` objective cannot learn the correct quantile. Offsets persisted in model artifacts.
+- **Hurdle Model Architecture (C3):** For zero-inflated distributions like THREES (35%+ samples exactly 0), a two-stage hurdle model replaces standard quantile regression:
+    - **Stage 1 (Zero Classifier):** XGBoost binary classifier predicts P(stat = 0 | features). Calibrated with isotonic regression to ensure accurate p_zero estimates.
+    - **Stage 2 (Positive Quantile Models):** Standard quantile regression trained only on positive samples (stat | stat > 0).
+    - **Inference Logic:** For target quantile q: if q ≤ p_zero → return 0; else map to positive distribution via adjusted quantile `(q - p_zero) / (1 - p_zero)`.
+    - **MC Sampling:** Bernoulli draw (independent of copula) determines zero vs positive. For positive samples, copula-correlated uniforms map through positive distribution inverse CDF.
+    - `HurdleQuantileModel` class with `save()`/`load()`/`is_hurdle_model()` for persistence. Artifacts: `threes_zero_classifier.joblib`, `threes_zero_calibrator.joblib`, `threes_rate_model.joblib`, `threes_is_hurdle.json`.
 - Default hyperparameters: `n_estimators=1000`, `max_depth=5`, `learning_rate=0.03`, `early_stopping_rounds=50`.
 
 #### Stage B: Hyperparameter Tuning (`hyperparameter_tuner.py`)
@@ -196,19 +207,19 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 - `BlackLittermanBlender` class with `BLConfig` dataclass.
 - **Prior:** Devigged sportsbook probability (vig removed via multiplicative normalization, equivalent to Shin's method for 2-outcome markets).
 - **View:** Model's empirical P(over) from MC samples.
-- **Confidence:** Per-prediction confidence from MC distribution properties:
+- **Confidence:** Per-prediction confidence using linear ramp based on z-score:
   ```
   z = |mean(samples) - line| / std(samples)
-  confidence = 1 - exp(-0.5 * z²)
+  confidence = min(z / z_max, 1.0)
   ```
-  z~0 → confidence~0 (line at center, posterior ≈ market). z~2 → confidence~0.86 (strong model disagreement).
+  z=0 → confidence=0 (line at center, posterior ≈ market). z=z_max → confidence=1.0 (full model weight). Linear interpolation between.
 - **Blending (log-odds space):**
   ```
   w = min(tau × confidence, max_weight)
   posterior_logit = market_logit + w × (model_logit - market_logit)
   posterior = sigmoid(posterior_logit)
   ```
-- **Parameters:** `tau` (global scaling, 0.01–0.30, default 0.05), `max_weight` (hard cap, default 0.50), `min_prob`/`max_prob` (clamping to avoid log(0)).
+- **Parameters:** `tau` (global scaling, 0.01–0.30, default 0.05), `max_weight` (hard cap, default 0.50), `z_max` (confidence saturation point, default 1.0), `min_prob`/`max_prob` (clamping to avoid log(0)).
 - **Key property:** When tau=0 or confidence=0, posterior = market → no edge → no bet. Model influence scales with both global trust (tau) and per-prediction confidence.
 - **Integration:** Wired into `_calculate_edges()` in `backtest_harness.py` via `--bl-tau` CLI flag. Disabled by default (backward compatible).
 
@@ -458,7 +469,8 @@ python src/scrapers/daily_game_lines_scraper.py
 
 ### Processing
 ```bash
-python src/processing/nba_linker_local.py [download|process|upload]
+python src/processing/nba_linker_local.py [download|process|upload|incremental]
+python src/processing/nba_linker_local.py incremental [--batch-size 50000] [--limit N]  # Lightweight daily mode
 python src/processing/populate_average_stats.py [--season YYYY-YY] [--table player]
 python src/processing/backfill_opponent_allowed.py
 python src/processing/backfill_league_priors.py
@@ -597,16 +609,15 @@ See `ACTIONITEMS.md` for full details.
 **BL parameter sweep results (2026-01-31):** Comprehensive sweep revealed:
 - **No-BL configs are profitable:** +3% ROI, 600-873 bets across edge/Kelly combinations. REB is the strongest stat at +7.9% ROI.
 - **ALL BL configs produce 0-12 bets:** The BL confidence formula `confidence = 1 - exp(-0.5 * z²)` produces near-zero values for realistic betting edges. For a 3% raw edge (P(over)=0.55), z~0.13, confidence~0.008. Combined with tau, `w = tau * confidence` is vanishingly small (~0.0008), crushing edges below any practical threshold.
-- **Structural issue:** The BL layer as currently designed cannot pass through profitable edges — this is a design flaw in the confidence function, not a model quality issue. The model DOES find edges (visible in no-BL results), but BL destroys them.
-- **Recommended fix (pending):** Use tau as a fixed blending weight (skip confidence scaling), change the confidence function to be less aggressive, or use BL only for position sizing rather than edge filtering.
+- **Fixed (2026-02-05):** Replaced exponential confidence with linear ramp `confidence = min(z / z_max, 1.0)`. At z=0.13, confidence is now 0.13 instead of 0.008 — a 16x improvement in effective weight. BL should now produce meaningful bet counts.
 
 **Active tracks:**
-- **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option. BL (A3) has structural confidence function issue — see above.
+- **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A3b (BL confidence fix) completed. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option.
 - **Track B** (Complete): New signal sources — B1 (injury context, 10 features), B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented and included in latest training run.
-- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration) pending.
+- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration) pending. C3 (THREES hurdle model) implemented — two-stage architecture with isotonic-calibrated classifier and positive-only quantile models.
 - **Track D**: Deprioritized model items (pending recalibration).
-- **Track E**: Go-live pipeline — no-BL path shows positive ROI (+3%). BL fix needed before BL-based edge filtering is viable.
+- **Track E**: Go-live pipeline — no-BL path shows positive ROI (+3%). E4 (daily injury pipeline) and E5 (paper trading infra) complete. E6 (scheduling) pending.
 
 **Prediction storage + query tool (2026-01-31):** Daily predictions and MC samples now persisted to PostgreSQL (`daily_predictions` + `daily_prediction_samples` tables). CLI query tool (`src/tools/query_player.py`) enables ad-hoc probability queries against stored distributions. Daily runner refactored: NBA API ScoreboardV2 for game discovery, `rapidapi_injuries` for injury filtering, MC samples for edge calculation, `ROW_NUMBER` snapshot ranking for line freshness.
 
-**Current state (2026-01-31):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260129_205540`. Daily inference pipeline fully wired to DB storage. Calibration fixes (conformal recalibration, zero-snap, threes eval) applied but models need retraining to incorporate. No-BL backtest shows +3% ROI (REB +7.9%). BL blending has structural confidence function issue that kills all edges — needs redesign before use. Next step: retrain with calibration fixes, then evaluate no-BL strategy for paper trading or fix BL confidence function.
+**Current state (2026-02-05):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260129_205540`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. THREES hurdle model implemented — two-stage architecture (classifier + positive quantile models) should fix Q0.10 +20.4% calibration gap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). Next step: retrain with hurdle model, validate THREES calibration, then proceed to paper trading.

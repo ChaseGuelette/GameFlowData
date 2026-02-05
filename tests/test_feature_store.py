@@ -144,7 +144,8 @@ def test_get_player_rolling_stats_fallback():
     result = store._get_player_rolling_stats(conn, 10, date(2025, 1, 1))
 
     assert result["player_avg_min_l5"] == 0
-    assert result["player_avg_usg_pct_l5"] == 0
+    # Advanced stats use league-average defaults, not 0
+    assert result["player_avg_usg_pct_l5"] == 0.20
     assert result["player_avg_reb_l5"] == 0
     assert result["player_avg_ast_l5"] == 0
     # B3: L3 averages default to 0
@@ -235,15 +236,16 @@ def test_get_player_rolling_stats_maps_keys():
 
 
 def test_get_team_rolling_stats_fallback():
-    """When no data found, return 0 for all stats."""
+    """When no data found, return league-average defaults."""
     store = FeatureStore(engine=Mock())
     conn = Mock()
     conn.execute.return_value = FakeResult(None)
 
     result = store._get_team_rolling_stats(conn, 1, date(2025, 1, 1), False)
 
-    assert result["team_avg_pace_l5"] == 0
-    assert result["team_avg_def_rtg_l5"] == 0
+    # Team stats use league-average defaults
+    assert result["team_avg_pace_l5"] == 99.5
+    assert result["team_avg_def_rtg_l5"] == 112.0
 
 
 def test_get_team_rolling_stats_mapping_for_opponent():
@@ -259,17 +261,18 @@ def test_get_team_rolling_stats_mapping_for_opponent():
 
 
 def test_get_opponent_positional_stats_fallback():
-    """When no data found, return 0 for all stats."""
+    """When no data found, return league-average defaults."""
     store = FeatureStore(engine=Mock())
     conn = Mock()
     conn.execute.return_value = FakeResult(None)
 
     result = store._get_opponent_positional_stats(conn, 2, "G", date(2025, 1, 1))
 
-    assert result["opp_pos_off_rtg_allowed_l5"] == 0
-    assert result["opp_pos_reb_allowed_l5"] == 0
-    assert result["opp_pos_ast_allowed_l5"] == 0
-    assert result["opp_pos_threes_allowed_l5"] == 0
+    # Opponent positional stats use league-average defaults
+    assert result["opp_pos_off_rtg_allowed_l5"] == 112.0
+    assert result["opp_pos_reb_allowed_l5"] == 0  # Counting stat, 0 is OK
+    assert result["opp_pos_ast_allowed_l5"] == 0  # Counting stat, 0 is OK
+    assert result["opp_pos_threes_allowed_l5"] == 0  # Counting stat, 0 is OK
 
 
 def test_get_opponent_positional_stats_mapping():
@@ -299,7 +302,7 @@ def test_get_game_lines_defaults():
 
     result = store._get_game_lines(conn, "g1")
 
-    assert result["line_spread"] == 0
+    assert result["line_spread_raw"] == 0
     assert result["line_total"] == 0
 
 
@@ -311,7 +314,7 @@ def test_get_game_lines_uses_db_values():
 
     result = store._get_game_lines(conn, "g1")
 
-    assert result["line_spread"] == -4.0
+    assert result["line_spread_raw"] == -4.0
     assert result["line_total"] == 219.5
 
 

@@ -5,6 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-05 Session 12] — Lightweight Incremental Linker
+
+### Added
+
+- **`link_incremental()` function** in `src/processing/nba_linker_local.py`:
+  - Lightweight mode for daily automated linking without downloading full 25M+ row tables
+  - Queries only unlinked records (`WHERE player_id IS NULL`)
+  - Loads reference tables once (teams, players, team_game_stats)
+  - Direct SQL updates via batched queries
+  - Fuzzy player name matching with 0.80 threshold and last name bonus
+  - Game matching via normalized team names and ±90 day fuzzy window
+  - CLI options: `--batch-size` (default 50000), `--limit` (optional cap)
+- **`normalize_player()` function** — Moved to module level for reuse across functions
+- **Expanded `TEAM_NAME_ALIASES`** — 30 full team name → 3-letter abbreviation mappings (e.g., "Atlanta Hawks" → "ATL") for matching Odds API full names to NBA API abbreviations
+
+### Changed
+
+- **`src/orchestration/run_daily.py`:**
+  - Fixed broken linker call (was missing command argument)
+  - Now uses `incremental` command: `python src/processing/nba_linker_local.py incremental`
+
+### Updated
+
+- **`tests/test_nba_linker_local.py`:**
+  - Updated `test_normalize_team_aliases` — Now expects 3-letter abbreviations instead of full team names
+
+### Test Results
+
+- Player match rate: 99.3% (4,963/5,000 records)
+- Game match rate: 40.7% (2,037/5,000 records) — lower because many props are for future games
+- Total unlinked records: ~2.8M combo market rows from backfill
+
+---
+
+## [2026-02-05 Session 11] — Fix BL Confidence + THREES Hurdle Model (A3b, C3)
+
+### Added — THREES Hurdle Model (C3)
+
+- **`HurdleQuantileModel` class** in `src/models/quantile_trainer.py`:
+  - Two-stage architecture: Stage 1 binary classifier + Stage 2 quantile regression on positive samples
+  - Isotonic regression calibration for P(zero) classifier
+  - `predict_p_zero()`, `predict_quantiles()` methods with zero/positive combination
+  - `_interpolate_positive_quantile()` for adjusted quantile mapping
+  - `save()` / `load()` / `is_hurdle_model()` for persistence
+- **`train_hurdle_model()` function** — Trains hurdle model with conformal recalibration on positive distribution
+- **`_sample_hurdle()` and `_sample_hurdle_from_quantiles()` methods** in `src/models/monte_carlo.py`:
+  - Bernoulli draw for zero vs positive (independent of copula)
+  - Inverse CDF sampling for positive samples
+  - Copula-correlated uniforms applied to positive branch only
+- **`_calibrate_hurdle_model()` method** in `src/models/train_pipeline.py`:
+  - Zero prediction accuracy diagnostics
+  - Quantile coverage evaluation
+
+### Changed
+
+- **`PlayerPropsModelPipeline` class**:
+  - Added `hurdle_models: dict[str, HurdleQuantileModel]` attribute
+  - Modified `train_rate_models()` — uses `train_hurdle_model()` for THREES stat
+  - Modified `save_all()` — saves hurdle model artifacts (classifier, calibrator, rate models, flag file)
+  - Modified `load_all()` — detects and loads hurdle models via `threes_is_hurdle.json` flag
+- **`MonteCarloPredictor._predict_copula()`** — Detects hurdle models and uses `_sample_hurdle()` instead of regular inverse CDF
+- **`MonteCarloPredictor.predict_batch_for_date()`** — Handles hurdle models in batch prediction loop
+- **`TrainingOrchestrator._evaluate_calibration()`** — Evaluates hurdle models separately
+- **`TrainingOrchestrator._evaluate_combined_calibration()`** — Includes hurdle stats in combined eval
+
+### Changed — BL Confidence (A3b)
+
+- **`BLConfig` dataclass** in `src/models/black_litterman.py`:
+  - Added `z_max: float = 1.0` parameter — z-score at which confidence saturates to 1.0
+- **`compute_confidence()` method** — Replaced exponential formula with linear ramp:
+  - Old: `confidence = 1 - exp(-0.5 * z²)` (near-zero for z < 0.5)
+  - New: `confidence = min(z / z_max, 1.0)` (proportional for z < z_max)
+  - Impact: At z=0.13 (typical 3% edge), confidence is now 0.13 vs 0.008 previously (16x improvement)
+
+### Updated
+
+- **`tests/test_black_litterman.py`:**
+  - Updated `test_line_one_std_away` — z=1 now → confidence=1.0 (was 0.39)
+  - Updated `test_line_two_std_away` — z=2 now → confidence=1.0 (was 0.86)
+  - Updated `test_line_three_std_away` — z=3 now → confidence=1.0 (was 0.99)
+  - Added `test_linear_confidence_at_half_z_max` — verifies z=0.5 → confidence=0.5
+  - Added `test_custom_z_max` — verifies custom z_max=2.0 works correctly
+  - Added `test_linear_ramp_proportional` — verifies linear relationship
+  - Updated `test_default_config` and `test_custom_config` to include z_max assertions
+  - All 42 tests pass
+- **Test suite:** 518 of 523 tests pass (5 pre-existing failures unrelated to hurdle model)
+
+---
+
 ## [2026-02-05 Session 10] — BL Sizing Parameter + Combo Markets Verification
 
 ### Added
