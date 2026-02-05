@@ -1,0 +1,96 @@
+# GameFlowData Daily Pipeline - Cron Configuration
+# ================================================
+#
+# This file contains the cron schedule for the GameFlowData daily pipeline.
+# All times are in UTC. Adjust based on your server's timezone.
+#
+# To install: crontab -e and paste these lines
+# To verify: crontab -l
+#
+# ET to UTC conversion:
+#   EST (Nov-Mar): ET + 5 hours = UTC
+#   EDT (Mar-Nov): ET + 4 hours = UTC
+#
+# The times below assume EST (winter). Adjust during EDT.
+# =============================================================================
+
+# Environment setup (adjust paths for your server)
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+GAMEFLOW_DIR=/path/to/GameFlowData
+VENV_PYTHON=/path/to/venv/bin/python
+
+# =============================================================================
+# DAILY STATS JOB - 6:00 AM ET (11:00 UTC during EST, 10:00 UTC during EDT)
+# =============================================================================
+# Scrapes previous night's NBA game results and runs full processing pipeline.
+# Should run after all games from the previous night are final (~3-4 AM ET).
+#
+0 11 * * * cd $GAMEFLOW_DIR && $VENV_PYTHON src/orchestration/daily_stats_job.py >> logs/daily_stats.log 2>&1
+
+# =============================================================================
+# LINES JOB (FIRST RUN) - 12:00 PM ET (17:00 UTC during EST)
+# =============================================================================
+# First scrape of player props and injuries for the day.
+# Props typically posted by late morning.
+#
+0 17 * * * cd $GAMEFLOW_DIR && $VENV_PYTHON src/orchestration/lines_job.py >> logs/lines.log 2>&1
+
+# =============================================================================
+# LINES JOB (SECOND RUN) - 4:00 PM ET (21:00 UTC during EST)
+# =============================================================================
+# Afternoon update for line movement and injury updates.
+#
+0 21 * * * cd $GAMEFLOW_DIR && $VENV_PYTHON src/orchestration/lines_job.py >> logs/lines.log 2>&1
+
+# =============================================================================
+# LINES JOB (FINAL RUN) - 6:00 PM ET (23:00 UTC during EST)
+# =============================================================================
+# Final lines scrape before predictions. Captures late lineup news.
+#
+0 23 * * * cd $GAMEFLOW_DIR && $VENV_PYTHON src/orchestration/lines_job.py >> logs/lines.log 2>&1
+
+# =============================================================================
+# INFERENCE JOB - 6:30 PM ET (23:30 UTC during EST)
+# =============================================================================
+# Generate predictions using latest lines. Should complete before 7 PM game starts.
+#
+30 23 * * * cd $GAMEFLOW_DIR && $VENV_PYTHON src/orchestration/inference_job.py >> logs/inference.log 2>&1
+
+# =============================================================================
+# LOG ROTATION (Weekly) - Sunday 3:00 AM ET (08:00 UTC)
+# =============================================================================
+# Compress and rotate logs weekly to prevent disk space issues.
+#
+0 8 * * 0 cd $GAMEFLOW_DIR/logs && for f in *.log; do [ -f "$f" ] && gzip -c "$f" > "${f%.log}_$(date +\%Y\%m\%d).log.gz" && > "$f"; done
+
+# =============================================================================
+# NOTES
+# =============================================================================
+#
+# 1. BEFORE INSTALLING:
+#    - Update GAMEFLOW_DIR to your actual project path
+#    - Update VENV_PYTHON to your virtual environment's Python path
+#    - Ensure .env file exists with required API keys:
+#      - DATABASE_URL
+#      - ODDS_API_KEY
+#      - RAPIDAPI_KEY
+#
+# 2. MONITORING:
+#    - Check logs: tail -f logs/daily_stats.log logs/lines.log logs/inference.log
+#    - Check for errors: grep -i "error\|failed" logs/*.log
+#
+# 3. MANUAL RUNS:
+#    - Stats: python src/orchestration/daily_stats_job.py
+#    - Lines: python src/orchestration/lines_job.py --date 2026-02-05
+#    - Inference: python src/orchestration/inference_job.py --date 2026-02-05
+#
+# 4. DRY RUN (test without executing):
+#    - python src/orchestration/daily_stats_job.py --dry-run
+#    - python src/orchestration/lines_job.py --dry-run
+#    - python src/orchestration/inference_job.py --dry-run
+#
+# 5. OFF-SEASON:
+#    Comment out all jobs during NBA off-season (typically June-October)
+#    to avoid unnecessary API calls.
+#

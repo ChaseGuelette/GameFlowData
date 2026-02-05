@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""
+Inference Job - Generate Daily Predictions
+===========================================
+Run once daily (recommended: 6:30 PM ET) after lines_job, before games start.
+
+This job:
+1. Loads trained model artifacts
+2. Generates predictions for today's games
+3. Stores predictions to database
+4. Exports CSV backup
+
+Usage:
+    python src/orchestration/inference_job.py [--date YYYY-MM-DD] [--dry-run] [--model-dir PATH]
+
+Examples:
+    # Normal run for today
+    python src/orchestration/inference_job.py
+
+    # Run for specific date
+    python src/orchestration/inference_job.py --date 2026-02-05
+
+    # Use specific model artifacts
+    python src/orchestration/inference_job.py --model-dir src/models/artifacts/run_20260131_112534
+
+    # Dry run (load models but don't store)
+    python src/orchestration/inference_job.py --dry-run
+"""
+
+import argparse
+import logging
+import sys
+import time
+from datetime import date, datetime
+from pathlib import Path
+
+# Add project root to path
+sys.path.append(str(Path(__file__).resolve().parents[2]))
+
+# Configure logging
+LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_DIR / "inference.log"),
+    ],
+)
+logger = logging.getLogger("InferenceJob")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Inference Job - Generate Daily Predictions",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--date",
+        type=str,
+        default=str(date.today()),
+        help="Target date (YYYY-MM-DD), defaults to today",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Generate predictions but don't store to database",
+    )
+    parser.add_argument(
+        "--model-dir",
+        type=str,
+        default="src/models/artifacts",
+        help="Path to model artifacts directory",
+    )
+    parser.add_argument(
+        "--stats",
+        type=str,
+        nargs="+",
+        default=["pts", "reb", "ast"],
+        help="Stats to predict (default: pts reb ast)",
+    )
+    args = parser.parse_args()
+
+    target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
+
+    start_time = time.time()
+    logger.info("=" * 60)
+    logger.info(f"INFERENCE JOB START: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Target Date: {target_date}")
+    logger.info(f"Stats: {args.stats}")
+    logger.info("=" * 60)
+
+    try:
+        # Import here to avoid slow imports when just checking --help
+        from src.db.client import get_engine
+        from src.models.daily_runner import DailyPredictionRunner
+        from src.models.feature_store import FeatureStore
+        from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
+        from src.models.prediction_store import PredictionStore
+        from src.models.quantile_trainer import PlayerPropsModelPipeline
+
+        # Find model artifacts
+        artifacts_path = Path(args.model_dir)
+        if not artifacts_path.exists():
+            raise FileNotFoundError(f"Model artifacts directory not found: {artifacts_path}")
+
+        # Check if artifacts_path contains models directly or has run_* subdirs
+        if (artifacts_path / "minutes_model.joblib").exists():
+            model_path = artifacts_path
+        else:
+            runs = sorted([d for d in artifacts_path.iterdir() if d.is_dir() and d.name.startswith("run_")])
+            if not runs:
+                raise FileNotFoundError(f"No run_* directories found in {artifacts_path}")
+            model_path = runs[-1]
+
+        logger.info(f"Using model artifacts: {model_path.name}")
+
+        # Initialize components
+        logger.info("Initializing database connection...")
+        engine = get_engine()
+        feature_store = FeatureStore(engine)
+
+        logger.info("Loading model pipeline...")
+        pipeline = PlayerPropsModelPipeline.load_all(str(model_path), feature_store)
+
+        logger.info("Initializing Monte Carlo predictor (10,000 samples)...")
+        copula_params = load_copula_params(str(model_path))
+        if copula_params:
+            logger.info("Loaded Gaussian copula params for correlated sampling")
+        predictor = MonteCarloPredictor(pipeline, n_samples=10000, copula_params=copula_params)
+
+        # Create runner and generate predictions
+        runner = DailyPredictionRunner(engine, feature_store, pipeline, predictor)
+
+        logger.info(f"Generating predictions for {target_date}...")
+        preds, samples = runner.run_for_date(target_date, stats=args.stats)
+
+        if preds.empty:
+            logger.warning("No predictions generated (no games or no data)")
+            elapsed = time.time() - start_time
+            logger.info(f"INFERENCE JOB COMPLETED ({elapsed:.1f}s) - No predictions")
+            return
+
+        logger.info(f"Generated {len(preds)} predictions")
+
+        # Show summary
+        if "over_edge" in preds.columns:
+            pos_edge = preds[preds["over_edge"] > 0.05]
+            neg_edge = preds[preds["under_edge"] > 0.05]
+            logger.info(f"  Positive over edges (>5%): {len(pos_edge)}")
+            logger.info(f"  Positive under edges (>5%): {len(neg_edge)}")
+
+        # Store to database
+        if not args.dry_run:
+            logger.info("Storing predictions to database...")
+            store = PredictionStore(engine)
+            store.store_predictions(preds, target_date)
+            store.store_samples(samples, target_date)
+            logger.info(f"Stored {len(preds)} predictions + {len(samples)} sample arrays")
+
+        # Export CSV backup
+        output_dir = Path("predictions")
+        output_dir.mkdir(exist_ok=True)
+        output_file = output_dir / f"predictions_{target_date}.csv"
+        preds.to_csv(output_file, index=False)
+        logger.info(f"Exported CSV: {output_file}")
+
+        elapsed = time.time() - start_time
+        logger.info("=" * 60)
+        logger.info(f"INFERENCE JOB COMPLETED SUCCESSFULLY ({elapsed:.1f}s)")
+        logger.info(f"  Predictions: {len(preds)}")
+        logger.info(f"  Output: {output_file}")
+        logger.info("=" * 60)
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error("=" * 60)
+        logger.error(f"INFERENCE JOB FAILED ({elapsed:.1f}s)")
+        logger.error(f"Error: {e}", exc_info=True)
+        logger.error("=" * 60)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

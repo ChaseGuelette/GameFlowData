@@ -1,5 +1,52 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-05 — Session 13)
+
+### What We Did
+
+**Implemented E6 Daily Pipeline Automation.** Created frequency-separated job scripts for cron scheduling, separating stats scraping (once daily) from lines/injuries (multiple times daily) and inference (pre-game).
+
+**New files created:**
+
+| File | Purpose |
+|------|---------|
+| `src/orchestration/daily_stats_job.py` | Once-daily NBA stats + processing (6 AM ET) |
+| `src/orchestration/lines_job.py` | Multiple-times-daily props + injuries (12/4/6 PM ET) |
+| `src/orchestration/inference_job.py` | Pre-game predictions (6:30 PM ET) |
+| `.session/specs/E6_daily_automation.md` | Full specification document |
+| `cron/gameflow_crontab.txt` | Server cron schedule template |
+| `logs/` | Job execution log directory |
+
+**`daily_stats_job.py` (6:00 AM ET):**
+- Scrapes previous night's NBA game results via `nba_unified_scraper.py`
+- Runs full processing pipeline: linker → team_ids → positions → averages → opponent stats
+- Runtime: ~2-5 minutes
+
+**`lines_job.py` (12 PM, 4 PM, 6 PM ET):**
+- Scrapes game lines, player props, injuries
+- Runs incremental linker for new props
+- Options: `--date`, `--skip-injuries`, `--skip-linker`, `--dry-run`
+- Runtime: ~30-90 seconds
+
+**`inference_job.py` (6:30 PM ET):**
+- Loads model artifacts (auto-detects latest `run_*` directory)
+- Generates predictions via `DailyPredictionRunner` with 10K Monte Carlo samples
+- Stores to `daily_predictions` + `daily_prediction_samples` tables
+- Exports CSV backup to `predictions/` directory
+- Options: `--date`, `--model-dir`, `--stats`, `--dry-run`
+- Runtime: ~1-3 minutes
+
+**Also investigated:** Root cause of missing backtest bets after Jan 9 — `game_id_map_staging` table lacks mappings for games after Jan 10 because linker upload step never completed.
+
+### Next Step
+
+1. **Run linker upload** — `python src/processing/nba_linker_local.py upload` to fix missing game mappings
+2. **Retrain models** — Run training pipeline to generate hurdle model for THREES
+3. **Deploy automation** — Set up cron jobs on server using `cron/gameflow_crontab.txt` template
+4. **Paper trade** — Begin paper trading with automated pipeline
+
+---
+
 ## Session Summary (2026-02-05 — Session 12)
 
 ### What We Did
@@ -548,10 +595,25 @@ out-of-sample period. Do not pursue E4+ until sweep results are in.
   - `PaperTrader` class with bet selection (edge threshold + Kelly sizing), placement (UPSERT), and resolution
   - CLI scripts: `place_bets.py` (with `--dry-run`) and `resolve_bets.py`
   - 20 unit tests in `tests/test_paper_trader.py`
-- [ ] **E6. Scheduling** — Automate daily pipeline (cron/Task Scheduler):
-  - ~11am: Scrape game results, props, injuries
-  - ~12pm: Run processing + feature store + predictions
-  - ~6pm: Re-scrape props for line movement, re-run edge calc
+- [x] **E6. Daily Pipeline Automation** — *(IN PROGRESS — 2026-02-05)*
+  Separated jobs by frequency for cron scheduling. Spec: `.session/specs/E6_daily_automation.md`
+
+  **Scripts created:**
+  - `src/orchestration/daily_stats_job.py` — Once daily (6 AM ET): NBA results + full processing pipeline
+  - `src/orchestration/lines_job.py` — Multiple times daily (12 PM, 4 PM, 6 PM ET): Props + injuries + linking
+  - `src/orchestration/inference_job.py` — Once daily (6:30 PM ET): Generate predictions before games
+
+  **Schedule (ET timezone):**
+  - 6:00 AM: `daily_stats_job.py` — Scrape previous night's games, update derived stats
+  - 12:00 PM: `lines_job.py` — First props/injuries scrape
+  - 4:00 PM: `lines_job.py` — Second props/injuries scrape
+  - 6:00 PM: `lines_job.py` — Final props/injuries scrape
+  - 6:30 PM: `inference_job.py` — Generate predictions with latest lines
+
+  **Remaining work:**
+  - [ ] Email notifications on success/failure (Phase 2)
+  - [ ] Health check endpoints (Phase 2)
+  - [ ] Server deployment with cron
 - [ ] **E7. Paper trade** — Run live for 2-4 weeks, validate predictions vs outcomes
 - [ ] **E8. Go live — minimum flat stakes**
 - [ ] **E9. Scale to Kelly sizing**

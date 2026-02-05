@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-05 Session 13] — E6 Daily Pipeline Automation
+
+### Added
+
+- **Frequency-separated job scripts** for cron scheduling:
+  - **`src/orchestration/daily_stats_job.py`** — Once-daily (6 AM ET) NBA game results + full processing pipeline
+    - Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats.py` → `backfill_opponent_allowed.py`
+    - Runtime: ~2-5 minutes
+    - CLI: `--dry-run` to preview commands without executing
+  - **`src/orchestration/lines_job.py`** — Multiple-times-daily (12 PM, 4 PM, 6 PM ET) props + injuries scraping
+    - Steps: `daily_game_lines_scraper.py` → `daily_player_props_scraper.py` → `rapidapi_injury_backfill.py` (optional) → `link_injury_data.py` (optional) → `nba_linker_local.py incremental` (optional)
+    - Runtime: ~30-90 seconds
+    - CLI: `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`
+  - **`src/orchestration/inference_job.py`** — Pre-game (6:30 PM ET) prediction generation
+    - Loads model artifacts (auto-detects latest `run_*` directory)
+    - Initializes Monte Carlo predictor with 10K samples + Gaussian copula
+    - Stores to `daily_predictions` + `daily_prediction_samples` tables
+    - Exports CSV backup to `predictions/` directory
+    - Runtime: ~1-3 minutes
+    - CLI: `--date`, `--dry-run`, `--model-dir`, `--stats`
+- **`.session/specs/E6_daily_automation.md`** — Full specification document with:
+  - Architecture diagram and timeline
+  - Job descriptions and usage examples
+  - Environment variable requirements
+  - Cron configuration guide (ET → UTC conversion)
+  - Monitoring and troubleshooting guide
+- **`cron/gameflow_crontab.txt`** — Server cron schedule template with:
+  - UTC times for all 5 daily jobs
+  - Environment setup instructions
+  - Log rotation job (weekly)
+  - Documentation comments for manual runs and dry-run testing
+- **`logs/` directory** — Job execution log directory with `.gitkeep`
+- **`predictions/` directory** — Created by `inference_job.py` for CSV exports
+
+### Changed
+
+- Updated **ARCHITECTURE.md**:
+  - Added frequency-separated job scripts table in Orchestration section
+  - Added CLI documentation for new job scripts in Daily Workflow section
+  - Updated directory structure with `logs/`, `cron/`, `predictions/` directories
+  - Updated "Current state" section with E6 completion note
+- Updated **ACTIONITEMS.md**:
+  - E6 entry marked as implemented with full schedule and remaining Phase 2 work
+  - Added Session 13 summary
+
+### Analysis
+
+- **Root cause of missing backtest bets after Jan 9:** The `game_id_map_staging` table lacks mappings for games after Jan 10 because the linker upload step never completed. The `props_game_updates.csv` file has mappings through Jan 23 but they weren't uploaded to the database. Fix: run `python src/processing/nba_linker_local.py upload`.
+
+---
+
 ## [2026-02-05 Session 12] — Lightweight Incremental Linker
 
 ### Added

@@ -44,13 +44,17 @@ GameFlowData/
 │   ├── models/                 # ML core: features, training, inference, storage
 │   ├── backtesting/            # Historical replay and bet simulation
 │   ├── tools/                  # CLI query tools
-│   └── orchestration/          # Daily workflow coordination
+│   ├── orchestration/          # Daily workflow coordination
+│   └── paper_trading/          # Paper bet placement and resolution
 ├── tests/                      # Unit and integration tests (33 modules)
 ├── docs/                       # Component-level documentation
 ├── notebooks/                  # Jupyter notebooks for research
 ├── database/                   # Schema definitions (schema.sql)
 ├── data/linker_data/           # Local CSV cache for linking pipeline
 ├── backtest_results/           # Backtest output and analysis
+├── logs/                       # Job execution logs (daily_stats, lines, inference)
+├── cron/                       # Cron schedule templates for server deployment
+├── predictions/                # Daily prediction CSV exports
 ├── pyproject.toml              # Project config, deps, ruff/pytest settings
 ├── requirements.txt            # Production ML/data dependencies
 ├── requirements-dev.txt        # Dev/test dependencies
@@ -297,7 +301,23 @@ A simulation environment to validate betting strategies.
 
 ### 8. Orchestration (`src/orchestration/`)
 
-**`run_daily.py`** — Daily workflow coordinator. Triggers the full pipeline: data scraping → linking → feature store → predictions → storage → CSV export. Supports `--skip-storage` to skip DB persistence. Stores predictions to `daily_predictions` and MC samples to `daily_prediction_samples` via `PredictionStore`. The `--scrape-injuries` flag fetches current injuries from RapidAPI into `rapidapi_injuries` and runs `link_injury_data.py` to populate `player_id` for feature generation and filtering.
+**`run_daily.py`** — Full pipeline orchestrator (legacy). Triggers complete workflow: data scraping → linking → feature store → predictions → storage → CSV export. Supports `--skip-storage` to skip DB persistence. The `--scrape-injuries` flag fetches current injuries from RapidAPI into `rapidapi_injuries` and runs `link_injury_data.py` to populate `player_id` for feature generation and filtering.
+
+**Frequency-Separated Job Scripts (E6 — added 2026-02-05):**
+
+| Script | Schedule | Purpose |
+|--------|----------|---------|
+| `daily_stats_job.py` | 6:00 AM ET (once) | NBA game results + full processing pipeline |
+| `lines_job.py` | 12 PM, 4 PM, 6 PM ET | Player props + injuries + incremental linking |
+| `inference_job.py` | 6:30 PM ET (once) | Generate predictions with latest lines |
+
+**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats.py` → `backfill_opponent_allowed.py`. Supports `--dry-run` to preview commands. Runtime: ~2-5 minutes.
+
+**`lines_job.py`** — Multiple-times-daily props and injuries scraping. Steps: `daily_game_lines_scraper.py` → `daily_player_props_scraper.py` → `rapidapi_injury_backfill.py` (optional) → `link_injury_data.py` (optional) → `nba_linker_local.py incremental` (optional). Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`. Runtime: ~30-90 seconds.
+
+**`inference_job.py`** — Pre-game prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, exports CSV backup. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`. Runtime: ~1-3 minutes.
+
+**Cron Configuration:** See `cron/gameflow_crontab.txt` for server deployment template with UTC times and environment setup instructions.
 
 ### 9. Paper Trading (`src/paper_trading/`)
 
@@ -501,7 +521,13 @@ python src/backtesting/run_sweep.py \
 
 ### Daily Workflow
 ```bash
+# Full pipeline (legacy)
 python src/orchestration/run_daily.py [--date YYYY-MM-DD] [--skip-scraping] [--skip-processing] [--skip-inference] [--skip-storage] [--scrape-injuries]
+
+# Frequency-separated jobs (E6)
+python src/orchestration/daily_stats_job.py [--dry-run]           # 6 AM ET - Stats + processing
+python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker]  # 12/4/6 PM ET - Props + injuries
+python src/orchestration/inference_job.py [--date YYYY-MM-DD] [--dry-run] [--model-dir PATH] [--stats pts reb ast]  # 6:30 PM ET - Predictions
 ```
 
 The `--scrape-injuries` flag:
@@ -620,4 +646,4 @@ See `ACTIONITEMS.md` for full details.
 
 **Prediction storage + query tool (2026-01-31):** Daily predictions and MC samples now persisted to PostgreSQL (`daily_predictions` + `daily_prediction_samples` tables). CLI query tool (`src/tools/query_player.py`) enables ad-hoc probability queries against stored distributions. Daily runner refactored: NBA API ScoreboardV2 for game discovery, `rapidapi_injuries` for injury filtering, MC samples for edge calculation, `ROW_NUMBER` snapshot ranking for line freshness.
 
-**Current state (2026-02-05):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260129_205540`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. THREES hurdle model implemented — two-stage architecture (classifier + positive quantile models) should fix Q0.10 +20.4% calibration gap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). Next step: retrain with hurdle model, validate THREES calibration, then proceed to paper trading.
+**Current state (2026-02-05):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260129_205540`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. THREES hurdle model implemented — two-stage architecture (classifier + positive quantile models) should fix Q0.10 +20.4% calibration gap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). **E6 Daily Pipeline Automation (2026-02-05):** Three frequency-separated job scripts created for cron scheduling — `daily_stats_job.py` (once daily), `lines_job.py` (multiple times daily), `inference_job.py` (pre-game). Cron template at `cron/gameflow_crontab.txt`. Next step: retrain with hurdle model, validate THREES calibration, then proceed to paper trading.

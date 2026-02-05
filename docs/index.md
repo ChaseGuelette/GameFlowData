@@ -19,6 +19,9 @@
 - [Model Pipeline Runbook](model_pipeline_runbook.md) - Training, backtesting, and daily prediction guide.
 - [Monte Carlo Tuning](monte_carlo_tuning.md) - MC simulation parameter tuning notes.
 
+## Orchestration
+- [Daily Pipeline Automation](daily_pipeline_automation.md) - Frequency-separated job scripts for cron scheduling.
+
 ## Tools
 - [Query Player](query_player_documentation.md) - CLI tool for querying stored predictions.
 
