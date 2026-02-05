@@ -103,6 +103,7 @@ class BetSimulator:
     min_odds: int = -200  # Don't bet on heavy favorites
     max_odds: int = 200  # Don't bet on long shots
     allowed_bets: set[tuple[str, str]] | None = None  # e.g., {("pts", "under"), ("reb", "over")}
+    use_bl_for_sizing: bool = False  # Use BL-blended probs for Kelly sizing (sizing_prob_* columns)
 
     bets: list[Bet] = field(default_factory=list)
     current_bankroll: float = field(init=False)
@@ -178,11 +179,19 @@ class BetSimulator:
         model_prob: float,
         implied_prob: float,
         stake: float | None = None,
+        sizing_prob: float | None = None,
     ) -> Bet:
-        """Create and record a bet."""
+        """Create and record a bet.
+
+        Args:
+            sizing_prob: Optional BL-blended probability for Kelly sizing.
+                         When provided, used instead of model_prob for stake calculation.
+        """
         # Calculate stake if not provided
+        # Use sizing_prob for Kelly when available, else use model_prob
         if stake is None:
-            stake = self._calculate_kelly_stake(odds, model_prob)
+            kelly_prob = sizing_prob if sizing_prob is not None else model_prob
+            stake = self._calculate_kelly_stake(odds, kelly_prob)
 
         # Ensure we have funds (double check)
         if stake > self.current_bankroll:
@@ -241,6 +250,13 @@ class BetSimulator:
                     odds=row.get("over_odds"),
                     side=BetSide.OVER,
                 ):
+                    # Get sizing prob for Kelly when BL sizing is enabled
+                    sizing_prob = None
+                    if self.use_bl_for_sizing and "sizing_prob_over" in row.index:
+                        sizing_prob = row.get("sizing_prob_over")
+                        if pd.isna(sizing_prob):
+                            sizing_prob = None
+
                     bet = self.place_bet(
                         player_id=row["player_id"],
                         game_id=row["game_id"],
@@ -251,6 +267,7 @@ class BetSimulator:
                         odds=int(row["over_odds"]),
                         model_prob=row["over_prob"],
                         implied_prob=row["implied_over"],
+                        sizing_prob=sizing_prob,
                     )
                     # Store bookmaker if available (line shopping)
                     if "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
@@ -258,6 +275,9 @@ class BetSimulator:
                     # Store BL posterior if available
                     if "posterior_over" in row.index and not pd.isna(row.get("posterior_over")):
                         bet.posterior_prob = row["posterior_over"]
+                    # Also store sizing_prob as posterior when using BL sizing
+                    elif sizing_prob is not None:
+                        bet.posterior_prob = sizing_prob
                     new_bets.append(bet)
 
             # Check under bet (skip if not in allowlist)
@@ -268,6 +288,13 @@ class BetSimulator:
                     odds=row.get("under_odds"),
                     side=BetSide.UNDER,
                 ):
+                    # Get sizing prob for Kelly when BL sizing is enabled
+                    sizing_prob = None
+                    if self.use_bl_for_sizing and "sizing_prob_under" in row.index:
+                        sizing_prob = row.get("sizing_prob_under")
+                        if pd.isna(sizing_prob):
+                            sizing_prob = None
+
                     bet = self.place_bet(
                         player_id=row["player_id"],
                         game_id=row["game_id"],
@@ -278,6 +305,7 @@ class BetSimulator:
                         odds=int(row["under_odds"]),
                         model_prob=row["under_prob"],
                         implied_prob=row["implied_under"],
+                        sizing_prob=sizing_prob,
                     )
                     # Store bookmaker if available (line shopping)
                     if "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
@@ -285,6 +313,9 @@ class BetSimulator:
                     # Store BL posterior if available
                     if "posterior_under" in row.index and not pd.isna(row.get("posterior_under")):
                         bet.posterior_prob = row["posterior_under"]
+                    # Also store sizing_prob as posterior when using BL sizing
+                    elif sizing_prob is not None:
+                        bet.posterior_prob = sizing_prob
                     new_bets.append(bet)
 
         return new_bets

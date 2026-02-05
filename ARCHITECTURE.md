@@ -74,7 +74,7 @@ GameFlowData/
 The system ingests data from two distinct worlds that don't natively share identifiers:
 1.  **Official NBA Data:** (Via `nba_api`) Game stats, player bios, team box scores.
 2.  **Sportsbook Data:** (Via The Odds API) Player props, game lines, futures.
-3.  **Injury Data:** (Via RapidAPI + ESPN) Historical injury backfill from 2021 via RapidAPI NBA Injury Reports API; ongoing daily collection via ESPN scraper.
+3.  **Injury Data:** (Via RapidAPI) Historical backfill from 2021 and daily collection via RapidAPI NBA Injury Reports API. Data stored in `rapidapi_injuries` table with `player_id` linking via `link_injury_data.py`.
 
 #### Scrapers (`src/scrapers/`)
 
@@ -92,7 +92,7 @@ The system ingests data from two distinct worlds that don't natively share ident
 | `update_player_position_history.py` | Historical player position tracking |
 | `player_prop_scraper.py` | Alternate player props source |
 | `game_lines_scraper.py` | Historical game lines |
-| `rapidapi_injury_backfill.py` | Historical injury data backfill from RapidAPI (2021-present, 88K+ rows) |
+| `rapidapi_injury_backfill.py` | Injury data from RapidAPI — historical backfill (2021-present, 88K+ rows) and daily collection via `run_daily.py --scrape-injuries` |
 
 #### The NBA Linker (`src/processing/nba_linker_local.py`)
 
@@ -286,7 +286,47 @@ A simulation environment to validate betting strategies.
 
 ### 8. Orchestration (`src/orchestration/`)
 
-**`run_daily.py`** — Daily workflow coordinator. Triggers the full pipeline: data scraping → linking → feature store → predictions → storage → CSV export. Supports `--skip-storage` to skip DB persistence. Stores predictions to `daily_predictions` and MC samples to `daily_prediction_samples` via `PredictionStore`.
+**`run_daily.py`** — Daily workflow coordinator. Triggers the full pipeline: data scraping → linking → feature store → predictions → storage → CSV export. Supports `--skip-storage` to skip DB persistence. Stores predictions to `daily_predictions` and MC samples to `daily_prediction_samples` via `PredictionStore`. The `--scrape-injuries` flag fetches current injuries from RapidAPI into `rapidapi_injuries` and runs `link_injury_data.py` to populate `player_id` for feature generation and filtering.
+
+### 9. Paper Trading (`src/paper_trading/`)
+
+Standalone CLI scripts to convert stored `daily_predictions` into paper bets with bet selection, outcome resolution, and P&L tracking. Designed for a future lightweight dashboard.
+
+| Module | Purpose |
+|--------|---------|
+| `paper_trader.py` | Core `PaperTrader` class — bet selection, Kelly sizing, outcome resolution, daily log updates |
+| `place_bets.py` | CLI to place paper bets from daily predictions |
+| `resolve_bets.py` | CLI to resolve bets using actual game results |
+
+**Database Tables:**
+- `paper_bets` — Individual bet records with odds, edge, stake, status, P&L. Unique on `(game_date, player_id, stat_type, bet_direction)`.
+- `paper_trading_daily_log` — Daily aggregated stats: wins/losses, total staked, P&L, cumulative bankroll. Unique on `game_date`.
+
+**Execution Flow:**
+```
+After daily_runner.py completes (predictions stored):
+
+1. Place Bets:
+   python src/paper_trading/place_bets.py --date 2026-02-04
+   └── Reads daily_predictions → Filters by edge → Writes to paper_bets
+
+2. Next Day (after games complete):
+   python src/paper_trading/resolve_bets.py --date 2026-02-04
+   └── Reads player_game_stats → Compares to lines → Updates paper_bets & daily_log
+```
+
+**Bet Selection Logic:**
+- Query `daily_predictions` for target date (pts, reb, ast stats)
+- Filter predictions where `over_edge` or `under_edge` exceeds threshold (default 5%)
+- Choose direction with higher edge
+- Calculate stake via fractional Kelly (default 12.5%)
+- Cap at max 5% of bankroll per bet
+
+**Resolution Logic:**
+- Fetch actual stats from `player_game_stats`
+- Compare actual vs line → won/lost/push/cancelled
+- Calculate P&L: won = stake × (decimal_odds - 1), lost = -stake
+- Update `paper_trading_daily_log` with aggregates
 
 ---
 
@@ -311,11 +351,17 @@ A simulation environment to validate betting strategies.
 
 ### Betting Data
 - `raw_game_lines_staging`: Spreads and totals.
-- `raw_player_props_combined`: Player prop lines and odds.
+- `raw_player_props_combined`: Player prop lines and odds (~25M rows). Includes:
+  - **Core markets:** `player_points`, `player_rebounds`, `player_assists`, `player_threes`, `player_steals`, `player_blocks`, `player_turnovers`
+  - **Combo markets (added 2026-01-31):** `player_points_rebounds_assists` (PRA), `player_points_rebounds`, `player_points_assists`, `player_rebounds_assists`, `player_blocks_steals`, `player_field_goals`
 
 ### Predictions
 - `daily_predictions`: Stored daily prediction quantiles, edges, and implied probabilities. Unique on `(prediction_date, player_id, game_id, stat)`. Supports upsert for re-runs.
 - `daily_prediction_samples`: Gzip-compressed MC sample arrays (10K float64 values per prediction, ~20-40KB). Unique on `(prediction_date, player_id, game_id, stat)`.
+
+### Paper Trading
+- `paper_bets`: Individual paper bet records with full context (odds, edge, stake, status, P&L). Unique on `(game_date, player_id, stat_type, bet_direction)`.
+- `paper_trading_daily_log`: Daily aggregated P&L tracking. Unique on `game_date`. Tracks wins/losses, total staked, ROI, cumulative P&L, and running bankroll.
 
 ### Reference
 - `players`: Player reference data.
@@ -443,8 +489,13 @@ python src/backtesting/run_sweep.py \
 
 ### Daily Workflow
 ```bash
-python src/orchestration/run_daily.py [--date YYYY-MM-DD] [--skip-scraping] [--skip-processing] [--skip-inference] [--skip-storage]
+python src/orchestration/run_daily.py [--date YYYY-MM-DD] [--skip-scraping] [--skip-processing] [--skip-inference] [--skip-storage] [--scrape-injuries]
 ```
+
+The `--scrape-injuries` flag:
+1. Fetches injuries for the target date from RapidAPI → `rapidapi_injuries` table
+2. Runs `link_injury_data.py` to populate `player_id` column via fuzzy matching
+3. Enables injury features in feature store and injury filtering in daily runner
 
 ### Query Predictions
 ```bash
@@ -462,6 +513,24 @@ python src/tools/query_player.py --top 20
 
 # Top edges for a specific date
 python src/tools/query_player.py --date 2026-01-29 --top 10
+```
+
+### Paper Trading
+```bash
+# Place paper bets from predictions
+python src/paper_trading/place_bets.py --date 2026-02-04
+
+# Dry-run to see bets without placing
+python src/paper_trading/place_bets.py --date 2026-02-04 --dry-run
+
+# Custom edge threshold
+python src/paper_trading/place_bets.py --date 2026-02-04 --edge-threshold 0.08
+
+# Resolve bets after games complete
+python src/paper_trading/resolve_bets.py --date 2026-02-04
+
+# Dry-run resolution
+python src/paper_trading/resolve_bets.py --date 2026-02-04 --dry-run
 ```
 
 ---

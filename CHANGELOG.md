@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-05 Session 10] — BL Sizing Parameter + Combo Markets Verification
+
+### Added
+
+- **`--bl-sizing-tau` CLI parameter** on `run_backtest.py` — Enables BL-blended probabilities for Kelly position sizing independently from edge detection
+- **`bl_sizing_blender` field** on `BacktestHarness` — Separate blender instance for sizing calculations
+- **`sizing_prob_over`/`sizing_prob_under` columns** in predictions output — BL-blended probabilities for position sizing
+- **Spec files for next items:**
+  - `.session/specs/A3b_BL_confidence_fix.md` — Linear ramp confidence function
+  - `.session/specs/C3_THREES_hurdle_model.md` — Zero-inflated hurdle model for THREES
+
+### Changed
+
+- **`BetSimulator.place_bet()`** — Now accepts optional `sizing_prob` parameter for Kelly calculation (defaults to model probability if not provided)
+- **`_calculate_edges()`** in `backtest_harness.py` — Computes sizing probabilities when `bl_sizing_blender` is set
+
+### Verified
+
+- **Combo markets scraping job (2026-01-31):** ~35K new prop lines successfully added to `raw_player_props_combined`:
+  - `player_points_rebounds_assists` (12,013 rows, 82 players, 6 games)
+  - `player_points_rebounds` (7,939 rows)
+  - `player_points_assists` (5,758 rows)
+  - `player_rebounds_assists` (5,107 rows)
+  - `player_blocks_steals` (2,582 rows)
+  - `player_field_goals` (2,376 rows)
+
+### Analysis
+
+- **Brier score improved:** 0.2705 → 0.2506 (model no longer catastrophically overconfident)
+- **No-BL ROI:** +3.5% (profitable without BL blending)
+- **BL confidence function issue persists:** Crushes sizing probs toward market, resulting in near-zero Kelly stakes
+
+---
+
+## [2026-02-04 Session 9] — Daily Injury Pipeline Fix + Paper Trading Infrastructure
+
+### Added
+
+- **Paper Trading Infrastructure (E5):**
+  - **`src/paper_trading/paper_trader.py`** — Core `PaperTrader` class with:
+    - `select_bets(game_date)` — Query daily_predictions, filter by edge threshold, calculate Kelly stakes
+    - `place_bets(bets)` — UPSERT into paper_bets table
+    - `resolve_bets(game_date)` — Fetch actuals from player_game_stats, update status/P&L
+    - `get_pending_bets()`, `get_daily_summary()`, `get_bets_for_date()` — Dashboard query methods
+  - **`src/paper_trading/place_bets.py`** — CLI script to place paper bets
+    - `--dry-run` mode to preview without placing
+    - `--edge-threshold`, `--kelly-fraction`, `--bankroll` parameters
+    - Formatted table output with bet summary
+  - **`src/paper_trading/resolve_bets.py`** — CLI script to resolve bets using actual results
+    - `--dry-run` mode to preview resolution
+    - Formatted resolution table with P&L summary
+  - **DB migration:** `paper_bets` and `paper_trading_daily_log` tables
+  - **Unit tests:** 20 tests in `tests/test_paper_trader.py` covering Kelly calculation, bet selection, resolution logic
+
+### Changed
+
+- **`src/orchestration/run_daily.py`** — Fixed `--scrape-injuries` flag to use RapidAPI instead of ESPN
+  - Now calls `rapidapi_injury_backfill.py --start {date} --end {date}` to fetch injuries into `rapidapi_injuries` table
+  - Then calls `link_injury_data.py` to populate `player_id` column via fuzzy name matching
+  - Ensures consistency with feature store (`feature_store.py`) and daily runner (`daily_runner.py`) which both query `rapidapi_injuries`
+  - Updated help text from "Scrape current injuries from ESPN" to "Scrape injuries from RapidAPI and link player IDs"
+
+### Fixed
+
+- **E4 (Daily injury pipeline)** — The `--scrape-injuries` flag was writing to `espn_injuries` table but all downstream components read from `rapidapi_injuries`. Daily injury data was effectively unused. Now both scraping and consumption use the same data source.
+
+---
+
 ## [2026-01-31 Session 8] — Calibration Fixes, BL Sweep Analysis
 
 ### Added

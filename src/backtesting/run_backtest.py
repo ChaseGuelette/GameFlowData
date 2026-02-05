@@ -91,6 +91,12 @@ def main():
         default=None,
         help="Black-Litterman tau parameter. Enables BL blending when set (e.g., 0.05=conservative). None=disabled.",
     )
+    parser.add_argument(
+        "--bl-sizing-tau",
+        type=float,
+        default=None,
+        help="Black-Litterman tau for Kelly sizing only (edge detection uses raw model probs). E.g., 0.10",
+    )
 
     args = parser.parse_args()
 
@@ -133,13 +139,21 @@ def main():
     logger.info(f"Initializing Monte Carlo predictor (n_samples={args.n_samples})...")
     predictor = MonteCarloPredictor(pipeline, n_samples=args.n_samples, copula_params=copula_params)
 
-    # Configure Black-Litterman blender (optional)
+    # Configure Black-Litterman blender for edge filtering (optional)
     bl_blender = None
     if args.bl_tau is not None:
         from src.models.black_litterman import BlackLittermanBlender, BLConfig
 
         bl_blender = BlackLittermanBlender(BLConfig(tau=args.bl_tau))
-        logger.info(f"Black-Litterman blending enabled (tau={args.bl_tau})")
+        logger.info(f"Black-Litterman edge filtering enabled (tau={args.bl_tau})")
+
+    # Configure Black-Litterman blender for sizing only (optional)
+    bl_sizing_blender = None
+    if args.bl_sizing_tau is not None:
+        from src.models.black_litterman import BlackLittermanBlender, BLConfig
+
+        bl_sizing_blender = BlackLittermanBlender(BLConfig(tau=args.bl_sizing_tau))
+        logger.info(f"Black-Litterman sizing enabled (tau={args.bl_sizing_tau})")
 
     # Configure and run harness
     harness = BacktestHarness(
@@ -154,6 +168,7 @@ def main():
         bookmakers=args.bookmakers,
         allowed_bets=allowed_bets,
         bl_blender=bl_blender,
+        bl_sizing_blender=bl_sizing_blender,
     )
 
     if allowed_bets:

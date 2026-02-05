@@ -1,5 +1,73 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-05 — Session 10)
+
+### What We Did
+
+**Reviewed project status and added `--bl-sizing-tau` parameter.** Implemented BL-blended probabilities for Kelly position sizing (separate from edge detection):
+
+- Added `--bl-sizing-tau` CLI parameter to `run_backtest.py`
+- Added `bl_sizing_blender` field to `BacktestHarness`
+- Modified `_calculate_edges()` to compute `sizing_prob_over`/`sizing_prob_under` columns
+- Modified `BetSimulator.place_bet()` to accept optional `sizing_prob` for Kelly calculation
+- Verified implementation with one-day backtest (same bet count, different stakes)
+
+**Key finding:** Model is no longer catastrophically overconfident (Brier improved from 0.2705 to 0.2506). The no-BL approach shows +3.5% ROI. However, the BL confidence function issue persists — it crushes sizing probs toward market, resulting in near-zero Kelly stakes even with BL sizing enabled.
+
+**Verified testing scripts are still valid:**
+- `src/models/analyze_calibration_drift.py` — minutes-rate correlation, combined calibration
+- `src/models/analyze_minutes_bimodality.py` — spread/blowout handling
+- `src/backtesting/visualize_results.py` — HTML dashboard generation
+
+**Created specs for next items:**
+- `.session/specs/A3b_BL_confidence_fix.md` — Linear ramp confidence function
+- `.session/specs/C3_THREES_hurdle_model.md` — Zero-inflated model for THREES
+
+**Verified combo markets scraping job (2026-01-31):** Confirmed ~35K new prop lines successfully added to `raw_player_props_combined`:
+- `player_points_rebounds_assists` (12K rows)
+- `player_points_rebounds` (8K rows)
+- `player_points_assists` (6K rows)
+- `player_rebounds_assists` (5K rows)
+- `player_blocks_steals` (3K rows)
+- `player_field_goals` (2K rows)
+
+### Next Step
+
+1. **A3b** — Fix BL confidence function (linear ramp) — Quick win, enables BL for sizing/filtering
+2. **C3** — Implement THREES hurdle model — Enables betting on 4th stat
+3. **E6** — Automate daily scheduling
+
+---
+
+## Session Summary (2026-02-04 — Session 9 continued)
+
+### What We Did
+
+**Built paper trading infrastructure (E5).** Created standalone CLI scripts to convert stored `daily_predictions` into paper bets with bet selection, outcome resolution, and P&L tracking.
+
+**Implementation:**
+- **Database tables:** `paper_bets` (individual bets) and `paper_trading_daily_log` (daily aggregates)
+- **`src/paper_trading/paper_trader.py`** — Core `PaperTrader` class with `select_bets()`, `place_bets()`, `resolve_bets()` methods
+- **`src/paper_trading/place_bets.py`** — CLI to place paper bets (supports `--dry-run`, `--edge-threshold`, `--kelly-fraction`)
+- **`src/paper_trading/resolve_bets.py`** — CLI to resolve bets using actual game results
+- **Unit tests:** 20 tests covering Kelly calculation, bet selection logic, resolution, and defaults
+
+**Design decisions:**
+- Standalone scripts (not integrated into `run_daily.py`) for future lightweight dashboard
+- Supports pts, reb, ast stats only
+- SQL tables for dashboard display
+
+**Earlier in session:** Fixed daily injury pipeline (E4) — `--scrape-injuries` now uses RapidAPI + linker.
+
+### Next Step
+
+With E4 and E5 complete:
+1. Retrain models with calibration fixes (E1b)
+2. Automate daily scheduling (E6)
+3. Paper trade for 2-4 weeks (E7)
+
+---
+
 ## Session Summary (2026-01-31 — Session 8)
 
 ### What We Did
@@ -207,6 +275,18 @@ overconfident and contain no independent signal beyond the market. Ordered by ef
   2. Replace exponential confidence with linear or sigmoid ramp (e.g., `confidence = min(z / z_max, 1.0)`)
   3. Use BL only for position sizing, not edge filtering
 
+- [ ] **A3b. Fix BL confidence function** *(SPEC READY — 2026-02-05)*
+  Replace exponential confidence with linear ramp. Spec: `.session/specs/A3b_BL_confidence_fix.md`
+
+  **Implementation:**
+  - Change `_calculate_confidence()` in `black_litterman.py`: `confidence = min(z / z_max, 1.0)`
+  - Add `z_max` parameter to `BLConfig` (default 1.0)
+  - Expected: z=0.13 → confidence=0.13 (vs 0.008 currently)
+
+  **Verification:**
+  - Backtest with `--bl-sizing-tau 0.10` should produce non-zero stakes
+  - Backtest with `--bl-tau 0.10` should produce >100 bets
+
 - [x] **A4. Residual modeling (Option A — feature-based)** *(IMPLEMENTED — 2026-01-28)*
   Added per-stat prop lines (`prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`)
   as centering features to all rate models. The model now sees market expectation and learns
@@ -326,6 +406,28 @@ where bookmaker attention is lower.
   Run `analyze_calibration_drift.py` with the current model to get per-stat quantile coverage.
   This informs whether rate_factors or tail adjustments need stat-specific tuning.
 
+- [ ] **C3. Zero-inflated hurdle model for THREES** *(SPEC READY — 2026-02-05)*
+  Implement two-stage hurdle architecture to handle 35%+ zero mass in THREES distribution.
+  Spec: `.session/specs/C3_THREES_hurdle_model.md`
+
+  **Problem:** THREES Q0.10 has +20.4% calibration gap. XGBoost quantile regression cannot
+  learn Q0.10 = 0 when it always predicts positive values. Conformal recalibration (offsets)
+  cannot fix this — you can't offset a positive prediction to exactly 0.
+
+  **Solution:**
+  - **Stage 1:** Binary classifier predicting P(threes = 0 | features)
+  - **Stage 2:** Quantile regression on positive samples only (threes | threes > 0)
+  - **Inference:** If q ≤ p_zero → quantile = 0, else map to positive distribution
+
+  **Files to modify:**
+  - `src/models/quantile_trainer.py` — Add `HurdleQuantileModel` class
+  - `src/models/monte_carlo.py` — Add `_sample_hurdle()` method
+  - `train_pipeline.py` — Train hurdle model for THREES stat
+
+  **Acceptance criteria:**
+  - THREES Q0.10 calibration gap < 5%
+  - Backtest with `--stats pts reb ast threes` shows no degradation
+
 ---
 
 ## Track D: Previous Model Improvement Items (Deprioritized)
@@ -362,14 +464,12 @@ out-of-sample period. Do not pursue E4+ until sweep results are in.
 - [x] **E1. Retrain models** — *(DONE — 2026-01-30)* Retrained with all bug fixes and new features. Artifact: `run_20260129_205540`. Needs another retrain to incorporate calibration fixes from session 8.
 - [x] **E2. Run BL parameter sweep** — *(DONE — 2026-01-31)* Ran `run_sweep.py` on OOS period (2025-10-22 to 2026-01-29). 40 configs: tau × edge × kelly.
 - [x] **E3. Analyze sweep results** — *(DONE — 2026-01-31)* **Key finding:** No-BL is profitable (+3% ROI, REB +7.9%). BL confidence function is structurally broken — kills all edges. See A3 for details and fix options.
-- [ ] **E4. Fix daily injury pipeline** *(CRITICAL for live)* — `daily_runner.py` reads `rapidapi_injuries` but `run_daily.py --scrape-injuries` writes to `espn_injuries`. Need daily RapidAPI injury scraper:
-  - Option A (recommended): Adapt `rapidapi_injury_backfill.py` to run for today's date, wire into orchestrator
-  - Option B: Switch daily runner back to `espn_injuries` (loses `player_id` matching advantage)
-  - Must run `link_injury_data.py` after scrape to populate `player_id` column
-- [ ] **E5. Paper trade infrastructure** — Convert stored `daily_predictions` into paper bets:
-  - Bet selection logic (apply edge threshold + Kelly sizing from sweep results)
-  - Outcome resolution (pull next-day box scores, mark bets won/lost)
-  - P&L tracking table + dashboard
+- [x] **E4. Fix daily injury pipeline** *(DONE — 2026-02-04)* — `run_daily.py --scrape-injuries` now calls `rapidapi_injury_backfill.py` (for target date) followed by `link_injury_data.py`. Both feature store and daily runner use `rapidapi_injuries` with `player_id` linking.
+- [x] **E5. Paper trade infrastructure** *(DONE — 2026-02-04)* — Convert stored `daily_predictions` into paper bets:
+  - `paper_bets` and `paper_trading_daily_log` tables for storage
+  - `PaperTrader` class with bet selection (edge threshold + Kelly sizing), placement (UPSERT), and resolution
+  - CLI scripts: `place_bets.py` (with `--dry-run`) and `resolve_bets.py`
+  - 20 unit tests in `tests/test_paper_trader.py`
 - [ ] **E6. Scheduling** — Automate daily pipeline (cron/Task Scheduler):
   - ~11am: Scrape game results, props, injuries
   - ~12pm: Run processing + feature store + predictions
@@ -409,10 +509,11 @@ pts/reb/ast shows profitability.
 | ~~E1 (Retrain)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — `run_20260129_205540`. Needs re-retrain with calibration fixes. |
 | ~~E2 (BL Sweep)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — No-BL profitable (+3% ROI). BL kills all edges (confidence function flaw). |
 | ~~E3 (Analyze sweep)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — REB +7.9%, model finds genuine edges without BL. |
-| **E1b (Retrain with calibration fixes)** | Low | **High** | Conformal recalibration + zero-snap need retraining to take effect |
-| **A3b (Fix BL confidence)** | Medium | **High** | Redesign confidence function — see A3 fix options |
-| **E4 (Daily injury pipeline)** | Medium | **Critical** | `rapidapi_injuries` not updated daily, must fix before live |
-| E5 (Paper trade infra) | Medium | High | Bet selection, outcome resolution, P&L tracking |
+| **A3b (Fix BL confidence)** | **Low** | **High** | Linear ramp confidence — spec ready, 1 file change |
+| **C3 (THREES hurdle model)** | **Medium-High** | **High** | Zero-inflated model — spec ready, enables 4th stat |
+| E1b (Retrain with calibration fixes) | Low | Medium | Conformal recalibration + zero-snap need retraining to take effect |
+| ~~E4 (Daily injury pipeline)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — `--scrape-injuries` now uses RapidAPI + linker |
+| ~~E5 (Paper trade infra)~~ | ~~Medium~~ | ~~High~~ | **DONE** — `PaperTrader` class, CLI scripts, 20 tests |
 | E6 (Scheduling) | Low | High | cron/Task Scheduler automation |
 | ~~C1 (Q10 investigation)~~ | ~~Low~~ | ~~Low-Medium~~ | **PARTIALLY DONE** — Root cause identified (zero-inflation), conformal recalibration applied |
 | A5 (Residual modeling — classifier) | High | High | Only if A4 isn't sufficient |

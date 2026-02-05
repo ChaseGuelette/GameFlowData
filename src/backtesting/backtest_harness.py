@@ -82,7 +82,8 @@ class BacktestHarness:
     stats: list[str] = field(default_factory=lambda: ["pts", "reb", "ast"])
     min_minutes_avg: int = 10
     allowed_bets: list[tuple[str, str]] | None = None  # e.g., [("pts", "under"), ("reb", "over")]
-    bl_blender: BlackLittermanBlender | None = None  # Black-Litterman probability blender
+    bl_blender: BlackLittermanBlender | None = None  # Black-Litterman probability blender (for edge filtering)
+    bl_sizing_blender: BlackLittermanBlender | None = None  # BL for Kelly sizing only (edge detection uses raw probs)
 
     # Internal state
     _simulator: BetSimulator = field(init=False)
@@ -94,6 +95,7 @@ class BacktestHarness:
             starting_bankroll=self.starting_bankroll,
             kelly_fraction=self.kelly_fraction,
             allowed_bets=set(self.allowed_bets) if self.allowed_bets else None,
+            use_bl_for_sizing=self.bl_sizing_blender is not None,
         )
         self._metrics_calc = MetricsCalculator()
 
@@ -243,6 +245,7 @@ class BacktestHarness:
                 "stats": self.stats,
                 "allowed_bets": [f"{s}:{side}" for s, side in self.allowed_bets] if self.allowed_bets else None,
                 "bl_tau": self.bl_blender.config.tau if self.bl_blender else None,
+                "bl_sizing_tau": self.bl_sizing_blender.config.tau if self.bl_sizing_blender else None,
             },
         )
 
@@ -732,6 +735,43 @@ class BacktestHarness:
             # Multiplicative devigging: divide each raw prob by the booksum
             merged["implied_over"] = raw_over / booksum
             merged["implied_under"] = raw_under / booksum
+
+            # ── BL Sizing path (optional) ──
+            # When bl_sizing_blender is set, compute BL posteriors for Kelly sizing only
+            # Edge detection still uses raw model probs (over_prob/under_prob)
+            if self.bl_sizing_blender is not None:
+                sizing_results = []
+                for _, row in merged.iterrows():
+                    if pd.isna(row.get("line")) or pd.isna(row.get("over_odds")) or pd.isna(row.get("under_odds")):
+                        sizing_results.append({
+                            "sizing_prob_over": None,
+                            "sizing_prob_under": None,
+                        })
+                        continue
+
+                    samples = prediction_samples.get((row["player_id"], row["game_id"], row["stat"]))
+
+                    if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
+                        result = self.bl_sizing_blender.blend_prediction(
+                            samples=samples,
+                            line=row["line"],
+                            over_odds=int(row["over_odds"]),
+                            under_odds=int(row["under_odds"]),
+                        )
+                        sizing_results.append({
+                            "sizing_prob_over": result["posterior_over"],
+                            "sizing_prob_under": result["posterior_under"],
+                        })
+                    else:
+                        # No samples — fall back to raw model probs
+                        sizing_results.append({
+                            "sizing_prob_over": row["over_prob"],
+                            "sizing_prob_under": row["under_prob"],
+                        })
+
+                sizing_df = pd.DataFrame(sizing_results)
+                merged["sizing_prob_over"] = sizing_df["sizing_prob_over"].values
+                merged["sizing_prob_under"] = sizing_df["sizing_prob_under"].values
 
         # Calculate edges (works for both paths)
         merged["over_edge"] = merged["over_prob"] - merged["implied_over"]

@@ -27,6 +27,12 @@ Writes rows to `raw_player_props_staging_v2` with the following key fields:
 ## Market Selection
 - `CORE_MARKETS`: player_points, player_rebounds, player_assists, player_threes, player_blocks, player_steals, player_turnovers
 - `COMBO_MARKETS`: player_points_rebounds_assists, player_points_rebounds, player_points_assists, player_rebounds_assists, player_double_double, player_triple_double
+- `ADDITIONAL_MARKETS` (available but not in defaults): player_blocks_steals, player_field_goals, player_frees_made, player_frees_attempts
+
+## Data Status (as of 2026-02-05)
+`raw_player_props_combined` contains ~25M rows:
+- Core markets: Full historical coverage (2021-present)
+- Combo markets (PRA, P+R, P+A, R+A, blocks+steals, field_goals): Added 2026-01-31 (~35K rows for 6 games)
 
 ## Resume Capability
 - Progress file format: `{"markets": "<sorted_markets_key>", "processed": [[ts, eid], ...]}`

@@ -51,7 +51,7 @@ def main():
     parser.add_argument(
         "--scrape-live-props", action="store_true", help="Scrape LIVE player props into raw_player_props_live"
     )
-    parser.add_argument("--scrape-injuries", action="store_true", help="Scrape current injuries from ESPN")
+    parser.add_argument("--scrape-injuries", action="store_true", help="Scrape injuries from RapidAPI and link player IDs")
     parser.add_argument("--skip-processing", action="store_true", help="Skip the processing/update step")
     parser.add_argument("--skip-inference", action="store_true", help="Skip the prediction step")
     parser.add_argument("--skip-storage", action="store_true", help="Skip storing predictions to database")
@@ -92,9 +92,18 @@ def main():
                 "Scraping LIVE Player Props to 'raw_player_props_live'",
             )
 
-        # Scrape Injuries (Optional)
+        # Scrape Injuries (Optional) - Uses RapidAPI → rapidapi_injuries table
         if args.scrape_injuries:
-            run_command("python src/scrapers/injury_scraper_job.py", "Scraping ESPN Injuries")
+            # Fetch today's injuries from RapidAPI into rapidapi_injuries table
+            run_command(
+                f"python src/scrapers/rapidapi_injury_backfill.py --start {args.date} --end {args.date}",
+                "Scraping RapidAPI Injuries"
+            )
+            # Link player names to player_id for feature generation and injury filtering
+            run_command(
+                "python src/processing/link_injury_data.py",
+                "Linking Injury Player IDs"
+            )
 
     else:
         logger.info("Skipping Scraping Step")
