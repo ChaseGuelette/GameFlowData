@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-07 Session 14] — Backtesting Data Fixes
+
+### Fixed
+
+- **Incomplete model directory selection** in `src/backtesting/run_sweep.py`:
+  - `find_latest_model_dir()` now validates that `minutes_model.joblib` exists before selecting a directory
+  - Logs warning when skipping incomplete training run directories
+  - Prevents silent failures when an aborted training run leaves an empty artifact directory
+
+- **Game ID format mismatch** affecting backtest line fetching:
+  - **Root cause:** `raw_player_props_combined.game_id` stored as 8-digit (e.g., "22500589") vs `player_game_stats.game_id` as 10-digit (e.g., "0022500589")
+  - **Fix (query):** Updated prefetch lines query in `src/backtesting/backtest_harness.py` to use `LPAD(rp.game_id, 10, '0') = gd.game_id`
+  - **Fix (linker):** Added `.zfill(10)` in `src/processing/nba_linker_local.py` when storing game_ids in lookup dictionaries (3 locations)
+  - **Impact:** Lines fetched increased from 33,962 to 191,908 (+465%). Bets increased from 889 to 2,251 (+153%)
+
+- **Pre-existing test failure** in `tests/test_backtest_harness.py`:
+  - Added missing `all_edges_df` parameter to `sample_result` fixture
+  - `TestBacktestResult::test_to_csv` now passes
+
+### Changed
+
+- Updated `src/backtesting/backtest_harness.py` line 556: JOIN uses `LPAD()` for game_id compatibility
+- Updated `src/backtesting/run_sweep.py` lines 560-592: `find_latest_model_dir()` includes validation
+- Updated `src/processing/nba_linker_local.py` lines 355-357, 374-377, 916-919: game_id stored with leading zeros
+
+---
+
 ## [2026-02-05 Session 13] — E6 Daily Pipeline Automation
 
 ### Added

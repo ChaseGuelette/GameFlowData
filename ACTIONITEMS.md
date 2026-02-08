@@ -1,5 +1,45 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-07 — Session 14)
+
+### What We Did
+
+**Fixed critical backtesting data issues.** Investigated and resolved two bugs causing the backtest to miss 85%+ of available prop lines:
+
+**Issue 1: Incomplete model directory selection**
+- `find_latest_model_dir()` was auto-selecting `run_20260206_171812`, an incomplete training run with only `run_config.json` (no model files)
+- Root cause: Training started but never completed, leaving empty artifact directory
+- **Fix:** Updated `find_latest_model_dir()` in `run_sweep.py` to validate `minutes_model.joblib` exists before selecting a directory; logs warning when skipping incomplete runs
+
+**Issue 2: Game ID format mismatch**
+- `player_game_stats.game_id` uses 10-digit format: `0022500589`
+- `raw_player_props_combined.game_id` was storing 8-digit format: `22500589` (missing leading zeros)
+- The JOIN in `backtest_harness.py` failed for mismatched IDs
+- **Fix (backtest):** Changed JOIN to use `LPAD(rp.game_id, 10, '0') = gd.game_id` to handle both formats
+- **Fix (linker):** Added `.zfill(10)` when storing game_ids in lookup dictionaries to ensure proper format for future runs
+
+**Impact:**
+| Metric | Before Fix | After Fix |
+|--------|------------|-----------|
+| Lines chunk 1 (Jan 1-15) | 33,565 | 119,129 |
+| Lines chunk 2 (Jan 16-29) | 397 | 72,779 |
+| Total lines | 33,962 | 191,908 |
+| Total bets (edge=0.05) | 889 | 2,251 |
+
+**Files modified:**
+- `src/backtesting/run_sweep.py` — Validation in `find_latest_model_dir()`
+- `src/backtesting/backtest_harness.py` — LPAD in prefetch lines query
+- `src/processing/nba_linker_local.py` — `.zfill(10)` in 3 locations for game_id storage
+- `tests/test_backtest_harness.py` — Fixed pre-existing test failure (missing `all_edges_df`)
+
+### Next Step
+
+1. **Run full BL parameter sweep** — With corrected data, rerun sweep with higher tau values (0.3-1.0) to find optimal BL configuration
+2. **Retrain models** — Run training pipeline to generate fresh hurdle model for THREES
+3. **Paper trade** — Begin paper trading with automated pipeline
+
+---
+
 ## Session Summary (2026-02-05 — Session 13)
 
 ### What We Did
@@ -551,7 +591,34 @@ where bookmaker attention is lower.
   - `src/models/monte_carlo.py` — Added `_sample_hurdle()`, `_sample_hurdle_from_quantiles()`, copula integration
   - `src/models/train_pipeline.py` — Added `_calibrate_hurdle_model()`, hurdle evaluation
 
-  **Next:** Retrain to validate THREES Q0.10 gap < 5%
+  **Status:** Architecture implemented, but calibration failed (25.6% gap at Q0.10). Root cause: quantile regression on discrete count data is fundamentally wrong. See C4 for fix.
+
+- [ ] **C4. Replace THREES quantile regression with Truncated Negative Binomial** *(HIGH PRIORITY)*
+  The C3 hurdle model's Step 2 (quantile regression on positive samples) still fails because:
+  1. Quantile regression produces continuous values for discrete outcomes (can't have 2.3 threes)
+  2. Interpolation between 5 quantile points is too coarse for a distribution with only ~8 values
+  3. Boundary math extrapolates below Q10 when p_zero is high (adjusted_q = 0.057)
+
+  Full spec: `.session/specs/C4_threes_count_model.md`
+
+  **Architecture change:** Hurdle + Quantile Regression → Hurdle + Truncated Negative Binomial
+  - Keep Step 1 (zero classifier) — improve calibration
+  - Replace Step 2 with count model predicting NegBin parameters (μ, α)
+  - MC sampling draws integers directly from truncated NegBin
+  - Remove THREES from copula (count model features encode minutes context)
+
+  **Implementation phases:**
+  - Phase 0: Validate truncated NegBin fits positive-only data (chi-squared test)
+  - Phase 1: Build `TruncatedNegBinModel` class with XGBoost regressors for μ and α
+  - Phase 2: Integrate with `MonteCarloPredictor` — new `_sample_threes_count()` method
+  - Phase 3: Improve zero classifier calibration (Platt scaling if isotonic fails)
+  - Phase 4: Training pipeline integration, new artifacts
+  - Phase 5: Calibration validation & backtesting
+  - Phase 6: Production deployment
+
+  **Timeline:** ~10-12 days
+  **Blocked by:** Nothing — can start immediately
+  **Blocks:** THREES betting in production
 
 ---
 
@@ -652,6 +719,26 @@ pts/reb/ast shows profitability.
 
 ---
 
+## Track G: Dashboard (Mid-High Priority — After E7 Paper Trading Validation)
+
+Next.js dashboard for viewing predictions and paper trading results. Blocked by E7 (paper trading validation) and C3 validation (THREES hurdle model). Full spec: `.session/specs/dashboard_implementation.md`
+
+**Tech Stack:** Next.js 14+, TypeScript, Supabase, Tailwind CSS, Recharts
+**Location:** `dashboard/` folder in repo
+**Design:** Desktop-first, dark theme
+
+- [ ] **G1. Project setup** — Initialize Next.js with TypeScript, Tailwind, Supabase client, auth
+- [ ] **G2. Database migration** — Add `feat_*` columns to `daily_predictions` for insight generation
+- [ ] **G3. Update prediction storage** — Modify `prediction_store.py` and `daily_runner.py` to save feature values
+- [ ] **G4. Home page MVP** — Prop cards grid with filtering (All/Points/Rebounds/Assists/Threes)
+- [ ] **G5. Analysis modal** — Last 5 games chart, template-based insights from features
+- [ ] **G6. Hero section** — "Lock of the Day" with top pick by edge
+- [ ] **G7. Player headshots** — NBA CDN integration with fallback
+- [ ] **G8. Paper trading views** — History page, P&L dashboard
+- [ ] **G9. Vercel deployment** — Production deployment with environment variables
+
+---
+
 ## Priority Matrix
 
 | Item | Effort | Expected Value | Notes |
@@ -669,7 +756,8 @@ pts/reb/ast shows profitability.
 | ~~E2 (BL Sweep)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — No-BL profitable (+3% ROI). BL kills all edges (confidence function flaw). |
 | ~~E3 (Analyze sweep)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — REB +7.9%, model finds genuine edges without BL. |
 | ~~A3b (Fix BL confidence)~~ | ~~Low~~ | ~~High~~ | **DONE** — Linear ramp confidence. 42 tests passing. |
-| ~~C3 (THREES hurdle model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE** — Two-stage hurdle model implemented. Needs retraining to validate. |
+| ~~C3 (THREES hurdle model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE but FAILED** — Calibration gap 25.6% at Q0.10. Quantile regression wrong for discrete data. |
+| C4 (THREES count model) | Medium-High | High | Replace quantile regression with Truncated NegBin. Spec: `.session/specs/C4_threes_count_model.md` |
 | E1b (Retrain with calibration fixes) | Low | Medium | Conformal recalibration + zero-snap need retraining to take effect |
 | ~~E4 (Daily injury pipeline)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — `--scrape-injuries` now uses RapidAPI + linker |
 | ~~E5 (Paper trade infra)~~ | ~~Medium~~ | ~~High~~ | **DONE** — `PaperTrader` class, CLI scripts, 20 tests |
@@ -679,6 +767,7 @@ pts/reb/ast shows profitability.
 | A6 (Conditional rate modeling) | Medium-High | Medium-High | Only if copula combined calibration still drifts |
 | D1-D4 (Old model items) | Various | Low until recalibrated | Revisit after Track A |
 | F1-F5 (Market expansion) | Various | Medium | After demonstrated edge on core markets |
+| G1-G9 (Dashboard) | Medium-High | Mid-High | After E7 paper trading + C3 THREES validation. Spec: `.session/specs/dashboard_implementation.md` |
 
 ---
 

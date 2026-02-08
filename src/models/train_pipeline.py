@@ -471,7 +471,8 @@ class TrainingOrchestrator:
                         if feat in row.index:
                             features[feat] = row[feat]
                 elif stat in hurdle_models:
-                    for feat in hurdle_models[stat].feature_names:
+                    # Use all_feature_names (classifier + positive models) for MC sampling
+                    for feat in hurdle_models[stat].all_feature_names:
                         if feat in row.index:
                             features[feat] = row[feat]
 
@@ -497,7 +498,8 @@ class TrainingOrchestrator:
                     results[stat]["actuals"].append(row[f"actual_{stat}"])
             except Exception as e:
                 failure_count += 1
-                logger.debug(f"Prediction failed for row {idx}: {e}")
+                if failure_count <= 5:  # Log first 5 failures at INFO level
+                    logger.info(f"Prediction failed for row {idx}: {e}")
                 continue
 
         if failure_count > 0:

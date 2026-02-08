@@ -558,16 +558,38 @@ def save_results(
 # ---------------------------------------------------------------------------
 
 def find_latest_model_dir(base_dir: str) -> Path:
-    """Find the most recent run_* directory in the artifacts folder."""
+    """Find the most recent COMPLETE run_* directory in the artifacts folder.
+
+    A directory is considered complete if it contains minutes_model.joblib.
+    Incomplete training runs (config only) are skipped.
+    """
     base = Path(base_dir)
     if not base.exists():
         raise FileNotFoundError(f"Artifacts directory not found: {base}")
+
+    # Check if base_dir itself is a model directory
     if (base / "minutes_model.joblib").exists():
         return base
-    runs = sorted([d for d in base.iterdir() if d.is_dir() and d.name.startswith("run_")])
+
+    # Find all run_* directories, sorted newest first
+    runs = sorted(
+        [d for d in base.iterdir() if d.is_dir() and d.name.startswith("run_")],
+        reverse=True,
+    )
+
     if not runs:
         raise FileNotFoundError(f"No run_* directories found in {base}")
-    return runs[-1]
+
+    # Find first complete run (has minutes_model.joblib)
+    for run_dir in runs:
+        if (run_dir / "minutes_model.joblib").exists():
+            return run_dir
+        logger.warning(f"Skipping incomplete model directory: {run_dir.name}")
+
+    raise FileNotFoundError(
+        f"No complete model artifacts found in {base}. "
+        f"Checked {len(runs)} directories but none contained minutes_model.joblib."
+    )
 
 
 def main():

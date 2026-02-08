@@ -267,6 +267,7 @@ class TestBacktestResult:
         return BacktestResult(
             predictions_df=pd.DataFrame({"player_id": [1], "pred_mean": [20.0]}),
             bets_df=pd.DataFrame({"player_id": [1], "profit": [100.0]}),
+            all_edges_df=pd.DataFrame({"player_id": [1], "edge": [0.05]}),
             metrics=metrics,
             start_date=date(2024, 1, 1),
             end_date=date(2024, 1, 31),

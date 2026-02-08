@@ -31,6 +31,7 @@ Written under `linker_data/`:
 - **Fuzzy date matching:** Searches within `FUZZY_DATE_WINDOW_DAYS` (default 90) to handle incorrect commence times.
 - **Player matching:** Manual mappings → exact normalized match → SequenceMatcher fuzzy (0.80 threshold, +0.15 last name bonus).
 - **Team ID backfill:** Uses `(player_id, game_id)` from `player_game_stats`.
+- **Game ID format:** All game_ids are stored as 10-digit strings with leading zeros (e.g., "0022500589") using `.zfill(10)` to ensure compatibility with `player_game_stats.game_id` format.
 
 ## Usage
 

@@ -541,7 +541,7 @@ class BacktestHarness:
             ranked_lines AS (
                 SELECT
                     rp.player_id,
-                    rp.game_id,
+                    gd.game_id,
                     gd.game_date,
                     rp.market_key,
                     rp.line,
@@ -549,11 +549,11 @@ class BacktestHarness:
                     rp.outcome_label,
                     rp.odds_american,
                     ROW_NUMBER() OVER (
-                        PARTITION BY rp.player_id, rp.game_id, rp.market_key, rp.line, rp.bookmaker, rp.outcome_label
+                        PARTITION BY rp.player_id, gd.game_id, rp.market_key, rp.line, rp.bookmaker, rp.outcome_label
                         ORDER BY rp.snapshot_time DESC
                     ) as rn
                 FROM raw_player_props_combined rp
-                JOIN game_dates gd ON rp.game_id = gd.game_id
+                JOIN game_dates gd ON LPAD(rp.game_id, 10, '0') = gd.game_id
                 WHERE rp.market_key IN :markets
                   AND rp.bookmaker IN :bookmakers
                   AND rp.snapshot_time::date <= gd.game_date

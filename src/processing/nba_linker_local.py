@@ -352,7 +352,9 @@ def process_local():
     game_lookup = {}
     for _, row in home_games.iterrows():
         key = (row["home_team_norm"], row["game_date"])
-        game_lookup[key] = (row["game_id"], row["team_id"], row["opponent_id"])
+        # Ensure game_id is a 10-digit string with leading zeros
+        game_id = str(row["game_id"]).zfill(10) if pd.notna(row["game_id"]) else None
+        game_lookup[key] = (game_id, row["team_id"], row["opponent_id"])
 
     print(f"  {len(game_lookup):,} home team/date combinations")
 
@@ -369,7 +371,10 @@ def process_local():
         if away_team:
             away_norm = normalize_team(away_team)
             key = (row["home_team_norm"], away_norm)
-            props_game_lookup[key].append((row["game_id"], row["game_date"]))
+            # Ensure game_id is a 10-digit string with leading zeros
+            game_id = str(row["game_id"]).zfill(10) if pd.notna(row["game_id"]) else None
+            if game_id:
+                props_game_lookup[key].append((game_id, row["game_date"]))
 
     # Convert to regular dict
     props_game_lookup = dict(props_game_lookup)
@@ -913,7 +918,10 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
         game_date = str(row["team_game_date"])[:10]
 
         if home_norm and away_norm:
-            props_game_lookup[(home_norm, away_norm)].append((row["game_id"], game_date))
+            # Ensure game_id is a 10-digit string with leading zeros
+            game_id = str(row["game_id"]).zfill(10) if pd.notna(row["game_id"]) else None
+            if game_id:
+                props_game_lookup[(home_norm, away_norm)].append((game_id, game_date))
 
     print(f"  Built game lookup with {len(props_game_lookup)} unique matchups")
 

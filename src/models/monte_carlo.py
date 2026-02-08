@@ -322,7 +322,8 @@ class MonteCarloPredictor:
             if is_hurdle:
                 # Use hurdle sampling for zero-inflated stats (THREES)
                 hurdle_model = self.pipeline.hurdle_models[stat]
-                X_rate = self._prepare_features(features, hurdle_model.feature_names)
+                # Use all_feature_names (classifier + positive models) for hurdle sampling
+                X_rate = self._prepare_features(features, hurdle_model.all_feature_names)
                 rate_samples = self._sample_hurdle(hurdle_model, X_rate, u_rate)
             else:
                 # Get rate quantile predictions and map through inverse CDF
