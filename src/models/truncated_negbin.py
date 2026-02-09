@@ -186,8 +186,25 @@ class TruncatedNegBinModel:
         self._global_mu, self._global_alpha = self._fit_global_params(y_np)
 
         # Stage 2: Prepare targets for XGBoost
-        # Target for mu model: log of sample value (proxy for conditional mean)
-        log_mu_target = np.log(y_np + 0.5)  # +0.5 for stability at y=1
+        # Key insight: observed values y are from the TRUNCATED distribution.
+        # E[X | X > 0] = mu / (1 - P(X=0)), so observed values are inflated.
+        # We need to train mu to predict the UNTRUNCATED mean, which is lower.
+        # Adjustment: mu = observed * (1 - P(X=0))
+        #
+        # Compute P(X=0) using global MLE params
+        n_global = 1.0 / self._global_alpha
+        p_global = n_global / (n_global + self._global_mu)
+        p_zero_global = nbinom.pmf(0, n_global, p_global)
+        truncation_factor = 1.0 - p_zero_global
+
+        logger.info(
+            f"Truncation adjustment: P(X=0)={p_zero_global:.3f}, "
+            f"factor={truncation_factor:.3f}"
+        )
+
+        # Target for mu model: adjusted to untruncated mean
+        # mu = observed * (1 - p_zero) since E[X|X>0] = mu / (1 - p_zero)
+        log_mu_target = np.log((y_np + 0.5) * truncation_factor)
 
         # Target for alpha model: residual-based overdispersion estimate
         # Use squared residuals relative to mean squared as a ratio

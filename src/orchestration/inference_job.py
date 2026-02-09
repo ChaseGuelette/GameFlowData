@@ -111,9 +111,18 @@ def main():
         if (artifacts_path / "minutes_model.joblib").exists():
             model_path = artifacts_path
         else:
-            runs = sorted([d for d in artifacts_path.iterdir() if d.is_dir() and d.name.startswith("run_")])
+            # Filter out _incomplete directories (training in progress)
+            runs = sorted([
+                d for d in artifacts_path.iterdir()
+                if d.is_dir()
+                and d.name.startswith("run_")
+                and not d.name.endswith("_incomplete")
+            ])
             if not runs:
-                raise FileNotFoundError(f"No run_* directories found in {artifacts_path}")
+                raise FileNotFoundError(
+                    f"No completed run_* directories found in {artifacts_path}. "
+                    "Check if training is still in progress (_incomplete directories exist)."
+                )
             model_path = runs[-1]
 
         logger.info(f"Using model artifacts: {model_path.name}")

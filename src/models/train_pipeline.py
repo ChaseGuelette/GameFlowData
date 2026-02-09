@@ -49,17 +49,20 @@ class TrainingOrchestrator:
         self.tuning_per_quantile = tuning_per_quantile
         self.hyperparams_path = hyperparams_path
 
-        # Create timestamped run directory
+        # Create timestamped run directory with _incomplete suffix
+        # This prevents the inference job from picking up a partially-trained model
+        # The directory is renamed to remove _incomplete after all artifacts are saved
         self.timestamp = datetime.now()
         timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
-        self.run_dir = Path(base_artifacts_dir) / f"run_{timestamp_str}"
+        self._final_run_dir_name = f"run_{timestamp_str}"
+        self.run_dir = Path(base_artifacts_dir) / f"run_{timestamp_str}_incomplete"
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         self.feature_config_path = self.run_dir / "selected_features.json"
         self.hyperparams_config_path = self.run_dir / "best_hyperparams.json"
 
         logger.info(f"Initialized Training Run: {timestamp_str}")
-        logger.info(f"Artifacts will be saved to: {self.run_dir}")
+        logger.info(f"Artifacts will be saved to: {self.run_dir} (renamed on completion)")
         if tune_hyperparams:
             logger.info(f"Hyperparameter tuning ENABLED: {tuning_trials} trials")
         elif hyperparams_path:
@@ -130,6 +133,11 @@ class TrainingOrchestrator:
         # 7. Sanity Check (End-to-End Inference)
         self._run_sanity_check(pipeline, cal_df)
 
+        # 8. Finalize: Rename directory to remove _incomplete suffix
+        # This atomic rename ensures inference job only sees complete models
+        final_run_dir = self.run_dir.parent / self._final_run_dir_name
+        self.run_dir.rename(final_run_dir)
+        self.run_dir = final_run_dir
         logger.info(f"Training pipeline completed successfully. Artifacts in {self.run_dir}")
 
     def _save_run_config(self, train_seasons, calibration_season, cal_end_date=None):

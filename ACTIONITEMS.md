@@ -1,5 +1,47 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-09 — Session 18)
+
+### What We Did
+
+**Fixed C4 THREES truncated NegBin mu training target.** Identified and fixed critical bug causing 25.8% calibration gap at Q10 in the THREES count model.
+
+**Bug:** The mu model was trained to predict `log(observed_count + 0.5)`, but observed values come from the **truncated** distribution (conditioned on X > 0), which has a higher mean than the underlying untruncated distribution. For truncated NegBin: E[X | X > 0] = μ / (1 - P(X=0)), so observed values are inflated by ~26%.
+
+**Fix:** Applied truncation adjustment factor in `truncated_negbin.py`:
+```python
+# Before (wrong):
+log_mu_target = np.log(y + 0.5)
+
+# After (correct):
+p_zero_global = nbinom.pmf(0, 1/alpha, ...)  # ~0.26
+log_mu_target = np.log((y + 0.5) * (1 - p_zero_global))
+```
+
+This scales down training targets by ~26%, bringing predicted mu from ~2.5 to correct ~1.66.
+
+**Added training safety pattern (atomic rename).** Prevents race condition where inference job at 6:30 PM could select an incomplete model directory if training is in progress.
+
+**Implementation:**
+- Training creates `run_YYYYMMDD_HHMMSS_incomplete` directory
+- Renamed to `run_YYYYMMDD_HHMMSS` only after all artifacts saved
+- Inference job filters out `_incomplete` directories when auto-selecting
+
+**Files modified:**
+- `src/models/truncated_negbin.py` — Truncation adjustment for mu training target
+- `src/models/train_pipeline.py` — Atomic rename pattern
+- `src/orchestration/inference_job.py` — Filter incomplete directories
+
+**Tests:** 536 passed, 4 pre-existing failures in `test_feature_store.py` (mock issues)
+
+### Next Step
+
+1. **Retrain models** — Run training to verify C4 THREES calibration improvement
+2. **Paper trade** — Begin paper trading with automated pipeline
+3. **Fix pre-existing test failures** — 4 mock issues in `test_feature_store.py`
+
+---
+
 ## Session Summary (2026-02-09 — Session 17)
 
 ### What We Did

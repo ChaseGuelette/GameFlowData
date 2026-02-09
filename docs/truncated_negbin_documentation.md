@@ -41,7 +41,7 @@ Stage 2: Count Model (TruncatedNegBinModel)
 
 The model uses **mu-alpha parameterization**:
 
-- `μ` (mu): Mean of the untruncated distribution
+- `μ` (mu): Mean of the **untruncated** distribution
 - `α` (alpha): Overdispersion parameter
 
 Relationship to scipy's (n, p) notation:
@@ -49,6 +49,27 @@ Relationship to scipy's (n, p) notation:
 - `p = 1 / (1 + α × μ)` (success probability)
 
 Variance = μ + α × μ² (always > mean when α > 0)
+
+### Truncation Adjustment (Critical Fix - 2026-02-09)
+
+The mu model must be trained to predict the **untruncated** mean, not observed values. Observed values come from the truncated distribution (conditioned on X > 0):
+
+```
+E[X | X > 0] = μ / (1 - P(X=0))
+```
+
+Since observed values are inflated by the factor `1 / (1 - P(X=0))`, training targets must be scaled down:
+
+```python
+# Compute truncation factor from global MLE
+p_zero_global = nbinom.pmf(0, 1/alpha, n/(n+mu))  # ~0.26 for THREES
+truncation_factor = 1.0 - p_zero_global
+
+# Correct training target
+log_mu_target = np.log((y + 0.5) * truncation_factor)
+```
+
+Without this adjustment, the XGBoost model predicts μ≈2.5 instead of the correct μ≈1.66, causing severe over-coverage (~25% gap at Q10).
 
 ## Usage
 

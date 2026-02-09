@@ -98,6 +98,11 @@ python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 220
        ├─ minutes_model.joblib
        ├─ pts_rate_model.joblib
        ├─ reb_rate_model.joblib
+
+8. Finalize (Atomic Rename)
+   └─ Directory is created as run_YYYYMMDD_HHMMSS_incomplete during training
+   └─ Renamed to run_YYYYMMDD_HHMMSS after all artifacts saved
+   └─ Prevents inference job from selecting incomplete models
        ├─ ast_rate_model.joblib
        ├─ threes_rate_model.joblib
        ├─ feature_config.joblib

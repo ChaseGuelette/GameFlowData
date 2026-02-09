@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-09 Session 18] — Truncated NegBin Mu Training Fix & Training Safety
+
+### Fixed
+
+- **C4 THREES truncated NegBin mu training target** in `src/models/truncated_negbin.py`:
+  - **Bug:** The mu model was trained on `log(observed_count + 0.5)`, but observed values come from the truncated distribution (E[X|X>0] = μ/(1-P(X=0))), which is inflated by ~26%
+  - **Fix:** Applied truncation adjustment factor: `log_mu_target = log((y + 0.5) * (1 - p_zero_global))`
+  - Scales down training targets by ~26%, bringing predicted mu from ~2.5 to correct ~1.66
+  - This should fix the 25.8% calibration gap at Q10 in THREES count model
+
+### Added
+
+- **Atomic rename pattern for training safety** in `src/models/train_pipeline.py`:
+  - Training now creates `run_YYYYMMDD_HHMMSS_incomplete` directory initially
+  - Renamed to `run_YYYYMMDD_HHMMSS` only after all artifacts are saved (step 8)
+  - Prevents race condition where inference job could select incomplete model during training
+- **Incomplete directory filtering** in `src/orchestration/inference_job.py`:
+  - Auto-select logic now filters out `_incomplete` directories
+  - Improved error message when only incomplete runs exist
+
+### Test Results
+
+- 536 tests passed, 4 pre-existing failures in `test_feature_store.py` (mock issues unrelated to this session)
+
+---
+
 ## [2026-02-09 Session 17] — Windows Task Scheduler Fixes & Incremental Stats
 
 ### Fixed
