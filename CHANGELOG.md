@@ -5,6 +5,123 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-09 Session 16] — Windows Task Scheduler Automation
+
+### Added
+
+- **Windows Task Scheduler batch scripts** in `scripts/`:
+  - `scripts/run_daily_stats.bat` — Wraps `daily_stats_job.py` for Task Scheduler
+  - `scripts/run_lines.bat` — Wraps `lines_job.py` for Task Scheduler
+  - `scripts/run_inference.bat` — Wraps `inference_job.py` for Task Scheduler
+- **5 Windows Scheduled Tasks** for local deployment:
+  - `GameFlow-DailyStats` — 9:00 AM daily
+  - `GameFlow-Lines-12PM` — 12:00 PM daily
+  - `GameFlow-Lines-4PM` — 4:00 PM daily
+  - `GameFlow-Lines-6PM` — 6:00 PM daily
+  - `GameFlow-Inference` — 6:30 PM daily
+
+### Changed
+
+- **ARCHITECTURE.md** — Added Windows Task Scheduler documentation in Orchestration section
+
+### Analysis
+
+- **Backtest sweep review (2026-02-08):** Analyzed 165 configurations from latest sweep
+  - Best config: `tau=0.5, z_max=1.0, edge=0.15, kelly=0.125`
+  - Results: $27,379 profit, 10.87% ROI, 57.6% hit rate, 1.21 Sharpe, 427 bets
+  - PTS strongest: +17.5% ROI (241 bets)
+  - BL blending now works after A3b fix (linear ramp confidence)
+  - Edge > 0.20 bucket shows +20% ROI
+
+---
+
+## [2026-02-09 Session 15] — C4 THREES Truncated Negative Binomial Count Model
+
+### Added
+
+- **`TruncatedNegBinModel` class** in `src/models/truncated_negbin.py` (~500 lines):
+  - Two-stage architecture: XGBoost regressors predict log(μ) and log(α) for Truncated Negative Binomial
+  - Inverse CDF sampling produces integer counts directly (not continuous quantile interpolation)
+  - mu/alpha parameterization: μ = mean, α = overdispersion (variance = μ + α×μ²)
+  - `fit()`, `predict_params()`, `sample()`, `sample_single()` methods
+  - `save()` / `load()` / `exists()` for persistence
+  - Configuration via `TruncatedNegBinConfig` dataclass
+- **`tests/test_truncated_negbin.py`** — 17 unit tests covering:
+  - Model fitting convergence
+  - Parameter prediction ranges
+  - Integer sampling (all samples ≥ 1)
+  - Batch sampling
+  - Save/load roundtrip
+  - Edge cases (zero values rejected, unfitted model raises)
+- **`scripts/validate_threes_negbin.py`** — Phase 0 validation script:
+  - Chi-squared goodness-of-fit test for truncated NegBin
+  - Segment validation by shooter volume (high/moderate/low 3PA)
+  - Results: All segments passed (WMAPE < 5%)
+- **`_sample_threes_count()` method** in `src/models/monte_carlo.py`:
+  - Bernoulli draw for zero vs positive (independent of copula)
+  - Truncated NegBin sampling for positive samples
+  - Integer output (0, 1, 2, 3, ...)
+- **`_has_threes_count_model()` helper** in `src/models/monte_carlo.py`
+- **`_train_threes_count_model()` method** in `src/models/quantile_trainer.py`:
+  - Stage 1: XGBoost binary classifier + isotonic calibration for P(zero)
+  - Stage 2: TruncatedNegBinModel on positive samples
+  - Stores `threes_zero_classifier`, `threes_zero_calibrator`, `threes_count_model`, `threes_zero_feature_names`
+- **`_calibrate_count_model()` method** in `src/models/train_pipeline.py`:
+  - Zero prediction accuracy diagnostics
+  - Quantile coverage evaluation via inverse CDF
+
+### Changed
+
+- **`src/models/quantile_trainer.py`:**
+  - `train_rate_models()` — detects `stat == "threes"` and uses count model instead of quantile regression
+  - `save_all()` — saves count model artifacts (classifier, calibrator, feature names, count model files)
+  - `load_all()` — detects `model_type: "count"` in `threes_is_hurdle.json` and loads count model components
+- **`src/models/monte_carlo.py`:**
+  - `_predict_copula()` — routes threes through count model before copula processing
+  - `predict_batch_for_date()` — handles count model for threes separately from copula stats
+- **`src/models/train_pipeline.py`:**
+  - `_evaluate_calibration()` — evaluates count model when present
+  - `_evaluate_combined_calibration()` — includes threes when count model present
+
+### Fixed
+
+- **`AttributeError: feature_names_in_`** — XGBoost doesn't reliably expose feature names. Fixed by:
+  - Storing `threes_zero_feature_names` explicitly during training
+  - Saving as `threes_zero_feature_names.joblib`
+  - Loading and using in calibration and inference paths
+
+### Technical Details
+
+**Why Truncated Negative Binomial:**
+- Made threes are discrete integers (0, 1, 2, 3...) — quantile regression produces continuous values
+- Overdispersion: variance ≈ 2.8 vs mean ≈ 2.1 — Poisson would underestimate variance
+- Truncation at 0: we only model positive samples (zero classifier handles P(zero) separately)
+
+**Sampling Strategy (inverse CDF, not rejection):**
+```python
+# Map u in (0,1) to truncated distribution
+p_zero_nb = nbinom.pmf(0, n, p)
+adjusted_u = u * (1 - p_zero_nb) + p_zero_nb
+samples = nbinom.ppf(adjusted_u, n, p)  # integers >= 1
+```
+
+**Artifacts (C4 architecture):**
+- `threes_zero_classifier.joblib` — XGBoost binary classifier
+- `threes_zero_calibrator.joblib` — Isotonic regression for P(zero)
+- `threes_zero_feature_names.joblib` — Feature names for zero classifier
+- `truncated_negbin_meta.json` — Global mu/alpha, feature names
+- `truncated_negbin_mu_model.joblib` — XGBoost regressor for log(μ)
+- `truncated_negbin_alpha_model.joblib` — XGBoost regressor for log(α)
+- `threes_is_hurdle.json` — Flag file with `model_type: "count"`
+
+### Status
+
+- All 523 tests pass
+- Ready for retraining to activate C4 architecture
+- Expected to fix the 25.6% Q10 calibration gap from C3
+
+---
+
 ## [2026-02-07 Session 14] — Backtesting Data Fixes
 
 ### Fixed

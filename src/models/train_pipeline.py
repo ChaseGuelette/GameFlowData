@@ -313,7 +313,7 @@ class TrainingOrchestrator:
             )
             all_reports[stat] = reports
 
-        # Hurdle models (e.g., THREES)
+        # Hurdle models (e.g., THREES legacy C3)
         hurdle_models = getattr(pipeline, "hurdle_models", {})
         for stat, hurdle_model in hurdle_models.items():
             logger.info(f"Evaluating {stat.upper()} Hurdle Model...")
@@ -326,6 +326,22 @@ class TrainingOrchestrator:
                 name=f"{stat}_hurdle",
             )
             all_reports[stat] = reports
+
+        # Count models (C4 architecture - threes)
+        if hasattr(pipeline, 'threes_count_model') and pipeline.threes_count_model is not None:
+            if "actual_threes" in df.columns:
+                logger.info("Evaluating THREES Count Model (C4)...")
+                mask = (df["actual_minutes"] >= 10) & (df["actual_threes"].notna())
+                reports = self._calibrate_count_model(
+                    pipeline=pipeline,
+                    df=df,
+                    actual_col="actual_threes",
+                    filter_mask=mask,
+                    name="threes_count",
+                )
+                all_reports["threes"] = reports
+            else:
+                logger.warning("Count model present but 'actual_threes' column missing from data")
 
         # Check for failures
         all_gaps = [r["gap"] for model_reports in all_reports.values() for r in model_reports]
@@ -421,6 +437,88 @@ class TrainingOrchestrator:
 
         return reports
 
+    def _calibrate_count_model(self, pipeline, df, actual_col, filter_mask, name) -> list[dict]:
+        """
+        Evaluate calibration for a count model (C4 threes).
+
+        Uses Monte Carlo sampling to generate quantile predictions from the
+        zero classifier + truncated NegBin count model, then evaluates coverage.
+        """
+        filtered = df[filter_mask].copy().reset_index(drop=True)
+        y_actual = filtered[actual_col].values.astype(int)
+
+        if len(filtered) == 0:
+            logger.warning(f"No validation data for {name}")
+            return []
+
+        # Get p_zero predictions
+        zero_clf = pipeline.threes_zero_classifier
+        zero_cal = pipeline.threes_zero_calibrator
+        count_model = pipeline.threes_count_model
+        zero_feature_names = pipeline.threes_zero_feature_names
+
+        # Get features for zero classifier
+        X_zero = filtered[zero_feature_names].fillna(0)
+        p_zero_raw = zero_clf.predict_proba(X_zero)[:, 1]
+        p_zero = zero_cal.predict(p_zero_raw.reshape(-1, 1)).flatten()
+
+        # Analyze zero prediction accuracy
+        actual_zeros = (y_actual == 0)
+        predicted_zeros = p_zero > 0.5
+        zero_accuracy = (actual_zeros == predicted_zeros).mean()
+        actual_zero_rate = actual_zeros.mean()
+        pred_zero_rate = p_zero.mean()
+
+        logger.info(f"  Zero prediction: accuracy={zero_accuracy:.3f}, actual_rate={actual_zero_rate:.3f}, pred_rate={pred_zero_rate:.3f}")
+
+        # Get features for count model and predict params
+        X_count = filtered[count_model.feature_names].fillna(0)
+        mu, alpha = count_model.predict_params(X_count)
+
+        # For each sample, compute quantile thresholds via inverse CDF
+        # Q(p) for truncated NegBin conditioned on p_zero
+        n_samples = len(filtered)
+        quantile_preds = {q: np.zeros(n_samples) for q in [0.10, 0.25, 0.50, 0.75, 0.90]}
+
+        for i in range(n_samples):
+            pz = p_zero[i]
+            m = mu[i]
+            a = alpha[i]
+
+            for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
+                # If q <= p_zero, prediction is 0
+                if q <= pz:
+                    quantile_preds[q][i] = 0
+                else:
+                    # Map q to the positive distribution
+                    # q_pos = (q - p_zero) / (1 - p_zero)
+                    q_pos = (q - pz) / (1 - pz + 1e-9)
+                    q_pos = np.clip(q_pos, 0.001, 0.999)
+
+                    # Inverse CDF of truncated NegBin
+                    from scipy.stats import nbinom
+                    n = 1.0 / (a + 1e-6)
+                    p = n / (n + m + 1e-6)
+                    p = np.clip(p, 0.001, 0.999)
+
+                    p_zero_nb = nbinom.pmf(0, n, p)
+                    adjusted_q = q_pos * (1 - p_zero_nb) + p_zero_nb
+                    adjusted_q = np.clip(adjusted_q, 0.001, 0.999)
+
+                    quantile_preds[q][i] = max(1, int(nbinom.ppf(adjusted_q, n, p)))
+
+        reports = []
+        for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
+            coverage = (y_actual <= quantile_preds[q]).mean()
+            gap = coverage - q
+
+            status = "OK" if abs(gap) <= self.CALIBRATION_TOLERANCE else f"GAP {gap:+.3f}"
+            logger.info(f"  Q{q:.2f}: Act={coverage:.3f} [{status}]")
+
+            reports.append({"quantile": q, "coverage": coverage, "gap": gap})
+
+        return reports
+
     def _save_calibration_report(self, reports: dict, suffix: str = ""):
         filename = f"calibration_report{suffix}.json" if suffix else "calibration_report.json"
         with open(self.run_dir / filename, "w") as f:
@@ -438,9 +536,16 @@ class TrainingOrchestrator:
         """
         logger.info("\n=== Combined Calibration (Minutes × Rate → Total) ===")
 
-        # Evaluate all stats that have trained rate models (including hurdle models)
+        # Evaluate all stats that have trained rate models (including hurdle and count models)
         hurdle_models = getattr(pipeline, "hurdle_models", {})
-        eval_stats = [s for s in ["pts", "reb", "ast", "threes"] if s in pipeline.rate_models or s in hurdle_models]
+        has_count_model = hasattr(pipeline, 'threes_count_model') and pipeline.threes_count_model is not None
+        eval_stats = [
+            s for s in ["pts", "reb", "ast", "threes"]
+            if s in pipeline.rate_models or s in hurdle_models or (s == "threes" and has_count_model)
+        ]
+
+        # Filter stats to only those with actual columns in the data
+        eval_stats = [s for s in eval_stats if f"actual_{s}" in df.columns]
 
         # Filter to valid rows with actual stats
         valid_mask = df["actual_minutes"] >= 10

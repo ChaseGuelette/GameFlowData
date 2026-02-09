@@ -1,5 +1,80 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-09 — Session 16)
+
+### What We Did
+
+**Set up Windows Task Scheduler for daily pipeline automation.** Created batch scripts and scheduled tasks for local Windows deployment of the daily scraping and inference pipeline.
+
+**Backtest Analysis:** Reviewed sweep results from 2026-02-08. Top performing config: `tau=0.5, z_max=1.0, edge=0.15, kelly=0.125` with $27,379 profit, 10.87% ROI, 57.6% hit rate, 1.21 Sharpe.
+
+**Files created:**
+- `scripts/run_daily_stats.bat` — Wraps daily_stats_job.py for Task Scheduler
+- `scripts/run_lines.bat` — Wraps lines_job.py for Task Scheduler
+- `scripts/run_inference.bat` — Wraps inference_job.py for Task Scheduler
+
+**Windows Task Scheduler tasks created:**
+| Task | Schedule | Script |
+|------|----------|--------|
+| GameFlow-DailyStats | 9:00 AM | run_daily_stats.bat |
+| GameFlow-Lines-12PM | 12:00 PM | run_lines.bat |
+| GameFlow-Lines-4PM | 4:00 PM | run_lines.bat |
+| GameFlow-Lines-6PM | 6:00 PM | run_lines.bat |
+| GameFlow-Inference | 6:30 PM | run_inference.bat |
+
+**Key backtest insights:**
+- BL blending (tau=0.5) now works after A3b fix — produces meaningful weights
+- PTS strongest stat: +17.5% ROI, 241 bets
+- REB solid: +1.9% ROI, 109 bets
+- AST marginal: +3.2% ROI, 77 bets
+- Edge > 0.20 bucket: +20% ROI (214 bets)
+
+### Next Step
+
+1. **Test scheduled tasks** — Run `scripts\run_lines.bat` manually to verify
+2. **Paper trade** — Begin paper trading with automated pipeline
+3. **Retrain with C4** — Run training to activate truncated NegBin for THREES
+
+---
+
+## Session Summary (2026-02-09 — Session 15)
+
+### What We Did
+
+**Implemented C4 THREES Truncated Negative Binomial Count Model.** Replaced the failed C3 hurdle+quantile regression approach with a proper count model for discrete integer outcomes.
+
+**Why C3 failed:** Quantile regression produces continuous values (e.g., Q10=1.2) for discrete outcomes (made threes are 0, 1, 2, 3...). With ~35% zero mass and p_zero≈0.47, Q10 maps to the 5.7th percentile of the positive distribution, requiring extrapolation below the training range. Result: 25.6% calibration gap at Q10.
+
+**C4 Solution:**
+1. **Stage 1 (unchanged):** XGBoost binary classifier with isotonic calibration for P(zero)
+2. **Stage 2 (new):** Truncated Negative Binomial model predicting μ (mean) and α (overdispersion)
+   - Two XGBoost regressors predict log(μ) and log(α) for positivity
+   - Inverse CDF sampling produces integer counts directly
+   - Handles overdispersion (variance ≈ 2.8 vs mean ≈ 2.1)
+
+**New files created:**
+- `src/models/truncated_negbin.py` (~500 lines) — `TruncatedNegBinModel` class
+- `tests/test_truncated_negbin.py` — 17 unit tests (all pass)
+- `scripts/validate_threes_negbin.py` — Phase 0 validation (chi-squared test)
+
+**Files modified:**
+- `src/models/quantile_trainer.py` — Added `_train_threes_count_model()`, updated `save_all()`/`load_all()`
+- `src/models/monte_carlo.py` — Added `_sample_threes_count()`, `_has_threes_count_model()`
+- `src/models/train_pipeline.py` — Added `_calibrate_count_model()`, updated evaluation methods
+
+**Fixed during session:**
+- `AttributeError: feature_names_in_` — XGBoost doesn't reliably expose feature names. Fixed by storing `threes_zero_feature_names` explicitly.
+
+**Test results:** All 523 tests pass.
+
+### Next Step
+
+1. **Retrain models** — Run training pipeline to generate C4 count model for THREES
+2. **Run backtest with threes** — `--stats pts reb ast threes` to validate calibration improvement
+3. **Validate Q10 gap** — Target: < ±5% gap (down from 25.6%)
+
+---
+
 ## Session Summary (2026-02-07 — Session 14)
 
 ### What We Did
@@ -593,32 +668,31 @@ where bookmaker attention is lower.
 
   **Status:** Architecture implemented, but calibration failed (25.6% gap at Q0.10). Root cause: quantile regression on discrete count data is fundamentally wrong. See C4 for fix.
 
-- [ ] **C4. Replace THREES quantile regression with Truncated Negative Binomial** *(HIGH PRIORITY)*
-  The C3 hurdle model's Step 2 (quantile regression on positive samples) still fails because:
+- [x] **C4. Replace THREES quantile regression with Truncated Negative Binomial** *(IMPLEMENTED — 2026-02-09)*
+  The C3 hurdle model's Step 2 (quantile regression on positive samples) failed because:
   1. Quantile regression produces continuous values for discrete outcomes (can't have 2.3 threes)
   2. Interpolation between 5 quantile points is too coarse for a distribution with only ~8 values
   3. Boundary math extrapolates below Q10 when p_zero is high (adjusted_q = 0.057)
 
   Full spec: `.session/specs/C4_threes_count_model.md`
 
-  **Architecture change:** Hurdle + Quantile Regression → Hurdle + Truncated Negative Binomial
-  - Keep Step 1 (zero classifier) — improve calibration
-  - Replace Step 2 with count model predicting NegBin parameters (μ, α)
-  - MC sampling draws integers directly from truncated NegBin
-  - Remove THREES from copula (count model features encode minutes context)
+  **Architecture implemented:** Hurdle + Truncated Negative Binomial
+  - Stage 1: XGBoost binary classifier + isotonic calibration for P(zero)
+  - Stage 2: `TruncatedNegBinModel` predicting NegBin parameters (μ, α) via two XGBoost regressors
+  - MC sampling draws integers directly from truncated NegBin via inverse CDF
+  - THREES removed from copula (count model features encode minutes context)
 
-  **Implementation phases:**
-  - Phase 0: Validate truncated NegBin fits positive-only data (chi-squared test)
-  - Phase 1: Build `TruncatedNegBinModel` class with XGBoost regressors for μ and α
-  - Phase 2: Integrate with `MonteCarloPredictor` — new `_sample_threes_count()` method
-  - Phase 3: Improve zero classifier calibration (Platt scaling if isotonic fails)
-  - Phase 4: Training pipeline integration, new artifacts
-  - Phase 5: Calibration validation & backtesting
-  - Phase 6: Production deployment
+  **Files created:**
+  - `src/models/truncated_negbin.py` — TruncatedNegBinModel class (~500 lines)
+  - `tests/test_truncated_negbin.py` — 17 unit tests
+  - `scripts/validate_threes_negbin.py` — Phase 0 validation script
 
-  **Timeline:** ~10-12 days
-  **Blocked by:** Nothing — can start immediately
-  **Blocks:** THREES betting in production
+  **Files modified:**
+  - `src/models/quantile_trainer.py` — `_train_threes_count_model()`, save/load
+  - `src/models/monte_carlo.py` — `_sample_threes_count()`, `_has_threes_count_model()`
+  - `src/models/train_pipeline.py` — `_calibrate_count_model()`, evaluation updates
+
+  **Status:** Code complete, all 523 tests pass. Needs retraining to activate.
 
 ---
 
@@ -681,25 +755,28 @@ out-of-sample period. Do not pursue E4+ until sweep results are in.
   - `PaperTrader` class with bet selection (edge threshold + Kelly sizing), placement (UPSERT), and resolution
   - CLI scripts: `place_bets.py` (with `--dry-run`) and `resolve_bets.py`
   - 20 unit tests in `tests/test_paper_trader.py`
-- [x] **E6. Daily Pipeline Automation** — *(IN PROGRESS — 2026-02-05)*
-  Separated jobs by frequency for cron scheduling. Spec: `.session/specs/E6_daily_automation.md`
+- [x] **E6. Daily Pipeline Automation** — *(DONE — 2026-02-09)*
+  Separated jobs by frequency for scheduling. Spec: `.session/specs/E6_daily_automation.md`
 
   **Scripts created:**
-  - `src/orchestration/daily_stats_job.py` — Once daily (6 AM ET): NBA results + full processing pipeline
-  - `src/orchestration/lines_job.py` — Multiple times daily (12 PM, 4 PM, 6 PM ET): Props + injuries + linking
-  - `src/orchestration/inference_job.py` — Once daily (6:30 PM ET): Generate predictions before games
+  - `src/orchestration/daily_stats_job.py` — Once daily: NBA results + full processing pipeline
+  - `src/orchestration/lines_job.py` — Multiple times daily: Props + injuries + linking
+  - `src/orchestration/inference_job.py` — Once daily: Generate predictions before games
 
-  **Schedule (ET timezone):**
-  - 6:00 AM: `daily_stats_job.py` — Scrape previous night's games, update derived stats
-  - 12:00 PM: `lines_job.py` — First props/injuries scrape
-  - 4:00 PM: `lines_job.py` — Second props/injuries scrape
-  - 6:00 PM: `lines_job.py` — Final props/injuries scrape
-  - 6:30 PM: `inference_job.py` — Generate predictions with latest lines
+  **Scheduling implemented:**
+  - **Linux:** `cron/gameflow_crontab.txt` template for server deployment
+  - **Windows:** Batch scripts in `scripts/` + Task Scheduler tasks (GameFlow-*)
 
-  **Remaining work:**
-  - [ ] Email notifications on success/failure (Phase 2)
-  - [ ] Health check endpoints (Phase 2)
-  - [ ] Server deployment with cron
+  **Windows Task Scheduler (local deployment):**
+  - 9:00 AM: `GameFlow-DailyStats` — Scrape previous night's games
+  - 12:00 PM: `GameFlow-Lines-12PM` — First props scrape
+  - 4:00 PM: `GameFlow-Lines-4PM` — Second props scrape
+  - 6:00 PM: `GameFlow-Lines-6PM` — Final props scrape
+  - 6:30 PM: `GameFlow-Inference` — Generate predictions
+
+  **Phase 2 (future):**
+  - [ ] Email notifications on success/failure
+  - [ ] Health check endpoints
 - [ ] **E7. Paper trade** — Run live for 2-4 weeks, validate predictions vs outcomes
 - [ ] **E8. Go live — minimum flat stakes**
 - [ ] **E9. Scale to Kelly sizing**
@@ -757,7 +834,7 @@ Next.js dashboard for viewing predictions and paper trading results. Blocked by 
 | ~~E3 (Analyze sweep)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — REB +7.9%, model finds genuine edges without BL. |
 | ~~A3b (Fix BL confidence)~~ | ~~Low~~ | ~~High~~ | **DONE** — Linear ramp confidence. 42 tests passing. |
 | ~~C3 (THREES hurdle model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE but FAILED** — Calibration gap 25.6% at Q0.10. Quantile regression wrong for discrete data. |
-| C4 (THREES count model) | Medium-High | High | Replace quantile regression with Truncated NegBin. Spec: `.session/specs/C4_threes_count_model.md` |
+| ~~C4 (THREES count model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE** — Truncated NegBin implemented. Needs retraining. |
 | E1b (Retrain with calibration fixes) | Low | Medium | Conformal recalibration + zero-snap need retraining to take effect |
 | ~~E4 (Daily injury pipeline)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — `--scrape-injuries` now uses RapidAPI + linker |
 | ~~E5 (Paper trade infra)~~ | ~~Medium~~ | ~~High~~ | **DONE** — `PaperTrader` class, CLI scripts, 20 tests |

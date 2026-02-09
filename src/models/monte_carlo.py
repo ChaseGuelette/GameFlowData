@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,9 @@ from scipy.stats import norm as sp_norm
 
 if TYPE_CHECKING:
     from src.models.quantile_trainer import HurdleQuantileModel
+    from src.models.truncated_negbin import TruncatedNegBinModel
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -281,7 +285,37 @@ class MonteCarloPredictor:
              b. Transform to uniform: u = Φ(z)
              c. Map through marginal inverse CDFs
              d. Multiply: stat = minutes × rate
+
+        THREES with C4 count model:
+          - Uses separate path via _sample_threes_count()
+          - Produces integer samples directly
+          - NOT included in copula (receives minutes features directly)
         """
+        predictions = {}
+
+        # Handle THREES separately if using count model (C4)
+        if 'threes' in stats and self._has_threes_count_model():
+            threes_samples = self._sample_threes_count(features)
+            predictions['threes'] = PropPrediction(
+                player_id=player_id,
+                game_id=game_id,
+                stat='threes',
+                mean=float(threes_samples.mean()),
+                median=float(np.median(threes_samples)),
+                q10=float(np.percentile(threes_samples, 10)),
+                q25=float(np.percentile(threes_samples, 25)),
+                q50=float(np.percentile(threes_samples, 50)),
+                q75=float(np.percentile(threes_samples, 75)),
+                q90=float(np.percentile(threes_samples, 90)),
+                samples=threes_samples.astype(float),
+            )
+            # Remove threes from stats to process via copula
+            stats = [s for s in stats if s != 'threes']
+
+        # If no other stats to process, return early
+        if not stats:
+            return predictions
+
         # Get minutes quantile predictions
         X_min = self._prepare_features(features, self.pipeline.minutes_model.all_feature_names)
         min_qdf = self.pipeline.minutes_model.predict_quantiles(X_min)
@@ -291,9 +325,8 @@ class MonteCarloPredictor:
         # Generate shared latent normal for minutes (same across all stats)
         z_minutes = self.rng.standard_normal(self.n_samples)
 
-        predictions = {}
         for stat in stats:
-            # Check for hurdle model first (e.g., THREES)
+            # Check for hurdle model first (e.g., THREES with legacy C3 model)
             is_hurdle = stat in getattr(self.pipeline, "hurdle_models", {})
             if not is_hurdle and stat not in self.pipeline.rate_models:
                 continue
@@ -320,7 +353,7 @@ class MonteCarloPredictor:
                 minutes_samples = self._apply_blowout_factor(minutes_samples)
 
             if is_hurdle:
-                # Use hurdle sampling for zero-inflated stats (THREES)
+                # Use hurdle sampling for zero-inflated stats (legacy THREES C3 model)
                 hurdle_model = self.pipeline.hurdle_models[stat]
                 # Use all_feature_names (classifier + positive models) for hurdle sampling
                 X_rate = self._prepare_features(features, hurdle_model.all_feature_names)
@@ -380,13 +413,54 @@ class MonteCarloPredictor:
         stats = stats or ["pts", "reb", "ast"]
         n_players = len(features_df)
 
+        predictions_list = []
+        samples_dict = {}
+
+        player_ids = features_df["player_id"].values
+        game_ids = features_df["game_id"].values
+        player_names = features_df["player_name"].values if "player_name" in features_df.columns else [None] * n_players
+        team_ids = features_df["team_id"].values if "team_id" in features_df.columns else [None] * n_players
+
+        # Handle THREES with count model (C4) separately
+        process_threes_count = 'threes' in stats and self._has_threes_count_model()
+        if process_threes_count:
+            # Batch predict THREES using count model
+            logger.debug("Using C4 count model for THREES predictions")
+            for i in range(n_players):
+                row_features = features_df.iloc[i].to_dict()
+                threes_samples = self._sample_threes_count(row_features)
+
+                predictions_list.append({
+                    "player_id": player_ids[i],
+                    "player_name": player_names[i],
+                    "game_id": game_ids[i],
+                    "team_id": team_ids[i],
+                    "stat": "threes",
+                    "pred_mean": float(threes_samples.mean()),
+                    "pred_std": float(threes_samples.std()),
+                    "pred_median": float(np.median(threes_samples)),
+                    "pred_q10": float(np.percentile(threes_samples, 10)),
+                    "pred_q25": float(np.percentile(threes_samples, 25)),
+                    "pred_q50": float(np.percentile(threes_samples, 50)),
+                    "pred_q75": float(np.percentile(threes_samples, 75)),
+                    "pred_q90": float(np.percentile(threes_samples, 90)),
+                })
+                samples_dict[(player_ids[i], game_ids[i], "threes")] = threes_samples.astype(float)
+
+            # Remove threes from stats for copula processing
+            stats = [s for s in stats if s != 'threes']
+
+        # If no other stats to process, return early
+        if not stats:
+            return predictions_list, samples_dict
+
         # 1. Batch minutes prediction (1 XGBoost call for ALL players)
         X_minutes = self._prepare_features_batch(features_df, self.pipeline.minutes_model.all_feature_names)
         minutes_quantiles_df = self.pipeline.minutes_model.predict_quantiles(X_minutes)
 
         # 2. Batch rate predictions (1 XGBoost call per stat)
         rate_quantiles = {}
-        hurdle_data = {}  # Store (p_zero, quantile_df) for hurdle models
+        hurdle_data = {}  # Store (p_zero, quantile_df) for legacy hurdle models
         hurdle_models = getattr(self.pipeline, "hurdle_models", {})
 
         for stat in stats:
@@ -404,14 +478,6 @@ class MonteCarloPredictor:
                 rate_quantiles[stat] = self.pipeline.rate_models[stat].predict_quantiles(X_rate)
 
         # 3. Per-player sampling loop (fast numpy, not XGBoost)
-        predictions_list = []
-        samples_dict = {}
-
-        player_ids = features_df["player_id"].values
-        game_ids = features_df["game_id"].values
-        player_names = features_df["player_name"].values if "player_name" in features_df.columns else [None] * n_players
-        team_ids = features_df["team_id"].values if "team_id" in features_df.columns else [None] * n_players
-
         use_copula = self.copula_params is not None
 
         for i in range(n_players):
@@ -834,6 +900,74 @@ class MonteCarloPredictor:
             samples[~is_zero] = np.maximum(positive_samples, 0)
 
         return samples
+
+    def _sample_threes_count(self, features: dict) -> np.ndarray:
+        """
+        Sample THREES using the count model (C4 architecture).
+
+        Two-stage hurdle sampling:
+          1. Bernoulli draw from zero classifier (P(threes = 0))
+          2. For positive samples: draw from truncated NegBin
+
+        The count model produces integer samples directly, avoiding the
+        interpolation artifacts of the quantile-based hurdle model.
+
+        Args:
+            features: Feature dictionary for the player
+
+        Returns:
+            Integer samples array of shape (n_samples,)
+        """
+        # Get components from pipeline
+        count_model = getattr(self.pipeline, 'threes_count_model', None)
+        zero_clf = getattr(self.pipeline, 'threes_zero_classifier', None)
+        zero_cal = getattr(self.pipeline, 'threes_zero_calibrator', None)
+
+        if count_model is None:
+            raise ValueError(
+                "No threes_count_model found in pipeline. "
+                "Ensure model was trained with C4 count model."
+            )
+
+        if zero_clf is None or zero_cal is None:
+            raise ValueError(
+                "No threes_zero_classifier/calibrator found in pipeline. "
+                "Ensure model includes zero classifier components."
+            )
+
+        # Get feature names for zero classifier
+        zero_feature_names = getattr(self.pipeline, 'threes_zero_feature_names', None)
+        if zero_feature_names is None:
+            raise ValueError(
+                "No threes_zero_feature_names found in pipeline. "
+                "Model may have been trained with older version."
+            )
+
+        # Prepare features for zero classifier
+        X_clf = self._prepare_features(features, zero_feature_names)
+
+        # Step 1: Get calibrated P(zero)
+        p_zero_raw = zero_clf.predict_proba(X_clf)[:, 1][0]
+        p_zero = float(zero_cal.predict([p_zero_raw])[0])
+
+        # Step 2: Bernoulli draw - which samples are zero?
+        is_zero = self.rng.random(self.n_samples) < p_zero
+        n_positive = int((~is_zero).sum())
+
+        # Step 3: Initialize result array
+        samples = np.zeros(self.n_samples, dtype=int)
+
+        if n_positive > 0:
+            # Step 4: Sample from truncated NegBin for positive branch
+            X_count = self._prepare_features(features, count_model.feature_names)
+            positive_samples = count_model.sample(X_count, n_samples=n_positive, rng=self.rng)
+            samples[~is_zero] = positive_samples.flatten()
+
+        return samples
+
+    def _has_threes_count_model(self) -> bool:
+        """Check if pipeline has the C4 threes count model."""
+        return hasattr(self.pipeline, 'threes_count_model') and self.pipeline.threes_count_model is not None
 
     def _inverse_transform_sample(self, quantile_probs: np.ndarray, quantile_values: np.ndarray) -> np.ndarray:
         """

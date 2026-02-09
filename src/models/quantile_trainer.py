@@ -825,22 +825,16 @@ class PlayerPropsModelPipeline:
 
             print(f"Training on {len(X):,} samples")
 
-            # Use hurdle model for THREES (zero-inflated distribution)
+            # Use count model for THREES (C4 architecture)
             if stat == "threes":
-                # Train hurdle model with two stages
-                # Get a base feature list for classifier (use Q0.50 features or all)
+                # Train hurdle + count model for zero-inflated discrete distribution
                 base_features = per_q_available.get(0.5, available_features)
-                hurdle_model = train_hurdle_model(
-                    df,
+                count_results = self._train_threes_count_model(
+                    df=df,
                     feature_names=base_features,
-                    feature_names_per_quantile=per_q_available,
                     config=config,
                 )
-                self.hurdle_models[stat] = hurdle_model
-                all_results[stat] = {
-                    "model_type": "hurdle",
-                    "zero_rate": (df.loc[valid_mask, rate_col] == 0).mean(),
-                }
+                all_results[stat] = count_results
             else:
                 # Train regular quantile model suite
                 model_suite = QuantileModelSuite(config)
@@ -849,6 +843,111 @@ class PlayerPropsModelPipeline:
                 all_results[stat] = results
 
         return all_results
+
+    def _train_threes_count_model(
+        self,
+        df: pd.DataFrame,
+        feature_names: list[str],
+        config: QuantileModelConfig | None = None,
+    ) -> dict:
+        """
+        Train two-stage hurdle + count model for THREES (C4 architecture).
+
+        Stage 1: Zero classifier (P(threes = 0))
+        Stage 2: Truncated NegBin count model (conditional on threes > 0)
+
+        This replaces the C3 hurdle + quantile model that had 25.6% Q10 calibration gap.
+        """
+        from src.models.truncated_negbin import TruncatedNegBinModel
+
+        print("\n" + "=" * 60)
+        print("TRAINING THREES COUNT MODEL (C4)")
+        print("=" * 60)
+
+        config = config or self.config
+
+        # Filter to valid rows (min >= 10, threes not null)
+        valid_mask = df['actual_threes'].notna() & (df['actual_minutes'] >= 10)
+        df_valid = df[valid_mask].copy()
+
+        # Get available features
+        available_features = [f for f in feature_names if f in df_valid.columns]
+
+        X = df_valid[available_features].fillna(0)
+        y_count = df_valid['actual_threes'].astype(int)  # Integer counts
+        is_zero = (y_count == 0).astype(int)
+
+        print(f"Total samples: {len(X):,}")
+        print(f"Zero samples: {is_zero.sum():,} ({is_zero.mean():.1%})")
+        print(f"Positive samples: {(~is_zero.astype(bool)).sum():,}")
+
+        # === Stage 1: Zero Classifier ===
+        print("\n--- Stage 1: Zero Classifier ---")
+
+        # Temporal split for calibration
+        n_train = int(len(X) * (1 - 0.15))
+        X_train = X.iloc[:n_train]
+        X_val = X.iloc[n_train:]
+        is_zero_train = is_zero.iloc[:n_train]
+        is_zero_val = is_zero.iloc[n_train:]
+        y_train = y_count.iloc[:n_train]
+        y_val = y_count.iloc[n_train:]
+
+        zero_clf = xgb.XGBClassifier(
+            objective='binary:logistic',
+            n_estimators=config.n_estimators,
+            max_depth=config.max_depth,
+            learning_rate=config.learning_rate,
+            subsample=config.subsample,
+            colsample_bytree=config.colsample_bytree,
+            early_stopping_rounds=config.early_stopping_rounds,
+            n_jobs=-1,
+            eval_metric='logloss',
+        )
+
+        zero_clf.fit(
+            X_train, is_zero_train,
+            eval_set=[(X_val, is_zero_val)],
+            verbose=False
+        )
+
+        # Calibrate zero classifier with isotonic regression
+        p_zero_raw = zero_clf.predict_proba(X_val)[:, 1]
+        zero_calibrator = IsotonicRegression(out_of_bounds='clip')
+        zero_calibrator.fit(p_zero_raw, is_zero_val)
+
+        p_zero_cal = zero_calibrator.predict(p_zero_raw)
+        print(f"Zero classifier - Raw p_zero: {p_zero_raw.mean():.3f}, Calibrated: {p_zero_cal.mean():.3f}")
+        print(f"Actual zero rate (val): {is_zero_val.mean():.3f}")
+
+        # === Stage 2: Truncated NegBin Count Model ===
+        print("\n--- Stage 2: Truncated NegBin Count Model ---")
+
+        positive_mask = y_count > 0
+        X_pos = X[positive_mask]
+        y_pos = y_count[positive_mask]
+
+        print(f"Training count model on {len(X_pos):,} positive samples")
+
+        count_model = TruncatedNegBinModel()
+        count_results = count_model.fit(X_pos, y_pos)
+
+        print(f"Global mu: {count_results['global_mu']:.3f}")
+        print(f"Global alpha (overdispersion): {count_results['global_alpha']:.3f}")
+
+        # Store models on pipeline
+        self.threes_zero_classifier = zero_clf
+        self.threes_zero_calibrator = zero_calibrator
+        self.threes_count_model = count_model
+        self.threes_zero_feature_names = available_features  # Store feature names explicitly
+
+        return {
+            'model_type': 'count',
+            'zero_rate': is_zero.mean(),
+            'global_mu': count_results['global_mu'],
+            'global_alpha': count_results['global_alpha'],
+            'n_positive_samples': len(X_pos),
+        }
 
     def save_all(self, directory: str):
         """Save all models."""
@@ -861,9 +960,28 @@ class PlayerPropsModelPipeline:
         for stat, model in self.rate_models.items():
             model.save(path / f"{stat}_rate_model.joblib")
 
-        # Save hurdle models (these save multiple files)
+        # Save hurdle models (these save multiple files) - legacy C3
         for stat, hurdle_model in self.hurdle_models.items():
             hurdle_model.save(path)
+
+        # Save threes count model (C4) if present
+        has_count_model = hasattr(self, 'threes_count_model') and self.threes_count_model is not None
+        if has_count_model:
+            # Save zero classifier and its feature names
+            joblib.dump(self.threes_zero_classifier, path / "threes_zero_classifier.joblib")
+            joblib.dump(self.threes_zero_calibrator, path / "threes_zero_calibrator.joblib")
+            joblib.dump(self.threes_zero_feature_names, path / "threes_zero_feature_names.joblib")
+
+            # Save count model
+            self.threes_count_model.save(path)
+
+            # Save flag file indicating count model (C4)
+            with open(path / "threes_is_hurdle.json", "w") as f:
+                json.dump({
+                    "is_hurdle": True,
+                    "model_type": "count",  # C4 architecture
+                }, f, indent=2)
+            print("Saved THREES count model (C4)")
 
         # Save per-quantile feature config
         joblib.dump(
@@ -871,6 +989,7 @@ class PlayerPropsModelPipeline:
                 "minutes_features": self.minutes_features,
                 "rate_features": self.rate_features,
                 "hurdle_stats": list(self.hurdle_models.keys()),
+                "count_model_stats": ["threes"] if has_count_model else [],
             },
             path / "feature_config.joblib",
         )
@@ -889,18 +1008,54 @@ class PlayerPropsModelPipeline:
         if minutes_path.exists():
             pipeline.minutes_model = QuantileModelSuite.load(minutes_path)
 
-        # Load feature config first to check for hurdle stats
+        # Load feature config first to check for hurdle stats and count models
         config_path = path / "feature_config.joblib"
         hurdle_stats = []
+        count_model_stats = []
         if config_path.exists():
             config = joblib.load(config_path)
             pipeline.minutes_features = config["minutes_features"]
             pipeline.rate_features = config["rate_features"]
             hurdle_stats = config.get("hurdle_stats", [])
+            count_model_stats = config.get("count_model_stats", [])
+
+        # Check for C4 count model via threes_is_hurdle.json
+        is_count_model = False
+        hurdle_json_path = path / "threes_is_hurdle.json"
+        if hurdle_json_path.exists():
+            with open(hurdle_json_path, "r") as f:
+                hurdle_info = json.load(f)
+                is_count_model = hurdle_info.get("model_type") == "count"
+
+        # Load threes count model (C4) if present
+        if is_count_model or "threes" in count_model_stats:
+            from src.models.truncated_negbin import TruncatedNegBinModel
+
+            # Load zero classifier, calibrator, and feature names
+            zero_clf_path = path / "threes_zero_classifier.joblib"
+            zero_cal_path = path / "threes_zero_calibrator.joblib"
+            zero_feat_path = path / "threes_zero_feature_names.joblib"
+
+            if zero_clf_path.exists() and zero_cal_path.exists():
+                pipeline.threes_zero_classifier = joblib.load(zero_clf_path)
+                pipeline.threes_zero_calibrator = joblib.load(zero_cal_path)
+                if zero_feat_path.exists():
+                    pipeline.threes_zero_feature_names = joblib.load(zero_feat_path)
+
+                # Load count model
+                if TruncatedNegBinModel.exists(path):
+                    pipeline.threes_count_model = TruncatedNegBinModel.load(path)
+                    print("Loaded THREES count model (C4)")
+                else:
+                    print("WARNING: Count model flag set but model files not found")
 
         # Load rate models
         for stat in ["pts", "reb", "ast", "threes"]:
-            # Check if this is a hurdle model
+            # Skip threes if we loaded a count model
+            if stat == "threes" and hasattr(pipeline, 'threes_count_model'):
+                continue
+
+            # Check if this is a hurdle model (legacy C3)
             if stat in hurdle_stats or HurdleQuantileModel.is_hurdle_model(path):
                 if stat == "threes" and HurdleQuantileModel.is_hurdle_model(path):
                     pipeline.hurdle_models[stat] = HurdleQuantileModel.load(path)

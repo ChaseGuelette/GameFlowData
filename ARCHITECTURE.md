@@ -165,12 +165,14 @@ The modeling engine predicts the probability distribution of player stats.
     - *Example:* "Floor" (Q10) models might prioritize minutes played, while "Ceiling" (Q90) models prioritize usage rate and pace.
 - **Isotonic Calibration:** Post-processing step to ensure monotonic predictions (`Q10 <= Q25 <= ...`).
 - **Conformal Recalibration:** After training each quantile, computes validation residuals `(y_val - pred)`. If coverage gap exceeds 3%, applies a conformal offset `delta = np.quantile(residuals, q)` at prediction time. Addresses zero-inflated distributions (e.g., `threes_per_min`) where XGBoost's `quantileerror` objective cannot learn the correct quantile. Offsets persisted in model artifacts.
-- **Hurdle Model Architecture (C3):** For zero-inflated distributions like THREES (35%+ samples exactly 0), a two-stage hurdle model replaces standard quantile regression:
+- **Count Model Architecture (C4):** For zero-inflated discrete distributions like THREES (35%+ samples exactly 0), a two-stage hurdle + count model replaces the C3 quantile regression approach:
     - **Stage 1 (Zero Classifier):** XGBoost binary classifier predicts P(stat = 0 | features). Calibrated with isotonic regression to ensure accurate p_zero estimates.
-    - **Stage 2 (Positive Quantile Models):** Standard quantile regression trained only on positive samples (stat | stat > 0).
-    - **Inference Logic:** For target quantile q: if q ≤ p_zero → return 0; else map to positive distribution via adjusted quantile `(q - p_zero) / (1 - p_zero)`.
-    - **MC Sampling:** Bernoulli draw (independent of copula) determines zero vs positive. For positive samples, copula-correlated uniforms map through positive distribution inverse CDF.
-    - `HurdleQuantileModel` class with `save()`/`load()`/`is_hurdle_model()` for persistence. Artifacts: `threes_zero_classifier.joblib`, `threes_zero_calibrator.joblib`, `threes_rate_model.joblib`, `threes_is_hurdle.json`.
+    - **Stage 2 (Truncated Negative Binomial):** `TruncatedNegBinModel` class in `src/models/truncated_negbin.py` predicts μ (mean) and α (overdispersion) parameters. Two XGBoost regressors predict log(μ) and log(α) for positivity.
+    - **Why NegBin:** Made threes are discrete integers (0, 1, 2, 3...) with overdispersion (variance ≈ 2.8 vs mean ≈ 2.1). Negative Binomial handles both properties; truncation at 0 conditions on positive samples.
+    - **MC Sampling:** Bernoulli draw determines zero vs positive (independent of copula). For positive samples, inverse CDF sampling from truncated NegBin produces integer counts directly.
+    - **Artifacts:** `threes_zero_classifier.joblib`, `threes_zero_calibrator.joblib`, `threes_zero_feature_names.joblib`, `truncated_negbin_meta.json`, `truncated_negbin_mu_model.joblib`, `truncated_negbin_alpha_model.joblib`, `threes_is_hurdle.json` (with `model_type: "count"`).
+    - **Removed from copula:** THREES uses count model features directly (includes minutes context), so copula correlation would double-count.
+- **Legacy Hurdle Model (C3):** The original two-stage hurdle + quantile regression is retained for backward compatibility but deprecated. Failed due to 25.6% calibration gap at Q10 — quantile regression produces continuous values for discrete outcomes.
 - Default hyperparameters: `n_estimators=1000`, `max_depth=5`, `learning_rate=0.03`, `early_stopping_rounds=50`.
 
 #### Stage B: Hyperparameter Tuning (`hyperparameter_tuner.py`)
@@ -317,7 +319,14 @@ A simulation environment to validate betting strategies.
 
 **`inference_job.py`** — Pre-game prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, exports CSV backup. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`. Runtime: ~1-3 minutes.
 
-**Cron Configuration:** See `cron/gameflow_crontab.txt` for server deployment template with UTC times and environment setup instructions.
+**Cron Configuration:** See `cron/gameflow_crontab.txt` for Linux server deployment template with UTC times and environment setup instructions.
+
+**Windows Task Scheduler:** For local Windows deployment, batch scripts in `scripts/` directory wrap each job:
+- `scripts/run_daily_stats.bat` — Runs daily stats job
+- `scripts/run_lines.bat` — Runs lines job
+- `scripts/run_inference.bat` — Runs inference job
+
+Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, GameFlow-Lines-6PM, GameFlow-Inference) execute these batch scripts at configured times. See `scripts/` directory for implementation.
 
 ### 9. Paper Trading (`src/paper_trading/`)
 
@@ -646,7 +655,7 @@ See `ACTIONITEMS.md` for full details.
 
 **Prediction storage + query tool (2026-01-31):** Daily predictions and MC samples now persisted to PostgreSQL (`daily_predictions` + `daily_prediction_samples` tables). CLI query tool (`src/tools/query_player.py`) enables ad-hoc probability queries against stored distributions. Daily runner refactored: NBA API ScoreboardV2 for game discovery, `rapidapi_injuries` for injury filtering, MC samples for edge calculation, `ROW_NUMBER` snapshot ranking for line freshness.
 
-**Current state (2026-02-07):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260205_165808`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. THREES hurdle model implemented — two-stage architecture (classifier + positive quantile models) should fix Q0.10 +20.4% calibration gap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). **E6 Daily Pipeline Automation (2026-02-05):** Three frequency-separated job scripts created for cron scheduling — `daily_stats_job.py` (once daily), `lines_job.py` (multiple times daily), `inference_job.py` (pre-game). Cron template at `cron/gameflow_crontab.txt`.
+**Current state (2026-02-09):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260205_165808`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. **C4 THREES count model implemented** — replaces failed C3 hurdle+quantile approach with Truncated Negative Binomial. New `TruncatedNegBinModel` class in `src/models/truncated_negbin.py` directly samples integer counts, fixing the fundamental issue of quantile regression on discrete data. Needs retraining to activate. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). **E6 Daily Pipeline Automation (2026-02-05):** Three frequency-separated job scripts created for cron scheduling — `daily_stats_job.py` (once daily), `lines_job.py` (multiple times daily), `inference_job.py` (pre-game). Cron template at `cron/gameflow_crontab.txt`.
 
 **Backtesting fixes (2026-02-07):**
 1. **Incomplete model directory validation:** `find_latest_model_dir()` in `run_sweep.py` now skips incomplete training runs (directories without `minutes_model.joblib`). Prevents silent failures when an aborted training run is selected.

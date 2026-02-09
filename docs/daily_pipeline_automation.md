@@ -200,7 +200,66 @@ RAPIDAPI_KEY=<your-rapidapi-key>
 
 ---
 
-## Cron Configuration
+## Scheduling Configuration
+
+### Option 1: Windows Task Scheduler (Local)
+
+For local Windows deployment, batch scripts in `scripts/` wrap each job:
+
+**Batch Scripts:**
+- `scripts/run_daily_stats.bat` — Runs daily_stats_job.py
+- `scripts/run_lines.bat` — Runs lines_job.py
+- `scripts/run_inference.bat` — Runs inference_job.py
+
+**Create Scheduled Tasks:**
+
+```cmd
+:: Daily Stats - 9:00 AM
+schtasks /create /tn "GameFlow-DailyStats" /tr "C:\Users\Chase\Projects\GameFlowData\scripts\run_daily_stats.bat" /sc daily /st 09:00 /f
+
+:: Lines Job - 12:00 PM
+schtasks /create /tn "GameFlow-Lines-12PM" /tr "C:\Users\Chase\Projects\GameFlowData\scripts\run_lines.bat" /sc daily /st 12:00 /f
+
+:: Lines Job - 4:00 PM
+schtasks /create /tn "GameFlow-Lines-4PM" /tr "C:\Users\Chase\Projects\GameFlowData\scripts\run_lines.bat" /sc daily /st 16:00 /f
+
+:: Lines Job - 6:00 PM
+schtasks /create /tn "GameFlow-Lines-6PM" /tr "C:\Users\Chase\Projects\GameFlowData\scripts\run_lines.bat" /sc daily /st 18:00 /f
+
+:: Inference Job - 6:30 PM
+schtasks /create /tn "GameFlow-Inference" /tr "C:\Users\Chase\Projects\GameFlowData\scripts\run_inference.bat" /sc daily /st 18:30 /f
+```
+
+**Manage Tasks:**
+
+```cmd
+:: List all GameFlow tasks
+schtasks /query /fo TABLE | findstr GameFlow
+
+:: Run a task manually
+schtasks /run /tn "GameFlow-Lines-12PM"
+
+:: Disable all tasks (off-season)
+schtasks /change /tn "GameFlow-DailyStats" /disable
+schtasks /change /tn "GameFlow-Lines-12PM" /disable
+schtasks /change /tn "GameFlow-Lines-4PM" /disable
+schtasks /change /tn "GameFlow-Lines-6PM" /disable
+schtasks /change /tn "GameFlow-Inference" /disable
+
+:: Re-enable all tasks
+schtasks /change /tn "GameFlow-DailyStats" /enable
+schtasks /change /tn "GameFlow-Lines-12PM" /enable
+schtasks /change /tn "GameFlow-Lines-4PM" /enable
+schtasks /change /tn "GameFlow-Lines-6PM" /enable
+schtasks /change /tn "GameFlow-Inference" /enable
+
+:: Delete a task
+schtasks /delete /tn "GameFlow-DailyStats" /f
+```
+
+**Note:** Windows tasks only run if PC is on and user is logged in. Missed tasks do NOT run retroactively.
+
+### Option 2: Linux Cron (Server)
 
 For server deployment, use the template at `cron/gameflow_crontab.txt`.
 
@@ -222,6 +281,8 @@ For server deployment, use the template at `cron/gameflow_crontab.txt`.
 # 6:30 PM ET (23:30 UTC during EST)
 30 23 * * * cd /path/to/GameFlowData && python src/orchestration/inference_job.py >> logs/inference.log 2>&1
 ```
+
+**Note:** NBA API (`nba_api`) may be blocked from datacenter IPs. Consider local Windows deployment or residential proxy for cloud servers.
 
 ---
 

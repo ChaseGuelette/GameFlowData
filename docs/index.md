@@ -16,6 +16,7 @@
 ## Models
 - [Feature Store](feature_store_documentation.md) - Training and inference feature assembly.
 - [Black-Litterman Blending](black_litterman_documentation.md) - Probability blending with market prior.
+- [Truncated Negative Binomial](truncated_negbin_documentation.md) - Count model for THREES (C4 architecture).
 - [Model Pipeline Runbook](model_pipeline_runbook.md) - Training, backtesting, and daily prediction guide.
 - [Monte Carlo Tuning](monte_carlo_tuning.md) - MC simulation parameter tuning notes.
 
