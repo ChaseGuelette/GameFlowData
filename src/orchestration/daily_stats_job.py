@@ -118,10 +118,10 @@ def main():
             "python src/scrapers/update_league_position_averages.py",
             "Updating League Position Averages",
         ),
-        # Step 6: Populate rolling averages
+        # Step 6: Populate rolling averages (incremental - only today's games)
         (
-            "python src/processing/populate_average_stats.py",
-            "Populating Rolling Average Stats",
+            "python src/processing/populate_average_stats_incremental.py",
+            "Populating Rolling Average Stats (Incremental)",
         ),
         # Step 7: Update opponent allowed stats
         (

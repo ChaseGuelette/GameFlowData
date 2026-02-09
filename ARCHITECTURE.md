@@ -117,7 +117,8 @@ Serves as the bridge between NBA and sportsbook data:
 
 | Module | Purpose |
 |--------|---------|
-| `populate_average_stats.py` | Computes L5, L15, season-to-date rolling averages for players and teams. Batch insert (100 rows). |
+| `populate_average_stats.py` | Computes L5, L15, season-to-date rolling averages for players and teams. Full recalculation for historical backfills. |
+| `populate_average_stats_incremental.py` | Lightweight daily version — only processes players who played on target date. Uses UPSERT. Runtime: ~1s vs ~28min for full script. |
 | `backfill_opponent_allowed.py` | Computes opponent defensive metrics by position → `team_allowed_by_position` table. |
 | `backfill_league_priors.py` | Computes league-wide Bayesian priors → `league_priors_history` table. |
 | `backfill_team_ids.py` | Validates and links team IDs across data sources. |
@@ -313,7 +314,7 @@ A simulation environment to validate betting strategies.
 | `lines_job.py` | 12 PM, 4 PM, 6 PM ET | Player props + injuries + incremental linking |
 | `inference_job.py` | 6:30 PM ET (once) | Generate predictions with latest lines |
 
-**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats.py` → `backfill_opponent_allowed.py`. Supports `--dry-run` to preview commands. Runtime: ~2-5 minutes.
+**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed.py`. Supports `--dry-run` to preview commands. Runtime: ~5-10 minutes (optimized from ~30 minutes via incremental rolling averages).
 
 **`lines_job.py`** — Multiple-times-daily props and injuries scraping. Steps: `daily_game_lines_scraper.py` → `daily_player_props_scraper.py` → `rapidapi_injury_backfill.py` (optional) → `link_injury_data.py` (optional) → `nba_linker_local.py incremental` (optional). Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`. Runtime: ~30-90 seconds.
 
@@ -500,7 +501,8 @@ python src/scrapers/daily_game_lines_scraper.py
 ```bash
 python src/processing/nba_linker_local.py [download|process|upload|incremental]
 python src/processing/nba_linker_local.py incremental [--batch-size 50000] [--limit N]  # Lightweight daily mode
-python src/processing/populate_average_stats.py [--season YYYY-YY] [--table player]
+python src/processing/populate_average_stats.py [--season YYYY-YY] [--table player]  # Full historical recalculation
+python src/processing/populate_average_stats_incremental.py [--date YYYY-MM-DD]  # Lightweight daily update (~1s)
 python src/processing/backfill_opponent_allowed.py
 python src/processing/backfill_league_priors.py
 ```

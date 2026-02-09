@@ -1,5 +1,40 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-09 — Session 17)
+
+### What We Did
+
+**Fixed Windows Task Scheduler batch scripts and tested all scheduled tasks.** Multiple critical bugs prevented scheduled tasks from working correctly.
+
+**Issues Fixed:**
+1. **Virtual environment path mismatch** — Batch scripts referenced `.venv\Scripts\activate` but actual path is `venv\Scripts\activate`
+2. **PYTHONPATH missing** — Subprocess calls failed with `ModuleNotFoundError: No module named 'src'`
+3. **Log file permission conflict** — Python's FileHandler and shell redirect both trying to write to same log file
+4. **SQL syntax error** — `:snap_date::DATE` in `update_player_position_history.py` conflicted with SQLAlchemy parameter binding
+
+**Files modified:**
+- `scripts/run_daily_stats.bat`, `scripts/run_lines.bat`, `scripts/run_inference.bat` — Fixed venv path, added PYTHONPATH, removed log redirect
+- `src/scrapers/update_player_position_history.py` — Changed `:snap_date::DATE` to `CAST(:snap_date AS DATE)`
+- `src/orchestration/daily_stats_job.py` — Updated to use incremental stats script
+
+**Performance Optimization (Major):**
+Created `src/processing/populate_average_stats_incremental.py` — lightweight daily version:
+- Only processes players who played on target date (vs all players)
+- Fetches last 20 games per player (vs full history)
+- Uses UPSERT instead of TRUNCATE + reload
+- **Result: 1.0s vs 1709s (28.5 min) — 1700x speedup**
+
+**Verified working:**
+All 5 production scheduled tasks tested and confirmed working via Windows Task Scheduler.
+
+### Next Step
+
+1. **Paper trade** — Begin paper trading with automated pipeline
+2. **Retrain with C4** — Run training to activate truncated NegBin for THREES
+3. **Investigate pre-existing test failures** — 4 failing tests in `test_feature_store.py` (mock issues)
+
+---
+
 ## Session Summary (2026-02-09 — Session 16)
 
 ### What We Did

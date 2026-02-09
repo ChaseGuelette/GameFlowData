@@ -57,8 +57,8 @@ def update_snapshot(engine, snapshot_date: date):
             JOIN public.player_game_stats box
                 ON adv.game_id = box.game_id
                AND adv.player_id = box.player_id
-            WHERE box.game_date::DATE BETWEEN (:snap_date::DATE - INTERVAL '1 year')
-                                          AND :snap_date::DATE
+            WHERE box.game_date::DATE BETWEEN (CAST(:snap_date AS DATE) - INTERVAL '1 year')
+                                          AND CAST(:snap_date AS DATE)
               AND adv.position IS NOT NULL
               AND (adv.did_not_play = FALSE OR adv.did_not_play IS NULL)
         ),
@@ -108,7 +108,7 @@ def update_snapshot(engine, snapshot_date: date):
         SELECT
             player_id,
             team_id,
-            :snap_date::DATE,
+            CAST(:snap_date AS DATE),
             season_id,
             position,
             CASE

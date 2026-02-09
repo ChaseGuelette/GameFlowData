@@ -8,20 +8,20 @@ The daily pipeline is split into three jobs based on execution frequency:
 
 | Job | Schedule (ET) | Purpose | Runtime |
 |-----|---------------|---------|---------|
-| `daily_stats_job.py` | 6:00 AM | NBA game results + processing | ~2-5 min |
+| `daily_stats_job.py` | 9:00 AM | NBA game results + processing | ~5-10 min |
 | `lines_job.py` | 12 PM, 4 PM, 6 PM | Props + injuries + linking | ~30-90 sec |
 | `inference_job.py` | 6:30 PM | Generate predictions | ~1-3 min |
 
 ## Pipeline Timeline
 
 ```
-6:00 AM   daily_stats_job.py
+9:00 AM   daily_stats_job.py
           ├─ nba_unified_scraper.py (NBA game results)
           ├─ nba_linker_local.py incremental
           ├─ backfill_team_ids.py
           ├─ update_player_position_history.py
           ├─ update_league_position_averages.py
-          ├─ populate_average_stats.py
+          ├─ populate_average_stats_incremental.py (lightweight, ~1s)
           └─ backfill_opponent_allowed.py
 
 12:00 PM  lines_job.py (first run)
@@ -52,7 +52,7 @@ The daily pipeline is split into three jobs based on execution frequency:
 
 **Purpose:** Scrape NBA game results from the previous night and run the full processing pipeline to update derived stats.
 
-**Schedule:** Once daily, 6:00 AM ET (after previous night's games are final)
+**Schedule:** Once daily, 9:00 AM ET (after previous night's games are final)
 
 ### Usage
 
@@ -77,7 +77,7 @@ python src/orchestration/daily_stats_job.py --dry-run
 3. `backfill_team_ids.py` - Fill missing team IDs in staging tables
 4. `update_player_position_history.py` - Update position snapshots
 5. `update_league_position_averages.py` - Update league averages by position
-6. `populate_average_stats.py` - Compute rolling averages (L3, L5, L15, season)
+6. `populate_average_stats_incremental.py` - Compute rolling averages for today's players only (~1s vs ~28min for full)
 7. `backfill_opponent_allowed.py` - Update opponent-adjusted defensive stats
 
 ### Logs
@@ -266,8 +266,8 @@ For server deployment, use the template at `cron/gameflow_crontab.txt`.
 **Example (UTC times for EST):**
 
 ```cron
-# 6:00 AM ET (11:00 UTC during EST)
-0 11 * * * cd /path/to/GameFlowData && python src/orchestration/daily_stats_job.py >> logs/daily_stats.log 2>&1
+# 9:00 AM ET (14:00 UTC during EST)
+0 14 * * * cd /path/to/GameFlowData && python src/orchestration/daily_stats_job.py >> logs/daily_stats.log 2>&1
 
 # 12:00 PM ET (17:00 UTC during EST)
 0 17 * * * cd /path/to/GameFlowData && python src/orchestration/lines_job.py >> logs/lines.log 2>&1

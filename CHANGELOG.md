@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-09 Session 17] — Windows Task Scheduler Fixes & Incremental Stats
+
+### Fixed
+
+- **Batch script virtual environment path** — Changed `.venv` to `venv` in all 3 scripts:
+  - `scripts/run_daily_stats.bat`
+  - `scripts/run_lines.bat`
+  - `scripts/run_inference.bat`
+- **PYTHONPATH for subprocess imports** — Added `set PYTHONPATH=C:\Users\Chase\Projects\GameFlowData` to all batch scripts to fix `ModuleNotFoundError: No module named 'src'`
+- **Log file permission conflicts** — Removed shell redirect (`>> logs\*.log 2>&1`) from batch scripts since Python's FileHandler handles logging
+- **SQL syntax error in `update_player_position_history.py`** — Changed `:snap_date::DATE` to `CAST(:snap_date AS DATE)` to avoid SQLAlchemy parameter binding conflict with PostgreSQL cast syntax
+
+### Added
+
+- **`src/processing/populate_average_stats_incremental.py`** (~325 lines):
+  - Lightweight daily version of rolling average calculation
+  - Only processes players who played on target date (vs all players)
+  - Fetches last 20 games per player (vs full history)
+  - Uses UPSERT instead of TRUNCATE + reload
+  - **Performance: 1.0s vs 1709s (28.5 min) — 1700x speedup**
+
+### Changed
+
+- **`src/orchestration/daily_stats_job.py`** — Step 6 now uses `populate_average_stats_incremental.py` instead of full recalculation
+
+### Verified
+
+- All 5 production scheduled tasks working:
+  - `GameFlow-DailyStats` (9:00 AM)
+  - `GameFlow-Lines-12PM` (12:00 PM)
+  - `GameFlow-Lines-4PM` (4:00 PM)
+  - `GameFlow-Lines-6PM` (6:00 PM)
+  - `GameFlow-Inference` (6:30 PM)
+- Full daily stats job completed successfully in 53 minutes total
+
+---
+
 ## [2026-02-09 Session 16] — Windows Task Scheduler Automation
 
 ### Added

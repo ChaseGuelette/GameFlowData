@@ -43,13 +43,30 @@ All computed with `shift(1)` to ensure no data leakage from the current game.
 
 ## Usage
 ```bash
+# Full recalculation (historical backfills)
 python src/processing/populate_average_stats.py
 python src/processing/populate_average_stats.py --season 2024-25
 python src/processing/populate_average_stats.py --table player
 python src/processing/populate_average_stats.py --table player_advanced
 python src/processing/populate_average_stats.py --table team
 python src/processing/populate_average_stats.py --table player --from-year 2021
+
+# Incremental update (daily cron jobs) — see populate_average_stats_incremental.py
+python src/processing/populate_average_stats_incremental.py                    # Today's games
+python src/processing/populate_average_stats_incremental.py --date 2026-02-09  # Specific date
 ```
+
+## Incremental Version
+
+For daily cron jobs, use `populate_average_stats_incremental.py` instead of the full script:
+
+**Key optimizations:**
+- Only processes players who played on the target date (vs all ~4000 players)
+- Fetches last 20 games per player (vs full history)
+- Uses UPSERT instead of TRUNCATE + reload
+- **Performance: ~1 second vs ~28 minutes (1700x speedup)**
+
+The incremental version computes the same rolling averages (L5, L15, season-to-date) and B2/B3/B4 features, but only for players who had games on the target date. Results are upserted into `player_average_game_stats` using `ON CONFLICT (player_id, game_id) DO UPDATE`.
 
 ## Notes
 - The first game of a season will have null averages (no prior history).
