@@ -409,6 +409,8 @@ class FeatureStore:
             ) pos ON TRUE
 
             -- Player Box Score Averages + B2/B3/B4 features
+            -- NOTE: Using <= because the row for game_date X contains averages computed
+            -- BEFORE game X (due to shift(1) in populate_average_stats). Safe, not leakage.
             LEFT JOIN LATERAL (
                 SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
                        avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5,
@@ -418,7 +420,7 @@ class FeatureStore:
                        rest_days, games_last_7d
                 FROM player_average_game_stats pags
                 WHERE pags.player_id = pgs.player_id
-                  AND pags.game_date < pgs.game_date
+                  AND pags.game_date <= pgs.game_date
                 ORDER BY pags.game_date DESC LIMIT 1
             ) p_avg ON TRUE
 
@@ -427,7 +429,7 @@ class FeatureStore:
                 SELECT avg_usg_pct_l5, avg_ts_pct_l15, avg_reb_pct_l5, avg_ast_pct_l5
                 FROM player_average_advanced_stats paas
                 WHERE paas.player_id = pgs.player_id
-                  AND paas.game_date < pgs.game_date
+                  AND paas.game_date <= pgs.game_date
                 ORDER BY paas.game_date DESC LIMIT 1
             ) pa_avg ON TRUE
 
@@ -436,7 +438,7 @@ class FeatureStore:
                 SELECT avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
                 FROM team_average_game_stats tags
                 WHERE tags.team_id = pgs.team_id
-                  AND tags.game_date < pgs.game_date
+                  AND tags.game_date <= pgs.game_date
                 ORDER BY tags.game_date DESC LIMIT 1
             ) t_avg ON TRUE
 
@@ -445,7 +447,7 @@ class FeatureStore:
                 SELECT avg_def_rtg_l5, avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
                 FROM team_average_game_stats tags
                 WHERE tags.team_id = tgs.opponent_id
-                  AND tags.game_date < pgs.game_date
+                  AND tags.game_date <= pgs.game_date
                 ORDER BY tags.game_date DESC LIMIT 1
             ) opp_avg ON TRUE
 
@@ -458,7 +460,7 @@ class FeatureStore:
                 FROM team_allowed_by_position tabp
                 WHERE tabp.team_id = tgs.opponent_id
                   AND tabp.position_group = pos.position_group
-                  AND tabp.game_date < pgs.game_date
+                  AND tabp.game_date <= pgs.game_date
                 ORDER BY tabp.game_date DESC LIMIT 1
             ) opp_def ON TRUE
 
@@ -715,6 +717,8 @@ class FeatureStore:
                       AND ph.snapshot_date < pgs.game_date
                     ORDER BY ph.snapshot_date DESC LIMIT 1
                 ) pos ON TRUE
+                -- NOTE: Using <= because the row for game_date X contains averages computed
+                -- BEFORE game X (due to shift(1) in populate_average_stats). Safe, not leakage.
                 LEFT JOIN LATERAL (
                     SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
                            avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5,
@@ -724,28 +728,28 @@ class FeatureStore:
                            rest_days, games_last_7d
                     FROM player_average_game_stats pags
                     WHERE pags.player_id = pgs.player_id
-                      AND pags.game_date < pgs.game_date
+                      AND pags.game_date <= pgs.game_date
                     ORDER BY pags.game_date DESC LIMIT 1
                 ) p_avg ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT avg_usg_pct_l5, avg_ts_pct_l15, avg_reb_pct_l5, avg_ast_pct_l5
                     FROM player_average_advanced_stats paas
                     WHERE paas.player_id = pgs.player_id
-                      AND paas.game_date < pgs.game_date
+                      AND paas.game_date <= pgs.game_date
                     ORDER BY paas.game_date DESC LIMIT 1
                 ) pa_avg ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
                     FROM team_average_game_stats tags
                     WHERE tags.team_id = pgs.team_id
-                      AND tags.game_date < pgs.game_date
+                      AND tags.game_date <= pgs.game_date
                     ORDER BY tags.game_date DESC LIMIT 1
                 ) t_avg ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT avg_def_rtg_l5, avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
                     FROM team_average_game_stats tags
                     WHERE tags.team_id = tgs.opponent_id
-                      AND tags.game_date < pgs.game_date
+                      AND tags.game_date <= pgs.game_date
                     ORDER BY tags.game_date DESC LIMIT 1
                 ) opp_avg ON TRUE
                 LEFT JOIN LATERAL (
@@ -756,7 +760,7 @@ class FeatureStore:
                     FROM team_allowed_by_position tabp
                     WHERE tabp.team_id = tgs.opponent_id
                       AND tabp.position_group = pos.position_group
-                      AND tabp.game_date < pgs.game_date
+                      AND tabp.game_date <= pgs.game_date
                     ORDER BY tabp.game_date DESC LIMIT 1
                 ) opp_def ON TRUE
                 LEFT JOIN LATERAL (
@@ -1148,6 +1152,8 @@ class FeatureStore:
             ) pos ON TRUE
 
             -- Player Box Score Averages + B2/B3/B4 features
+            -- NOTE: Using <= because the row for game_date X contains averages computed
+            -- BEFORE game X (due to shift(1) in populate_average_stats). Safe, not leakage.
             LEFT JOIN LATERAL (
                 SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
                        avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5,
@@ -1157,7 +1163,7 @@ class FeatureStore:
                        rest_days, games_last_7d
                 FROM player_average_game_stats pags
                 WHERE pags.player_id = pgs.player_id
-                  AND pags.game_date < pgs.game_date
+                  AND pags.game_date <= pgs.game_date
                 ORDER BY pags.game_date DESC LIMIT 1
             ) p_avg ON TRUE
 
@@ -1166,7 +1172,7 @@ class FeatureStore:
                 SELECT avg_usg_pct_l5, avg_ts_pct_l15, avg_reb_pct_l5, avg_ast_pct_l5
                 FROM player_average_advanced_stats paas
                 WHERE paas.player_id = pgs.player_id
-                  AND paas.game_date < pgs.game_date
+                  AND paas.game_date <= pgs.game_date
                 ORDER BY paas.game_date DESC LIMIT 1
             ) pa_avg ON TRUE
 
@@ -1175,7 +1181,7 @@ class FeatureStore:
                 SELECT avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
                 FROM team_average_game_stats tags
                 WHERE tags.team_id = pgs.team_id
-                  AND tags.game_date < pgs.game_date
+                  AND tags.game_date <= pgs.game_date
                 ORDER BY tags.game_date DESC LIMIT 1
             ) t_avg ON TRUE
 
@@ -1184,7 +1190,7 @@ class FeatureStore:
                 SELECT avg_def_rtg_l5, avg_pace_l5, avg_fg3a_l5, avg_fg3_pct_l5
                 FROM team_average_game_stats tags
                 WHERE tags.team_id = tgs.opponent_id
-                  AND tags.game_date < pgs.game_date
+                  AND tags.game_date <= pgs.game_date
                 ORDER BY tags.game_date DESC LIMIT 1
             ) opp_avg ON TRUE
 
@@ -1197,7 +1203,7 @@ class FeatureStore:
                 FROM team_allowed_by_position tabp
                 WHERE tabp.team_id = tgs.opponent_id
                   AND tabp.position_group = pos.position_group
-                  AND tabp.game_date < pgs.game_date
+                  AND tabp.game_date <= pgs.game_date
                 ORDER BY tabp.game_date DESC LIMIT 1
             ) opp_def ON TRUE
 
