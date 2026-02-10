@@ -204,7 +204,15 @@ class TruncatedNegBinModel:
 
         # Target for mu model: adjusted to untruncated mean
         # mu = observed * (1 - p_zero) since E[X|X>0] = mu / (1 - p_zero)
-        log_mu_target = np.log((y_np + 0.5) * truncation_factor)
+        # IMPORTANT: Apply truncation factor FIRST, then add small epsilon for log stability
+        # The old code had: log((y + 0.5) * factor) = log(y*factor + 0.5*factor)
+        # This added 0.37 bias to mu! Correct: log(y*factor + small_epsilon)
+        mu_target = y_np * truncation_factor
+        logger.info(
+            f"Adjusted mu target: mean={mu_target.mean():.3f} "
+            f"(should be close to MLE mu={self._global_mu:.3f})"
+        )
+        log_mu_target = np.log(mu_target + 0.01)  # 0.01 epsilon for numerical stability
 
         # Target for alpha model: residual-based overdispersion estimate
         # Use squared residuals relative to mean squared as a ratio
