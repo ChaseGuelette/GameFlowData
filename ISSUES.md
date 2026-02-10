@@ -138,12 +138,14 @@ Features like `avg_pace_l5` (typical: 95-110), `avg_def_rtg_l5` (typical: 105-11
 ### ISS-010: Chunk query failures silently swallowed in date range feature fetch
 
 - **File:** `src/models/feature_store.py:813-815`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** Silent data loss in backtesting; could produce misleading results
 
 If a chunk query fails (e.g., DB timeout), the error is logged but those dates are silently dropped from the result. The backtest evaluates on an incomplete set of dates with no warning.
 
 **Fix:** Track failed chunks and either raise an error or emit a warning with the count of missing dates.
+
+**Resolution:** Failed chunks are now tracked in `failed_chunks` list. After processing, a `WARNING` log is emitted with the count and indices of failed chunks. See `get_features_for_date_range()` lines 618-897.
 
 ---
 
@@ -174,7 +176,7 @@ When blowout simulation is enabled, `_apply_blowout_factor` generates a differen
 ### ISS-013: Mutable default dictionaries shared by reference
 
 - **File:** `src/models/monte_carlo.py:190-196`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** Latent time-bomb — if any code mutates these dicts, it corrupts the global default for all future instances
 
 ```python
@@ -184,6 +186,8 @@ self.variance_inflation = variance_inflation or DEFAULT_VARIANCE_INFLATION
 This assigns a reference to the module-level dict, not a copy. No current code mutates these after construction, but the pattern is dangerous.
 
 **Fix:** Use `.copy()`: `self.variance_inflation = dict(variance_inflation or DEFAULT_VARIANCE_INFLATION)`.
+
+**Resolution:** All four config assignments now use `dict()` to create copies. See `MonteCarloPredictor.__init__()` lines 197-207.
 
 ---
 
@@ -332,52 +336,49 @@ The `args.workers` value is passed to `harness.run(max_workers=args.workers)`, b
 ### ISS-027: No date format validation at CLI level
 
 - **File:** `src/backtesting/run_backtest.py:51-52`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** Invalid date strings fail deep in the harness with confusing tracebacks
 
 The `--start` and `--end` arguments are parsed as raw strings. Invalid formats like `01-2024-15` are not caught until much later.
 
 **Fix:** Use `type=lambda s: datetime.strptime(s, "%Y-%m-%d").date()` in argparse.
 
+**Resolution:** Added `parse_date()` helper function and used `type=parse_date` for `--start` and `--end` arguments. Invalid dates now produce a clear error message at parse time.
+
 ---
 
 ### ISS-028: No validation on `--bl-tau` range; negative values silently invert blending
 
 - **File:** `src/backtesting/run_backtest.py:84-88`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** Negative tau produces mathematically inverted blending (posterior moves away from the model)
 
 The `BLConfig` dataclass has no validation. A negative tau produces a negative weight in `w = min(self.config.tau * confidence, self.config.max_weight)`, which inverts blending direction.
 
 **Fix:** Add `if tau < 0: raise ValueError` in `BLConfig.__post_init__` or at argparse level.
 
+**Resolution:** Added validation after `parser.parse_args()` to check that `--bl-tau` and `--bl-sizing-tau` are non-negative, using `parser.error()` for clear CLI feedback.
+
 ---
 
 ## Remaining Open Issues
 
-12 of 28 issues have been fixed. The following 16 remain open:
-
-### Short-term (targeted fixes)
-
-1. **ISS-013** — `monte_carlo.py:190-196`: Use `.copy()` on mutable default dicts
-2. **ISS-010** — `feature_store.py:813-815`: Track and warn on failed date-range chunks
+16 of 28 issues have been fixed. The following 12 remain open:
 
 ### Medium-term (require more design)
 
-3. **ISS-012** — Move blowout factor outside per-stat loop (dormant — `enabled=False`)
-4. **ISS-014** — Extend MC quantile function beyond [0.01, 0.99] for extreme lines
-5. **ISS-023** — Split Stage 2 dedup to allow uncorrelated multi-stat bets per player
+1. **ISS-012** — Move blowout factor outside per-stat loop (dormant — `enabled=False`)
+2. **ISS-014** — Extend MC quantile function beyond [0.01, 0.99] for extreme lines
+3. **ISS-023** — Split Stage 2 dedup to allow uncorrelated multi-stat bets per player
 
 ### Low priority / cosmetic
 
-6. **ISS-017** — Fix misleading ratio column names (`l3_l15_ratio` computes L3/L5)
-7. **ISS-018** — Pre-game inference requires game row to exist in `player_game_stats`
-8. **ISS-019** — Dead `team_ids` parameter in `_load_injury_features_bulk`
-9. **ISS-020** — `validate_features=False` disables XGBoost feature-order safety
-10. **ISS-021** — Vectorize slow row-by-row monotonicity enforcement loop
-11. **ISS-022** — `prob_over + prob_under != 1.0` strict inequality
-12. **ISS-024** — `reset()` doesn't reset `current_bankroll` (dormant)
-13. **ISS-025** — Dead `side` parameter in `should_bet()`
-14. **ISS-026** — `--workers` CLI arg accepted but parallelism never used
-15. **ISS-027** — No date format validation at CLI level
-16. **ISS-028** — No `--bl-tau` range validation; negative values invert blending
+4. **ISS-017** — Fix misleading ratio column names (`l3_l15_ratio` computes L3/L5)
+5. **ISS-018** — Pre-game inference requires game row to exist in `player_game_stats`
+6. **ISS-019** — Dead `team_ids` parameter in `_load_injury_features_bulk`
+7. **ISS-020** — `validate_features=False` disables XGBoost feature-order safety
+8. **ISS-021** — Vectorize slow row-by-row monotonicity enforcement loop
+9. **ISS-022** — `prob_over + prob_under != 1.0` strict inequality
+10. **ISS-024** — `reset()` doesn't reset `current_bankroll` (dormant)
+11. **ISS-025** — Dead `side` parameter in `should_bet()`
+12. **ISS-026** — `--workers` CLI arg accepted but parallelism never used

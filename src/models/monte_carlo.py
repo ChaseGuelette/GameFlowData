@@ -194,16 +194,17 @@ class MonteCarloPredictor:
         self.quantile_probs = np.array([0.10, 0.25, 0.50, 0.75, 0.90])
 
         # Load correlation config (legacy)
-        self.correlation_config = correlation_config or DEFAULT_CORRELATION_CONFIG
+        # Use dict() to copy, avoiding shared mutable state with module-level defaults
+        self.correlation_config = dict(correlation_config or DEFAULT_CORRELATION_CONFIG)
 
         # Load variance inflation config
-        self.variance_inflation = variance_inflation or DEFAULT_VARIANCE_INFLATION
+        self.variance_inflation = dict(variance_inflation or DEFAULT_VARIANCE_INFLATION)
 
         # Load tail adjustment config
-        self.tail_adjustment = tail_adjustment or DEFAULT_TAIL_ADJUSTMENT
+        self.tail_adjustment = dict(tail_adjustment or DEFAULT_TAIL_ADJUSTMENT)
 
         # Load blowout/foul config
-        self.blowout_config = blowout_config or DEFAULT_BLOWOUT_CONFIG
+        self.blowout_config = dict(blowout_config or DEFAULT_BLOWOUT_CONFIG)
 
         # Gaussian copula parameters (replaces legacy correlation adjustment when set)
         self.copula_params = copula_params

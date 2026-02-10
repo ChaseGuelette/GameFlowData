@@ -9,7 +9,7 @@ Usage:
 import argparse
 import logging
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -26,6 +26,14 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("BacktestRunner")
+
+
+def parse_date(s: str) -> date:
+    """Parse date string in YYYY-MM-DD format for argparse."""
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Invalid date format: '{s}'. Use YYYY-MM-DD")
 
 
 def find_latest_model_dir(base_dir: str) -> Path:
@@ -48,8 +56,8 @@ def find_latest_model_dir(base_dir: str) -> Path:
 
 def main():
     parser = argparse.ArgumentParser(description="Run Backtest on Historical Data")
-    parser.add_argument("--start", type=str, required=True, help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end", type=str, required=True, help="End date (YYYY-MM-DD)")
+    parser.add_argument("--start", type=parse_date, required=True, help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end", type=parse_date, required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument("--model-dir", type=str, default="src/models/artifacts", help="Path to model artifacts")
     parser.add_argument(
         "--output-dir", type=str, default=None, help="Output directory (default: backtest_results/<timestamp>)"
@@ -99,6 +107,12 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Validate BL tau parameters (negative values invert blending direction)
+    if args.bl_tau is not None and args.bl_tau < 0:
+        parser.error("--bl-tau must be non-negative (0.0 or greater)")
+    if args.bl_sizing_tau is not None and args.bl_sizing_tau < 0:
+        parser.error("--bl-sizing-tau must be non-negative (0.0 or greater)")
 
     # Parse allowed_bets from "stat:side" strings to list of tuples
     allowed_bets = None

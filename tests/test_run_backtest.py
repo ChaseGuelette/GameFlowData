@@ -93,6 +93,8 @@ class TestMainArgParsing:
             bookmakers=["draftkings"],
             allowed_bets=None,
             workers=1,
+            bl_tau=None,
+            bl_sizing_tau=None,
         )
         mock_find_model.return_value = Path("fake/path")
 
@@ -148,6 +150,8 @@ class TestMainArgParsing:
             bookmakers=["draftkings"],
             allowed_bets=["pts:under", "reb:over"],
             workers=1,
+            bl_tau=None,
+            bl_sizing_tau=None,
         )
         mock_find_model.return_value = Path("fake/path")
         mock_result = MagicMock()
@@ -203,6 +207,8 @@ class TestMainArgParsing:
             bookmakers=["draftkings"],
             allowed_bets=None,
             workers=1,
+            bl_tau=None,
+            bl_sizing_tau=None,
         )
         mock_find_model.return_value = Path("fake/path")
         mock_result = MagicMock()
