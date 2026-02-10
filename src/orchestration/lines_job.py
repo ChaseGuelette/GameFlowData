@@ -29,6 +29,7 @@ Examples:
 
 import argparse
 import logging
+import shlex
 import subprocess
 import sys
 import time
@@ -54,8 +55,15 @@ logging.basicConfig(
 logger = logging.getLogger("LinesJob")
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 def run_command(command: str, description: str, dry_run: bool = False) -> bool:
-    """Run a shell command and return success status."""
+    """Run a shell command and return success status.
+
+    Uses shlex.split() for proper parsing of arguments with spaces/quotes.
+    Runs from project root to ensure relative paths work correctly.
+    """
     logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: {description}")
 
     if dry_run:
@@ -64,20 +72,34 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
 
     start_time = time.time()
     try:
+        # Use shlex.split for proper command parsing (handles args with spaces/quotes)
+        cmd_args = shlex.split(command)
         result = subprocess.run(
-            command.split(),
+            cmd_args,
             check=True,
             capture_output=True,
             text=True,
             shell=False,
+            cwd=PROJECT_ROOT,  # Run from project root for proper path resolution
         )
         elapsed = time.time() - start_time
         logger.info(f"COMPLETED: {description} ({elapsed:.1f}s)")
+        if result.stdout:
+            # Log last 200 chars of stdout for debugging
+            logger.debug(f"  Output: ...{result.stdout[-200:]}")
         return True
     except subprocess.CalledProcessError as e:
         elapsed = time.time() - start_time
         logger.error(f"FAILED: {description} ({elapsed:.1f}s)")
-        logger.error(f"Error: {e.stderr[:500] if e.stderr else 'No error output'}")
+        logger.error(f"  Exit code: {e.returncode}")
+        logger.error(f"  Stderr: {e.stderr[:500] if e.stderr else 'No error output'}")
+        if e.stdout:
+            logger.error(f"  Stdout: {e.stdout[:500]}")
+        return False
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error(f"FAILED: {description} ({elapsed:.1f}s)")
+        logger.error(f"  Exception: {e}")
         return False
 
 
