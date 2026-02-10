@@ -123,10 +123,10 @@ def main():
             "python src/processing/populate_average_stats_incremental.py",
             "Populating Rolling Average Stats (Incremental)",
         ),
-        # Step 7: Update opponent allowed stats
+        # Step 7: Update opponent allowed stats (incremental - last 30 days)
         (
-            "python src/processing/backfill_opponent_allowed.py",
-            "Updating Opponent Allowed Stats",
+            "python src/processing/backfill_opponent_allowed_incremental.py --days-back 30",
+            "Updating Opponent Allowed Stats (Incremental)",
         ),
     ]
 

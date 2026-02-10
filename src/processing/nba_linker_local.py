@@ -21,10 +21,11 @@ Requirements:
 """
 
 import argparse
+import logging
 import sys
 import unicodedata
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -32,6 +33,9 @@ import pandas as pd
 import pytz
 from sqlalchemy import text
 from tqdm import tqdm
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def _progress_apply(df, func, desc="Processing", **kwargs):
@@ -840,6 +844,62 @@ def upload_results():
 # ============================================================================
 
 
+def _fetch_upcoming_games_from_nba_api(target_date: datetime.date | None = None) -> list[dict]:
+    """
+    Fetch upcoming/today's games from NBA API ScoreboardV2.
+
+    Returns list of dicts with: game_id, home_team, away_team, game_date
+    """
+    try:
+        from nba_api.stats.endpoints import ScoreboardV2
+        from nba_api.stats.static import teams as nba_teams
+    except ImportError:
+        logging.warning("nba_api not installed - cannot fetch upcoming games")
+        return []
+
+    if target_date is None:
+        target_date = datetime.now(EASTERN).date()
+
+    games = []
+
+    # Build team ID to abbreviation lookup
+    team_id_to_abbrev = {}
+    for team in nba_teams.get_teams():
+        team_id_to_abbrev[team["id"]] = team["abbreviation"]
+
+    # Fetch games for today and next 2 days (to catch upcoming games)
+    for days_ahead in range(3):
+        check_date = target_date + timedelta(days=days_ahead)
+        date_str = check_date.strftime("%Y-%m-%d")
+
+        try:
+            scoreboard = ScoreboardV2(game_date=date_str)
+            game_header = scoreboard.get_data_frames()[0]  # GameHeader DataFrame
+
+            for _, row in game_header.iterrows():
+                game_id = str(row.get("GAME_ID", "")).zfill(10)
+                home_team_id = row.get("HOME_TEAM_ID")
+                away_team_id = row.get("VISITOR_TEAM_ID")
+
+                home_abbrev = team_id_to_abbrev.get(home_team_id)
+                away_abbrev = team_id_to_abbrev.get(away_team_id)
+
+                if game_id and home_abbrev and away_abbrev:
+                    games.append({
+                        "game_id": game_id,
+                        "home_team": home_abbrev,
+                        "away_team": away_abbrev,
+                        "game_date": date_str,
+                    })
+
+        except Exception as e:
+            logging.warning(f"Failed to fetch games for {date_str}: {e}")
+            continue
+
+    logging.info(f"Fetched {len(games)} upcoming games from NBA API")
+    return games
+
+
 def link_incremental(batch_size: int = 50000, limit: int | None = None):
     """
     Lightweight incremental linker for daily use.
@@ -899,6 +959,9 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
 
     # Build game lookup: (home_team_norm, away_team_norm) -> [(game_id, game_date), ...]
     props_game_lookup = defaultdict(list)
+
+    # Source 1: Historical games from team_game_stats (completed games)
+    historical_count = 0
     for _, row in games_df.iterrows():
         matchup = row.get("team_matchup", "")
         if not matchup or pd.isna(matchup):
@@ -922,7 +985,26 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
             game_id = str(row["game_id"]).zfill(10) if pd.notna(row["game_id"]) else None
             if game_id:
                 props_game_lookup[(home_norm, away_norm)].append((game_id, game_date))
+                historical_count += 1
 
+    print(f"  Historical games from DB: {historical_count}")
+
+    # Source 2: Upcoming games from NBA API (today + next 2 days)
+    # This is critical for linking props for games that haven't been played yet
+    upcoming_games = _fetch_upcoming_games_from_nba_api()
+    upcoming_count = 0
+    for game in upcoming_games:
+        home_norm = normalize_team(game["home_team"])
+        away_norm = normalize_team(game["away_team"])
+        game_id = game["game_id"]
+        game_date = game["game_date"]
+
+        if home_norm and away_norm and game_id:
+            # Add to lookup (may duplicate with historical, but that's fine)
+            props_game_lookup[(home_norm, away_norm)].append((game_id, game_date))
+            upcoming_count += 1
+
+    print(f"  Upcoming games from NBA API: {upcoming_count}")
     print(f"  Built game lookup with {len(props_game_lookup)} unique matchups")
 
     # 2. Count unlinked records

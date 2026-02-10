@@ -545,8 +545,11 @@ class TrainingOrchestrator:
         """
         Evaluate calibration for the multiclass THREES model (C5 architecture).
 
-        Uses the predicted PMF directly to compute quantiles via CDF inversion,
-        then evaluates coverage at standard quantile levels.
+        For discrete multiclass distributions, per-class calibration (predicted vs actual
+        frequency per class) is more meaningful than quantile coverage, which breaks down
+        when P(class 0) >> quantile level (e.g., P(0)=35% makes Q10 coverage always ~35%).
+
+        Returns per-class gaps instead of quantile gaps for the calibration pass/fail check.
         """
         filtered = df[filter_mask].copy().reset_index(drop=True)
         y_actual = filtered[actual_col].values.astype(int)
@@ -565,34 +568,41 @@ class TrainingOrchestrator:
         # Bin actuals to match model classes (0-8+)
         y_binned = np.clip(y_actual, 0, 8)
 
-        # Per-class calibration analysis
-        logger.info(f"  Per-class calibration:")
-        class_gaps = []
+        # Per-class calibration analysis (PRIMARY METRIC for discrete distributions)
+        logger.info(f"  Per-class calibration (used for pass/fail):")
+        reports = []
         for k in range(9):
             predicted_prob = probs[:, k].mean()
             actual_freq = (y_binned == k).mean()
-            gap = actual_freq - predicted_prob
-            class_gaps.append(abs(gap))
-            status = "OK" if abs(gap) <= 0.05 else f"GAP {gap:+.3f}"
-            logger.info(f"    Class {k}: pred={predicted_prob:.3f}, actual={actual_freq:.3f} [{status}]")
-
-        avg_class_gap = np.mean(class_gaps)
-        logger.info(f"  Average per-class gap: {avg_class_gap:.3f}")
-
-        # Quantile calibration via CDF inversion
-        cdf = np.cumsum(probs, axis=1)  # (n_samples, 9)
-
-        reports = []
-        for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
-            # Find smallest k where CDF(k) >= q for each sample
-            quantile_preds = (cdf >= q).argmax(axis=1)
-            coverage = (y_binned <= quantile_preds).mean()
-            gap = coverage - q
+            gap = actual_freq - predicted_prob  # positive = model underpredicts this class
 
             status = "OK" if abs(gap) <= self.CALIBRATION_TOLERANCE else f"GAP {gap:+.3f}"
-            logger.info(f"  Q{q:.2f}: Act={coverage:.3f} [{status}]")
+            logger.info(f"    Class {k}: pred={predicted_prob:.3f}, actual={actual_freq:.3f} [{status}]")
 
-            reports.append({"quantile": q, "coverage": coverage, "gap": gap})
+            # Return per-class gaps (these will be used for worst_gap calculation)
+            reports.append({
+                "class": k,
+                "predicted": float(predicted_prob),
+                "actual": float(actual_freq),
+                "gap": float(gap),
+            })
+
+        avg_gap = np.mean([abs(r["gap"]) for r in reports])
+        logger.info(f"  Average per-class gap: {avg_gap:.3f}")
+
+        # Also log quantile coverage for informational purposes (NOT used for pass/fail)
+        # This metric is misleading for discrete distributions with large point masses
+        cdf = np.cumsum(probs, axis=1)  # (n_samples, 9)
+        logger.info(f"  Quantile coverage (informational only - NOT used for calibration pass/fail):")
+        for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
+            quantile_preds = (cdf >= q).argmax(axis=1)
+            coverage = (y_binned <= quantile_preds).mean()
+            q_gap = coverage - q
+            # Explain why Q10 gap is large: it equals ~P(0) - 0.10
+            if q == 0.10:
+                logger.info(f"    Q{q:.2f}: coverage={coverage:.3f}, gap={q_gap:+.3f} (expected: ~P(0)={probs[:, 0].mean():.3f})")
+            else:
+                logger.info(f"    Q{q:.2f}: coverage={coverage:.3f}, gap={q_gap:+.3f}")
 
         return reports
 
