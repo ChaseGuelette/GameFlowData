@@ -353,8 +353,10 @@ def test_get_player_game_features_combines_outputs():
     })
     store._get_team_rolling_stats = Mock(side_effect=[{"team_avg_pace_l5": 100}, {"opp_avg_pace_l5": 98}])
     store._get_opponent_positional_stats = Mock(return_value={"opp_pos_off_rtg_allowed_l5": 110})
-    store._get_game_lines = Mock(return_value={"line_spread": -6, "line_total": 225})
+    # Note: _get_game_lines returns line_spread_raw, which gets transformed to line_spread
+    store._get_game_lines = Mock(return_value={"line_spread_raw": 6, "line_total": 225})
     store._get_player_prop_lines = Mock(return_value={"prop_line_pts": 20.5})
+    store._get_injury_context = Mock(return_value={})
 
     result = store.get_player_game_features(1, "g1", date(2025, 1, 1))
 
@@ -362,6 +364,7 @@ def test_get_player_game_features_combines_outputs():
     assert result["game_id"] == "g1"
     assert result["season_id"] == "22024"
     assert result["player_avg_min_l5"] == 20
+    # is_home=1 so line_spread = -line_spread_raw = -6
     assert result["line_spread"] == -6
     assert result["rest_days"] == 2
     # Deprecated features kept as zeros
@@ -379,7 +382,12 @@ def test_get_training_dataset_raises_on_small_dataset():
     store = FeatureStore(engine=engine)
 
     def fake_read_sql(query, conn, params=None):
-        return pd.DataFrame({"position_group": ["G"]})
+        query_str = str(query)
+        # Injury bulk query - return empty dataframe
+        if "rapidapi_injuries" in query_str:
+            return pd.DataFrame()
+        # Main training query - return small dataset
+        return pd.DataFrame({"position_group": ["G"], "game_date": [date(2024, 1, 1)]})
 
     pd_read_sql = pd.read_sql
     pd.read_sql = fake_read_sql
@@ -400,9 +408,15 @@ def test_get_training_dataset_raises_on_null_position_group():
     store = FeatureStore(engine=engine)
 
     def fake_read_sql(query, conn, params=None):
+        query_str = str(query)
+        # Injury bulk query - return empty dataframe
+        if "rapidapi_injuries" in query_str:
+            return pd.DataFrame()
+        # Main training query
         rows = 10000
         data = {
             "position_group": ["G"] * rows,
+            "game_date": [date(2024, 1, 1)] * rows,
             "actual_minutes": np.full(rows, 20.0),
             "actual_pts": np.full(rows, 18.0),
             "actual_reb": np.full(rows, 5.0),
@@ -433,10 +447,16 @@ def test_get_training_dataset_builds_rate_targets():
     captured = {}
 
     def fake_read_sql(query, _conn, params=None):
+        query_str = str(query)
+        # Injury bulk query - return empty dataframe
+        if "rapidapi_injuries" in query_str:
+            return pd.DataFrame()
+        # Main training query
         captured["params"] = params
         rows = 10000
         data = {
             "position_group": ["G"] * rows,
+            "game_date": [date(2024, 1, 1)] * rows,
             "actual_minutes": np.full(rows, 20.0),
             "actual_pts": np.full(rows, 18.0),
             "actual_reb": np.full(rows, 5.0),
@@ -454,7 +474,8 @@ def test_get_training_dataset_builds_rate_targets():
     finally:
         pd.read_sql = pd_read_sql
 
-    assert captured["params"]["seasons"] == ["22024"]
+    # The query uses "season" (singular) not "seasons"
+    assert captured["params"]["season"] == "22024"
     assert captured["params"]["excluded"] == list(store.config.excluded_seasons)
 
     # Rate targets should be calculated for rows with >= 10 minutes

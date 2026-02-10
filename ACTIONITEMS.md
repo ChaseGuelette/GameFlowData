@@ -1,5 +1,87 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-09 — Session 20)
+
+### What We Did
+
+**Built Next.js Dashboard (G1-G4 partial).** Created web application for viewing daily predictions and analyzing player props. Previous session crashed due to invalid placeholder image file — recovered and completed setup.
+
+**Tech Stack:**
+- Next.js 16 with App Router, TypeScript, Tailwind CSS
+- Supabase Auth (email/password) + SSR client
+- Recharts for visualization
+- Dark theme, desktop-first design
+
+**Components created:**
+- `Navbar` — Navigation with bankroll display from `paper_trading_daily_log`
+- `FilterTabs` — Stat type filtering (All/PTS/REB/AST/THREES)
+- `PropCard` / `PropGrid` — Prediction cards with edge badges
+- `AnalysisModal` — Last 5 games chart + quantile summary
+- `PlayerAvatar` — NBA headshots with inline SVG fallback
+- `Badge` / `EdgeBadge` — Stat type and edge tier indicators
+- Login page with email/password auth
+
+**Data flow:**
+- Main page fetches from `daily_predictions` + `players` tables
+- Filters predictions by edge threshold (≥3%)
+- Enriches with player names
+- Auth middleware redirects unauthenticated users to `/login`
+
+**Files created:**
+- `dashboard/` — Complete Next.js project
+- `dashboard/src/app/` — Page routes (home, login)
+- `dashboard/src/components/` — React components
+- `dashboard/src/lib/supabase/` — Client, server, middleware helpers
+- `dashboard/src/types/predictions.ts` — TypeScript interfaces
+
+**Fixed crash issue:** Previous instance wrote text to `placeholder-avatar.png` instead of image data, causing API errors. Replaced with inline SVG data URL.
+
+**Tests:** 540 passed, 0 failures (coverage warning only — 50.32%)
+
+### Next Step
+
+1. **G5** — Complete analysis modal with feature-based insights
+2. **G6** — Add "Lock of the Day" hero section
+3. **Retrain models** — With off-by-one fix from Session 19
+4. **Paper trade** — Begin daily paper trading
+
+---
+
+## Session Summary (2026-02-09 — Session 19)
+
+### What We Did
+
+**Fixed critical off-by-one bug in feature store LATERAL JOINs.** The feature store queries used `< game_date` to fetch pre-computed rolling averages, but `player_average_game_stats` uses `shift(1)` during population — meaning the row for `game_date X` already contains averages from games BEFORE X (not including X). The `<` logic caused queries to fetch the PREVIOUS game's row instead of the current game's row, resulting in models training and predicting with stale features (one game behind).
+
+**Fix:** Changed `< game_date` to `<= game_date` in 15 LATERAL JOINs across 3 feature store methods:
+- `get_features_for_date()` — backtesting
+- `get_features_for_date_range()` — batch backtesting
+- `_load_single_season_training()` — model training
+
+Added explanatory comments to clarify why `<=` is safe (not data leakage).
+
+**Injury queries unchanged:** Queries that look up OTHER players' historical stats (e.g., teammates out with injuries) correctly use `<` since they're fetching past game data, not pre-computed rolling stats.
+
+**Fixed daily runner inference bug:** Added 30-day recency filter to `_get_players_for_games()` to exclude retired players (e.g., Shaquille O'Neal, Grant Hill) from predictions. Also added `target_date` parameter to method signature for proper cutoff calculation.
+
+**Fixed test failures:** Updated 6 failing tests to match new method signatures and mock data structures.
+
+**Files modified:**
+- `src/models/feature_store.py` — Changed 15 LATERAL JOINs from `<` to `<=`
+- `src/models/daily_runner.py` — Added `target_date` param, 30-day recency filter
+- `tests/test_daily_runner.py` — Updated 2 tests for new signature
+- `tests/test_feature_store.py` — Updated 4 tests with proper mock data
+
+**Tests:** 540 passed, 0 failures
+
+### Next Step
+
+1. **Retrain models** — Critical: models must be retrained to benefit from the off-by-one fix
+2. **Run backtest** — Verify calibration and ROI with current-game features
+3. **Paper trade** — Begin paper trading with automated pipeline
+
+---
+
 ## Session Summary (2026-02-09 — Session 18)
 
 ### What We Did
@@ -873,21 +955,21 @@ pts/reb/ast shows profitability.
 
 ---
 
-## Track G: Dashboard (Mid-High Priority — After E7 Paper Trading Validation)
+## Track G: Dashboard (In Progress)
 
-Next.js dashboard for viewing predictions and paper trading results. Blocked by E7 (paper trading validation) and C3 validation (THREES hurdle model). Full spec: `.session/specs/dashboard_implementation.md`
+Next.js dashboard for viewing predictions and paper trading results. Full spec: `.session/specs/dashboard_implementation.md`
 
-**Tech Stack:** Next.js 14+, TypeScript, Supabase, Tailwind CSS, Recharts
+**Tech Stack:** Next.js 16, TypeScript, Supabase SSR, Tailwind CSS, Recharts
 **Location:** `dashboard/` folder in repo
 **Design:** Desktop-first, dark theme
 
-- [ ] **G1. Project setup** — Initialize Next.js with TypeScript, Tailwind, Supabase client, auth
+- [x] **G1. Project setup** — *(DONE — 2026-02-09)* Next.js 16 with TypeScript, Tailwind, Supabase SSR client, email/password auth
 - [ ] **G2. Database migration** — Add `feat_*` columns to `daily_predictions` for insight generation
 - [ ] **G3. Update prediction storage** — Modify `prediction_store.py` and `daily_runner.py` to save feature values
-- [ ] **G4. Home page MVP** — Prop cards grid with filtering (All/Points/Rebounds/Assists/Threes)
-- [ ] **G5. Analysis modal** — Last 5 games chart, template-based insights from features
+- [x] **G4. Home page MVP** — *(DONE — 2026-02-09)* Prop cards grid with filtering (All/PTS/REB/AST/THREES), edge sorting, player name enrichment
+- [x] **G5. Analysis modal** — *(PARTIAL — 2026-02-09)* Last 5 games chart + quantile summary created. Template-based insights pending (needs G2/G3).
 - [ ] **G6. Hero section** — "Lock of the Day" with top pick by edge
-- [ ] **G7. Player headshots** — NBA CDN integration with fallback
+- [x] **G7. Player headshots** — *(DONE — 2026-02-09)* NBA CDN integration with inline SVG fallback
 - [ ] **G8. Paper trading views** — History page, P&L dashboard
 - [ ] **G9. Vercel deployment** — Production deployment with environment variables
 
@@ -921,7 +1003,10 @@ Next.js dashboard for viewing predictions and paper trading results. Blocked by 
 | A6 (Conditional rate modeling) | Medium-High | Medium-High | Only if copula combined calibration still drifts |
 | D1-D4 (Old model items) | Various | Low until recalibrated | Revisit after Track A |
 | F1-F5 (Market expansion) | Various | Medium | After demonstrated edge on core markets |
-| G1-G9 (Dashboard) | Medium-High | Mid-High | After E7 paper trading + C3 THREES validation. Spec: `.session/specs/dashboard_implementation.md` |
+| ~~G1 (Project setup)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Next.js 16, TypeScript, Tailwind, Supabase SSR |
+| ~~G4 (Home page MVP)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Prop cards, filtering, edge sorting |
+| ~~G7 (Player headshots)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — NBA CDN with SVG fallback |
+| G5-G6, G8-G9 (Dashboard) | Medium | Mid-High | In progress. Spec: `.session/specs/dashboard_implementation.md` |
 
 ---
 

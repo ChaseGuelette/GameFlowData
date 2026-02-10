@@ -159,15 +159,21 @@ features = fs.get_player_game_features(
 ```
 
 ## Maintenance and Troubleshooting
-Critical Constraints
-Schema Dependencies: This store relies on player_position_history and league_priors_history being populated. If you re-run migrations, you must re-run the backfills for these tables.
 
-Date Logic: Never change < game_date to <= game_date. This will introduce leakage (using the game's own stats to predict itself).
+### Critical Constraints
+**Schema Dependencies:** This store relies on `player_position_history` and `league_priors_history` being populated. If you re-run migrations, you must re-run the backfills for these tables.
 
-Common Errors
-ValueError: Suspiciously few rows: Triggers if get_training_dataset returns < 10,000 rows. Check if your seasons list matches the IDs in your database (e.g., '22023' vs '2023-24').
+**Date Logic (Updated 2026-02-09):** The LATERAL JOINs for pre-computed rolling averages use `<= game_date` because `player_average_game_stats` uses `shift(1)` during population — meaning the row for `game_date X` already contains averages from games BEFORE X (not including X). Using `<=` gets the correct pre-computed features for each game. This is NOT data leakage because:
+1. The rolling average computation in `populate_average_stats.py` applies `shift(1)` before saving
+2. The row labeled `game_date X` contains averages from games [X-N, X-1], computed before game X was played
+3. Using `<` instead of `<=` would fetch the PREVIOUS game's row (stale features, one game behind)
 
-KeyError in Model: Ensure that any new feature added to get_training_dataset (SQL) is also added to get_player_game_features (Dictionary).
+**Exception - Injury queries:** Queries that look up OTHER players' historical stats (e.g., `team_out_pts_sum` from teammates' past performances) correctly use `<` since they're fetching actual past game data, not pre-computed rolling stats.
+
+### Common Errors
+**ValueError: Suspiciously few rows:** Triggers if `get_training_dataset` returns < 10,000 rows. Check if your seasons list matches the IDs in your database (e.g., '22023' vs '2023-24').
+
+**KeyError in Model:** Ensure that any new feature added to `get_training_dataset` (SQL) is also added to `get_player_game_features` (Dictionary).
 
 
 

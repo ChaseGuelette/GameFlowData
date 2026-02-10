@@ -90,11 +90,12 @@ def test_get_games_for_date_nba_api_primary(runner):
 
 
 def test_get_players_for_games_empty(runner):
-    assert runner._get_players_for_games([]) == []
+    assert runner._get_players_for_games([], date(2023, 10, 25)) == []
 
 
 def test_get_players_for_games_success(runner, mock_engine):
     games = [{"game_id": "g1", "home_team_id": 1, "away_team_id": 2}]
+    target_date = date(2023, 10, 25)
 
     # Mock DB result
     mock_result = MagicMock()
@@ -107,7 +108,7 @@ def test_get_players_for_games_success(runner, mock_engine):
     conn = mock_engine.connect.return_value.__enter__.return_value
     conn.execute.return_value = mock_result
 
-    players = runner._get_players_for_games(games)
+    players = runner._get_players_for_games(games, target_date)
 
     assert len(players) == 2
 

@@ -28,6 +28,7 @@ GameFlowData is a data-intensive application that ingests raw NBA game statistic
 | **Data Sources** | nba_api, The Odds API, ESPN | NBA stats, sportsbook odds, injury reports |
 | **Pipeline** | Custom Python orchestration | Training, inference, and backfill jobs |
 | **Visualization** | Plotly | Backtest equity curves and diagnostic plots |
+| **Dashboard** | Next.js 16, TypeScript, Tailwind, Recharts | Web UI for predictions and paper trading |
 | **Testing** | Pytest, Pytest-Cov | Unit and integration testing |
 | **Linting/Types** | Ruff, Pyright | Code quality and static analysis |
 
@@ -46,6 +47,7 @@ GameFlowData/
 │   ├── tools/                  # CLI query tools
 │   ├── orchestration/          # Daily workflow coordination
 │   └── paper_trading/          # Paper bet placement and resolution
+├── dashboard/                  # Next.js web dashboard (TypeScript, Tailwind)
 ├── tests/                      # Unit and integration tests (33 modules)
 ├── docs/                       # Component-level documentation
 ├── notebooks/                  # Jupyter notebooks for research
@@ -333,7 +335,63 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 
 ### 9. Paper Trading (`src/paper_trading/`)
 
-Standalone CLI scripts to convert stored `daily_predictions` into paper bets with bet selection, outcome resolution, and P&L tracking. Designed for a future lightweight dashboard.
+Standalone CLI scripts to convert stored `daily_predictions` into paper bets with bet selection, outcome resolution, and P&L tracking. Integrated with the Dashboard for visualization.
+
+### 10. Dashboard (`dashboard/`)
+
+Next.js web application for viewing daily predictions, analyzing player props, and tracking paper trading performance.
+
+**Technology Stack:**
+| Layer | Components |
+|-------|------------|
+| Framework | Next.js 16 with App Router |
+| Language | TypeScript |
+| Styling | Tailwind CSS |
+| Data | Supabase (PostgreSQL) via `@supabase/ssr` |
+| Charts | Recharts |
+| Auth | Supabase Auth (email/password) |
+
+**Directory Structure:**
+```
+dashboard/
+├── src/
+│   ├── app/                    # Next.js App Router pages
+│   │   ├── page.tsx            # Main predictions dashboard
+│   │   ├── login/page.tsx      # Authentication page
+│   │   └── layout.tsx          # Root layout with dark theme
+│   ├── components/
+│   │   ├── layout/             # Navbar with bankroll display
+│   │   ├── predictions/        # PropCard, PropGrid, FilterTabs
+│   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
+│   │   └── shared/             # PlayerAvatar, Badge components
+│   ├── lib/
+│   │   ├── supabase/           # Client, server, and middleware helpers
+│   │   └── utils.ts            # Formatting, edge tiers, headshot URLs
+│   ├── types/
+│   │   └── predictions.ts      # TypeScript interfaces for predictions
+│   └── middleware.ts           # Auth redirect for protected routes
+├── .env.local                  # Supabase credentials (not committed)
+└── next.config.ts              # NBA CDN image domains
+```
+
+**Key Features:**
+- **Predictions View:** Displays today's predictions filtered by stat type (pts/reb/ast/threes), sorted by edge magnitude.
+- **Analysis Modal:** Click any prop card to see Last 5 games chart, quantile distribution summary, and detailed prediction metadata.
+- **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
+- **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
+- **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
+
+**Data Sources:**
+- `daily_predictions` table — prediction quantiles, edges, implied probabilities
+- `players` table — player names for enrichment
+- `paper_trading_daily_log` table — bankroll for display
+
+**Run Commands:**
+```bash
+cd dashboard && npm run dev    # Development server at localhost:3000
+cd dashboard && npm run build  # Production build
+cd dashboard && npm run lint   # ESLint check
+```
 
 | Module | Purpose |
 |--------|---------|
@@ -611,6 +669,7 @@ python src/paper_trading/resolve_bets.py --date 2026-02-04 --dry-run
 1.  **Temporal Integrity:**
     - **Rule:** Feature generation must ONLY use data where `game_date < target_game_date`.
     - **Reason:** Prevents "look-ahead bias" where the model accidentally learns from the future (e.g., knowing a player played 40 minutes makes predicting points too easy).
+    - **Implementation Note (fixed 2026-02-09):** Pre-computed rolling averages in `player_average_game_stats` use `shift(1)` during population, meaning the row for `game_date X` contains averages from games BEFORE X. Therefore, feature store queries use `<= game_date` (not `< game_date`) to get the correct pre-computed features for each game. The previous `<` logic caused an off-by-one error where models used stale features (one game behind).
 
 2.  **Minutes Dependency:**
     - **Rule:** We model **Rate** (Stats per Minute) and **Minutes** separately.
@@ -667,3 +726,11 @@ See `ACTIONITEMS.md` for full details.
 3. **Linker leading zeros preservation:** Added `.zfill(10)` when storing game_ids in lookup dictionaries to ensure consistent 10-digit format for future linker runs.
 
 **Impact:** Lines fetched increased from 33,962 to 191,908. Bets increased from 889 to 2,251. Full date coverage restored (Jan 1-29 instead of just Jan 1-15).
+
+**Feature store off-by-one fix (2026-02-09):**
+1. **Off-by-one bug in LATERAL JOINs:** Feature store queries used `< game_date` to fetch pre-computed rolling averages, but `player_average_game_stats` uses `shift(1)` during population — meaning the row for game_date X already contains averages from games BEFORE X (not including X). The `<` logic caused queries to fetch the PREVIOUS game's row instead of the current game's row, resulting in stale features (one game behind).
+2. **Fix applied:** Changed `< game_date` to `<= game_date` in 15 LATERAL JOINs across 3 feature store methods: `get_features_for_date()`, `get_features_for_date_range()`, and `_load_single_season_training()`. Added explanatory comments.
+3. **Injury queries unchanged:** Queries that look up OTHER players' historical stats (e.g., teammates out with injuries) correctly use `<` since they're fetching past game data, not pre-computed rolling stats.
+4. **Daily runner recency filter:** Added 30-day cutoff filter to `_get_players_for_games()` to exclude retired players (e.g., Shaquille O'Neal) from predictions.
+
+**Impact:** Models will now train and predict with current-game features instead of stale one-game-behind features. Requires model retraining to benefit from fix.

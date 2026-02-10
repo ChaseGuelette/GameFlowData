@@ -5,6 +5,105 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-09 Session 20] — Next.js Dashboard (G1, G4, G5 partial, G7)
+
+### Added
+
+- **Next.js Dashboard** (`dashboard/`):
+  - **Tech Stack:** Next.js 16 with App Router, TypeScript, Tailwind CSS, Supabase SSR, Recharts
+  - **Authentication:** Email/password login via Supabase Auth with middleware redirect
+  - **Home Page:** Daily predictions grid with stat type filtering (All/PTS/REB/AST/THREES), edge sorting, player name enrichment from `players` table
+  - **Analysis Modal:** Last 5 games bar chart, quantile distribution summary, prediction metadata
+  - **Components created:**
+    - `Navbar` — Navigation with bankroll display from `paper_trading_daily_log`
+    - `FilterTabs` — Stat type filtering chips
+    - `PropCard` / `PropGrid` — Prediction cards with over/under probabilities, edge badges
+    - `AnalysisModal` — Modal with Last5Chart and QuantileSummary
+    - `Last5Chart` — Recharts bar chart with reference line for prop line
+    - `QuantileSummary` — Q10/Q25/Q50/Q75/Q90 distribution display
+    - `PlayerAvatar` — NBA CDN headshots with inline SVG fallback
+    - `Badge` / `EdgeBadge` — Stat type and edge tier visual indicators
+    - Login page with form validation and error handling
+  - **Supabase Integration:**
+    - `src/lib/supabase/client.ts` — Browser client for client components
+    - `src/lib/supabase/server.ts` — Server client for server components
+    - `src/lib/supabase/middleware.ts` — Session refresh and auth redirect
+  - **Utilities:**
+    - `src/lib/utils.ts` — Date formatting, edge calculation, headshot URLs, inline SVG placeholder
+    - `src/types/predictions.ts` — TypeScript interfaces for predictions, stats, colors
+  - **Configuration:**
+    - `.env.local` — Supabase URL and anon key (gitignored)
+    - `next.config.ts` — NBA CDN image domain allowlist
+    - `middleware.ts` — Auth redirect for protected routes
+
+### Fixed
+
+- **Crash recovery:** Previous session wrote text to `placeholder-avatar.png` causing API errors. Replaced with inline SVG data URL (no external file needed).
+
+### Changed
+
+- **ARCHITECTURE.md:**
+  - Added Section 10 (Dashboard) with tech stack, directory structure, features, data sources
+  - Updated Technology Stack table with Dashboard entry
+  - Updated Directory Structure to include `dashboard/` folder
+- **ACTIONITEMS.md:**
+  - Added Session 20 summary
+  - Updated Track G with G1, G4, G5, G7 marked as done/partial
+  - Updated Priority Matrix with dashboard items
+
+### Test Results
+
+- 540 tests passed, 0 failures (coverage warning: 50.32% < 60% target)
+
+---
+
+## [2026-02-09 Session 19] — Feature Store Off-by-One Fix & Daily Runner Recency Filter
+
+### Fixed
+
+- **Critical off-by-one bug in feature store LATERAL JOINs** (`src/models/feature_store.py`):
+  - **Bug:** Queries used `< game_date` to fetch pre-computed rolling averages, but `player_average_game_stats` uses `shift(1)` during population — meaning the row for `game_date X` already contains averages from games BEFORE X. The `<` logic caused queries to fetch the PREVIOUS game's row instead of current game's row.
+  - **Impact:** Models were training and predicting with stale features (one game behind).
+  - **Fix:** Changed `< game_date` to `<= game_date` in 15 LATERAL JOINs across 3 methods:
+    - `get_features_for_date()` — backtesting
+    - `get_features_for_date_range()` — batch backtesting
+    - `_load_single_season_training()` — model training
+  - Added explanatory comments clarifying why `<=` is safe (not data leakage).
+  - Injury queries that look up OTHER players' historical stats correctly remain as `<`.
+
+- **Daily runner returning retired players** (`src/models/daily_runner.py`):
+  - **Bug:** Query for expected players had no recency filter, returning players like Shaquille O'Neal and Grant Hill from historical team rosters.
+  - **Fix:** Added 30-day cutoff filter (`AND pgs.game_date >= :cutoff_date`) to `_get_players_for_games()`.
+  - Added `target_date` parameter to method signature for proper cutoff calculation.
+
+### Changed
+
+- **`src/models/daily_runner.py`:**
+  - `_get_players_for_games(games, target_date)` — now requires `target_date` parameter
+  - `run_for_date()` — passes `target_date` to `_get_players_for_games()`
+
+### Updated
+
+- **`tests/test_daily_runner.py`:**
+  - `test_get_players_for_games_empty` — now passes `target_date` argument
+  - `test_get_players_for_games_success` — now passes `target_date` argument
+
+- **`tests/test_feature_store.py`:**
+  - `test_get_player_game_features_combines_outputs` — fixed mock for `_get_game_lines()` to return `line_spread_raw`, added mock for `_get_injury_context()`
+  - `test_get_training_dataset_raises_on_small_dataset` — added `game_date` column and injury query handling to mock
+  - `test_get_training_dataset_raises_on_null_position_group` — same fix
+  - `test_get_training_dataset_builds_rate_targets` — same fix, corrected assertion from `seasons` to `season`
+
+### Test Results
+
+- 540 tests passed, 0 failures
+
+### Impact
+
+Models must be retrained to benefit from the off-by-one fix. Previously trained models were optimized for stale features; new training will use current-game features.
+
+---
+
 ## [2026-02-09 Session 18] — Truncated NegBin Mu Training Fix & Training Safety
 
 ### Fixed
