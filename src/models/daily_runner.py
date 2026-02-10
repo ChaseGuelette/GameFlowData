@@ -315,11 +315,13 @@ class DailyPredictionRunner:
         markets = [stat_to_market[s] for s in stats if s in stat_to_market]
 
         # Get the most recent snapshot per player/game/market/bookmaker/line/side
+        # NOTE: raw_player_props_combined stores 8-digit game_ids (e.g., "22500769")
+        # but NBA API returns 10-digit game_ids (e.g., "0022500769"). Use LPAD to match.
         query = text("""
             WITH ranked_lines AS (
                 SELECT
                     player_id,
-                    game_id,
+                    LPAD(game_id, 10, '0') as game_id,
                     bookmaker,
                     market_key,
                     line,
@@ -327,11 +329,11 @@ class DailyPredictionRunner:
                     odds_american,
                     snapshot_time,
                     ROW_NUMBER() OVER (
-                        PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
+                        PARTITION BY player_id, LPAD(game_id, 10, '0'), market_key, bookmaker, line, outcome_label
                         ORDER BY snapshot_time DESC
                     ) as rn
                 FROM raw_player_props_combined
-                WHERE game_id IN :game_ids
+                WHERE LPAD(game_id, 10, '0') IN :game_ids
                   AND market_key IN :markets
                   AND player_id IS NOT NULL
             )

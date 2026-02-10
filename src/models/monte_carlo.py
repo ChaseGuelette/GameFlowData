@@ -294,9 +294,15 @@ class MonteCarloPredictor:
         """
         predictions = {}
 
-        # Handle THREES separately if using count model (C4)
-        if 'threes' in stats and self._has_threes_count_model():
+        # Handle THREES separately if using multiclass (C5) or count model (C4)
+        if 'threes' in stats and self._has_threes_multiclass_model():
+            threes_samples = self._sample_threes_multiclass(features)
+        elif 'threes' in stats and self._has_threes_count_model():
             threes_samples = self._sample_threes_count(features)
+        else:
+            threes_samples = None
+
+        if threes_samples is not None:
             predictions['threes'] = PropPrediction(
                 player_id=player_id,
                 game_id=game_id,
@@ -422,10 +428,39 @@ class MonteCarloPredictor:
         player_names = features_df["player_name"].values if "player_name" in features_df.columns else [None] * n_players
         team_ids = features_df["team_id"].values if "team_id" in features_df.columns else [None] * n_players
 
-        # Handle THREES with count model (C4) separately
-        process_threes_count = 'threes' in stats and self._has_threes_count_model()
-        if process_threes_count:
-            # Batch predict THREES using count model
+        # Handle THREES with multiclass (C5) or count model (C4) separately
+        process_threes_multiclass = 'threes' in stats and self._has_threes_multiclass_model()
+        process_threes_count = 'threes' in stats and self._has_threes_count_model() and not process_threes_multiclass
+
+        if process_threes_multiclass:
+            # Batch predict THREES using multiclass model
+            logger.debug("Using C5 multiclass model for THREES predictions")
+            for i in range(n_players):
+                row_features = features_df.iloc[i].to_dict()
+                threes_samples = self._sample_threes_multiclass(row_features)
+
+                predictions_list.append({
+                    "player_id": player_ids[i],
+                    "player_name": player_names[i],
+                    "game_id": game_ids[i],
+                    "team_id": team_ids[i],
+                    "stat": "threes",
+                    "pred_mean": float(threes_samples.mean()),
+                    "pred_std": float(threes_samples.std()),
+                    "pred_median": float(np.median(threes_samples)),
+                    "pred_q10": float(np.percentile(threes_samples, 10)),
+                    "pred_q25": float(np.percentile(threes_samples, 25)),
+                    "pred_q50": float(np.percentile(threes_samples, 50)),
+                    "pred_q75": float(np.percentile(threes_samples, 75)),
+                    "pred_q90": float(np.percentile(threes_samples, 90)),
+                })
+                samples_dict[(player_ids[i], game_ids[i], "threes")] = threes_samples.astype(float)
+
+            # Remove threes from stats for copula processing
+            stats = [s for s in stats if s != 'threes']
+
+        elif process_threes_count:
+            # Batch predict THREES using count model (legacy C4)
             logger.debug("Using C4 count model for THREES predictions")
             for i in range(n_players):
                 row_features = features_df.iloc[i].to_dict()
@@ -969,6 +1004,39 @@ class MonteCarloPredictor:
     def _has_threes_count_model(self) -> bool:
         """Check if pipeline has the C4 threes count model."""
         return hasattr(self.pipeline, 'threes_count_model') and self.pipeline.threes_count_model is not None
+
+    def _has_threes_multiclass_model(self) -> bool:
+        """Check if pipeline has the C5 threes multiclass model."""
+        return hasattr(self.pipeline, 'threes_multiclass_model') and self.pipeline.threes_multiclass_model is not None
+
+    def _sample_threes_multiclass(self, features: dict) -> np.ndarray:
+        """
+        Sample THREES using the multiclass classifier (C5 architecture).
+
+        Directly samples from the categorical distribution P(X=k) for k in {0,...,8+}.
+        Much simpler than C4 hurdle + NegBin - single model, naturally discrete output.
+
+        Args:
+            features: Feature dictionary for the player
+
+        Returns:
+            Integer samples array of shape (n_samples,)
+        """
+        model = self.pipeline.threes_multiclass_model
+
+        # Prepare features for the model
+        X = self._prepare_features(features, model.feature_names)
+
+        # Get predicted probabilities P(X=k) for k in {0,...,8}
+        probs = model.predict_proba(X)[0]  # Shape: (9,)
+
+        # Ensure probs sum to 1 (numerical stability)
+        probs = probs / probs.sum()
+
+        # Sample from categorical distribution
+        samples = self.rng.choice(9, size=self.n_samples, p=probs)
+
+        return samples.astype(int)
 
     def _inverse_transform_sample(self, quantile_probs: np.ndarray, quantile_values: np.ndarray) -> np.ndarray:
         """

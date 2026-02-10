@@ -69,6 +69,7 @@ class BacktestHarness:
     edge_threshold: float = 0.05
     starting_bankroll: float = 10000.0
     kelly_fraction: float = 0.125
+    max_bet_pct: float | None = None  # Cap bet size as % of bankroll (e.g., 0.025 = 2.5%)
     bookmakers: list[str] = field(default_factory=lambda: [
         # US market (original)
         "draftkings", "fanduel", "betmgm", "betrivers", "bovada",
@@ -94,6 +95,7 @@ class BacktestHarness:
             edge_threshold=self.edge_threshold,
             starting_bankroll=self.starting_bankroll,
             kelly_fraction=self.kelly_fraction,
+            max_bet_pct=self.max_bet_pct,
             allowed_bets=set(self.allowed_bets) if self.allowed_bets else None,
             use_bl_for_sizing=self.bl_sizing_blender is not None,
         )
@@ -241,6 +243,7 @@ class BacktestHarness:
                 "edge_threshold": self.edge_threshold,
                 "starting_bankroll": self.starting_bankroll,
                 "kelly_fraction": self.kelly_fraction,
+                "max_bet_pct": self.max_bet_pct,
                 "bookmakers": self.bookmakers,
                 "stats": self.stats,
                 "allowed_bets": [f"{s}:{side}" for s, side in self.allowed_bets] if self.allowed_bets else None,
@@ -440,6 +443,7 @@ class BacktestHarness:
             "pts": "player_points",
             "reb": "player_rebounds",
             "ast": "player_assists",
+            "threes": "player_threes",
         }
         markets = [stat_to_market[s] for s in self.stats if s in stat_to_market]
 
@@ -508,6 +512,7 @@ class BacktestHarness:
             "pts": "player_points",
             "reb": "player_rebounds",
             "ast": "player_assists",
+            "threes": "player_threes",
         }
         markets = [stat_to_market[s] for s in self.stats if s in stat_to_market]
 
@@ -627,6 +632,7 @@ class BacktestHarness:
             "player_points": "pts",
             "player_rebounds": "reb",
             "player_assists": "ast",
+            "player_threes": "threes",
         }
         lines_df = lines_df.copy()
         lines_df["stat"] = lines_df["market_key"].map(market_to_stat)

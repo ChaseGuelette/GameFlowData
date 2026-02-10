@@ -224,6 +224,7 @@ def run_single_config(
     allowed_bets: list[tuple[str, str]] | None,
     start_date: date,
     end_date: date,
+    max_bet_pct: float | None = None,
 ) -> SweepResult:
     """Run edge calculation + simulation + metrics for one sweep config."""
     t0 = time.time()
@@ -242,6 +243,7 @@ def run_single_config(
         edge_threshold=config.edge_threshold,
         starting_bankroll=starting_bankroll,
         kelly_fraction=config.kelly_fraction,
+        max_bet_pct=max_bet_pct,
         bookmakers=bookmakers,
         stats=stats,
         allowed_bets=allowed_bets,
@@ -286,6 +288,7 @@ def run_single_config(
         edge_threshold=config.edge_threshold,
         starting_bankroll=starting_bankroll,
         kelly_fraction=config.kelly_fraction,
+        max_bet_pct=max_bet_pct,
         allowed_bets=set(allowed_bets) if allowed_bets else None,
     )
 
@@ -432,6 +435,7 @@ def save_results(
     bookmakers: list[str] | None = None,
     stats: list[str] | None = None,
     allowed_bets: list[tuple[str, str]] | None = None,
+    max_bet_pct: float | None = None,
 ) -> None:
     """Save sweep results to JSON, CSV, and per-config subdirectories.
 
@@ -522,6 +526,7 @@ def save_results(
             "edge_threshold": r.config.edge_threshold,
             "starting_bankroll": starting_bankroll,
             "kelly_fraction": r.config.kelly_fraction,
+            "max_bet_pct": max_bet_pct,
             "bl_tau": r.config.tau,
             "bl_z_max": r.config.z_max,
             "bookmakers": bookmakers or [],
@@ -646,6 +651,12 @@ Examples:
     parser.add_argument("--n-samples", type=int, default=5000, help="Monte Carlo samples")
     parser.add_argument("--stats", nargs="+", default=["pts", "reb", "ast"], help="Stats to predict")
     parser.add_argument("--starting-bankroll", type=float, default=10000.0, help="Starting bankroll")
+    parser.add_argument(
+        "--max-bet-pct",
+        type=float,
+        default=None,
+        help="Maximum bet size as %% of bankroll (e.g., 0.025 = 2.5%%). Caps Kelly sizing. Default: no cap.",
+    )
     parser.add_argument(
         "--bookmakers", nargs="+",
         default=[
@@ -779,6 +790,7 @@ Examples:
             allowed_bets=allowed_bets,
             start_date=start_date,
             end_date=end_date,
+            max_bet_pct=args.max_bet_pct,
         )
 
         results.append(result)
@@ -815,6 +827,7 @@ Examples:
         bookmakers=args.bookmakers,
         stats=args.stats,
         allowed_bets=allowed_bets,
+        max_bet_pct=args.max_bet_pct,
     )
 
     total_time = phase01_time + sum(r.elapsed_seconds for r in results)

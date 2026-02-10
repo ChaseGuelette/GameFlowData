@@ -335,11 +335,24 @@ class TrainingOrchestrator:
             )
             all_reports[stat] = reports
 
-        # Count models (C4 architecture - threes)
-        if hasattr(pipeline, 'threes_count_model') and pipeline.threes_count_model is not None:
-            if "actual_threes" in df.columns:
+        # THREES models (C5 multiclass or C4 count architecture)
+        if "actual_threes" in df.columns:
+            mask = (df["actual_minutes"] >= 10) & (df["actual_threes"].notna())
+
+            # Check for multiclass model first (C5 architecture)
+            if hasattr(pipeline, 'threes_multiclass_model') and pipeline.threes_multiclass_model is not None:
+                logger.info("Evaluating THREES Multiclass Model (C5)...")
+                reports = self._calibrate_multiclass_model(
+                    pipeline=pipeline,
+                    df=df,
+                    actual_col="actual_threes",
+                    filter_mask=mask,
+                    name="threes_multiclass",
+                )
+                all_reports["threes"] = reports
+            # Fall back to count model (C4 architecture)
+            elif hasattr(pipeline, 'threes_count_model') and pipeline.threes_count_model is not None:
                 logger.info("Evaluating THREES Count Model (C4)...")
-                mask = (df["actual_minutes"] >= 10) & (df["actual_threes"].notna())
                 reports = self._calibrate_count_model(
                     pipeline=pipeline,
                     df=df,
@@ -348,8 +361,9 @@ class TrainingOrchestrator:
                     name="threes_count",
                 )
                 all_reports["threes"] = reports
-            else:
-                logger.warning("Count model present but 'actual_threes' column missing from data")
+        else:
+            if hasattr(pipeline, 'threes_multiclass_model') or hasattr(pipeline, 'threes_count_model'):
+                logger.warning("THREES model present but 'actual_threes' column missing from data")
 
         # Check for failures
         all_gaps = [r["gap"] for model_reports in all_reports.values() for r in model_reports]
@@ -518,6 +532,61 @@ class TrainingOrchestrator:
         reports = []
         for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
             coverage = (y_actual <= quantile_preds[q]).mean()
+            gap = coverage - q
+
+            status = "OK" if abs(gap) <= self.CALIBRATION_TOLERANCE else f"GAP {gap:+.3f}"
+            logger.info(f"  Q{q:.2f}: Act={coverage:.3f} [{status}]")
+
+            reports.append({"quantile": q, "coverage": coverage, "gap": gap})
+
+        return reports
+
+    def _calibrate_multiclass_model(self, pipeline, df, actual_col, filter_mask, name) -> list[dict]:
+        """
+        Evaluate calibration for the multiclass THREES model (C5 architecture).
+
+        Uses the predicted PMF directly to compute quantiles via CDF inversion,
+        then evaluates coverage at standard quantile levels.
+        """
+        filtered = df[filter_mask].copy().reset_index(drop=True)
+        y_actual = filtered[actual_col].values.astype(int)
+
+        if len(filtered) == 0:
+            logger.warning(f"No validation data for {name}")
+            return []
+
+        model = pipeline.threes_multiclass_model
+        feature_names = model.feature_names
+
+        # Get features and predict probabilities
+        X = filtered[feature_names].fillna(0)
+        probs = model.predict_proba(X)  # (n_samples, 9)
+
+        # Bin actuals to match model classes (0-8+)
+        y_binned = np.clip(y_actual, 0, 8)
+
+        # Per-class calibration analysis
+        logger.info(f"  Per-class calibration:")
+        class_gaps = []
+        for k in range(9):
+            predicted_prob = probs[:, k].mean()
+            actual_freq = (y_binned == k).mean()
+            gap = actual_freq - predicted_prob
+            class_gaps.append(abs(gap))
+            status = "OK" if abs(gap) <= 0.05 else f"GAP {gap:+.3f}"
+            logger.info(f"    Class {k}: pred={predicted_prob:.3f}, actual={actual_freq:.3f} [{status}]")
+
+        avg_class_gap = np.mean(class_gaps)
+        logger.info(f"  Average per-class gap: {avg_class_gap:.3f}")
+
+        # Quantile calibration via CDF inversion
+        cdf = np.cumsum(probs, axis=1)  # (n_samples, 9)
+
+        reports = []
+        for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
+            # Find smallest k where CDF(k) >= q for each sample
+            quantile_preds = (cdf >= q).argmax(axis=1)
+            coverage = (y_binned <= quantile_preds).mean()
             gap = coverage - q
 
             status = "OK" if abs(gap) <= self.CALIBRATION_TOLERANCE else f"GAP {gap:+.3f}"

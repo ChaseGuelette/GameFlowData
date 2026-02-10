@@ -100,6 +100,7 @@ class BetSimulator:
     edge_threshold: float = 0.05
     starting_bankroll: float = 10000.0
     kelly_fraction: float = 0.125
+    max_bet_pct: float | None = None  # Cap bet size as % of bankroll (e.g., 0.025 = 2.5%)
     min_odds: int = -200  # Don't bet on heavy favorites
     max_odds: int = 200  # Don't bet on long shots
     allowed_bets: set[tuple[str, str]] | None = None  # e.g., {("pts", "under"), ("reb", "over")}
@@ -112,7 +113,7 @@ class BetSimulator:
         self.current_bankroll = self.starting_bankroll
 
     def _calculate_kelly_stake(self, odds: int, model_prob: float) -> float:
-        """Calculate stake using fractional Kelly Criterion."""
+        """Calculate stake using fractional Kelly Criterion with optional cap."""
         if odds == 0:
             return 0.0
 
@@ -134,6 +135,10 @@ class BetSimulator:
 
         if f_fractional <= 0:
             return 0.0
+
+        # Apply max bet cap if configured
+        if self.max_bet_pct is not None:
+            f_fractional = min(f_fractional, self.max_bet_pct)
 
         # Calculate stake based on current bankroll
         stake = f_fractional * self.current_bankroll

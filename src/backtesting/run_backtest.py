@@ -72,6 +72,12 @@ def main():
         "--kelly-fraction", type=float, default=0.125, help="Kelly Criterion fraction (e.g., 0.125 for 1/8th)"
     )
     parser.add_argument(
+        "--max-bet-pct",
+        type=float,
+        default=None,
+        help="Maximum bet size as %% of bankroll (e.g., 0.025 = 2.5%%). Caps Kelly sizing. Default: no cap.",
+    )
+    parser.add_argument(
         "--bookmakers",
         nargs="+",
         default=[
@@ -113,6 +119,10 @@ def main():
         parser.error("--bl-tau must be non-negative (0.0 or greater)")
     if args.bl_sizing_tau is not None and args.bl_sizing_tau < 0:
         parser.error("--bl-sizing-tau must be non-negative (0.0 or greater)")
+
+    # Validate max_bet_pct
+    if args.max_bet_pct is not None and (args.max_bet_pct <= 0 or args.max_bet_pct > 1):
+        parser.error("--max-bet-pct must be between 0 and 1 (e.g., 0.025 for 2.5%)")
 
     # Parse allowed_bets from "stat:side" strings to list of tuples
     allowed_bets = None
@@ -179,12 +189,15 @@ def main():
         edge_threshold=args.edge_threshold,
         starting_bankroll=args.starting_bankroll,
         kelly_fraction=args.kelly_fraction,
+        max_bet_pct=args.max_bet_pct,
         bookmakers=args.bookmakers,
         allowed_bets=allowed_bets,
         bl_blender=bl_blender,
         bl_sizing_blender=bl_sizing_blender,
     )
 
+    if args.max_bet_pct:
+        logger.info(f"Max bet cap: {args.max_bet_pct:.1%} of bankroll")
     if allowed_bets:
         logger.info(f"Allowed bets filter: {[f'{s}:{side}' for s, side in allowed_bets]}")
     logger.info(f"Running backtest from {args.start} to {args.end}...")

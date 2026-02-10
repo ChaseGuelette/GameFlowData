@@ -851,17 +851,19 @@ class PlayerPropsModelPipeline:
         config: QuantileModelConfig | None = None,
     ) -> dict:
         """
-        Train two-stage hurdle + count model for THREES (C4 architecture).
+        Train multiclass classifier for THREES (C5 architecture).
 
-        Stage 1: Zero classifier (P(threes = 0))
-        Stage 2: Truncated NegBin count model (conditional on threes > 0)
+        Predicts P(X=k) for k in {0, 1, 2, ..., 8+} directly.
+        No separate zero classifier needed - class 0 handles zeros naturally.
 
-        This replaces the C3 hurdle + quantile model that had 25.6% Q10 calibration gap.
+        This replaces:
+        - C3: hurdle + quantile (25.6% Q10 gap)
+        - C4: hurdle + truncated NegBin (broken alpha/mu training)
         """
-        from src.models.truncated_negbin import TruncatedNegBinModel
+        from src.models.threes_multiclass import ThreesMulticlassModel, ThreesMulticlassConfig
 
         print("\n" + "=" * 60)
-        print("TRAINING THREES COUNT MODEL (C4)")
+        print("TRAINING THREES MULTICLASS MODEL (C5)")
         print("=" * 60)
 
         config = config or self.config
@@ -874,79 +876,42 @@ class PlayerPropsModelPipeline:
         available_features = [f for f in feature_names if f in df_valid.columns]
 
         X = df_valid[available_features].fillna(0)
-        y_count = df_valid['actual_threes'].astype(int)  # Integer counts
-        is_zero = (y_count == 0).astype(int)
+        y_count = df_valid['actual_threes'].values.astype(int)  # Integer counts
 
+        # Class distribution
+        zero_rate = (y_count == 0).mean()
         print(f"Total samples: {len(X):,}")
-        print(f"Zero samples: {is_zero.sum():,} ({is_zero.mean():.1%})")
-        print(f"Positive samples: {(~is_zero.astype(bool)).sum():,}")
+        print(f"Zero samples: {(y_count == 0).sum():,} ({zero_rate:.1%})")
+        print(f"Positive samples: {(y_count > 0).sum():,}")
 
-        # === Stage 1: Zero Classifier ===
-        print("\n--- Stage 1: Zero Classifier ---")
-
-        # Temporal split for calibration
-        n_train = int(len(X) * (1 - 0.15))
-        X_train = X.iloc[:n_train]
-        X_val = X.iloc[n_train:]
-        is_zero_train = is_zero.iloc[:n_train]
-        is_zero_val = is_zero.iloc[n_train:]
-        y_train = y_count.iloc[:n_train]
-        y_val = y_count.iloc[n_train:]
-
-        zero_clf = xgb.XGBClassifier(
-            objective='binary:logistic',
+        # Create multiclass config matching the quantile config
+        multiclass_config = ThreesMulticlassConfig(
             n_estimators=config.n_estimators,
             max_depth=config.max_depth,
             learning_rate=config.learning_rate,
             subsample=config.subsample,
             colsample_bytree=config.colsample_bytree,
             early_stopping_rounds=config.early_stopping_rounds,
-            n_jobs=-1,
-            eval_metric='logloss',
         )
 
-        zero_clf.fit(
-            X_train, is_zero_train,
-            eval_set=[(X_val, is_zero_val)],
-            verbose=False
-        )
+        # Train single multiclass model
+        model = ThreesMulticlassModel(multiclass_config)
+        train_info = model.fit(X, y_count)
 
-        # Calibrate zero classifier with isotonic regression
-        p_zero_raw = zero_clf.predict_proba(X_val)[:, 1]
-        zero_calibrator = IsotonicRegression(out_of_bounds='clip')
-        zero_calibrator.fit(p_zero_raw, is_zero_val)
+        print(f"\nClass distribution: {dict(enumerate([f'{p:.3f}' for p in train_info['class_distribution']]))}")
+        print(f"Validation accuracy: {train_info['val_accuracy']:.3f}")
 
-        p_zero_cal = zero_calibrator.predict(p_zero_raw)
-        print(f"Zero classifier - Raw p_zero: {p_zero_raw.mean():.3f}, Calibrated: {p_zero_cal.mean():.3f}")
-        print(f"Actual zero rate (val): {is_zero_val.mean():.3f}")
-
-        # === Stage 2: Truncated NegBin Count Model ===
-        print("\n--- Stage 2: Truncated NegBin Count Model ---")
-
-        positive_mask = y_count > 0
-        X_pos = X[positive_mask]
-        y_pos = y_count[positive_mask]
-
-        print(f"Training count model on {len(X_pos):,} positive samples")
-
-        count_model = TruncatedNegBinModel()
-        count_results = count_model.fit(X_pos, y_pos)
-
-        print(f"Global mu: {count_results['global_mu']:.3f}")
-        print(f"Global alpha (overdispersion): {count_results['global_alpha']:.3f}")
-
-        # Store models on pipeline
-        self.threes_zero_classifier = zero_clf
-        self.threes_zero_calibrator = zero_calibrator
-        self.threes_count_model = count_model
-        self.threes_zero_feature_names = available_features  # Store feature names explicitly
+        # Store model on pipeline
+        self.threes_multiclass_model = model
+        self.threes_feature_names = available_features
 
         return {
-            'model_type': 'count',
-            'zero_rate': is_zero.mean(),
-            'global_mu': count_results['global_mu'],
-            'global_alpha': count_results['global_alpha'],
-            'n_positive_samples': len(X_pos),
+            'model_type': 'multiclass',
+            'zero_rate': zero_rate,
+            'n_samples': len(X),
+            'n_features': len(available_features),
+            'val_accuracy': train_info['val_accuracy'],
+            'class_distribution': train_info['class_distribution'],
         }
 
     def save_all(self, directory: str):
@@ -964,9 +929,23 @@ class PlayerPropsModelPipeline:
         for stat, hurdle_model in self.hurdle_models.items():
             hurdle_model.save(path)
 
-        # Save threes count model (C4) if present
+        # Save threes multiclass model (C5) if present
+        has_multiclass_model = hasattr(self, 'threes_multiclass_model') and self.threes_multiclass_model is not None
+        if has_multiclass_model:
+            # Save multiclass model
+            self.threes_multiclass_model.save(path)
+
+            # Save flag file indicating multiclass model (C5)
+            with open(path / "threes_is_hurdle.json", "w") as f:
+                json.dump({
+                    "is_hurdle": True,
+                    "model_type": "multiclass",  # C5 architecture
+                }, f, indent=2)
+            print("Saved THREES multiclass model (C5)")
+
+        # Legacy: Save threes count model (C4) if present
         has_count_model = hasattr(self, 'threes_count_model') and self.threes_count_model is not None
-        if has_count_model:
+        if has_count_model and not has_multiclass_model:
             # Save zero classifier and its feature names
             joblib.dump(self.threes_zero_classifier, path / "threes_zero_classifier.joblib")
             joblib.dump(self.threes_zero_calibrator, path / "threes_zero_calibrator.joblib")
@@ -989,7 +968,8 @@ class PlayerPropsModelPipeline:
                 "minutes_features": self.minutes_features,
                 "rate_features": self.rate_features,
                 "hurdle_stats": list(self.hurdle_models.keys()),
-                "count_model_stats": ["threes"] if has_count_model else [],
+                "count_model_stats": ["threes"] if has_count_model and not has_multiclass_model else [],
+                "multiclass_model_stats": ["threes"] if has_multiclass_model else [],
             },
             path / "feature_config.joblib",
         )
@@ -1019,16 +999,29 @@ class PlayerPropsModelPipeline:
             hurdle_stats = config.get("hurdle_stats", [])
             count_model_stats = config.get("count_model_stats", [])
 
-        # Check for C4 count model via threes_is_hurdle.json
-        is_count_model = False
+        # Check for model type via threes_is_hurdle.json
+        model_type = None
         hurdle_json_path = path / "threes_is_hurdle.json"
         if hurdle_json_path.exists():
             with open(hurdle_json_path, "r") as f:
                 hurdle_info = json.load(f)
-                is_count_model = hurdle_info.get("model_type") == "count"
+                model_type = hurdle_info.get("model_type")
 
-        # Load threes count model (C4) if present
-        if is_count_model or "threes" in count_model_stats:
+        # Also check feature config for multiclass stats
+        multiclass_stats = config.get("multiclass_model_stats", []) if config_path.exists() else []
+
+        # Load threes multiclass model (C5) if present
+        if model_type == "multiclass" or "threes" in multiclass_stats:
+            from src.models.threes_multiclass import ThreesMulticlassModel
+
+            if ThreesMulticlassModel.exists(path):
+                pipeline.threes_multiclass_model = ThreesMulticlassModel.load(path)
+                print("Loaded THREES multiclass model (C5)")
+            else:
+                print("WARNING: Multiclass model flag set but model files not found")
+
+        # Legacy: Load threes count model (C4) if present
+        elif model_type == "count" or "threes" in count_model_stats:
             from src.models.truncated_negbin import TruncatedNegBinModel
 
             # Load zero classifier, calibrator, and feature names
@@ -1051,8 +1044,11 @@ class PlayerPropsModelPipeline:
 
         # Load rate models
         for stat in ["pts", "reb", "ast", "threes"]:
-            # Skip threes if we loaded a count model
-            if stat == "threes" and hasattr(pipeline, 'threes_count_model'):
+            # Skip threes if we loaded a multiclass or count model
+            if stat == "threes" and (
+                hasattr(pipeline, 'threes_multiclass_model') or
+                hasattr(pipeline, 'threes_count_model')
+            ):
                 continue
 
             # Check if this is a hurdle model (legacy C3)
