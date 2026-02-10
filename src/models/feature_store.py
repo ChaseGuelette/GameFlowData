@@ -185,16 +185,41 @@ class FeatureStore:
         self.engine = engine
         self.config = config or FeatureConfig()
 
-    def get_player_game_features(self, player_id: int, game_id: str, as_of_date: date) -> dict | None:
+    def get_player_game_features(
+        self,
+        player_id: int,
+        game_id: str,
+        as_of_date: date,
+        team_id: int | None = None,
+        opponent_id: int | None = None,
+        is_home: bool | None = None,
+    ) -> dict | None:
         """
         Get all features for a single player-game (Inference Mode).
         Strictly uses data available BEFORE the game starts.
+
+        For scheduled games (not yet played), pass team_id, opponent_id, is_home
+        to avoid querying player_game_stats which won't have the game yet.
         """
         with self.engine.connect() as conn:
             # 1. Game & Position Context
-            ctx = self._get_context_snapshots(conn, game_id, player_id, as_of_date)
-            if ctx is None:
-                return None
+            if team_id is not None and opponent_id is not None:
+                # Use provided context (for scheduled games not in player_game_stats)
+                position_group = self._get_player_position(conn, player_id, as_of_date)
+                if position_group is None:
+                    return None
+                ctx = {
+                    "team_id": team_id,
+                    "opponent_id": opponent_id,
+                    "is_home": is_home if is_home is not None else True,
+                    "position_group": position_group,
+                    "season_id": "22025",  # Current season
+                }
+            else:
+                # Query from player_game_stats (for historical games)
+                ctx = self._get_context_snapshots(conn, game_id, player_id, as_of_date)
+                if ctx is None:
+                    return None
 
             # 2. Player Stats
             player_stats = self._get_player_rolling_stats(conn, player_id, as_of_date)
@@ -1300,6 +1325,16 @@ class FeatureStore:
 
         with self.engine.connect() as conn:
             return pd.read_sql(query, conn, params={"dates": list(set(game_dates))})
+
+    def _get_player_position(self, conn, player_id: int, as_of_date: date) -> str | None:
+        """Get player's position group from position history."""
+        query = text("""
+            SELECT position_group FROM player_position_history
+            WHERE player_id = :player_id AND snapshot_date < :as_of_date
+            ORDER BY snapshot_date DESC LIMIT 1
+        """)
+        result = conn.execute(query, {"player_id": player_id, "as_of_date": as_of_date}).fetchone()
+        return result[0] if result else None
 
     def _get_context_snapshots(self, conn, game_id, player_id, as_of_date):
         query = text("""

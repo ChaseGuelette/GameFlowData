@@ -2,7 +2,7 @@
 
 import logging
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -44,7 +44,7 @@ class DailyPredictionRunner:
         logger.info(f"Found {len(games)} games")
 
         # 2. Get all players expected to play
-        players = self._get_players_for_games(games)
+        players = self._get_players_for_games(games, target_date)
         logger.info(f"Found {len(players)} players (pre-injury filter)")
 
         # Filter injured players
@@ -97,6 +97,9 @@ class DailyPredictionRunner:
                     player_id=player["player_id"],
                     game_id=player["game_id"],
                     as_of_date=target_date,
+                    team_id=player.get("team_id"),
+                    opponent_id=player.get("opponent_id"),
+                    is_home=player.get("is_home"),
                 )
                 if features is not None:
                     # get_player_game_features returns a dict; convert to single-row DF
@@ -191,7 +194,7 @@ class DailyPredictionRunner:
             result = conn.execute(query, {"target_date": target_date})
             return [dict(row._mapping) for row in result]
 
-    def _get_players_for_games(self, games: list[dict]) -> list[dict]:
+    def _get_players_for_games(self, games: list[dict], target_date: date) -> list[dict]:
         """Get expected players for games (based on recent activity)."""
         if not games:
             return []
@@ -208,6 +211,7 @@ class DailyPredictionRunner:
             return []
 
         # Get recent active players for these teams
+        # Filter to players who have played in the last 30 days to exclude retired players
         query = text("""
             SELECT DISTINCT ON (pgs.player_id)
                 pgs.player_id,
@@ -218,22 +222,26 @@ class DailyPredictionRunner:
             JOIN players p ON pgs.player_id = p.player_id
             WHERE pgs.team_id IN :team_ids
               AND pgs.avg_min_l5 >= 10
+              AND pgs.game_date >= :cutoff_date
             ORDER BY pgs.player_id, pgs.game_date DESC
         """).bindparams(bindparam("team_ids", expanding=True))
 
+        # Calculate cutoff date (30 days before target to exclude retired players)
+        cutoff_date = target_date - timedelta(days=30)
+
         with self.engine.connect() as conn:
-            result = conn.execute(query, {"team_ids": list(team_ids)})
+            result = conn.execute(query, {"team_ids": list(team_ids), "cutoff_date": cutoff_date})
             players = [dict(row._mapping) for row in result]
 
         # Map each player to their game and opponent
         # Build team -> game mapping
-        team_game_map = {}  # team_id -> (game_id, opponent_id)
+        team_game_map = {}  # team_id -> (game_id, opponent_id, is_home)
         for g in games:
             home = g.get("home_team_id")
             away = g.get("away_team_id")
             if home and away:
-                team_game_map[home] = {"game_id": g["game_id"], "opponent_id": away}
-                team_game_map[away] = {"game_id": g["game_id"], "opponent_id": home}
+                team_game_map[home] = {"game_id": g["game_id"], "opponent_id": away, "is_home": True}
+                team_game_map[away] = {"game_id": g["game_id"], "opponent_id": home, "is_home": False}
 
         result_players = []
         for p in players:
@@ -241,6 +249,7 @@ class DailyPredictionRunner:
             if mapping:
                 p["game_id"] = mapping["game_id"]
                 p["opponent_id"] = mapping["opponent_id"]
+                p["is_home"] = mapping["is_home"]
                 result_players.append(p)
 
         return result_players
