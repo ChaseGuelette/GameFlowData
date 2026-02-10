@@ -75,6 +75,47 @@ export interface PaperTradingSummary {
   bankroll: number
 }
 
+export type BetStatus = 'pending' | 'won' | 'lost' | 'push' | 'cancelled'
+
+export interface PaperBet {
+  id: number
+  game_date: string
+  player_id: number
+  player_name: string
+  stat_type: StatType
+  line: number
+  bet_direction: 'over' | 'under'
+  odds_at_bet: number
+  stake: number
+  edge: number
+  status: BetStatus
+  actual_value: number | null
+  pnl: number | null
+}
+
+export interface DailyPerformance {
+  game_date: string
+  total_bets: number
+  bets_won: number
+  bets_lost: number
+  bets_push: number
+  total_staked: number
+  total_pnl: number
+  cumulative_pnl: number
+  bankroll_after: number
+  roi_pct: number
+}
+
+export interface StatPerformance {
+  stat: StatType
+  total_bets: number
+  wins: number
+  losses: number
+  win_rate: number
+  total_pnl: number
+  roi: number
+}
+
 // Helper to get stat display name
 export const STAT_LABELS: Record<StatType, string> = {
   pts: 'Points',
