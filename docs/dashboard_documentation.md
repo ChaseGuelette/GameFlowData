@@ -24,6 +24,9 @@ dashboard/
 │   ├── app/                    # Next.js App Router pages
 │   │   ├── page.tsx            # Main predictions dashboard
 │   │   ├── login/page.tsx      # Authentication page
+│   │   ├── history/page.tsx    # Bet history view
+│   │   ├── performance/page.tsx # Performance metrics
+│   │   ├── auth/callback/route.ts # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
 │   │   ├── layout/             # Layout components
@@ -36,6 +39,15 @@ dashboard/
 │   │   │   ├── AnalysisModal.tsx    # Detailed analysis modal
 │   │   │   ├── Last5Chart.tsx       # Last 5 games chart
 │   │   │   └── QuantileSummary.tsx  # Quantile distribution
+│   │   ├── history/            # Bet history components
+│   │   │   ├── BetCard.tsx     # Individual bet result card
+│   │   │   ├── BetList.tsx     # Grid of bet cards
+│   │   │   ├── HistoryFilters.tsx  # Status filter tabs
+│   │   │   └── HistorySummary.tsx  # Summary stats bar
+│   │   ├── performance/        # Performance metric components
+│   │   │   ├── KPICard.tsx     # Single metric display
+│   │   │   ├── BankrollChart.tsx   # Bankroll over time chart
+│   │   │   └── StatBreakdown.tsx   # Per-stat performance table
 │   │   └── shared/             # Shared components
 │   │       ├── PlayerAvatar.tsx     # NBA headshots
 │   │       └── Badge.tsx            # Stat and edge badges
@@ -122,11 +134,36 @@ Player reference data for name enrichment.
 
 ### `paper_trading_daily_log`
 
-Paper trading results for bankroll display.
+Paper trading results for bankroll display and performance tracking.
 
 **Columns used:**
 - `game_date` — Trading date
-- `bankroll` — Current bankroll value
+- `bankroll_after` — Bankroll after day's trading
+- `total_bets` — Number of bets placed
+- `bets_won` — Bets that won
+- `bets_lost` — Bets that lost
+- `bets_push` — Bets that pushed
+- `total_staked` — Total amount staked
+- `total_pnl` — Profit/loss for the day
+
+### `paper_bets`
+
+Individual bet records for history view.
+
+**Columns used:**
+- `id` — Bet identifier
+- `game_date` — Date of the game
+- `player_id` — NBA player ID
+- `player_name` — Player display name
+- `stat_type` — Stat type (pts, reb, ast, threes)
+- `line` — Prop line value
+- `bet_direction` — over or under
+- `odds_at_bet` — Odds when bet was placed
+- `stake` — Amount staked
+- `edge` — Model edge at bet time
+- `status` — pending, won, lost, push, cancelled
+- `actual_value` — Actual stat value (after game)
+- `pnl` — Profit/loss amount
 
 ## Components
 
@@ -336,9 +373,132 @@ turbopack: {
 }
 ```
 
+## Pages
+
+### History Page (`/history`)
+
+Displays bet history with filtering and summary statistics.
+
+**Features:**
+- Status filter tabs: All, Won, Lost, Push
+- Summary bar with totals: bets, wins, losses, win rate, P&L
+- Individual bet cards showing result vs line
+- Last 30 days of data
+
+**Components used:**
+- `HistoryFilters` — Status filter tabs
+- `HistorySummary` — Summary stats bar
+- `BetList` → `BetCard` — Grid of bet results
+
+### Performance Page (`/performance`)
+
+Displays overall performance metrics and visualizations.
+
+**Features:**
+- KPI cards: Current Bankroll, Total P&L, Overall ROI, Win Rate
+- Bankroll over time chart (Recharts AreaChart)
+- Performance breakdown by stat type table
+
+**Components used:**
+- `KPICard` — Individual metric cards
+- `BankrollChart` — Time series chart
+- `StatBreakdown` — Per-stat table
+
+### History Components
+
+#### BetCard
+
+Individual bet result display.
+
+```tsx
+<BetCard bet={bet} />
+```
+
+Shows:
+- Player name and avatar
+- Stat badge
+- Over/Under direction with line
+- Actual value
+- Result badge (Won/Lost/Push)
+- P&L amount
+
+#### HistoryFilters
+
+Status filter tabs.
+
+```tsx
+<HistoryFilters
+  activeFilter="all"
+  onFilterChange={(filter) => setFilter(filter)}
+/>
+```
+
+Options: All, Won, Lost, Push
+
+#### HistorySummary
+
+Summary statistics bar.
+
+```tsx
+<HistorySummary bets={bets} />
+```
+
+Shows: Total bets, Wins, Losses, Win Rate, Total P&L
+
+### Performance Components
+
+#### KPICard
+
+Single metric card with optional trend indicator.
+
+```tsx
+<KPICard
+  label="Total P&L"
+  value="+$1,234.56"
+  trend="up"
+  subValue="from 100 bets"
+/>
+```
+
+**Props:**
+- `label` — Metric name
+- `value` — Display value
+- `trend` — 'up' | 'down' | 'neutral' (optional, colors the value)
+- `subValue` — Additional context (optional)
+
+#### BankrollChart
+
+Bankroll over time visualization.
+
+```tsx
+<BankrollChart data={dailyData} />
+```
+
+**Features:**
+- Recharts AreaChart
+- Green gradient when trending up, red when down
+- Tooltip with date, bankroll, and daily P&L
+- Responsive container
+
+#### StatBreakdown
+
+Per-stat performance table.
+
+```tsx
+<StatBreakdown stats={statData} />
+```
+
+**Columns:**
+- Stat (with colored badge)
+- Bets
+- W-L
+- Win %
+- P&L
+- ROI
+
 ## Future Enhancements
 
 1. **Feature-based insights** — Display why the model likes a prop (e.g., "Team missing key rebounder")
 2. **Lock of the Day** — Hero section highlighting top pick
-3. **Paper trading views** — Bet history, P&L charts, performance metrics
+3. **Date range selector** — Allow selecting custom date ranges for history/performance
 4. **Vercel deployment** — Production hosting with environment variables

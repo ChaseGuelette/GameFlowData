@@ -1,5 +1,56 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-10 — Session 21)
+
+### What We Did
+
+**Implemented C5 THREES Multiclass PMF Model.** Complete replacement for C3/C4 approaches. Instead of modeling continuous rates or count distributions, directly predicts a 9-class probability mass function (PMF) for made threes: P(threes=0), P(threes=1), ..., P(threes=8+).
+
+**Why multiclass works better:**
+- Discrete outcomes (0, 1, 2, ... made threes) are naturally categorical
+- XGBoost multi:softprob directly outputs calibrated class probabilities
+- No quantile-to-PMF conversion needed — model outputs ARE the distribution
+- Categorical sampling produces integer counts directly
+
+**Files created:**
+- `src/models/threes_multiclass.py` — `ThreesMulticlassModel` class (~350 lines)
+- `tests/test_threes_multiclass.py` — 25 unit tests
+
+**Files modified:**
+- `src/models/quantile_trainer.py` — imports and integration
+- `src/models/monte_carlo.py` — `_sample_threes_multiclass()` for PMF-based sampling
+- `src/models/train_pipeline.py` — `_calibrate_multiclass_model()` for evaluation
+
+**Built Dashboard History & Performance Pages (G8 partial).** Added two new routes for viewing betting history and performance metrics:
+
+**History Page (`/history`):**
+- Status filter tabs (All/Won/Lost/Push)
+- Summary stats bar (total bets, wins, losses, win rate, P&L)
+- Individual bet cards showing player, stat, line, actual value, result, P&L
+- Last 30 days of data from `paper_bets` table
+
+**Performance Page (`/performance`):**
+- KPI cards: Current Bankroll, Total P&L, Overall ROI, Win Rate
+- Bankroll over time chart (Recharts AreaChart with green/red trend coloring)
+- Performance by stat breakdown table (per-stat wins, losses, ROI)
+- Data from `paper_trading_daily_log` and `paper_bets` tables
+
+**Components created:**
+- `dashboard/src/components/history/` — BetCard, BetList, HistoryFilters, HistorySummary
+- `dashboard/src/components/performance/` — KPICard, BankrollChart, StatBreakdown
+
+**Fixed auth callback route.** Added `dashboard/src/app/auth/callback/route.ts` to handle email confirmation redirects.
+
+**Tests:** 570 passed, 0 failures
+
+### Next Step
+
+1. **Retrain models** — Run training to activate C5 THREES multiclass model
+2. **Paper trade** — Begin daily paper trading with full pipeline
+3. **Dashboard improvements** — Add date range selector, mobile responsiveness
+
+---
+
 ## Session Summary (2026-02-09 — Session 20)
 
 ### What We Did
@@ -851,7 +902,33 @@ where bookmaker attention is lower.
   - `src/models/monte_carlo.py` — `_sample_threes_count()`, `_has_threes_count_model()`
   - `src/models/train_pipeline.py` — `_calibrate_count_model()`, evaluation updates
 
-  **Status:** Code complete, all 523 tests pass. Needs retraining to activate.
+  **Status:** Code complete, all 523 tests pass. Superseded by C5.
+
+- [x] **C5. THREES Multiclass PMF Model** *(IMPLEMENTED — 2026-02-10)*
+  Complete replacement for C3/C4 approaches. Instead of modeling continuous rates or count distributions, directly predicts a 9-class probability mass function (PMF) for made threes.
+
+  **Why multiclass:**
+  - Discrete outcomes (0, 1, 2, ... made threes) are naturally categorical
+  - XGBoost multi:softprob directly outputs calibrated class probabilities
+  - No quantile-to-PMF conversion needed — model outputs ARE the distribution
+  - Categorical sampling produces integer counts directly
+
+  **Architecture:**
+  - XGBoost multiclass classifier with `objective='multi:softprob'`, `num_class=9`
+  - Classes 0-7 are exact counts, class 8 represents "8 or more" (capped)
+  - Trained on `threes_per_game` binned to 0-8, not `threes_per_min`
+  - Monte Carlo sampling uses weighted random choice from PMF
+
+  **Files created:**
+  - `src/models/threes_multiclass.py` — `ThreesMulticlassModel` class (~350 lines)
+  - `tests/test_threes_multiclass.py` — 25 unit tests
+
+  **Files modified:**
+  - `src/models/quantile_trainer.py` — imports and integration for multiclass model
+  - `src/models/monte_carlo.py` — `_sample_threes_multiclass()` for PMF-based sampling
+  - `src/models/train_pipeline.py` — `_calibrate_multiclass_model()` for evaluation
+
+  **Status:** Code complete, all 570 tests pass. Needs retraining to activate.
 
 ---
 
@@ -970,7 +1047,11 @@ Next.js dashboard for viewing predictions and paper trading results. Full spec: 
 - [x] **G5. Analysis modal** — *(PARTIAL — 2026-02-09)* Last 5 games chart + quantile summary created. Template-based insights pending (needs G2/G3).
 - [ ] **G6. Hero section** — "Lock of the Day" with top pick by edge
 - [x] **G7. Player headshots** — *(DONE — 2026-02-09)* NBA CDN integration with inline SVG fallback
-- [ ] **G8. Paper trading views** — History page, P&L dashboard
+- [x] **G8. Paper trading views** — *(DONE — 2026-02-10)* History page and Performance page created:
+  - `/history` — Bet history with status filters (All/Won/Lost/Push), summary bar, bet cards
+  - `/performance` — KPI cards, bankroll chart, stat breakdown table
+  - Components: BetCard, BetList, HistoryFilters, HistorySummary, KPICard, BankrollChart, StatBreakdown
+  - Auth callback route for email confirmation added
 - [ ] **G9. Vercel deployment** — Production deployment with environment variables
 
 ---
@@ -993,7 +1074,8 @@ Next.js dashboard for viewing predictions and paper trading results. Full spec: 
 | ~~E3 (Analyze sweep)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — REB +7.9%, model finds genuine edges without BL. |
 | ~~A3b (Fix BL confidence)~~ | ~~Low~~ | ~~High~~ | **DONE** — Linear ramp confidence. 42 tests passing. |
 | ~~C3 (THREES hurdle model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE but FAILED** — Calibration gap 25.6% at Q0.10. Quantile regression wrong for discrete data. |
-| ~~C4 (THREES count model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE** — Truncated NegBin implemented. Needs retraining. |
+| ~~C4 (THREES count model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE** — Truncated NegBin implemented. Superseded by C5. |
+| ~~C5 (THREES multiclass)~~ | ~~Medium~~ | ~~High~~ | **DONE** — XGBoost multi:softprob, 9-class PMF. Needs retraining. |
 | E1b (Retrain with calibration fixes) | Low | Medium | Conformal recalibration + zero-snap need retraining to take effect |
 | ~~E4 (Daily injury pipeline)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — `--scrape-injuries` now uses RapidAPI + linker |
 | ~~E5 (Paper trade infra)~~ | ~~Medium~~ | ~~High~~ | **DONE** — `PaperTrader` class, CLI scripts, 20 tests |
@@ -1006,7 +1088,8 @@ Next.js dashboard for viewing predictions and paper trading results. Full spec: 
 | ~~G1 (Project setup)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Next.js 16, TypeScript, Tailwind, Supabase SSR |
 | ~~G4 (Home page MVP)~~ | ~~Medium~~ | ~~High~~ | **DONE** — Prop cards, filtering, edge sorting |
 | ~~G7 (Player headshots)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — NBA CDN with SVG fallback |
-| G5-G6, G8-G9 (Dashboard) | Medium | Mid-High | In progress. Spec: `.session/specs/dashboard_implementation.md` |
+| ~~G8 (Paper trading views)~~ | ~~Medium~~ | ~~High~~ | **DONE** — History page, Performance page with charts |
+| G5-G6, G9 (Dashboard) | Medium | Mid-High | In progress. Spec: `.session/specs/dashboard_implementation.md` |
 
 ---
 

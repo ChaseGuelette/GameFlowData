@@ -358,25 +358,32 @@ dashboard/
 │   ├── app/                    # Next.js App Router pages
 │   │   ├── page.tsx            # Main predictions dashboard
 │   │   ├── login/page.tsx      # Authentication page
+│   │   ├── history/page.tsx    # Bet history with filters
+│   │   ├── performance/page.tsx # Performance metrics and charts
+│   │   ├── auth/callback/route.ts # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
 │   │   ├── layout/             # Navbar with bankroll display
 │   │   ├── predictions/        # PropCard, PropGrid, FilterTabs
 │   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
+│   │   ├── history/            # BetCard, BetList, HistoryFilters, HistorySummary
+│   │   ├── performance/        # KPICard, BankrollChart, StatBreakdown
 │   │   └── shared/             # PlayerAvatar, Badge components
 │   ├── lib/
 │   │   ├── supabase/           # Client, server, and middleware helpers
 │   │   └── utils.ts            # Formatting, edge tiers, headshot URLs
 │   ├── types/
-│   │   └── predictions.ts      # TypeScript interfaces for predictions
+│   │   └── predictions.ts      # TypeScript interfaces for predictions, bets, performance
 │   └── middleware.ts           # Auth redirect for protected routes
 ├── .env.local                  # Supabase credentials (not committed)
 └── next.config.ts              # NBA CDN image domains
 ```
 
 **Key Features:**
-- **Predictions View:** Displays today's predictions filtered by stat type (pts/reb/ast/threes), sorted by edge magnitude.
+- **Predictions View (`/`):** Displays today's predictions filtered by stat type (pts/reb/ast/threes), sorted by edge magnitude.
 - **Analysis Modal:** Click any prop card to see Last 5 games chart, quantile distribution summary, and detailed prediction metadata.
+- **History View (`/history`):** Shows past betting results with status filters (All/Won/Lost/Push), summary stats bar, and individual bet cards with actual vs line comparison.
+- **Performance View (`/performance`):** KPI cards (bankroll, P&L, ROI, win rate), bankroll over time chart (Recharts AreaChart), and performance breakdown by stat type.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
 - **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
@@ -384,7 +391,8 @@ dashboard/
 **Data Sources:**
 - `daily_predictions` table — prediction quantiles, edges, implied probabilities
 - `players` table — player names for enrichment
-- `paper_trading_daily_log` table — bankroll for display
+- `paper_bets` table — individual bet records with status and P&L
+- `paper_trading_daily_log` table — daily aggregated stats, bankroll tracking
 
 **Run Commands:**
 ```bash
@@ -712,13 +720,13 @@ See `ACTIONITEMS.md` for full details.
 **Active tracks:**
 - **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A3b (BL confidence fix) completed. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option.
 - **Track B** (Complete): New signal sources — B1 (injury context, 10 features), B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented and included in latest training run.
-- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration) pending. C3 (THREES hurdle model) implemented — two-stage architecture with isotonic-calibrated classifier and positive-only quantile models.
+- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration) pending. C3 (THREES hurdle model) failed. C4 (Truncated NegBin) implemented. C5 (THREES multiclass PMF) implemented — XGBoost multi:softprob predicts 9-class PMF (0-8+ made threes), categorical sampling produces integer counts directly.
 - **Track D**: Deprioritized model items (pending recalibration).
 - **Track E**: Go-live pipeline — no-BL path shows positive ROI (+3%). E4 (daily injury pipeline) and E5 (paper trading infra) complete. E6 (scheduling) pending.
 
 **Prediction storage + query tool (2026-01-31):** Daily predictions and MC samples now persisted to PostgreSQL (`daily_predictions` + `daily_prediction_samples` tables). CLI query tool (`src/tools/query_player.py`) enables ad-hoc probability queries against stored distributions. Daily runner refactored: NBA API ScoreboardV2 for game discovery, `rapidapi_injuries` for injury filtering, MC samples for edge calculation, `ROW_NUMBER` snapshot ranking for line freshness.
 
-**Current state (2026-02-09):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260205_165808`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. **C4 THREES count model mu training fix** — Fixed critical bug where mu model was trained on observed values (truncated distribution) instead of untruncated mean. Applied truncation adjustment factor (1-p_zero) to training targets, reducing predicted mu from ~2.5 to correct ~1.66. Needs retraining to verify calibration improvement. **Training safety pattern added** — Training creates `_incomplete` suffix directory, renamed atomically after all artifacts saved. Inference job filters out incomplete directories. Prevents race condition when training and inference overlap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). **E6 Daily Pipeline Automation (2026-02-05):** Three frequency-separated job scripts created for cron scheduling — `daily_stats_job.py` (once daily), `lines_job.py` (multiple times daily), `inference_job.py` (pre-game). Cron template at `cron/gameflow_crontab.txt`.
+**Current state (2026-02-10):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260205_165808`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. **C5 THREES multiclass PMF model** — New XGBoost multi:softprob model predicts 9-class PMF (0-8+ made threes). Categorical sampling produces integer counts directly. Replaces C3/C4 approaches which failed due to quantile-to-discrete mapping issues. **Training safety pattern added** — Training creates `_incomplete` suffix directory, renamed atomically after all artifacts saved. Inference job filters out incomplete directories. Prevents race condition when training and inference overlap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). **E6 Daily Pipeline Automation (2026-02-05):** Three frequency-separated job scripts created for cron scheduling — `daily_stats_job.py` (once daily), `lines_job.py` (multiple times daily), `inference_job.py` (pre-game). Cron template at `cron/gameflow_crontab.txt`. **Dashboard History & Performance Pages (2026-02-10):** Added `/history` and `/performance` routes with full UI components for viewing betting history and performance metrics.
 
 **Backtesting fixes (2026-02-07):**
 1. **Incomplete model directory validation:** `find_latest_model_dir()` in `run_sweep.py` now skips incomplete training runs (directories without `minutes_model.joblib`). Prevents silent failures when an aborted training run is selected.

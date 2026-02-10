@@ -5,6 +5,98 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-10 Session 21] — THREES Multiclass Model (C5) & Dashboard History/Performance Pages (G8)
+
+### Added
+
+- **C5 THREES Multiclass PMF Model** (`src/models/threes_multiclass.py`):
+  - `ThreesMulticlassModel` class (~350 lines) — XGBoost multiclass classifier
+  - Predicts 9-class PMF: P(threes=0), P(threes=1), ..., P(threes=8+)
+  - `objective='multi:softprob'`, `num_class=9`
+  - Classes 0-7 are exact counts, class 8 represents "8 or more" (capped)
+  - `fit()`, `predict_proba()`, `sample()` methods
+  - `save()` / `load()` for persistence
+  - Configuration via `ThreesMulticlassConfig` dataclass
+- **`tests/test_threes_multiclass.py`** — 25 unit tests covering:
+  - Model fitting and training
+  - PMF probability output validation
+  - Categorical sampling (integer outputs 0-8)
+  - Calibration evaluation
+  - Save/load roundtrip
+- **`_sample_threes_multiclass()` method** in `src/models/monte_carlo.py`:
+  - Uses PMF probabilities for weighted random choice
+  - Produces integer counts directly (0, 1, 2, ..., 8)
+  - Called when multiclass model is detected
+- **`_calibrate_multiclass_model()` method** in `src/models/train_pipeline.py`:
+  - Evaluates per-class accuracy diagnostics
+  - Computes quantile coverage from cumulative PMF
+- **Dashboard History Page** (`dashboard/src/app/history/page.tsx`):
+  - Status filter tabs: All, Won, Lost, Push
+  - Summary stats bar: total bets, wins, losses, win rate, P&L
+  - Fetches from `paper_bets` table (last 30 days)
+- **Dashboard Performance Page** (`dashboard/src/app/performance/page.tsx`):
+  - KPI cards: Current Bankroll, Total P&L, Overall ROI, Win Rate
+  - Bankroll over time chart (Recharts AreaChart with green/red trend)
+  - Performance by stat breakdown table
+  - Fetches from `paper_trading_daily_log` and `paper_bets` tables
+- **History Components** (`dashboard/src/components/history/`):
+  - `BetCard.tsx` — Individual bet display with player, stat, line, actual, result, P&L
+  - `BetList.tsx` — Grid container for bet cards
+  - `HistoryFilters.tsx` — Status filter tab buttons
+  - `HistorySummary.tsx` — Summary stats bar with win/loss counts
+- **Performance Components** (`dashboard/src/components/performance/`):
+  - `KPICard.tsx` — Metric card with label, value, optional trend indicator
+  - `BankrollChart.tsx` — Recharts AreaChart with gradient fill
+  - `StatBreakdown.tsx` — Per-stat performance table
+- **Auth Callback Route** (`dashboard/src/app/auth/callback/route.ts`):
+  - Handles email confirmation redirects from Supabase
+  - Exchanges code for session, redirects to home or login
+
+### Changed
+
+- **`src/models/quantile_trainer.py`:**
+  - Added imports for `ThreesMulticlassModel`, `ThreesMulticlassConfig`
+  - Updated `train_rate_models()` to detect multiclass model option
+  - Updated `save_all()` / `load_all()` for multiclass artifacts
+- **`src/models/monte_carlo.py`:**
+  - Added `_has_threes_multiclass_model()` detection method
+  - Added `_sample_threes_multiclass()` for PMF-based sampling
+  - Updated prediction logic to route threes through multiclass model
+- **`src/models/train_pipeline.py`:**
+  - Added `_calibrate_multiclass_model()` for C5 evaluation
+  - Updated calibration flow to check for multiclass model before C4 count model
+- **`dashboard/src/types/predictions.ts`:**
+  - Added `BetStatus` type and `PaperBet` interface
+  - Added `DailyPerformance` interface for performance page
+  - Added `StatPerformance` interface for stat breakdown
+
+### Fixed
+
+- **XGBoost `best_iteration` AttributeError** in `threes_multiclass.py`:
+  - `best_iteration` is only set when early stopping triggers
+  - Added try/except to fall back to `n_estimators` when not set
+- **XGBoost `use_label_encoder` deprecation** in `threes_multiclass.py`:
+  - Removed deprecated parameter from XGBClassifier instantiation
+
+### Test Results
+
+- 570 tests passed, 0 failures
+
+### Technical Notes
+
+**Why C5 Multiclass vs C4 Truncated NegBin:**
+- Discrete outcomes (0, 1, 2, ... made threes) are naturally categorical
+- XGBoost multi:softprob directly outputs calibrated class probabilities
+- No quantile-to-PMF or count distribution conversion needed
+- Categorical sampling is simpler and more direct than inverse CDF
+
+**Artifacts (C5 architecture):**
+- `threes_multiclass_model.joblib` — XGBoost multiclass model
+- `threes_multiclass_meta.json` — Feature names, class count, config
+- `threes_is_hurdle.json` — Flag file with `model_type: "multiclass"`
+
+---
+
 ## [2026-02-09 Session 20] — Next.js Dashboard (G1, G4, G5 partial, G7)
 
 ### Added
