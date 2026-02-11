@@ -39,6 +39,7 @@ GameFlowData is a data-intensive application that ingests raw NBA game statistic
 ```
 GameFlowData/
 ├── src/                        # Main source code
+│   ├── config/                 # Configuration (stat_config.py)
 │   ├── db/                     # Database connection layer
 │   ├── scrapers/               # Data ingestion (13 modules)
 │   ├── processing/             # Data pipeline: linking, averages, backfill
@@ -67,6 +68,15 @@ GameFlowData/
 ---
 
 ## System Components
+
+### 0. Configuration (`src/config/`)
+
+**`stat_config.py`** — Per-stat configuration for betting parameters.
+- `StatConfig` dataclass — per-stat settings (enabled, edge_threshold, bl_tau)
+- `StatConfigSet` container — global defaults with per-stat overrides
+- `parse_stat_param()` helper — parses CLI arguments like `"pts=0.10 reb=0.07"`
+- Supports CLI format: `--edge-threshold pts=0.10 reb=0.07 ast=0.15` or global `--edge-threshold 0.05`
+- Used by backtesting harness, bet simulator, and paper trading
 
 ### 1. Database Layer (`src/db/`)
 
@@ -273,11 +283,11 @@ A simulation environment to validate betting strategies.
 
 | Module | Purpose |
 |--------|---------|
-| `backtest_harness.py` | Core engine — day-by-day historical replay with blind predictions. `BacktestResult` dataclass. Integrates optional BL blending in `_calculate_edges()`. |
-| `bet_simulator.py` | `Bet` and `BetOutcome` classes. `BetSide` enum (OVER/UNDER). P&L tracking per bet. Stores BL `posterior_prob` diagnostic. |
+| `backtest_harness.py` | Core engine — day-by-day historical replay with blind predictions. `BacktestResult` dataclass. Integrates optional BL blending in `_calculate_edges()`. Supports per-stat configuration via `StatConfigSet`. |
+| `bet_simulator.py` | `Bet` and `BetOutcome` classes. `BetSide` enum (OVER/UNDER). P&L tracking per bet. Stores BL `posterior_prob` diagnostic. Supports per-stat edge thresholds via `StatConfigSet`. |
 | `performance_metrics.py` | `PerformanceMetrics` dataclass — ROI, hit rate, Sharpe ratio, drawdown, Brier score. |
-| `run_backtest.py` | CLI entry point. Accepts date range, model paths, output directory. |
-| `run_sweep.py` | Parameter sweep tool — runs Phase 0-1 once, then sweeps `(tau, edge_threshold, kelly_fraction)` grid. Saves per-config subdirectories compatible with `visualize_results.py`. |
+| `run_backtest.py` | CLI entry point. Accepts date range, model paths, output directory. Supports per-stat edge thresholds and BL tau via `nargs="+"` format. |
+| `run_sweep.py` | Parameter sweep tool — runs Phase 0-1 once, then sweeps `(tau, edge_threshold, kelly_fraction)` grid. Saves per-config subdirectories compatible with `visualize_results.py`. Supports `StatConfigSet` for per-stat configuration. |
 | `visualize_results.py` | Self-contained HTML dashboard: bankroll growth chart, daily P&L bars, metrics summary cards, enriched bet log table (player names/teams from DB), other bookmaker lines comparison. Sortable/filterable via vanilla JS. |
 
 **Key Capabilities:**
@@ -580,6 +590,18 @@ python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD --bl-
 python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD --allowed-bets pts:under reb:over
 python src/backtesting/visualize_results.py --results-dir backtest_results/
 
+# Per-stat edge thresholds (different minimums per stat)
+python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD \
+    --edge-threshold pts=0.10 reb=0.07 ast=0.15
+
+# Per-stat BL tau (use "none" to disable BL for a stat)
+python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD \
+    --bl-tau pts=0.05 reb=0.10 ast=none
+
+# Mixed: global default + per-stat overrides
+python src/backtesting/run_backtest.py --start YYYY-MM-DD --end YYYY-MM-DD \
+    --edge-threshold 0.05 pts=0.10
+
 # Parameter sweep (BL tau × edge threshold × Kelly fraction)
 python src/backtesting/run_sweep.py \
     --start YYYY-MM-DD --end YYYY-MM-DD \
@@ -632,8 +654,11 @@ python src/paper_trading/place_bets.py --date 2026-02-04
 # Dry-run to see bets without placing
 python src/paper_trading/place_bets.py --date 2026-02-04 --dry-run
 
-# Custom edge threshold
+# Custom edge threshold (global)
 python src/paper_trading/place_bets.py --date 2026-02-04 --edge-threshold 0.08
+
+# Per-stat edge thresholds (different minimums per stat)
+python src/paper_trading/place_bets.py --date 2026-02-04 --edge-threshold pts=0.10 reb=0.07 ast=0.15
 
 # Resolve bets after games complete
 python src/paper_trading/resolve_bets.py --date 2026-02-04
@@ -731,3 +756,9 @@ See `ACTIONITEMS.md` for full details.
 4. **Daily runner recency filter:** Added 30-day cutoff filter to `_get_players_for_games()` to exclude retired players (e.g., Shaquille O'Neal) from predictions.
 
 **Impact:** Models will now train and predict with current-game features instead of stale one-game-behind features. Requires model retraining to benefit from fix.
+
+**Per-stat configuration system (2026-02-10):** Added `src/config/stat_config.py` module enabling different edge thresholds and BL tau values for each stat type (pts, reb, ast). Backtesting showed REB performs best (+7.9% ROI) while AST is marginal — per-stat tuning allows tighter thresholds on weaker stats and looser on stronger ones.
+1. **New module:** `StatConfig` dataclass for per-stat settings, `StatConfigSet` container with global fallbacks and CLI parsing via `from_cli_args()`.
+2. **CLI format:** `--edge-threshold pts=0.10 reb=0.07 ast=0.15` for per-stat, or `--edge-threshold 0.05` for global (backward compatible).
+3. **Files updated:** `bet_simulator.py`, `backtest_harness.py`, `run_backtest.py`, `run_sweep.py`, `paper_trader.py`, `place_bets.py` now accept `StatConfigSet`.
+4. **Tests:** 30 new tests in `tests/test_stat_config.py`. All 570 tests pass.

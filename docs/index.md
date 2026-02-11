@@ -1,5 +1,8 @@
 # Documentation Index
 
+## Configuration
+- [Stat Config](stat_config_documentation.md) - Per-stat configuration for edge thresholds and BL tau values.
+
 ## Scrapers
 - [Game Lines Scraper](game_lines_scraper_documentation.md) - Historical odds for moneyline, spreads, totals.
 - [Player Prop Scraper](player_prop_scraper_documentation.md) - Historical player props snapshots.

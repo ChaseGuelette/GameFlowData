@@ -58,11 +58,108 @@ const formatOdds = (odds: number): string => {
   return odds >= 0 ? `+${odds}` : `${odds}`
 }
 
+// Convert American odds to implied probability
+const oddsToImpliedProb = (odds: number): number => {
+  if (odds > 0) {
+    return 100 / (odds + 100)
+  } else {
+    return Math.abs(odds) / (Math.abs(odds) + 100)
+  }
+}
+
+// Estimate probability of Under X using quantile interpolation
+const estimateUnderProb = (
+  line: number,
+  q10: number,
+  q25: number,
+  q50: number,
+  q75: number,
+  q90: number
+): number => {
+  // Quantile points: (value, probability)
+  const points = [
+    { val: q10, prob: 0.10 },
+    { val: q25, prob: 0.25 },
+    { val: q50, prob: 0.50 },
+    { val: q75, prob: 0.75 },
+    { val: q90, prob: 0.90 },
+  ]
+
+  // If line is below q10, extrapolate (very likely under)
+  if (line <= q10) return 0.05
+  // If line is above q90, extrapolate (very unlikely under)
+  if (line >= q90) return 0.95
+
+  // Find the two quantiles that bracket the line
+  for (let i = 0; i < points.length - 1; i++) {
+    if (line >= points[i].val && line <= points[i + 1].val) {
+      // Linear interpolation
+      const range = points[i + 1].val - points[i].val
+      if (range === 0) return points[i].prob
+      const fraction = (line - points[i].val) / range
+      return points[i].prob + fraction * (points[i + 1].prob - points[i].prob)
+    }
+  }
+
+  return 0.5 // Fallback
+}
+
+// Calculate Kelly stake as fraction of bankroll
+const calculateKelly = (modelProb: number, odds: number, kellyFraction: number): number => {
+  if (odds === 0 || modelProb <= 0 || modelProb >= 1) return 0
+
+  // Convert to decimal odds (b = net fractional odds)
+  const b = odds > 0 ? odds / 100 : 100 / Math.abs(odds)
+  const q = 1 - modelProb
+
+  // Kelly formula: f = (p * b - q) / b = (p * (b + 1) - 1) / b
+  const f = (modelProb * (b + 1) - 1) / b
+
+  if (f <= 0) return 0
+
+  // Apply Kelly fraction and cap at 25% max
+  return Math.min(f * kellyFraction, 0.25)
+}
+
+// Kelly fraction options
+const KELLY_OPTIONS = [
+  { value: 0.125, label: '1/8 Kelly (Conservative)' },
+  { value: 0.25, label: '1/4 Kelly (Recommended)' },
+  { value: 0.5, label: '1/2 Kelly (Aggressive)' },
+  { value: 1.0, label: 'Full Kelly (Max Risk)' },
+]
+
 export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
   const [history, setHistory] = useState<PlayerGameStats[]>([])
   const [bookmakerLines, setBookmakerLines] = useState<BookmakerLine[]>([])
   const [loading, setLoading] = useState(true)
   const [linesLoading, setLinesLoading] = useState(true)
+
+  // Bankroll and Kelly settings (persisted to localStorage)
+  const [bankroll, setBankroll] = useState<number>(1000)
+  const [kellyFraction, setKellyFraction] = useState<number>(0.25)
+
+  // Load settings from localStorage on mount
+  useEffect(() => {
+    const savedBankroll = localStorage.getItem('betting_bankroll')
+    const savedKelly = localStorage.getItem('betting_kelly_fraction')
+    if (savedBankroll) setBankroll(parseFloat(savedBankroll))
+    if (savedKelly) setKellyFraction(parseFloat(savedKelly))
+  }, [])
+
+  // Save bankroll to localStorage when changed
+  const handleBankrollChange = (value: string) => {
+    const num = parseFloat(value) || 0
+    setBankroll(num)
+    localStorage.setItem('betting_bankroll', num.toString())
+  }
+
+  // Save Kelly fraction to localStorage when changed
+  const handleKellyChange = (value: string) => {
+    const num = parseFloat(value)
+    setKellyFraction(num)
+    localStorage.setItem('betting_kelly_fraction', num.toString())
+  }
 
   useEffect(() => {
     async function fetchHistory() {
@@ -137,20 +234,13 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
           }
         }
 
-        // Filter to complete lines, prioritize matching prop_line, sort by bookmaker
+        // Filter to complete lines only
         const allLines = Array.from(lineMap.values())
           .filter(l => l.over_odds !== 0 && l.under_odds !== 0)
 
-        // Prioritize lines matching the prop_line
-        const matchingLines = allLines.filter(l => l.line === prediction.prop_line)
-        const otherLines = allLines.filter(l => l.line !== prediction.prop_line)
-
-        // Show matching lines first, then other lines (limited to 8 total)
-        const lines = [...matchingLines, ...otherLines]
-          .slice(0, 8)
-          .sort((a, b) => a.bookmaker.localeCompare(b.bookmaker))
-
-        setBookmakerLines(lines)
+        // Note: We'll sort by line value in the render based on bet direction
+        // For now, just pass all lines - sorting happens in display
+        setBookmakerLines(allLines)
       }
       setLinesLoading(false)
     }
@@ -292,34 +382,137 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
 
         {/* Sportsbook Lines */}
         <div className="p-6 border-b border-slate-700">
-          <h3 className="text-lg font-semibold text-slate-50 mb-4">Sportsbook Lines</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-slate-50">Sportsbook Lines</h3>
+            <div className="text-sm text-slate-400">
+              Betting: <span className={isOverBet ? 'text-green-400' : 'text-red-400'}>{direction} {prediction.prop_line}</span>
+            </div>
+          </div>
           {linesLoading ? (
             <div className="text-slate-400 text-sm">Loading lines...</div>
           ) : bookmakerLines.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {bookmakerLines.map((line, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between bg-slate-700/50 rounded px-3 py-2"
-                >
-                  <div>
-                    <span className="text-slate-200 font-medium">{formatBookmaker(line.bookmaker)}</span>
-                    <span className="text-slate-400 ml-2 text-sm">{line.line}</span>
-                  </div>
-                  <div className="flex gap-3 text-sm">
-                    <span className={`${isOverBet ? 'text-green-400 font-medium' : 'text-slate-400'}`}>
-                      O {formatOdds(line.over_odds)}
-                    </span>
-                    <span className={`${!isOverBet ? 'text-green-400 font-medium' : 'text-slate-400'}`}>
-                      U {formatOdds(line.under_odds)}
-                    </span>
-                  </div>
-                </div>
-              ))}
+            <div className="space-y-2">
+              {/* Calculate edge for each line and sort by best edge */}
+              {[...bookmakerLines]
+                .map((line) => {
+                  // Estimate model probability at this line using quantiles
+                  const underProb = estimateUnderProb(
+                    line.line,
+                    prediction.q10,
+                    prediction.q25,
+                    prediction.q50,
+                    prediction.q75,
+                    prediction.q90
+                  )
+                  const overProb = 1 - underProb
+
+                  // Get relevant odds and calculate edge
+                  const relevantOdds = isOverBet ? line.over_odds : line.under_odds
+                  const modelProb = isOverBet ? overProb : underProb
+                  const impliedProb = oddsToImpliedProb(relevantOdds)
+                  const lineEdge = modelProb - impliedProb
+
+                  return { ...line, modelProb, impliedProb, lineEdge, relevantOdds }
+                })
+                .sort((a, b) => b.lineEdge - a.lineEdge) // Best edge first
+                .slice(0, 10)
+                .map((line, i) => {
+                  const hasPositiveEdge = line.lineEdge > 0
+                  const isBestEdge = i === 0 && hasPositiveEdge
+
+                  return (
+                    <div
+                      key={i}
+                      className={`flex items-center justify-between rounded px-3 py-2 ${
+                        isBestEdge
+                          ? 'bg-green-900/40 border border-green-600/60'
+                          : hasPositiveEdge
+                            ? 'bg-green-900/20 border border-green-700/40'
+                            : 'bg-slate-700/30'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-200 font-medium">{formatBookmaker(line.bookmaker)}</span>
+                        <span className="text-sm text-slate-400">{line.line}</span>
+                        {isBestEdge && (
+                          <span className="text-xs bg-green-600/40 text-green-300 px-1.5 py-0.5 rounded font-medium">
+                            BEST
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-sm">
+                        <span className={hasPositiveEdge ? 'text-green-400 font-medium' : 'text-slate-400'}>
+                          {line.lineEdge >= 0 ? '+' : ''}{(line.lineEdge * 100).toFixed(1)}% edge
+                        </span>
+                        <span className={isOverBet ? 'text-green-400' : 'text-slate-400'}>
+                          O {formatOdds(line.over_odds)}
+                        </span>
+                        <span className="text-slate-500">/</span>
+                        <span className={!isOverBet ? 'text-green-400' : 'text-slate-400'}>
+                          U {formatOdds(line.under_odds)}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })}
             </div>
           ) : (
             <div className="text-slate-400 text-sm">No lines available</div>
           )}
+        </div>
+
+        {/* Bet Sizing Calculator */}
+        <div className="p-6 border-b border-slate-700">
+          <h3 className="text-lg font-semibold text-slate-50 mb-4">Bet Sizing</h3>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Bankroll ($)</label>
+              <input
+                type="number"
+                value={bankroll}
+                onChange={(e) => handleBankrollChange(e.target.value)}
+                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
+                min="0"
+                step="100"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Kelly Fraction</label>
+              <select
+                value={kellyFraction}
+                onChange={(e) => handleKellyChange(e.target.value)}
+                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
+              >
+                {KELLY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Recommended bet size */}
+          {(() => {
+            const bestOdds = isOverBet ? prediction.best_over_odds : prediction.best_under_odds
+            const kellyPct = calculateKelly(probability, bestOdds || -110, kellyFraction)
+            const recommendedBet = bankroll * kellyPct
+
+            return (
+              <div className="bg-slate-700/50 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-slate-400 text-sm">Recommended Bet</span>
+                  <span className="text-slate-400 text-sm">
+                    {(kellyPct * 100).toFixed(2)}% of bankroll
+                  </span>
+                </div>
+                <div className="text-2xl font-bold text-green-400">
+                  ${recommendedBet.toFixed(2)}
+                </div>
+                <div className="text-xs text-slate-500 mt-2">
+                  Based on {(probability * 100).toFixed(1)}% model probability at {formatOdds(bestOdds || -110)} odds
+                </div>
+              </div>
+            )
+          })()}
         </div>
 
         {/* Quantile Summary */}

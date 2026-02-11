@@ -5,6 +5,106 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-10 Session 23] — Per-Stat Configuration System
+
+### Added
+
+- **`src/config/stat_config.py`** — Per-stat configuration module:
+  - `StatConfig` dataclass — per-stat settings (stat, enabled, edge_threshold, bl_tau)
+  - `StatConfigSet` container — global defaults with per-stat overrides
+  - `parse_stat_param()` helper — parses CLI arguments like `"pts=0.10 reb=0.07"`
+  - `from_cli_args()` factory method for CLI integration
+  - `to_dict()` serialization for logging/debugging
+  - `get_edge_threshold(stat)`, `get_bl_tau(stat)`, `is_stat_enabled(stat)` getters with fallback logic
+- **`src/config/__init__.py`** — Package init with exports
+- **`tests/test_stat_config.py`** — 30 unit tests covering:
+  - Global value parsing
+  - Per-stat value parsing
+  - Mixed global + per-stat overrides
+  - "none" value handling (to disable BL for a stat)
+  - Case-insensitive stat names
+  - Error handling for invalid formats
+  - Serialization roundtrips
+
+### Changed
+
+- **`src/backtesting/bet_simulator.py`:**
+  - Added `stat_config: StatConfigSet | None` parameter to `BetSimulator.__init__()`
+  - Added `_get_edge_threshold(stat: str)` method for per-stat threshold lookup
+  - Modified `should_bet()` to accept `stat` parameter and use per-stat thresholds
+  - Modified `evaluate_predictions()` to pass stat type to `should_bet()`
+- **`src/backtesting/backtest_harness.py`:**
+  - Added `stat_config: StatConfigSet | None` parameter to `BacktestHarness.__init__()`
+  - Added `_stat_blenders: dict[str, BlackLittermanBlender]` for per-stat BL blenders
+  - Added `_get_blender_for_stat(stat: str)` method
+  - Modified `__post_init__` to create per-stat BL blenders when `stat_config` has per-stat tau values
+  - Modified `_calculate_edges()` to use per-stat blenders
+  - Passes `stat_config` to `BetSimulator`
+- **`src/backtesting/run_backtest.py`:**
+  - Changed `--edge-threshold` from `type=float` to `nargs="+"` for multiple values
+  - Changed `--bl-tau` from `type=float` to `nargs="+"` for multiple values
+  - Added `StatConfigSet.from_cli_args()` parsing in `main()`
+  - Passes `stat_config` to `BacktestHarness`
+- **`src/backtesting/run_sweep.py`:**
+  - Added `StatConfigSet` import
+  - Creates `StatConfigSet` from `SweepConfig` values
+  - Passes `stat_config` to `BacktestHarness` and `BetSimulator`
+- **`src/paper_trading/paper_trader.py`:**
+  - Added `stat_config: StatConfigSet | None` parameter to `PaperTrader.__init__()`
+  - Added `_get_edge_threshold(stat: str)` method
+  - Modified `select_bets()` to use per-stat edge thresholds
+- **`src/paper_trading/place_bets.py`:**
+  - Changed `--edge-threshold` from `type=float` to `nargs="+"` for multiple values
+  - Added `StatConfigSet.from_cli_args()` parsing in `main()`
+  - Passes `stat_config` to `PaperTrader`
+  - Logs per-stat thresholds at startup
+
+### Fixed
+
+- **`tests/test_run_backtest.py`:**
+  - Updated mock return values for `edge_threshold` from float `0.05` to list `["0.05"]`
+  - Affected tests: `test_main_runs_backtest_with_defaults`, `test_main_parses_allowed_bets`, `test_main_creates_timestamped_output_dir`
+
+### Test Results
+
+- 570 tests passed, 0 failures
+
+### Technical Notes
+
+**CLI Format Examples:**
+```bash
+# Backward compatible (global value)
+--edge-threshold 0.05
+
+# Per-stat values
+--edge-threshold pts=0.10 reb=0.07 ast=0.15
+
+# Mixed: global default + per-stat overrides
+--edge-threshold 0.05 pts=0.10
+
+# Per-stat BL tau with disable option
+--bl-tau pts=0.05 reb=0.10 ast=none
+```
+
+**Precedence Logic:**
+1. Per-stat value (if configured) → highest priority
+2. Global value (if set) → fallback
+3. Default value (0.05 for edge) → final fallback
+
+**Why Per-Stat Configuration:**
+Backtesting showed significant ROI differences between stats:
+- REB: +7.9% ROI (strongest)
+- PTS: Variable performance
+- AST: +3.2% ROI (marginal)
+
+Per-stat configuration allows:
+- Tighter edge thresholds on weaker stats (filter more aggressively)
+- Looser thresholds on stronger stats (capture more profitable bets)
+- Different BL tau values based on stat-specific calibration
+- Disabling BL entirely for specific stats that don't benefit
+
+---
+
 ## [2026-02-10 Session 22] — Archive THREES Model
 
 ### Removed

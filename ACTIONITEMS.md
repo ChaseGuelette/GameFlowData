@@ -1,5 +1,50 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-10 — Session 23)
+
+### What We Did
+
+**Implemented per-stat configuration system.** Added ability to set different edge thresholds and Black-Litterman tau values for each stat type (pts, reb, ast). Backtesting showed REB performs best (+7.9% ROI) while AST is marginal — per-stat tuning allows tighter thresholds on weaker stats and looser on stronger ones.
+
+**New files created:**
+- `src/config/__init__.py` — Package init
+- `src/config/stat_config.py` — Core dataclasses and CLI parsing (~230 lines)
+- `tests/test_stat_config.py` — 30 unit tests
+
+**Files modified:**
+- `src/backtesting/bet_simulator.py` — Added `stat_config` parameter and `_get_edge_threshold(stat)` method
+- `src/backtesting/backtest_harness.py` — Per-stat BL blenders and stat_config integration
+- `src/backtesting/run_backtest.py` — CLI parsing with `nargs="+"` for per-stat values
+- `src/backtesting/run_sweep.py` — StatConfigSet integration
+- `src/paper_trading/paper_trader.py` — Per-stat edge thresholds
+- `src/paper_trading/place_bets.py` — CLI parsing for per-stat edge thresholds
+- `tests/test_run_backtest.py` — Fixed mock values for new CLI format
+
+**CLI format:**
+```bash
+# Global (backward compatible)
+--edge-threshold 0.05
+
+# Per-stat
+--edge-threshold pts=0.10 reb=0.07 ast=0.15
+
+# Mixed (global default + overrides)
+--edge-threshold 0.05 pts=0.10
+
+# Per-stat BL tau (use "none" to disable)
+--bl-tau pts=0.05 reb=0.10 ast=none
+```
+
+**Tests:** 570 passed, 0 failures
+
+### Next Step
+
+1. **Run backtest with per-stat tuning** — Test REB=0.07, PTS=0.10, AST=0.15 configuration
+2. **Paper trade** — Begin daily paper trading with per-stat optimized thresholds
+3. **Dashboard improvements** — Add date range selector, mobile responsiveness
+
+---
+
 ## Session Summary (2026-02-10 — Session 22)
 
 ### What We Did
