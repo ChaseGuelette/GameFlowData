@@ -209,7 +209,7 @@ class TrainingOrchestrator:
             hyperparams["minutes"] = minutes_config.to_dict()
 
         # Tune Rate Models
-        for stat in ["pts", "reb", "ast", "threes"]:
+        for stat in ["pts", "reb", "ast"]:
             logger.info(f"Tuning {stat.upper()} Rate Model...")
             target = f"{stat}_per_min"
             rate_df = df[(df["actual_minutes"] >= 10) & (df[target].notna())].copy()
@@ -254,7 +254,7 @@ class TrainingOrchestrator:
         )
 
         # Rate Stats
-        for stat in ["pts", "reb", "ast", "threes"]:
+        for stat in ["pts", "reb", "ast"]:
             logger.info(f"Selecting {stat.upper()} features (per quantile)...")
             target = f"{stat}_per_min"
             rate_df = df[(df["actual_minutes"] >= 10) & (df[target].notna())].fillna(0)
@@ -276,18 +276,18 @@ class TrainingOrchestrator:
         # The modified PlayerPropsModelPipeline will respect these
         pipeline.minutes_features = feature_config["minutes_features"]
 
-        for stat in ["pts", "reb", "ast", "threes"]:
+        for stat in ["pts", "reb", "ast"]:
             pipeline.rate_features[stat] = feature_config[f"{stat}_rate_features"]
 
         # Extract hyperparams for each model if provided
         minutes_hyperparams = hyperparams.get("minutes") if hyperparams else None
         rate_hyperparams = (
-            {stat: hyperparams.get(stat) for stat in ["pts", "reb", "ast", "threes"]} if hyperparams else {}
+            {stat: hyperparams.get(stat) for stat in ["pts", "reb", "ast"]} if hyperparams else {}
         )
 
         # Train
         pipeline.train_minutes_model(df, hyperparams=minutes_hyperparams)
-        pipeline.train_rate_models(df, stats=["pts", "reb", "ast", "threes"], hyperparams=rate_hyperparams)
+        pipeline.train_rate_models(df, stats=["pts", "reb", "ast"], hyperparams=rate_hyperparams)
 
         return pipeline
 
@@ -334,36 +334,6 @@ class TrainingOrchestrator:
                 name=f"{stat}_hurdle",
             )
             all_reports[stat] = reports
-
-        # THREES models (C5 multiclass or C4 count architecture)
-        if "actual_threes" in df.columns:
-            mask = (df["actual_minutes"] >= 10) & (df["actual_threes"].notna())
-
-            # Check for multiclass model first (C5 architecture)
-            if hasattr(pipeline, 'threes_multiclass_model') and pipeline.threes_multiclass_model is not None:
-                logger.info("Evaluating THREES Multiclass Model (C5)...")
-                reports = self._calibrate_multiclass_model(
-                    pipeline=pipeline,
-                    df=df,
-                    actual_col="actual_threes",
-                    filter_mask=mask,
-                    name="threes_multiclass",
-                )
-                all_reports["threes"] = reports
-            # Fall back to count model (C4 architecture)
-            elif hasattr(pipeline, 'threes_count_model') and pipeline.threes_count_model is not None:
-                logger.info("Evaluating THREES Count Model (C4)...")
-                reports = self._calibrate_count_model(
-                    pipeline=pipeline,
-                    df=df,
-                    actual_col="actual_threes",
-                    filter_mask=mask,
-                    name="threes_count",
-                )
-                all_reports["threes"] = reports
-        else:
-            if hasattr(pipeline, 'threes_multiclass_model') or hasattr(pipeline, 'threes_count_model'):
-                logger.warning("THREES model present but 'actual_threes' column missing from data")
 
         # Check for failures
         all_gaps = [r["gap"] for model_reports in all_reports.values() for r in model_reports]
@@ -459,153 +429,6 @@ class TrainingOrchestrator:
 
         return reports
 
-    def _calibrate_count_model(self, pipeline, df, actual_col, filter_mask, name) -> list[dict]:
-        """
-        Evaluate calibration for a count model (C4 threes).
-
-        Uses Monte Carlo sampling to generate quantile predictions from the
-        zero classifier + truncated NegBin count model, then evaluates coverage.
-        """
-        filtered = df[filter_mask].copy().reset_index(drop=True)
-        y_actual = filtered[actual_col].values.astype(int)
-
-        if len(filtered) == 0:
-            logger.warning(f"No validation data for {name}")
-            return []
-
-        # Get p_zero predictions
-        zero_clf = pipeline.threes_zero_classifier
-        zero_cal = pipeline.threes_zero_calibrator
-        count_model = pipeline.threes_count_model
-        zero_feature_names = pipeline.threes_zero_feature_names
-
-        # Get features for zero classifier
-        X_zero = filtered[zero_feature_names].fillna(0)
-        p_zero_raw = zero_clf.predict_proba(X_zero)[:, 1]
-        p_zero = zero_cal.predict(p_zero_raw.reshape(-1, 1)).flatten()
-
-        # Analyze zero prediction accuracy
-        actual_zeros = (y_actual == 0)
-        predicted_zeros = p_zero > 0.5
-        zero_accuracy = (actual_zeros == predicted_zeros).mean()
-        actual_zero_rate = actual_zeros.mean()
-        pred_zero_rate = p_zero.mean()
-
-        logger.info(f"  Zero prediction: accuracy={zero_accuracy:.3f}, actual_rate={actual_zero_rate:.3f}, pred_rate={pred_zero_rate:.3f}")
-
-        # Get features for count model and predict params
-        X_count = filtered[count_model.feature_names].fillna(0)
-        mu, alpha = count_model.predict_params(X_count)
-
-        # For each sample, compute quantile thresholds via inverse CDF
-        # Q(p) for truncated NegBin conditioned on p_zero
-        n_samples = len(filtered)
-        quantile_preds = {q: np.zeros(n_samples) for q in [0.10, 0.25, 0.50, 0.75, 0.90]}
-
-        for i in range(n_samples):
-            pz = p_zero[i]
-            m = mu[i]
-            a = alpha[i]
-
-            for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
-                # If q <= p_zero, prediction is 0
-                if q <= pz:
-                    quantile_preds[q][i] = 0
-                else:
-                    # Map q to the positive distribution
-                    # q_pos = (q - p_zero) / (1 - p_zero)
-                    q_pos = (q - pz) / (1 - pz + 1e-9)
-                    q_pos = np.clip(q_pos, 0.001, 0.999)
-
-                    # Inverse CDF of truncated NegBin
-                    from scipy.stats import nbinom
-                    n = 1.0 / (a + 1e-6)
-                    p = n / (n + m + 1e-6)
-                    p = np.clip(p, 0.001, 0.999)
-
-                    p_zero_nb = nbinom.pmf(0, n, p)
-                    adjusted_q = q_pos * (1 - p_zero_nb) + p_zero_nb
-                    adjusted_q = np.clip(adjusted_q, 0.001, 0.999)
-
-                    quantile_preds[q][i] = max(1, int(nbinom.ppf(adjusted_q, n, p)))
-
-        reports = []
-        for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
-            coverage = (y_actual <= quantile_preds[q]).mean()
-            gap = coverage - q
-
-            status = "OK" if abs(gap) <= self.CALIBRATION_TOLERANCE else f"GAP {gap:+.3f}"
-            logger.info(f"  Q{q:.2f}: Act={coverage:.3f} [{status}]")
-
-            reports.append({"quantile": q, "coverage": coverage, "gap": gap})
-
-        return reports
-
-    def _calibrate_multiclass_model(self, pipeline, df, actual_col, filter_mask, name) -> list[dict]:
-        """
-        Evaluate calibration for the multiclass THREES model (C5 architecture).
-
-        For discrete multiclass distributions, per-class calibration (predicted vs actual
-        frequency per class) is more meaningful than quantile coverage, which breaks down
-        when P(class 0) >> quantile level (e.g., P(0)=35% makes Q10 coverage always ~35%).
-
-        Returns per-class gaps instead of quantile gaps for the calibration pass/fail check.
-        """
-        filtered = df[filter_mask].copy().reset_index(drop=True)
-        y_actual = filtered[actual_col].values.astype(int)
-
-        if len(filtered) == 0:
-            logger.warning(f"No validation data for {name}")
-            return []
-
-        model = pipeline.threes_multiclass_model
-        feature_names = model.feature_names
-
-        # Get features and predict probabilities
-        X = filtered[feature_names].fillna(0)
-        probs = model.predict_proba(X)  # (n_samples, 9)
-
-        # Bin actuals to match model classes (0-8+)
-        y_binned = np.clip(y_actual, 0, 8)
-
-        # Per-class calibration analysis (PRIMARY METRIC for discrete distributions)
-        logger.info(f"  Per-class calibration (used for pass/fail):")
-        reports = []
-        for k in range(9):
-            predicted_prob = probs[:, k].mean()
-            actual_freq = (y_binned == k).mean()
-            gap = actual_freq - predicted_prob  # positive = model underpredicts this class
-
-            status = "OK" if abs(gap) <= self.CALIBRATION_TOLERANCE else f"GAP {gap:+.3f}"
-            logger.info(f"    Class {k}: pred={predicted_prob:.3f}, actual={actual_freq:.3f} [{status}]")
-
-            # Return per-class gaps (these will be used for worst_gap calculation)
-            reports.append({
-                "class": k,
-                "predicted": float(predicted_prob),
-                "actual": float(actual_freq),
-                "gap": float(gap),
-            })
-
-        avg_gap = np.mean([abs(r["gap"]) for r in reports])
-        logger.info(f"  Average per-class gap: {avg_gap:.3f}")
-
-        # Also log quantile coverage for informational purposes (NOT used for pass/fail)
-        # This metric is misleading for discrete distributions with large point masses
-        cdf = np.cumsum(probs, axis=1)  # (n_samples, 9)
-        logger.info(f"  Quantile coverage (informational only - NOT used for calibration pass/fail):")
-        for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
-            quantile_preds = (cdf >= q).argmax(axis=1)
-            coverage = (y_binned <= quantile_preds).mean()
-            q_gap = coverage - q
-            # Explain why Q10 gap is large: it equals ~P(0) - 0.10
-            if q == 0.10:
-                logger.info(f"    Q{q:.2f}: coverage={coverage:.3f}, gap={q_gap:+.3f} (expected: ~P(0)={probs[:, 0].mean():.3f})")
-            else:
-                logger.info(f"    Q{q:.2f}: coverage={coverage:.3f}, gap={q_gap:+.3f}")
-
-        return reports
-
     def _save_calibration_report(self, reports: dict, suffix: str = ""):
         filename = f"calibration_report{suffix}.json" if suffix else "calibration_report.json"
         with open(self.run_dir / filename, "w") as f:
@@ -619,16 +442,14 @@ class TrainingOrchestrator:
         Evaluate end-to-end calibration: Monte Carlo (minutes × rate) vs actual totals.
 
         This catches calibration drift from multiplying two uncertain quantities.
-        Evaluates all trained stats including threes.
         """
         logger.info("\n=== Combined Calibration (Minutes × Rate → Total) ===")
 
-        # Evaluate all stats that have trained rate models (including hurdle and count models)
+        # Evaluate all stats that have trained rate models (including hurdle models)
         hurdle_models = getattr(pipeline, "hurdle_models", {})
-        has_count_model = hasattr(pipeline, 'threes_count_model') and pipeline.threes_count_model is not None
         eval_stats = [
-            s for s in ["pts", "reb", "ast", "threes"]
-            if s in pipeline.rate_models or s in hurdle_models or (s == "threes" and has_count_model)
+            s for s in ["pts", "reb", "ast"]
+            if s in pipeline.rate_models or s in hurdle_models
         ]
 
         # Filter stats to only those with actual columns in the data
@@ -766,7 +587,7 @@ class TrainingOrchestrator:
 
         correlations = {}
 
-        for stat in ["pts", "reb", "ast", "threes"]:
+        for stat in ["pts", "reb", "ast"]:
             rate_col = f"{stat}_per_min"
             if rate_col not in analysis_df.columns:
                 continue

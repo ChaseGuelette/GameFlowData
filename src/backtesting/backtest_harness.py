@@ -443,7 +443,6 @@ class BacktestHarness:
             "pts": "player_points",
             "reb": "player_rebounds",
             "ast": "player_assists",
-            "threes": "player_threes",
         }
         markets = [stat_to_market[s] for s in self.stats if s in stat_to_market]
 
@@ -512,7 +511,6 @@ class BacktestHarness:
             "pts": "player_points",
             "reb": "player_rebounds",
             "ast": "player_assists",
-            "threes": "player_threes",
         }
         markets = [stat_to_market[s] for s in self.stats if s in stat_to_market]
 
@@ -632,7 +630,6 @@ class BacktestHarness:
             "player_points": "pts",
             "player_rebounds": "reb",
             "player_assists": "ast",
-            "player_threes": "threes",
         }
         lines_df = lines_df.copy()
         lines_df["stat"] = lines_df["market_key"].map(market_to_stat)
@@ -793,8 +790,7 @@ class BacktestHarness:
                 game_id,
                 pts,
                 reb,
-                ast,
-                fg3m as threes
+                ast
             FROM player_game_stats
             WHERE game_date >= :start_date
               AND game_date <= :end_date
@@ -810,7 +806,7 @@ class BacktestHarness:
 
         melted = df.melt(
             id_vars=["player_id", "game_id"],
-            value_vars=["pts", "reb", "ast", "threes"],
+            value_vars=["pts", "reb", "ast"],
             var_name="stat",
             value_name="actual_value",
         )
@@ -857,7 +853,7 @@ def load_model_pipeline(model_path: str) -> dict:
     }
 
     # Load rate models
-    for stat in ["pts", "reb", "ast", "threes"]:
+    for stat in ["pts", "reb", "ast"]:
         model_file = path / f"{stat}_rate_model.joblib"
         if model_file.exists():
             pipeline["rate_models"][stat] = joblib.load(model_file)

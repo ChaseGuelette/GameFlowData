@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-10 Session 22] — Archive THREES Model
+
+### Removed
+
+- **THREES (3-pointer) model archived** due to poor market coverage and insufficient betting volume:
+  - Only 50% of predictions had odds available (sportsbooks don't offer 3PT props for many players)
+  - Generated only 2 bets out of 78 total in backtesting
+  - Market reality issue, not a code bug — archived for potential future use
+
+### Archived (moved to `archive/threes_model/`)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/models/threes_multiclass.py` | 377 | Core C5 multiclass model |
+| `tests/test_threes_multiclass.py` | 370 | Test suite |
+| `scripts/validate_threes_negbin.py` | 322 | C4 validation script |
+| `scripts/test_threes_global_params.py` | 154 | C4 diagnostic |
+| `scripts/test_threes_distribution.py` | 113 | C4 diagnostic |
+| `.session/specs/C4_threes_count_model.md` | 425 | Spec document |
+
+### Changed
+
+- **`src/models/train_pipeline.py`:**
+  - Removed "threes" from stat loops
+  - Removed `_calibrate_count_model()` method
+  - Removed `_calibrate_multiclass_model()` method
+  - Updated calibration evaluation to exclude threes
+- **`src/models/monte_carlo.py`:**
+  - Removed "threes" from DEFAULT_VARIANCE_INFLATION
+  - Removed "threes" from DEFAULT_CORRELATION_CONFIG
+  - Removed THREES sampling methods
+  - Removed hurdle model infrastructure
+  - Simplified predict() and predict_batch() methods
+- **`src/models/quantile_trainer.py`:**
+  - Removed `RATE_FEATURES_THREES` import
+  - Removed "threes" from STAT_FEATURES mapping
+  - Removed `HurdleQuantileModel` class
+  - Removed `train_hurdle_model()` function
+  - Removed `_train_threes_count_model()` method
+  - Simplified `save_all()` and `load_all()` methods
+- **`src/backtesting/backtest_harness.py`:**
+  - Removed "threes" from stat_to_market mappings
+  - Removed "threes" from SQL actuals query
+  - Removed "threes" from rate model loading
+
+### Kept (low cost, future optionality)
+
+- Scraper market collection for `player_threes` (minimal API credits)
+- Feature columns in `feature_store.py` (no harm, enables future re-add)
+
+---
+
 ## [2026-02-10 Session 21] — THREES Multiclass Model (C5) & Dashboard History/Performance Pages (G8)
 
 ### Added

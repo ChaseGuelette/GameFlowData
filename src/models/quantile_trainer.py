@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -18,7 +17,6 @@ from .feature_store import (
     RATE_FEATURES_AST,
     RATE_FEATURES_PTS,
     RATE_FEATURES_REB,
-    RATE_FEATURES_THREES,
 )
 
 
@@ -64,7 +62,6 @@ STAT_FEATURES = {
     "pts": RATE_FEATURES_PTS,
     "reb": RATE_FEATURES_REB,
     "ast": RATE_FEATURES_AST,
-    "threes": RATE_FEATURES_THREES,
 }
 
 
@@ -345,352 +342,6 @@ class QuantileModelSuite:
         return suite
 
 
-@dataclass
-class HurdleQuantileModel:
-    """
-    Two-stage hurdle model for zero-inflated distributions (e.g., THREES).
-
-    Stage 1: Binary classifier predicts P(stat = 0)
-    Stage 2: Quantile regression on positive samples only
-
-    Combined inference uses: if q <= p_zero, return 0; else interpolate positive quantiles.
-    """
-
-    zero_classifier: xgb.XGBClassifier
-    zero_calibrator: IsotonicRegression
-    positive_quantile_models: dict[float, xgb.XGBRegressor]
-    quantiles: list[float]
-    feature_names: list[str]
-    positive_feature_names_per_quantile: dict[float, list[str]]
-    calibration_offsets: dict[float, float]  # Conformal offsets for positive models
-
-    @property
-    def all_feature_names(self) -> list[str]:
-        """Return union of all features needed for prediction."""
-        all_feats = set(self.feature_names)
-        for names in self.positive_feature_names_per_quantile.values():
-            all_feats.update(names)
-        return sorted(all_feats)
-
-    def predict_p_zero(self, X: pd.DataFrame) -> np.ndarray:
-        """Predict calibrated probability of zero."""
-        X_clf = X[self.feature_names]
-        p_raw = self.zero_classifier.predict_proba(X_clf)[:, 1]
-        return self.zero_calibrator.predict(p_raw)
-
-    def predict_quantiles(self, X: pd.DataFrame) -> pd.DataFrame:
-        """
-        Predict quantiles combining both stages.
-
-        Returns DataFrame with columns ['q10', 'q25', 'q50', 'q75', 'q90'].
-        """
-        p_zero = self.predict_p_zero(X)
-        n = len(X)
-
-        results = {}
-        for q in self.quantiles:
-            preds = np.zeros(n)
-
-            for i in range(n):
-                if q <= p_zero[i]:
-                    preds[i] = 0.0
-                else:
-                    # Map q to the positive distribution
-                    adjusted_q = (q - p_zero[i]) / (1 - p_zero[i])
-                    preds[i] = self._interpolate_positive_quantile(X.iloc[[i]], adjusted_q)
-
-            results[f"q{int(q * 100):02d}"] = preds
-
-        result = pd.DataFrame(results)
-        return self._enforce_monotonicity(result)
-
-    def predict_positive_quantiles(self, X: pd.DataFrame) -> pd.DataFrame:
-        """
-        Predict raw quantiles from positive-only models (for MC sampling).
-
-        Unlike predict_quantiles(), this does NOT apply the p_zero adjustment.
-        Use this for Monte Carlo sampling where the Bernoulli draw handles
-        zero mass separately.
-
-        Returns DataFrame with columns ['q10', 'q25', 'q50', 'q75', 'q90'].
-        """
-        n = len(X)
-        results = {}
-
-        for q in self.quantiles:
-            q_features = self.positive_feature_names_per_quantile[q]
-            preds = self.positive_quantile_models[q].predict(X[q_features])
-            preds = preds + self.calibration_offsets.get(q, 0.0)
-            results[f"q{int(q * 100):02d}"] = np.maximum(preds, 0)
-
-        result = pd.DataFrame(results)
-        return self._enforce_monotonicity(result)
-
-    def _interpolate_positive_quantile(self, X: pd.DataFrame, target_q: float) -> float:
-        """Interpolate positive distribution quantile."""
-        # Clamp to valid range
-        target_q = np.clip(target_q, 0.001, 0.999)
-
-        # Find bracketing quantiles
-        lower_q = max((q for q in self.quantiles if q <= target_q), default=self.quantiles[0])
-        upper_q = min((q for q in self.quantiles if q >= target_q), default=self.quantiles[-1])
-
-        # Get predictions from positive models
-        lower_features = self.positive_feature_names_per_quantile[lower_q]
-        lower_val = self.positive_quantile_models[lower_q].predict(X[lower_features])[0]
-        lower_val += self.calibration_offsets.get(lower_q, 0.0)
-
-        if lower_q == upper_q:
-            return max(0.0, lower_val)
-
-        upper_features = self.positive_feature_names_per_quantile[upper_q]
-        upper_val = self.positive_quantile_models[upper_q].predict(X[upper_features])[0]
-        upper_val += self.calibration_offsets.get(upper_q, 0.0)
-
-        # Linear interpolation
-        weight = (target_q - lower_q) / (upper_q - lower_q)
-        result = lower_val + weight * (upper_val - lower_val)
-        return max(0.0, result)
-
-    def _enforce_monotonicity(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Ensure quantile predictions are monotonically increasing."""
-        quantile_cols = sorted(df.columns)
-        quantile_values = [int(c[1:]) / 100 for c in quantile_cols]
-
-        result = df.copy()
-        for idx in df.index:
-            values = df.loc[idx, quantile_cols].values
-            if np.all(np.diff(values) >= 0):
-                continue
-            ir = IsotonicRegression()
-            fixed = ir.fit_transform(quantile_values, values)
-            result.loc[idx, quantile_cols] = fixed.astype(np.float32)
-
-        return result
-
-    def save(self, directory: Path) -> None:
-        """Save all components to disk."""
-        directory = Path(directory)
-        joblib.dump(self.zero_classifier, directory / "threes_zero_classifier.joblib")
-        joblib.dump(self.zero_calibrator, directory / "threes_zero_calibrator.joblib")
-        joblib.dump(
-            {
-                "models": self.positive_quantile_models,
-                "feature_names_per_quantile": self.positive_feature_names_per_quantile,
-                "calibration_offsets": self.calibration_offsets,
-            },
-            directory / "threes_rate_model.joblib",
-        )
-        with open(directory / "threes_is_hurdle.json", "w") as f:
-            json.dump(
-                {
-                    "is_hurdle": True,
-                    "quantiles": self.quantiles,
-                    "feature_names": self.feature_names,
-                },
-                f,
-                indent=2,
-            )
-        print(f"Saved hurdle model to {directory}")
-
-    @classmethod
-    def load(cls, directory: Path) -> HurdleQuantileModel:
-        """Load from disk."""
-        directory = Path(directory)
-
-        # Check if this is a hurdle model
-        hurdle_flag_path = directory / "threes_is_hurdle.json"
-        if not hurdle_flag_path.exists():
-            raise FileNotFoundError(f"Not a hurdle model: {directory}")
-
-        with open(hurdle_flag_path) as f:
-            meta = json.load(f)
-
-        zero_clf = joblib.load(directory / "threes_zero_classifier.joblib")
-        zero_cal = joblib.load(directory / "threes_zero_calibrator.joblib")
-        rate_data = joblib.load(directory / "threes_rate_model.joblib")
-
-        return cls(
-            zero_classifier=zero_clf,
-            zero_calibrator=zero_cal,
-            positive_quantile_models=rate_data["models"],
-            quantiles=meta["quantiles"],
-            feature_names=meta["feature_names"],
-            positive_feature_names_per_quantile=rate_data["feature_names_per_quantile"],
-            calibration_offsets=rate_data.get("calibration_offsets", {}),
-        )
-
-    @classmethod
-    def is_hurdle_model(cls, directory: Path) -> bool:
-        """Check if a directory contains a hurdle model."""
-        return (Path(directory) / "threes_is_hurdle.json").exists()
-
-
-def train_hurdle_model(
-    df: pd.DataFrame,
-    feature_names: list[str],
-    feature_names_per_quantile: dict[float, list[str]],
-    config: QuantileModelConfig | None = None,
-) -> HurdleQuantileModel:
-    """
-    Train a hurdle model for zero-inflated THREES distribution.
-
-    Args:
-        df: Training data with 'threes_per_min' target and 'actual_minutes' filter column.
-        feature_names: List of feature names for the classifier.
-        feature_names_per_quantile: Dict mapping quantile -> feature list for positive models.
-        config: Training configuration.
-
-    Returns:
-        Trained HurdleQuantileModel.
-    """
-    config = config or QuantileModelConfig()
-
-    print("\n" + "=" * 60)
-    print("TRAINING THREES HURDLE MODEL")
-    print("=" * 60)
-
-    # Filter to valid rows
-    valid_mask = df["threes_per_min"].notna() & (df["actual_minutes"] >= 10)
-    df_valid = df.loc[valid_mask].copy()
-
-    # Compute union of all features
-    all_features = set(feature_names)
-    for feat_list in feature_names_per_quantile.values():
-        all_features.update(feat_list)
-
-    available_features = sorted([f for f in all_features if f in df_valid.columns])
-    X = df_valid[available_features].fillna(0)
-    y = df_valid["threes_per_min"]
-
-    # Create binary target: is_zero
-    is_zero = (y == 0).astype(int)
-    print(f"Total samples: {len(X):,}")
-    print(f"Zero samples: {is_zero.sum():,} ({is_zero.mean():.1%})")
-    print(f"Positive samples: {(~is_zero.astype(bool)).sum():,}")
-
-    # Split for validation (preserve temporal order)
-    X_train, X_val, y_train, y_val, is_zero_train, is_zero_val = train_test_split(
-        X, y, is_zero, test_size=config.val_fraction, shuffle=False
-    )
-
-    # =========================================================================
-    # Stage 1: Train zero classifier
-    # =========================================================================
-    print("\n--- Stage 1: Zero Classifier ---")
-    clf_features = [f for f in feature_names if f in X_train.columns]
-    print(f"Using {len(clf_features)} features")
-
-    zero_clf = xgb.XGBClassifier(
-        objective="binary:logistic",
-        n_estimators=config.n_estimators,
-        max_depth=config.max_depth,
-        learning_rate=config.learning_rate,
-        subsample=config.subsample,
-        colsample_bytree=config.colsample_bytree,
-        min_child_weight=config.min_child_weight,
-        random_state=config.random_state,
-        early_stopping_rounds=config.early_stopping_rounds,
-        n_jobs=-1,
-        eval_metric="logloss",
-    )
-
-    zero_clf.fit(
-        X_train[clf_features],
-        is_zero_train,
-        eval_set=[(X_val[clf_features], is_zero_val)],
-        verbose=False,
-    )
-
-    # Calibrate with isotonic regression
-    p_zero_raw_val = zero_clf.predict_proba(X_val[clf_features])[:, 1]
-    zero_calibrator = IsotonicRegression(out_of_bounds="clip")
-    zero_calibrator.fit(p_zero_raw_val, is_zero_val)
-
-    p_zero_cal_val = zero_calibrator.predict(p_zero_raw_val)
-    print(f"Raw classifier accuracy: {(p_zero_raw_val.round() == is_zero_val).mean():.3f}")
-    print(f"Mean p_zero (raw): {p_zero_raw_val.mean():.3f}, (calibrated): {p_zero_cal_val.mean():.3f}")
-    print(f"Actual zero rate (val): {is_zero_val.mean():.3f}")
-
-    # =========================================================================
-    # Stage 2: Train positive quantile models
-    # =========================================================================
-    print("\n--- Stage 2: Positive Quantile Models ---")
-    positive_mask_train = is_zero_train == 0
-    positive_mask_val = is_zero_val == 0
-
-    X_pos_train = X_train.loc[positive_mask_train]
-    y_pos_train = y_train.loc[positive_mask_train]
-    X_pos_val = X_val.loc[positive_mask_val]
-    y_pos_val = y_val.loc[positive_mask_val]
-
-    print(f"Positive training samples: {len(X_pos_train):,}")
-    print(f"Positive validation samples: {len(X_pos_val):,}")
-
-    positive_models = {}
-    calibration_offsets = {}
-    positive_feature_names_per_q = {}
-
-    for q in config.quantiles:
-        q_features = [f for f in feature_names_per_quantile.get(q, feature_names) if f in X_pos_train.columns]
-        positive_feature_names_per_q[q] = q_features
-        print(f"\nQuantile {q:.2f} ({len(q_features)} features)...")
-
-        model = xgb.XGBRegressor(
-            objective="reg:quantileerror",
-            quantile_alpha=q,
-            n_estimators=config.n_estimators,
-            max_depth=config.max_depth,
-            learning_rate=config.learning_rate,
-            subsample=config.subsample,
-            colsample_bytree=config.colsample_bytree,
-            min_child_weight=config.min_child_weight,
-            random_state=config.random_state,
-            early_stopping_rounds=config.early_stopping_rounds,
-            n_jobs=-1,
-        )
-
-        model.fit(
-            X_pos_train[q_features],
-            y_pos_train,
-            eval_set=[(X_pos_val[q_features], y_pos_val)],
-            verbose=False,
-        )
-
-        val_preds = model.predict(X_pos_val[q_features])
-        val_coverage = (y_pos_val <= val_preds).mean()
-        print(f"  Val coverage: {val_coverage:.3f} (target: {q:.2f})")
-
-        # Conformal recalibration for positive model
-        coverage_gap = abs(val_coverage - q)
-        if coverage_gap > 0.03:
-            residuals = y_pos_val.values - val_preds
-            delta = float(np.quantile(residuals, q))
-            calibration_offsets[q] = delta
-            recal_coverage = (y_pos_val <= (val_preds + delta)).mean()
-            print(f"  Recalibration: delta={delta:+.4f}, adjusted cov={recal_coverage:.3f}")
-        else:
-            calibration_offsets[q] = 0.0
-
-        positive_models[q] = model
-
-    # =========================================================================
-    # Create and return hurdle model
-    # =========================================================================
-    hurdle_model = HurdleQuantileModel(
-        zero_classifier=zero_clf,
-        zero_calibrator=zero_calibrator,
-        positive_quantile_models=positive_models,
-        quantiles=list(config.quantiles),
-        feature_names=clf_features,
-        positive_feature_names_per_quantile=positive_feature_names_per_q,
-        calibration_offsets=calibration_offsets,
-    )
-
-    print("\n--- Hurdle Model Training Complete ---")
-    return hurdle_model
-
-
 class PlayerPropsModelPipeline:
     """
     Complete pipeline for training minutes and rate models.
@@ -704,7 +355,6 @@ class PlayerPropsModelPipeline:
         # Model suites
         self.minutes_model: QuantileModelSuite | None = None
         self.rate_models: dict[str, QuantileModelSuite] = {}
-        self.hurdle_models: dict[str, HurdleQuantileModel] = {}  # For zero-inflated stats
 
         # Per-quantile feature dicts (populated during training)
         # minutes_features: {0.1: [...], 0.25: [...], ...}
@@ -768,7 +418,7 @@ class PlayerPropsModelPipeline:
         hyperparams: dict | None = None,
     ) -> dict:
         """Train rate models for each stat with per-quantile features."""
-        stats = stats or ["pts", "reb", "ast", "threes"]
+        stats = stats or ["pts", "reb", "ast"]
         hyperparams = hyperparams or {}
 
         print("\n" + "=" * 60)
@@ -825,94 +475,13 @@ class PlayerPropsModelPipeline:
 
             print(f"Training on {len(X):,} samples")
 
-            # Use count model for THREES (C4 architecture)
-            if stat == "threes":
-                # Train hurdle + count model for zero-inflated discrete distribution
-                base_features = per_q_available.get(0.5, available_features)
-                count_results = self._train_threes_count_model(
-                    df=df,
-                    feature_names=base_features,
-                    config=config,
-                )
-                all_results[stat] = count_results
-            else:
-                # Train regular quantile model suite
-                model_suite = QuantileModelSuite(config)
-                results = model_suite.train(X, y, per_q_available, sample_weight=w)
-                self.rate_models[stat] = model_suite
-                all_results[stat] = results
+            # Train regular quantile model suite
+            model_suite = QuantileModelSuite(config)
+            results = model_suite.train(X, y, per_q_available, sample_weight=w)
+            self.rate_models[stat] = model_suite
+            all_results[stat] = results
 
         return all_results
-
-    def _train_threes_count_model(
-        self,
-        df: pd.DataFrame,
-        feature_names: list[str],
-        config: QuantileModelConfig | None = None,
-    ) -> dict:
-        """
-        Train multiclass classifier for THREES (C5 architecture).
-
-        Predicts P(X=k) for k in {0, 1, 2, ..., 8+} directly.
-        No separate zero classifier needed - class 0 handles zeros naturally.
-
-        This replaces:
-        - C3: hurdle + quantile (25.6% Q10 gap)
-        - C4: hurdle + truncated NegBin (broken alpha/mu training)
-        """
-        from src.models.threes_multiclass import ThreesMulticlassModel, ThreesMulticlassConfig
-
-        print("\n" + "=" * 60)
-        print("TRAINING THREES MULTICLASS MODEL (C5)")
-        print("=" * 60)
-
-        config = config or self.config
-
-        # Filter to valid rows (min >= 10, threes not null)
-        valid_mask = df['actual_threes'].notna() & (df['actual_minutes'] >= 10)
-        df_valid = df[valid_mask].copy()
-
-        # Get available features
-        available_features = [f for f in feature_names if f in df_valid.columns]
-
-        X = df_valid[available_features].fillna(0)
-        y_count = df_valid['actual_threes'].values.astype(int)  # Integer counts
-
-        # Class distribution
-        zero_rate = (y_count == 0).mean()
-        print(f"Total samples: {len(X):,}")
-        print(f"Zero samples: {(y_count == 0).sum():,} ({zero_rate:.1%})")
-        print(f"Positive samples: {(y_count > 0).sum():,}")
-
-        # Create multiclass config matching the quantile config
-        multiclass_config = ThreesMulticlassConfig(
-            n_estimators=config.n_estimators,
-            max_depth=config.max_depth,
-            learning_rate=config.learning_rate,
-            subsample=config.subsample,
-            colsample_bytree=config.colsample_bytree,
-            early_stopping_rounds=config.early_stopping_rounds,
-        )
-
-        # Train single multiclass model
-        model = ThreesMulticlassModel(multiclass_config)
-        train_info = model.fit(X, y_count)
-
-        print(f"\nClass distribution: {dict(enumerate([f'{p:.3f}' for p in train_info['class_distribution']]))}")
-        print(f"Validation accuracy: {train_info['val_accuracy']:.3f}")
-
-        # Store model on pipeline
-        self.threes_multiclass_model = model
-        self.threes_feature_names = available_features
-
-        return {
-            'model_type': 'multiclass',
-            'zero_rate': zero_rate,
-            'n_samples': len(X),
-            'n_features': len(available_features),
-            'val_accuracy': train_info['val_accuracy'],
-            'class_distribution': train_info['class_distribution'],
-        }
 
     def save_all(self, directory: str):
         """Save all models."""
@@ -920,56 +489,16 @@ class PlayerPropsModelPipeline:
         path.mkdir(exist_ok=True)
 
         if self.minutes_model:
-            self.minutes_model.save(path / "minutes_model.joblib")
+            self.minutes_model.save(str(path / "minutes_model.joblib"))
 
         for stat, model in self.rate_models.items():
-            model.save(path / f"{stat}_rate_model.joblib")
-
-        # Save hurdle models (these save multiple files) - legacy C3
-        for stat, hurdle_model in self.hurdle_models.items():
-            hurdle_model.save(path)
-
-        # Save threes multiclass model (C5) if present
-        has_multiclass_model = hasattr(self, 'threes_multiclass_model') and self.threes_multiclass_model is not None
-        if has_multiclass_model:
-            # Save multiclass model
-            self.threes_multiclass_model.save(path)
-
-            # Save flag file indicating multiclass model (C5)
-            with open(path / "threes_is_hurdle.json", "w") as f:
-                json.dump({
-                    "is_hurdle": True,
-                    "model_type": "multiclass",  # C5 architecture
-                }, f, indent=2)
-            print("Saved THREES multiclass model (C5)")
-
-        # Legacy: Save threes count model (C4) if present
-        has_count_model = hasattr(self, 'threes_count_model') and self.threes_count_model is not None
-        if has_count_model and not has_multiclass_model:
-            # Save zero classifier and its feature names
-            joblib.dump(self.threes_zero_classifier, path / "threes_zero_classifier.joblib")
-            joblib.dump(self.threes_zero_calibrator, path / "threes_zero_calibrator.joblib")
-            joblib.dump(self.threes_zero_feature_names, path / "threes_zero_feature_names.joblib")
-
-            # Save count model
-            self.threes_count_model.save(path)
-
-            # Save flag file indicating count model (C4)
-            with open(path / "threes_is_hurdle.json", "w") as f:
-                json.dump({
-                    "is_hurdle": True,
-                    "model_type": "count",  # C4 architecture
-                }, f, indent=2)
-            print("Saved THREES count model (C4)")
+            model.save(str(path / f"{stat}_rate_model.joblib"))
 
         # Save per-quantile feature config
         joblib.dump(
             {
                 "minutes_features": self.minutes_features,
                 "rate_features": self.rate_features,
-                "hurdle_stats": list(self.hurdle_models.keys()),
-                "count_model_stats": ["threes"] if has_count_model and not has_multiclass_model else [],
-                "multiclass_model_stats": ["threes"] if has_multiclass_model else [],
             },
             path / "feature_config.joblib",
         )
@@ -986,80 +515,19 @@ class PlayerPropsModelPipeline:
         # Load minutes model
         minutes_path = path / "minutes_model.joblib"
         if minutes_path.exists():
-            pipeline.minutes_model = QuantileModelSuite.load(minutes_path)
+            pipeline.minutes_model = QuantileModelSuite.load(str(minutes_path))
 
-        # Load feature config first to check for hurdle stats and count models
+        # Load feature config
         config_path = path / "feature_config.joblib"
-        hurdle_stats = []
-        count_model_stats = []
         if config_path.exists():
             config = joblib.load(config_path)
             pipeline.minutes_features = config["minutes_features"]
             pipeline.rate_features = config["rate_features"]
-            hurdle_stats = config.get("hurdle_stats", [])
-            count_model_stats = config.get("count_model_stats", [])
-
-        # Check for model type via threes_is_hurdle.json
-        model_type = None
-        hurdle_json_path = path / "threes_is_hurdle.json"
-        if hurdle_json_path.exists():
-            with open(hurdle_json_path, "r") as f:
-                hurdle_info = json.load(f)
-                model_type = hurdle_info.get("model_type")
-
-        # Also check feature config for multiclass stats
-        multiclass_stats = config.get("multiclass_model_stats", []) if config_path.exists() else []
-
-        # Load threes multiclass model (C5) if present
-        if model_type == "multiclass" or "threes" in multiclass_stats:
-            from src.models.threes_multiclass import ThreesMulticlassModel
-
-            if ThreesMulticlassModel.exists(path):
-                pipeline.threes_multiclass_model = ThreesMulticlassModel.load(path)
-                print("Loaded THREES multiclass model (C5)")
-            else:
-                print("WARNING: Multiclass model flag set but model files not found")
-
-        # Legacy: Load threes count model (C4) if present
-        elif model_type == "count" or "threes" in count_model_stats:
-            from src.models.truncated_negbin import TruncatedNegBinModel
-
-            # Load zero classifier, calibrator, and feature names
-            zero_clf_path = path / "threes_zero_classifier.joblib"
-            zero_cal_path = path / "threes_zero_calibrator.joblib"
-            zero_feat_path = path / "threes_zero_feature_names.joblib"
-
-            if zero_clf_path.exists() and zero_cal_path.exists():
-                pipeline.threes_zero_classifier = joblib.load(zero_clf_path)
-                pipeline.threes_zero_calibrator = joblib.load(zero_cal_path)
-                if zero_feat_path.exists():
-                    pipeline.threes_zero_feature_names = joblib.load(zero_feat_path)
-
-                # Load count model
-                if TruncatedNegBinModel.exists(path):
-                    pipeline.threes_count_model = TruncatedNegBinModel.load(path)
-                    print("Loaded THREES count model (C4)")
-                else:
-                    print("WARNING: Count model flag set but model files not found")
 
         # Load rate models
-        for stat in ["pts", "reb", "ast", "threes"]:
-            # Skip threes if we loaded a multiclass or count model
-            if stat == "threes" and (
-                hasattr(pipeline, 'threes_multiclass_model') or
-                hasattr(pipeline, 'threes_count_model')
-            ):
-                continue
-
-            # Check if this is a hurdle model (legacy C3)
-            if stat in hurdle_stats or HurdleQuantileModel.is_hurdle_model(path):
-                if stat == "threes" and HurdleQuantileModel.is_hurdle_model(path):
-                    pipeline.hurdle_models[stat] = HurdleQuantileModel.load(path)
-                    print(f"Loaded hurdle model for {stat}")
-                    continue
-
+        for stat in ["pts", "reb", "ast"]:
             rate_path = path / f"{stat}_rate_model.joblib"
             if rate_path.exists():
-                pipeline.rate_models[stat] = QuantileModelSuite.load(rate_path)
+                pipeline.rate_models[stat] = QuantileModelSuite.load(str(rate_path))
 
         return pipeline

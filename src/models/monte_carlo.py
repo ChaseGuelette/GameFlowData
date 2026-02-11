@@ -11,8 +11,7 @@ import pandas as pd
 from scipy.stats import norm as sp_norm
 
 if TYPE_CHECKING:
-    from src.models.quantile_trainer import HurdleQuantileModel
-    from src.models.truncated_negbin import TruncatedNegBinModel
+    pass  # Type imports removed with THREES model archival
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +76,6 @@ DEFAULT_VARIANCE_INFLATION = {
     "pts": 1.0,  # PTS is handled by correlation adjustment
     "reb": 1.15,  # REB needs ~15% wider distribution (no correlation to leverage)
     "ast": 1.0,  # AST is handled by correlation adjustment
-    "threes": 1.0,  # Threes handled by correlation adjustment
 }
 
 
@@ -131,12 +129,6 @@ DEFAULT_CORRELATION_CONFIG = {
         "rate_factors": [0.82, 0.88, 0.93, 1.00, 1.08, 1.14, 1.12],
         "enabled": True,
     },
-    "threes": {
-        # Default to similar pattern as PTS (3-pointers correlate with playing time)
-        "minutes_points": [12.5, 17.5, 22.5, 27.5, 32.5, 37.5, 42.5],
-        "rate_factors": [0.80, 0.88, 0.95, 1.05, 1.12, 1.18, 1.15],
-        "enabled": True,
-    },
 }
 
 
@@ -183,7 +175,7 @@ class MonteCarloPredictor:
             copula_params: Dict mapping stat -> Spearman rank correlation between minutes
                           and that stat's per-minute rate. When provided, uses Gaussian copula
                           sampling instead of the legacy post-hoc correlation adjustment.
-                          Example: {"pts": 0.314, "reb": -0.046, "ast": 0.176, "threes": 0.10}
+                          Example: {"pts": 0.314, "reb": -0.046, "ast": 0.176}
         """
         self.pipeline = model_pipeline
         self.n_samples = n_samples
@@ -287,37 +279,8 @@ class MonteCarloPredictor:
              c. Map through marginal inverse CDFs
              d. Multiply: stat = minutes × rate
 
-        THREES with C4 count model:
-          - Uses separate path via _sample_threes_count()
-          - Produces integer samples directly
-          - NOT included in copula (receives minutes features directly)
         """
         predictions = {}
-
-        # Handle THREES separately if using multiclass (C5) or count model (C4)
-        if 'threes' in stats and self._has_threes_multiclass_model():
-            threes_samples = self._sample_threes_multiclass(features)
-        elif 'threes' in stats and self._has_threes_count_model():
-            threes_samples = self._sample_threes_count(features)
-        else:
-            threes_samples = None
-
-        if threes_samples is not None:
-            predictions['threes'] = PropPrediction(
-                player_id=player_id,
-                game_id=game_id,
-                stat='threes',
-                mean=float(threes_samples.mean()),
-                median=float(np.median(threes_samples)),
-                q10=float(np.percentile(threes_samples, 10)),
-                q25=float(np.percentile(threes_samples, 25)),
-                q50=float(np.percentile(threes_samples, 50)),
-                q75=float(np.percentile(threes_samples, 75)),
-                q90=float(np.percentile(threes_samples, 90)),
-                samples=threes_samples.astype(float),
-            )
-            # Remove threes from stats to process via copula
-            stats = [s for s in stats if s != 'threes']
 
         # If no other stats to process, return early
         if not stats:
@@ -333,9 +296,7 @@ class MonteCarloPredictor:
         z_minutes = self.rng.standard_normal(self.n_samples)
 
         for stat in stats:
-            # Check for hurdle model first (e.g., THREES with legacy C3 model)
-            is_hurdle = stat in getattr(self.pipeline, "hurdle_models", {})
-            if not is_hurdle and stat not in self.pipeline.rate_models:
+            if stat not in self.pipeline.rate_models:
                 continue
 
             # Get rank correlation for this stat (default 0 = independent)
@@ -359,22 +320,15 @@ class MonteCarloPredictor:
             if self.blowout_config.get("enabled", False):
                 minutes_samples = self._apply_blowout_factor(minutes_samples)
 
-            if is_hurdle:
-                # Use hurdle sampling for zero-inflated stats (legacy THREES C3 model)
-                hurdle_model = self.pipeline.hurdle_models[stat]
-                # Use all_feature_names (classifier + positive models) for hurdle sampling
-                X_rate = self._prepare_features(features, hurdle_model.all_feature_names)
-                rate_samples = self._sample_hurdle(hurdle_model, X_rate, u_rate)
-            else:
-                # Get rate quantile predictions and map through inverse CDF
-                rate_model = self.pipeline.rate_models[stat]
-                X_rate = self._prepare_features(features, rate_model.all_feature_names)
-                rate_qdf = rate_model.predict_quantiles(X_rate)
-                rate_qvals = rate_qdf.iloc[0].values
-                rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(self.quantile_probs, rate_qvals)
+            # Get rate quantile predictions and map through inverse CDF
+            rate_model = self.pipeline.rate_models[stat]
+            X_rate = self._prepare_features(features, rate_model.all_feature_names)
+            rate_qdf = rate_model.predict_quantiles(X_rate)
+            rate_qvals = rate_qdf.iloc[0].values
+            rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(self.quantile_probs, rate_qvals)
 
-                rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
-                rate_samples = np.maximum(rate_samples, 0)
+            rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
+            rate_samples = np.maximum(rate_samples, 0)
 
             # Combine: stat = minutes × rate
             stat_samples = minutes_samples * rate_samples
@@ -428,64 +382,6 @@ class MonteCarloPredictor:
         player_names = features_df["player_name"].values if "player_name" in features_df.columns else [None] * n_players
         team_ids = features_df["team_id"].values if "team_id" in features_df.columns else [None] * n_players
 
-        # Handle THREES with multiclass (C5) or count model (C4) separately
-        process_threes_multiclass = 'threes' in stats and self._has_threes_multiclass_model()
-        process_threes_count = 'threes' in stats and self._has_threes_count_model() and not process_threes_multiclass
-
-        if process_threes_multiclass:
-            # Batch predict THREES using multiclass model
-            logger.debug("Using C5 multiclass model for THREES predictions")
-            for i in range(n_players):
-                row_features = features_df.iloc[i].to_dict()
-                threes_samples = self._sample_threes_multiclass(row_features)
-
-                predictions_list.append({
-                    "player_id": player_ids[i],
-                    "player_name": player_names[i],
-                    "game_id": game_ids[i],
-                    "team_id": team_ids[i],
-                    "stat": "threes",
-                    "pred_mean": float(threes_samples.mean()),
-                    "pred_std": float(threes_samples.std()),
-                    "pred_median": float(np.median(threes_samples)),
-                    "pred_q10": float(np.percentile(threes_samples, 10)),
-                    "pred_q25": float(np.percentile(threes_samples, 25)),
-                    "pred_q50": float(np.percentile(threes_samples, 50)),
-                    "pred_q75": float(np.percentile(threes_samples, 75)),
-                    "pred_q90": float(np.percentile(threes_samples, 90)),
-                })
-                samples_dict[(player_ids[i], game_ids[i], "threes")] = threes_samples.astype(float)
-
-            # Remove threes from stats for copula processing
-            stats = [s for s in stats if s != 'threes']
-
-        elif process_threes_count:
-            # Batch predict THREES using count model (legacy C4)
-            logger.debug("Using C4 count model for THREES predictions")
-            for i in range(n_players):
-                row_features = features_df.iloc[i].to_dict()
-                threes_samples = self._sample_threes_count(row_features)
-
-                predictions_list.append({
-                    "player_id": player_ids[i],
-                    "player_name": player_names[i],
-                    "game_id": game_ids[i],
-                    "team_id": team_ids[i],
-                    "stat": "threes",
-                    "pred_mean": float(threes_samples.mean()),
-                    "pred_std": float(threes_samples.std()),
-                    "pred_median": float(np.median(threes_samples)),
-                    "pred_q10": float(np.percentile(threes_samples, 10)),
-                    "pred_q25": float(np.percentile(threes_samples, 25)),
-                    "pred_q50": float(np.percentile(threes_samples, 50)),
-                    "pred_q75": float(np.percentile(threes_samples, 75)),
-                    "pred_q90": float(np.percentile(threes_samples, 90)),
-                })
-                samples_dict[(player_ids[i], game_ids[i], "threes")] = threes_samples.astype(float)
-
-            # Remove threes from stats for copula processing
-            stats = [s for s in stats if s != 'threes']
-
         # If no other stats to process, return early
         if not stats:
             return predictions_list, samples_dict
@@ -496,20 +392,9 @@ class MonteCarloPredictor:
 
         # 2. Batch rate predictions (1 XGBoost call per stat)
         rate_quantiles = {}
-        hurdle_data = {}  # Store (p_zero, quantile_df) for legacy hurdle models
-        hurdle_models = getattr(self.pipeline, "hurdle_models", {})
 
         for stat in stats:
-            if stat in hurdle_models:
-                # Hurdle model: batch predict p_zero and positive-only quantiles
-                # IMPORTANT: Use predict_positive_quantiles() for MC sampling to avoid
-                # double-counting zeros (Bernoulli draw handles zero mass separately)
-                hurdle_model = hurdle_models[stat]
-                X_rate = self._prepare_features_batch(features_df, hurdle_model.all_feature_names)
-                p_zero_arr = hurdle_model.predict_p_zero(X_rate)
-                quantile_df = hurdle_model.predict_positive_quantiles(X_rate)
-                hurdle_data[stat] = (p_zero_arr, quantile_df)
-            elif stat in self.pipeline.rate_models:
+            if stat in self.pipeline.rate_models:
                 X_rate = self._prepare_features_batch(features_df, self.pipeline.rate_models[stat].all_feature_names)
                 rate_quantiles[stat] = self.pipeline.rate_models[stat].predict_quantiles(X_rate)
 
@@ -533,9 +418,7 @@ class MonteCarloPredictor:
                 minutes_samples = np.maximum(minutes_samples, 0)
 
             for stat in stats:
-                # Check if this is a hurdle model or regular rate model
-                is_hurdle = stat in hurdle_data
-                if not is_hurdle and stat not in rate_quantiles:
+                if stat not in rate_quantiles:
                     continue
 
                 if use_copula:
@@ -555,37 +438,20 @@ class MonteCarloPredictor:
                     if self.blowout_config.get("enabled", False):
                         minutes_samples = self._apply_blowout_factor(minutes_samples)
 
-                    if is_hurdle:
-                        # Hurdle model sampling
-                        p_zero_arr, quantile_df = hurdle_data[stat]
-                        p_zero = float(p_zero_arr[i])
-                        rate_qvals = quantile_df.iloc[i].values
-                        rate_samples = self._sample_hurdle_from_quantiles(
-                            p_zero, self.quantile_probs, rate_qvals, u_rate
-                        )
-                    else:
-                        # Regular rate model sampling
-                        rate_qvals = rate_quantiles[stat].iloc[i].values
-                        rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(
-                            self.quantile_probs, rate_qvals
-                        )
-                        rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
-                        rate_samples = np.maximum(rate_samples, 0)
+                    # Rate model sampling
+                    rate_qvals = rate_quantiles[stat].iloc[i].values
+                    rate_ext_probs, rate_ext_vals = self._build_extended_quantile_fn(
+                        self.quantile_probs, rate_qvals
+                    )
+                    rate_samples = self._map_uniforms_to_samples(u_rate, rate_ext_probs, rate_ext_vals)
+                    rate_samples = np.maximum(rate_samples, 0)
                 else:
                     # Legacy path: independent rate + post-hoc adjustment
-                    if is_hurdle:
-                        p_zero_arr, quantile_df = hurdle_data[stat]
-                        p_zero = float(p_zero_arr[i])
-                        rate_qvals = quantile_df.iloc[i].values
-                        rate_samples = self._sample_hurdle_from_quantiles(
-                            p_zero, self.quantile_probs, rate_qvals, None
-                        )
-                    else:
-                        rate_qvals = rate_quantiles[stat].iloc[i].values
-                        rate_samples = self._inverse_transform_sample(self.quantile_probs, rate_qvals)
-                        rate_samples = np.maximum(rate_samples, 0)
-                        if self.use_correlated_sampling:
-                            rate_samples = self._apply_correlation_adjustment(rate_samples, minutes_samples, stat)
+                    rate_qvals = rate_quantiles[stat].iloc[i].values
+                    rate_samples = self._inverse_transform_sample(self.quantile_probs, rate_qvals)
+                    rate_samples = np.maximum(rate_samples, 0)
+                    if self.use_correlated_sampling:
+                        rate_samples = self._apply_correlation_adjustment(rate_samples, minutes_samples, stat)
 
                 # Combine: stat = minutes * rate
                 stat_samples = minutes_samples * rate_samples
@@ -752,8 +618,8 @@ class MonteCarloPredictor:
         return minutes_samples
 
     # Rate values below this threshold are snapped to exactly 0.
-    # Handles zero-inflated distributions (e.g., threes_per_min) where many true
-    # values are 0 but inverse CDF interpolation produces tiny positive values.
+    # Handles distributions where many true values are 0 but inverse CDF interpolation
+    # produces tiny positive values.
     # 1e-3 per minute × 30 min = 0.03 combined — negligible for integer-valued stats.
     ZERO_SNAP_THRESHOLD = 1e-3
 
@@ -837,207 +703,6 @@ class MonteCarloPredictor:
         # Floor at 0 (can't have negative rate)
         return np.maximum(samples, 0)
 
-    def _sample_hurdle(
-        self,
-        hurdle_model: HurdleQuantileModel,
-        X: pd.DataFrame,
-        u_rate: np.ndarray | None = None,
-    ) -> np.ndarray:
-        """
-        Sample from a hurdle model distribution (e.g., THREES).
-
-        Two-stage sampling:
-        1. Bernoulli draw: is this sample zero or positive?
-        2. For positive samples: map through positive distribution inverse CDF
-
-        Args:
-            hurdle_model: Trained HurdleQuantileModel
-            X: Feature DataFrame (single row)
-            u_rate: Optional uniform samples from copula (for correlated sampling).
-                   If None, generates fresh uniforms for positive samples.
-
-        Returns:
-            Rate samples from hurdle distribution (zero-inflated)
-        """
-        # Get calibrated P(zero)
-        p_zero = hurdle_model.predict_p_zero(X)[0]
-
-        # Step 1: Bernoulli draw for zero vs positive (independent of copula)
-        is_zero = self.rng.random(self.n_samples) < p_zero
-
-        samples = np.zeros(self.n_samples)
-        n_positive = (~is_zero).sum()
-
-        if n_positive > 0:
-            # Step 2: For positive samples, get raw quantiles from positive-only models
-            # IMPORTANT: Use predict_positive_quantiles(), NOT predict_quantiles()
-            # predict_quantiles() returns combined quantiles with zeros for q <= p_zero,
-            # which would double-count zeros when combined with the Bernoulli draw above.
-            quantile_df = hurdle_model.predict_positive_quantiles(X)
-            quantile_values = np.array([
-                quantile_df.iloc[0][f"q{int(q * 100):02d}"]
-                for q in hurdle_model.quantiles
-            ])
-
-            # Build extended inverse CDF for positive distribution
-            ext_probs, ext_vals = self._build_extended_quantile_fn(
-                np.array(hurdle_model.quantiles), quantile_values
-            )
-
-            if u_rate is not None:
-                # Use copula-correlated uniforms for positive samples only
-                u_positive = u_rate[~is_zero]
-            else:
-                # Independent sampling
-                u_positive = self.rng.random(n_positive)
-
-            # Map through inverse CDF
-            positive_samples = self._map_uniforms_to_samples(u_positive, ext_probs, ext_vals)
-            samples[~is_zero] = np.maximum(positive_samples, 0)
-
-        return samples
-
-    def _sample_hurdle_from_quantiles(
-        self,
-        p_zero: float,
-        quantile_probs: np.ndarray,
-        quantile_values: np.ndarray,
-        u_rate: np.ndarray | None = None,
-    ) -> np.ndarray:
-        """
-        Sample from hurdle distribution using pre-computed quantiles.
-
-        Used in batch prediction where quantiles are already computed.
-
-        Args:
-            p_zero: Calibrated probability of zero
-            quantile_probs: Quantile probabilities (e.g., [0.10, 0.25, 0.50, 0.75, 0.90])
-            quantile_values: Corresponding quantile values
-            u_rate: Optional uniform samples from copula
-
-        Returns:
-            Rate samples from hurdle distribution
-        """
-        # Step 1: Bernoulli draw (independent of copula)
-        is_zero = self.rng.random(self.n_samples) < p_zero
-
-        samples = np.zeros(self.n_samples)
-        n_positive = (~is_zero).sum()
-
-        if n_positive > 0:
-            ext_probs, ext_vals = self._build_extended_quantile_fn(quantile_probs, quantile_values)
-
-            if u_rate is not None:
-                u_positive = u_rate[~is_zero]
-            else:
-                u_positive = self.rng.random(n_positive)
-
-            positive_samples = self._map_uniforms_to_samples(u_positive, ext_probs, ext_vals)
-            samples[~is_zero] = np.maximum(positive_samples, 0)
-
-        return samples
-
-    def _sample_threes_count(self, features: dict) -> np.ndarray:
-        """
-        Sample THREES using the count model (C4 architecture).
-
-        Two-stage hurdle sampling:
-          1. Bernoulli draw from zero classifier (P(threes = 0))
-          2. For positive samples: draw from truncated NegBin
-
-        The count model produces integer samples directly, avoiding the
-        interpolation artifacts of the quantile-based hurdle model.
-
-        Args:
-            features: Feature dictionary for the player
-
-        Returns:
-            Integer samples array of shape (n_samples,)
-        """
-        # Get components from pipeline
-        count_model = getattr(self.pipeline, 'threes_count_model', None)
-        zero_clf = getattr(self.pipeline, 'threes_zero_classifier', None)
-        zero_cal = getattr(self.pipeline, 'threes_zero_calibrator', None)
-
-        if count_model is None:
-            raise ValueError(
-                "No threes_count_model found in pipeline. "
-                "Ensure model was trained with C4 count model."
-            )
-
-        if zero_clf is None or zero_cal is None:
-            raise ValueError(
-                "No threes_zero_classifier/calibrator found in pipeline. "
-                "Ensure model includes zero classifier components."
-            )
-
-        # Get feature names for zero classifier
-        zero_feature_names = getattr(self.pipeline, 'threes_zero_feature_names', None)
-        if zero_feature_names is None:
-            raise ValueError(
-                "No threes_zero_feature_names found in pipeline. "
-                "Model may have been trained with older version."
-            )
-
-        # Prepare features for zero classifier
-        X_clf = self._prepare_features(features, zero_feature_names)
-
-        # Step 1: Get calibrated P(zero)
-        p_zero_raw = zero_clf.predict_proba(X_clf)[:, 1][0]
-        p_zero = float(zero_cal.predict([p_zero_raw])[0])
-
-        # Step 2: Bernoulli draw - which samples are zero?
-        is_zero = self.rng.random(self.n_samples) < p_zero
-        n_positive = int((~is_zero).sum())
-
-        # Step 3: Initialize result array
-        samples = np.zeros(self.n_samples, dtype=int)
-
-        if n_positive > 0:
-            # Step 4: Sample from truncated NegBin for positive branch
-            X_count = self._prepare_features(features, count_model.feature_names)
-            positive_samples = count_model.sample(X_count, n_samples=n_positive, rng=self.rng)
-            samples[~is_zero] = positive_samples.flatten()
-
-        return samples
-
-    def _has_threes_count_model(self) -> bool:
-        """Check if pipeline has the C4 threes count model."""
-        return hasattr(self.pipeline, 'threes_count_model') and self.pipeline.threes_count_model is not None
-
-    def _has_threes_multiclass_model(self) -> bool:
-        """Check if pipeline has the C5 threes multiclass model."""
-        return hasattr(self.pipeline, 'threes_multiclass_model') and self.pipeline.threes_multiclass_model is not None
-
-    def _sample_threes_multiclass(self, features: dict) -> np.ndarray:
-        """
-        Sample THREES using the multiclass classifier (C5 architecture).
-
-        Directly samples from the categorical distribution P(X=k) for k in {0,...,8+}.
-        Much simpler than C4 hurdle + NegBin - single model, naturally discrete output.
-
-        Args:
-            features: Feature dictionary for the player
-
-        Returns:
-            Integer samples array of shape (n_samples,)
-        """
-        model = self.pipeline.threes_multiclass_model
-
-        # Prepare features for the model
-        X = self._prepare_features(features, model.feature_names)
-
-        # Get predicted probabilities P(X=k) for k in {0,...,8}
-        probs = model.predict_proba(X)[0]  # Shape: (9,)
-
-        # Ensure probs sum to 1 (numerical stability)
-        probs = probs / probs.sum()
-
-        # Sample from categorical distribution
-        samples = self.rng.choice(9, size=self.n_samples, p=probs)
-
-        return samples.astype(int)
-
     def _inverse_transform_sample(self, quantile_probs: np.ndarray, quantile_values: np.ndarray) -> np.ndarray:
         """
         Sample from a distribution defined by quantiles
@@ -1108,7 +773,7 @@ def compute_copula_params_from_data(df: pd.DataFrame) -> dict:
 
     Returns:
         Dict mapping stat -> Spearman rank correlation with minutes.
-        Example: {"pts": 0.314, "reb": -0.046, "ast": 0.176, "threes": 0.10}
+        Example: {"pts": 0.314, "reb": -0.046, "ast": 0.176}
     """
     from scipy.stats import spearmanr
 
@@ -1116,7 +781,7 @@ def compute_copula_params_from_data(df: pd.DataFrame) -> dict:
     analysis_df = df[valid_mask].copy()
 
     params = {}
-    for stat in ["pts", "reb", "ast", "threes"]:
+    for stat in ["pts", "reb", "ast"]:
         rate_col = f"{stat}_per_min"
 
         # Compute rate if needed
@@ -1174,7 +839,7 @@ def compute_correlation_config_from_data(df: pd.DataFrame) -> dict:
     valid_mask = df["actual_minutes"] >= 10
     analysis_df = df[valid_mask].copy()
 
-    for stat in ["pts", "reb", "ast", "threes"]:
+    for stat in ["pts", "reb", "ast"]:
         rate_col = f"{stat}_per_min"
 
         # Compute rate if needed
