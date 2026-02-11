@@ -1,5 +1,44 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-10 — Session 22)
+
+### What We Did
+
+**Archived THREES (3-pointer) model.** After extensive development across C3 (hurdle), C4 (truncated NegBin), and C5 (multiclass PMF) approaches, the THREES model was archived due to poor market coverage and insufficient betting volume.
+
+**Why archived:**
+- 50% of THREES predictions had no odds available (sportsbooks don't offer 3PT props for many players)
+- Only 2 bets out of 78 in backtesting came from THREES
+- Extensive development time not justified by minimal betting opportunities
+
+**Files archived to `archive/threes_model/`:**
+- `threes_multiclass.py` — C5 multiclass PMF model (377 lines)
+- `test_threes_multiclass.py` — Test suite (370 lines)
+- `validate_threes_negbin.py` — C4 validation script (322 lines)
+- `test_threes_global_params.py` — C4 diagnostic (154 lines)
+- `test_threes_distribution.py` — C4 diagnostic (113 lines)
+- `C4_threes_count_model.md` — Spec document (425 lines)
+
+**Files modified:**
+- `src/models/train_pipeline.py` — Removed THREES training, calibration, save/load
+- `src/models/monte_carlo.py` — Removed THREES sampling, hurdle model logic
+- `src/models/quantile_trainer.py` — Removed HurdleQuantileModel class, hurdle training
+- `src/backtesting/backtest_harness.py` — Removed `player_threes` market mapping
+
+**Preserved for future optionality:**
+- Scrapers still collect `player_threes` market data (low cost)
+- Feature columns remain in `feature_store.py`
+
+**Tests:** 540 passed, 0 failures
+
+### Next Step
+
+1. **Paper trade** — Begin daily paper trading with PTS/REB/AST models
+2. **Dashboard improvements** — Add date range selector, mobile responsiveness
+3. **Monitor THREES market coverage** — If coverage improves, consider restoring from archive
+
+---
+
 ## Session Summary (2026-02-10 — Session 21)
 
 ### What We Did
@@ -45,7 +84,7 @@
 
 ### Next Step
 
-1. **Retrain models** — Run training to activate C5 THREES multiclass model
+1. ~~**Retrain models** — Run training to activate C5 THREES multiclass model~~ *(Superseded — THREES archived)*
 2. **Paper trade** — Begin daily paper trading with full pipeline
 3. **Dashboard improvements** — Add date range selector, mobile responsiveness
 
@@ -857,78 +896,21 @@ where bookmaker attention is lower.
   Run `analyze_calibration_drift.py` with the current model to get per-stat quantile coverage.
   This informs whether rate_factors or tail adjustments need stat-specific tuning.
 
-- [x] **C3. Zero-inflated hurdle model for THREES** *(IMPLEMENTED — 2026-02-05)*
-  Two-stage hurdle architecture to handle 35%+ zero mass in THREES distribution.
-  Spec: `.session/specs/C3_THREES_hurdle_model.md`
+- [x] **C3-C5. THREES Model Experiments** *(ARCHIVED — 2026-02-10)*
+  Multiple approaches attempted for modeling THREES (3-pointers):
+  - **C3:** Hurdle + quantile regression — failed (25.6% calibration gap)
+  - **C4:** Hurdle + truncated NegBin — implemented but superseded
+  - **C5:** Multiclass PMF — implemented but not deployed
 
-  **Problem:** THREES Q0.10 had +20.4% calibration gap. XGBoost quantile regression cannot
-  learn Q0.10 = 0 when it always predicts positive values. Conformal recalibration (offsets)
-  cannot fix this — you can't offset a positive prediction to exactly 0.
+  **All THREES work archived** to `archive/threes_model/` due to:
+  - 50% of predictions had no odds available (poor market coverage)
+  - Only 2 bets out of 78 in backtesting came from THREES
+  - Development time not justified by minimal betting opportunities
 
-  **Solution implemented:**
-  - **Stage 1:** Binary classifier predicting P(threes = 0 | features) with isotonic calibration
-  - **Stage 2:** Quantile regression on positive samples only (threes | threes > 0)
-  - **Inference:** If q ≤ p_zero → quantile = 0, else interpolate positive distribution
-  - **MC sampling:** Bernoulli draw independent of copula; copula affects positive rate magnitude
-
-  **Files modified:**
-  - `src/models/quantile_trainer.py` — Added `HurdleQuantileModel` class, `train_hurdle_model()`, pipeline integration
-  - `src/models/monte_carlo.py` — Added `_sample_hurdle()`, `_sample_hurdle_from_quantiles()`, copula integration
-  - `src/models/train_pipeline.py` — Added `_calibrate_hurdle_model()`, hurdle evaluation
-
-  **Status:** Architecture implemented, but calibration failed (25.6% gap at Q0.10). Root cause: quantile regression on discrete count data is fundamentally wrong. See C4 for fix.
-
-- [x] **C4. Replace THREES quantile regression with Truncated Negative Binomial** *(IMPLEMENTED — 2026-02-09)*
-  The C3 hurdle model's Step 2 (quantile regression on positive samples) failed because:
-  1. Quantile regression produces continuous values for discrete outcomes (can't have 2.3 threes)
-  2. Interpolation between 5 quantile points is too coarse for a distribution with only ~8 values
-  3. Boundary math extrapolates below Q10 when p_zero is high (adjusted_q = 0.057)
-
-  Full spec: `.session/specs/C4_threes_count_model.md`
-
-  **Architecture implemented:** Hurdle + Truncated Negative Binomial
-  - Stage 1: XGBoost binary classifier + isotonic calibration for P(zero)
-  - Stage 2: `TruncatedNegBinModel` predicting NegBin parameters (μ, α) via two XGBoost regressors
-  - MC sampling draws integers directly from truncated NegBin via inverse CDF
-  - THREES removed from copula (count model features encode minutes context)
-
-  **Files created:**
-  - `src/models/truncated_negbin.py` — TruncatedNegBinModel class (~500 lines)
-  - `tests/test_truncated_negbin.py` — 17 unit tests
-  - `scripts/validate_threes_negbin.py` — Phase 0 validation script
-
-  **Files modified:**
-  - `src/models/quantile_trainer.py` — `_train_threes_count_model()`, save/load
-  - `src/models/monte_carlo.py` — `_sample_threes_count()`, `_has_threes_count_model()`
-  - `src/models/train_pipeline.py` — `_calibrate_count_model()`, evaluation updates
-
-  **Status:** Code complete, all 523 tests pass. Superseded by C5.
-
-- [x] **C5. THREES Multiclass PMF Model** *(IMPLEMENTED — 2026-02-10)*
-  Complete replacement for C3/C4 approaches. Instead of modeling continuous rates or count distributions, directly predicts a 9-class probability mass function (PMF) for made threes.
-
-  **Why multiclass:**
-  - Discrete outcomes (0, 1, 2, ... made threes) are naturally categorical
-  - XGBoost multi:softprob directly outputs calibrated class probabilities
-  - No quantile-to-PMF conversion needed — model outputs ARE the distribution
-  - Categorical sampling produces integer counts directly
-
-  **Architecture:**
-  - XGBoost multiclass classifier with `objective='multi:softprob'`, `num_class=9`
-  - Classes 0-7 are exact counts, class 8 represents "8 or more" (capped)
-  - Trained on `threes_per_game` binned to 0-8, not `threes_per_min`
-  - Monte Carlo sampling uses weighted random choice from PMF
-
-  **Files created:**
-  - `src/models/threes_multiclass.py` — `ThreesMulticlassModel` class (~350 lines)
-  - `tests/test_threes_multiclass.py` — 25 unit tests
-
-  **Files modified:**
-  - `src/models/quantile_trainer.py` — imports and integration for multiclass model
-  - `src/models/monte_carlo.py` — `_sample_threes_multiclass()` for PMF-based sampling
-  - `src/models/train_pipeline.py` — `_calibrate_multiclass_model()` for evaluation
-
-  **Status:** Code complete, all 570 tests pass. Needs retraining to activate.
+  **Preserved for future:**
+  - Scrapers still collect `player_threes` market data
+  - Feature columns remain in `feature_store.py`
+  - Archive contains all code for restoration if market coverage improves
 
 ---
 
@@ -1073,9 +1055,7 @@ Next.js dashboard for viewing predictions and paper trading results. Full spec: 
 | ~~E2 (BL Sweep)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — No-BL profitable (+3% ROI). BL kills all edges (confidence function flaw). |
 | ~~E3 (Analyze sweep)~~ | ~~Low~~ | ~~Critical~~ | **DONE** — REB +7.9%, model finds genuine edges without BL. |
 | ~~A3b (Fix BL confidence)~~ | ~~Low~~ | ~~High~~ | **DONE** — Linear ramp confidence. 42 tests passing. |
-| ~~C3 (THREES hurdle model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE but FAILED** — Calibration gap 25.6% at Q0.10. Quantile regression wrong for discrete data. |
-| ~~C4 (THREES count model)~~ | ~~Medium-High~~ | ~~High~~ | **DONE** — Truncated NegBin implemented. Superseded by C5. |
-| ~~C5 (THREES multiclass)~~ | ~~Medium~~ | ~~High~~ | **DONE** — XGBoost multi:softprob, 9-class PMF. Needs retraining. |
+| ~~C3-C5 (THREES models)~~ | ~~Various~~ | ~~High~~ | **ARCHIVED** — All THREES work moved to `archive/threes_model/` due to poor market coverage (50% missing lines). |
 | E1b (Retrain with calibration fixes) | Low | Medium | Conformal recalibration + zero-snap need retraining to take effect |
 | ~~E4 (Daily injury pipeline)~~ | ~~Medium~~ | ~~Critical~~ | **DONE** — `--scrape-injuries` now uses RapidAPI + linker |
 | ~~E5 (Paper trade infra)~~ | ~~Medium~~ | ~~High~~ | **DONE** — `PaperTrader` class, CLI scripts, 20 tests |

@@ -1,5 +1,7 @@
 # Truncated Negative Binomial Model Documentation
 
+> **ARCHIVED (2026-02-10):** This model (C4 architecture) was archived along with all THREES-related code to `archive/threes_model/` due to poor market coverage (50% missing lines) and insufficient betting volume (2 bets out of 78 in backtesting). Scrapers still collect `player_threes` market data for future optionality. This documentation is preserved for reference if the model is restored.
+
 ## Overview
 
 The `TruncatedNegBinModel` class in `src/models/truncated_negbin.py` implements a two-stage XGBoost-based model for predicting the parameters of a zero-truncated negative binomial distribution. This model is designed for discrete count outcomes like made three-pointers where:

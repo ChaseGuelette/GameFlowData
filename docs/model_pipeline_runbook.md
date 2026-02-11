@@ -66,7 +66,7 @@ python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 220
    └─ Same query but for cal_season only
 
 3. Feature Selection (Training Data ONLY)
-   ├─ For each model (minutes, pts_rate, reb_rate, ast_rate, threes_rate):
+   ├─ For each model (minutes, pts_rate, reb_rate, ast_rate):
    │   ├─ Rank features via Permutation Importance (XGBoost proxy model)
    │   └─ Optimize feature count via TimeSeriesSplit CV (avg pinball loss)
    └─ Output: dict of selected features per model
@@ -74,8 +74,9 @@ python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 220
 4. Train Models
    ├─ Minutes Model: QuantileModelSuite trained on actual_minutes
    │   └─ 5 XGBoost models (Q10, Q25, Q50, Q75, Q90)
-   └─ Rate Models (x4): QuantileModelSuite per stat
+   └─ Rate Models (x3: pts, reb, ast): QuantileModelSuite per stat
        └─ Each: 5 XGBoost models predicting stat_per_min
+       └─ Note: THREES model archived 2026-02-10 (poor market coverage)
 
 5. Calibration Evaluation (Holdout Season)
    ├─ Predict quantiles on holdout data
@@ -98,18 +99,17 @@ python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 220
        ├─ minutes_model.joblib
        ├─ pts_rate_model.joblib
        ├─ reb_rate_model.joblib
-
-8. Finalize (Atomic Rename)
-   └─ Directory is created as run_YYYYMMDD_HHMMSS_incomplete during training
-   └─ Renamed to run_YYYYMMDD_HHMMSS after all artifacts saved
-   └─ Prevents inference job from selecting incomplete models
        ├─ ast_rate_model.joblib
-       ├─ threes_rate_model.joblib
        ├─ feature_config.joblib
        ├─ selected_features.json
        ├─ run_config.json
        ├─ calibration_report.json
        └─ copula_params.json          # Gaussian copula Spearman ρ per stat
+
+8. Finalize (Atomic Rename)
+   └─ Directory is created as run_YYYYMMDD_HHMMSS_incomplete during training
+   └─ Renamed to run_YYYYMMDD_HHMMSS after all artifacts saved
+   └─ Prevents inference job from selecting incomplete models
 ```
 
 ### What Good Calibration Looks Like
@@ -159,7 +159,7 @@ python src/backtesting/run_backtest.py \
 | `--model-dir` | `src/models/artifacts` | Path to model artifacts (finds latest run_*) |
 | `--output-dir` | `backtest_results/bt_<timestamp>` | Where to save results |
 | `--n-samples` | `5000` | Monte Carlo samples per prediction |
-| `--stats` | `pts reb ast` | Stats to predict and bet on |
+| `--stats` | `pts reb ast` | Stats to predict and bet on (THREES archived) |
 | `--edge-threshold` | `0.05` | Minimum edge (5%) to place a simulated bet |
 | `--starting-bankroll` | `10000.0` | Initial bankroll for simulation |
 | `--kelly-fraction` | `0.125` | Fraction of Kelly stake (e.g., 0.125 = 1/8th Kelly) |

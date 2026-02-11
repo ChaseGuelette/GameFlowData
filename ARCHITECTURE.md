@@ -152,7 +152,7 @@ Centralized engine for converting raw stats into model-ready features.
 - `get_training_dataset()` — Full training data for season(s).
 
 **Feature Groups:**
-- `RATE_FEATURES_PTS` / `_REB` / `_AST` / `_THREES` — Per-stat rate model features. Each includes its corresponding `prop_line_*` centering feature plus B3 trend/variability features (`player_avg_{stat}_l3`, `player_{stat}_l3_l15_ratio`, `player_std_{stat}_l5`).
+- `RATE_FEATURES_PTS` / `_REB` / `_AST` — Per-stat rate model features. Each includes its corresponding `prop_line_*` centering feature plus B3 trend/variability features (`player_avg_{stat}_l3`, `player_{stat}_l3_l15_ratio`, `player_std_{stat}_l5`).
 - `MINUTES_FEATURES` — Playing time prediction features (includes `line_spread`, `line_total`, B2 rest/schedule, B3 minutes L3 trend, B4 minutes stability).
 - Configuration via `FeatureConfig` dataclass.
 
@@ -163,21 +163,13 @@ The modeling engine predicts the probability distribution of player stats.
 #### Stage A: Quantile Regression (`quantile_trainer.py`)
 
 - `PlayerPropsModelPipeline` class with `QuantileModelConfig` dataclass.
-- Trains multiple **XGBoost** models for each target stat (Points, Rebounds, Assists, Threes).
+- Trains multiple **XGBoost** models for each target stat (Points, Rebounds, Assists).
 - **Per-Quantile Optimization:** Each quantile (10th, 25th, 50th, 75th, 90th) selects its own optimal feature set.
     - *Example:* "Floor" (Q10) models might prioritize minutes played, while "Ceiling" (Q90) models prioritize usage rate and pace.
 - **Isotonic Calibration:** Post-processing step to ensure monotonic predictions (`Q10 <= Q25 <= ...`).
-- **Conformal Recalibration:** After training each quantile, computes validation residuals `(y_val - pred)`. If coverage gap exceeds 3%, applies a conformal offset `delta = np.quantile(residuals, q)` at prediction time. Addresses zero-inflated distributions (e.g., `threes_per_min`) where XGBoost's `quantileerror` objective cannot learn the correct quantile. Offsets persisted in model artifacts.
-- **Count Model Architecture (C4):** For zero-inflated discrete distributions like THREES (35%+ samples exactly 0), a two-stage hurdle + count model replaces the C3 quantile regression approach:
-    - **Stage 1 (Zero Classifier):** XGBoost binary classifier predicts P(stat = 0 | features). Calibrated with isotonic regression to ensure accurate p_zero estimates.
-    - **Stage 2 (Truncated Negative Binomial):** `TruncatedNegBinModel` class in `src/models/truncated_negbin.py` predicts μ (mean) and α (overdispersion) parameters. Two XGBoost regressors predict log(μ) and log(α) for positivity.
-    - **Truncation Adjustment (fixed 2026-02-09):** The mu model target is adjusted for truncation. Observed values come from E[X|X>0] = μ/(1-P(X=0)), so training targets are scaled down by (1-p_zero) factor using global MLE P(X=0). Without this adjustment, XGBoost predicts μ≈2.5 instead of correct μ≈1.66, causing severe calibration failures (25.8% gap at Q10).
-    - **Why NegBin:** Made threes are discrete integers (0, 1, 2, 3...) with overdispersion (variance ≈ 2.8 vs mean ≈ 2.1). Negative Binomial handles both properties; truncation at 0 conditions on positive samples.
-    - **MC Sampling:** Bernoulli draw determines zero vs positive (independent of copula). For positive samples, inverse CDF sampling from truncated NegBin produces integer counts directly.
-    - **Artifacts:** `threes_zero_classifier.joblib`, `threes_zero_calibrator.joblib`, `threes_zero_feature_names.joblib`, `truncated_negbin_meta.json`, `truncated_negbin_mu_model.joblib`, `truncated_negbin_alpha_model.joblib`, `threes_is_hurdle.json` (with `model_type: "count"`).
-    - **Removed from copula:** THREES uses count model features directly (includes minutes context), so copula correlation would double-count.
-- **Legacy Hurdle Model (C3):** The original two-stage hurdle + quantile regression is retained for backward compatibility but deprecated. Failed due to 25.6% calibration gap at Q10 — quantile regression produces continuous values for discrete outcomes.
+- **Conformal Recalibration:** After training each quantile, computes validation residuals `(y_val - pred)`. If coverage gap exceeds 3%, applies a conformal offset `delta = np.quantile(residuals, q)` at prediction time. Offsets persisted in model artifacts.
 - Default hyperparameters: `n_estimators=1000`, `max_depth=5`, `learning_rate=0.03`, `early_stopping_rounds=50`.
+- **Archived (2026-02-10):** THREES model (3-pointers) archived to `archive/threes_model/` due to poor market coverage (50% missing lines) and insufficient betting volume. Scrapers still collect `player_threes` market data for future optionality.
 
 #### Stage B: Hyperparameter Tuning (`hyperparameter_tuner.py`)
 
@@ -707,10 +699,7 @@ See `ACTIONITEMS.md` for full details.
 
 **Bug fix sweep (2026-01-30):** 12 issues fixed from comprehensive pipeline audit — see `ISSUES.md`. Key fixes: minutes model hyperparameters (ISS-001), early stopping (ISS-006), devigged edge calculation (ISS-003), injury query cross-product (ISS-004), train/serve threshold alignment (ISS-005), team-directional spread (ISS-008), league-average defaults (ISS-009), independent over/under line shopping (ISS-015). 16 issues remain open (mostly low-priority).
 
-**Calibration fixes (2026-01-31):** THREES rate model Q0.10 had +20.4% calibration gap during training (coverage 0.352 vs target 0.10). Root cause: zero-inflated distribution — 35%+ of `threes_per_min` samples are exactly 0, which XGBoost's `quantileerror` objective cannot learn. Three fixes applied:
-1. **Conformal recalibration** (quantile_trainer.py) — post-training offset from validation residuals closes coverage gaps > 3%.
-2. **Zero-snap handling** (monte_carlo.py) — values below 1e-3 in inverse CDF snapped to exactly 0.
-3. **Threes in combined calibration** (train_pipeline.py) — combined calibration eval now includes all trained rate models, not just `[pts, reb, ast]`.
+**Calibration fixes (2026-01-31):** Applied conformal recalibration (quantile_trainer.py) — post-training offset from validation residuals closes coverage gaps > 3%. Zero-snap handling (monte_carlo.py) snaps values below 1e-3 in inverse CDF to exactly 0.
 
 **BL parameter sweep results (2026-01-31):** Comprehensive sweep revealed:
 - **No-BL configs are profitable:** +3% ROI, 600-873 bets across edge/Kelly combinations. REB is the strongest stat at +7.9% ROI.
@@ -720,13 +709,13 @@ See `ACTIONITEMS.md` for full details.
 **Active tracks:**
 - **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A3b (BL confidence fix) completed. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option.
 - **Track B** (Complete): New signal sources — B1 (injury context, 10 features), B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented and included in latest training run.
-- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration) pending. C3 (THREES hurdle model) failed. C4 (Truncated NegBin) implemented. C5 (THREES multiclass PMF) implemented — XGBoost multi:softprob predicts 9-class PMF (0-8+ made threes), categorical sampling produces integer counts directly.
+- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration) pending. C3-C5 (THREES model experiments) archived 2026-02-10 due to poor market coverage.
 - **Track D**: Deprioritized model items (pending recalibration).
 - **Track E**: Go-live pipeline — no-BL path shows positive ROI (+3%). E4 (daily injury pipeline) and E5 (paper trading infra) complete. E6 (scheduling) pending.
 
 **Prediction storage + query tool (2026-01-31):** Daily predictions and MC samples now persisted to PostgreSQL (`daily_predictions` + `daily_prediction_samples` tables). CLI query tool (`src/tools/query_player.py`) enables ad-hoc probability queries against stored distributions. Daily runner refactored: NBA API ScoreboardV2 for game discovery, `rapidapi_injuries` for injury filtering, MC samples for edge calculation, `ROW_NUMBER` snapshot ranking for line freshness.
 
-**Current state (2026-02-10):** Models retrained with all bug fixes and new features — latest complete artifact: `run_20260205_165808`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. **C5 THREES multiclass PMF model** — New XGBoost multi:softprob model predicts 9-class PMF (0-8+ made threes). Categorical sampling produces integer counts directly. Replaces C3/C4 approaches which failed due to quantile-to-discrete mapping issues. **Training safety pattern added** — Training creates `_incomplete` suffix directory, renamed atomically after all artifacts saved. Inference job filters out incomplete directories. Prevents race condition when training and inference overlap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). **E6 Daily Pipeline Automation (2026-02-05):** Three frequency-separated job scripts created for cron scheduling — `daily_stats_job.py` (once daily), `lines_job.py` (multiple times daily), `inference_job.py` (pre-game). Cron template at `cron/gameflow_crontab.txt`. **Dashboard History & Performance Pages (2026-02-10):** Added `/history` and `/performance` routes with full UI components for viewing betting history and performance metrics.
+**Current state (2026-02-10):** Models trained for PTS, REB, AST stats — latest complete artifact: `run_20260205_165808`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. **THREES model archived (2026-02-10):** All THREES-related code (C3 hurdle, C4 NegBin, C5 multiclass) moved to `archive/threes_model/` due to poor market coverage (50% missing lines) and insufficient betting volume (2 bets out of 78 in backtest). Scrapers still collect `player_threes` market data for future optionality. **Training safety pattern added** — Training creates `_incomplete` suffix directory, renamed atomically after all artifacts saved. Inference job filters out incomplete directories. Prevents race condition when training and inference overlap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). **E6 Daily Pipeline Automation (2026-02-05):** Three frequency-separated job scripts created for cron scheduling — `daily_stats_job.py` (once daily), `lines_job.py` (multiple times daily), `inference_job.py` (pre-game). Cron template at `cron/gameflow_crontab.txt`. **Dashboard History & Performance Pages (2026-02-10):** Added `/history` and `/performance` routes with full UI components for viewing betting history and performance metrics.
 
 **Backtesting fixes (2026-02-07):**
 1. **Incomplete model directory validation:** `find_latest_model_dir()` in `run_sweep.py` now skips incomplete training runs (directories without `minutes_model.joblib`). Prevents silent failures when an aborted training run is selected.
