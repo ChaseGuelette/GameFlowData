@@ -68,6 +68,9 @@ const oddsToImpliedProb = (odds: number): number => {
 }
 
 // Estimate probability of Under X using quantile interpolation
+// P(stat < line) = probability the Under hits
+// Higher line = easier Under = higher probability
+// Lower line = harder Under = lower probability
 const estimateUnderProb = (
   line: number,
   q10: number,
@@ -76,7 +79,7 @@ const estimateUnderProb = (
   q75: number,
   q90: number
 ): number => {
-  // Quantile points: (value, probability)
+  // Quantile points: (value, cumulative probability that stat < value)
   const points = [
     { val: q10, prob: 0.10 },
     { val: q25, prob: 0.25 },
@@ -85,15 +88,26 @@ const estimateUnderProb = (
     { val: q90, prob: 0.90 },
   ]
 
-  // If line is below q10, extrapolate (very likely under)
-  if (line <= q10) return 0.05
-  // If line is above q90, extrapolate (very unlikely under)
-  if (line >= q90) return 0.95
+  // Extrapolate below q10 (Under is hard to hit at low lines)
+  if (line <= q10) {
+    // Linear extrapolation toward 0, but cap at 0.01
+    const slope = (points[1].prob - points[0].prob) / (points[1].val - points[0].val)
+    const extrapolated = points[0].prob + slope * (line - points[0].val)
+    return Math.max(0.01, Math.min(0.10, extrapolated))
+  }
 
-  // Find the two quantiles that bracket the line
+  // Extrapolate above q90 (Under is easy to hit at high lines)
+  if (line >= q90) {
+    // Linear extrapolation toward 1, but cap at 0.99
+    // Use the slope from q75 to q90 for extrapolation
+    const slope = (points[4].prob - points[3].prob) / (points[4].val - points[3].val)
+    const extrapolated = points[4].prob + slope * (line - points[4].val)
+    return Math.max(0.90, Math.min(0.99, extrapolated))
+  }
+
+  // Find the two quantiles that bracket the line and interpolate
   for (let i = 0; i < points.length - 1; i++) {
     if (line >= points[i].val && line <= points[i + 1].val) {
-      // Linear interpolation
       const range = points[i + 1].val - points[i].val
       if (range === 0) return points[i].prob
       const fraction = (line - points[i].val) / range
@@ -110,9 +124,8 @@ const calculateKelly = (modelProb: number, odds: number, kellyFraction: number):
 
   // Convert to decimal odds (b = net fractional odds)
   const b = odds > 0 ? odds / 100 : 100 / Math.abs(odds)
-  const q = 1 - modelProb
 
-  // Kelly formula: f = (p * b - q) / b = (p * (b + 1) - 1) / b
+  // Kelly formula: f = (p * (b + 1) - 1) / b
   const f = (modelProb * (b + 1) - 1) / b
 
   if (f <= 0) return 0
@@ -135,30 +148,62 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
   const [loading, setLoading] = useState(true)
   const [linesLoading, setLinesLoading] = useState(true)
 
-  // Bankroll and Kelly settings (persisted to localStorage)
-  const [bankroll, setBankroll] = useState<number>(1000)
-  const [kellyFraction, setKellyFraction] = useState<number>(0.25)
-
-  // Load settings from localStorage on mount
-  useEffect(() => {
-    const savedBankroll = localStorage.getItem('betting_bankroll')
-    const savedKelly = localStorage.getItem('betting_kelly_fraction')
-    if (savedBankroll) setBankroll(parseFloat(savedBankroll))
-    if (savedKelly) setKellyFraction(parseFloat(savedKelly))
-  }, [])
+  // Bankroll and Kelly settings (persisted to localStorage) - use lazy initialization
+  const [bankroll, setBankroll] = useState<number>(() => {
+    if (typeof window === 'undefined') return 1000
+    const saved = localStorage.getItem('betting_bankroll')
+    return saved ? parseFloat(saved) : 1000
+  })
+  const [bankrollInput, setBankrollInput] = useState<string>(() => {
+    if (typeof window === 'undefined') return '1000'
+    const saved = localStorage.getItem('betting_bankroll')
+    return saved || '1000'
+  })
+  const [kellyFraction, setKellyFraction] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0.25
+    const saved = localStorage.getItem('betting_kelly_fraction')
+    return saved ? parseFloat(saved) : 0.25
+  })
+  const [useCustomKelly, setUseCustomKelly] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return localStorage.getItem('betting_use_custom_kelly') === 'true'
+  })
+  const [customKellyInput, setCustomKellyInput] = useState<string>(() => {
+    if (typeof window === 'undefined') return '0.25'
+    const saved = localStorage.getItem('betting_kelly_fraction')
+    return saved || '0.25'
+  })
 
   // Save bankroll to localStorage when changed
   const handleBankrollChange = (value: string) => {
+    setBankrollInput(value)
     const num = parseFloat(value) || 0
     setBankroll(num)
     localStorage.setItem('betting_bankroll', num.toString())
   }
 
-  // Save Kelly fraction to localStorage when changed
+  // Save Kelly fraction to localStorage when changed (preset)
   const handleKellyChange = (value: string) => {
     const num = parseFloat(value)
     setKellyFraction(num)
+    setCustomKellyInput(num.toString())
     localStorage.setItem('betting_kelly_fraction', num.toString())
+  }
+
+  // Save custom Kelly fraction
+  const handleCustomKellyChange = (value: string) => {
+    setCustomKellyInput(value)
+    const num = parseFloat(value)
+    if (!isNaN(num) && num >= 0 && num <= 1) {
+      setKellyFraction(num)
+      localStorage.setItem('betting_kelly_fraction', num.toString())
+    }
+  }
+
+  // Toggle custom Kelly mode
+  const handleKellyToggle = (useCustom: boolean) => {
+    setUseCustomKelly(useCustom)
+    localStorage.setItem('betting_use_custom_kelly', useCustom.toString())
   }
 
   useEffect(() => {
@@ -431,9 +476,12 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
                             : 'bg-slate-700/30'
                       }`}
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="text-slate-200 font-medium">{formatBookmaker(line.bookmaker)}</span>
-                        <span className="text-sm text-slate-400">{line.line}</span>
+                      <div className="flex items-center gap-3">
+                        {/* Line value - prominent */}
+                        <span className={`text-lg font-bold ${hasPositiveEdge ? 'text-green-400' : 'text-slate-300'}`}>
+                          {line.line}
+                        </span>
+                        <span className="text-slate-400 text-sm">{formatBookmaker(line.bookmaker)}</span>
                         {isBestEdge && (
                           <span className="text-xs bg-green-600/40 text-green-300 px-1.5 py-0.5 rounded font-medium">
                             BEST
@@ -442,13 +490,13 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
                       </div>
                       <div className="flex items-center gap-3 text-sm">
                         <span className={hasPositiveEdge ? 'text-green-400 font-medium' : 'text-slate-400'}>
-                          {line.lineEdge >= 0 ? '+' : ''}{(line.lineEdge * 100).toFixed(1)}% edge
+                          {line.lineEdge >= 0 ? '+' : ''}{(line.lineEdge * 100).toFixed(1)}%
                         </span>
-                        <span className={isOverBet ? 'text-green-400' : 'text-slate-400'}>
+                        <span className={isOverBet ? 'text-green-400' : 'text-slate-500'}>
                           O {formatOdds(line.over_odds)}
                         </span>
-                        <span className="text-slate-500">/</span>
-                        <span className={!isOverBet ? 'text-green-400' : 'text-slate-400'}>
+                        <span className="text-slate-600">/</span>
+                        <span className={!isOverBet ? 'text-green-400' : 'text-slate-500'}>
                           U {formatOdds(line.under_odds)}
                         </span>
                       </div>
@@ -468,25 +516,45 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
             <div>
               <label className="block text-sm text-slate-400 mb-1">Bankroll ($)</label>
               <input
-                type="number"
-                value={bankroll}
+                type="text"
+                inputMode="decimal"
+                value={bankrollInput}
                 onChange={(e) => handleBankrollChange(e.target.value)}
+                onFocus={(e) => e.target.select()}
                 className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
-                min="0"
-                step="100"
               />
             </div>
             <div>
-              <label className="block text-sm text-slate-400 mb-1">Kelly Fraction</label>
-              <select
-                value={kellyFraction}
-                onChange={(e) => handleKellyChange(e.target.value)}
-                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
-              >
-                {KELLY_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-sm text-slate-400">Kelly Fraction</label>
+                <button
+                  onClick={() => handleKellyToggle(!useCustomKelly)}
+                  className="text-xs text-blue-400 hover:text-blue-300"
+                >
+                  {useCustomKelly ? 'Use Presets' : 'Custom'}
+                </button>
+              </div>
+              {useCustomKelly ? (
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={customKellyInput}
+                  onChange={(e) => handleCustomKellyChange(e.target.value)}
+                  onFocus={(e) => e.target.select()}
+                  placeholder="0.25"
+                  className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
+                />
+              ) : (
+                <select
+                  value={kellyFraction}
+                  onChange={(e) => handleKellyChange(e.target.value)}
+                  className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
+                >
+                  {KELLY_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 

@@ -7,6 +7,11 @@ interface QuantileSummaryProps {
   line: number
 }
 
+// Safe toFixed that handles NaN
+const safeFixed = (val: number, decimals: number = 1): string => {
+  return Number.isFinite(val) ? val.toFixed(decimals) : '—'
+}
+
 export function QuantileSummary({ q10, q25, q50, q75, q90, line }: QuantileSummaryProps) {
   const quantiles = [
     { label: 'Q10', value: q10 },
@@ -16,11 +21,12 @@ export function QuantileSummary({ q10, q25, q50, q75, q90, line }: QuantileSumma
     { label: 'Q90', value: q90 },
   ]
 
-  // Calculate position of line on the distribution
-  const minQ = q10
-  const maxQ = q90
+  // Calculate position of line on the distribution (with safety checks)
+  const minQ = Number.isFinite(q10) ? q10 : 0
+  const maxQ = Number.isFinite(q90) ? q90 : 10
   const range = maxQ - minQ
   const linePosition = range > 0 ? ((line - minQ) / range) * 100 : 50
+  const q50Position = range > 0 ? (((Number.isFinite(q50) ? q50 : 5) - minQ) / range) * 100 : 50
 
   return (
     <div className="space-y-4">
@@ -29,7 +35,7 @@ export function QuantileSummary({ q10, q25, q50, q75, q90, line }: QuantileSumma
         {quantiles.map(({ label, value }) => (
           <div key={label} className="flex-1">
             <div className="text-slate-400 text-xs">{label}</div>
-            <div className="text-slate-50 font-semibold">{value.toFixed(1)}</div>
+            <div className="text-slate-50 font-semibold">{safeFixed(value)}</div>
           </div>
         ))}
       </div>
@@ -58,15 +64,15 @@ export function QuantileSummary({ q10, q25, q50, q75, q90, line }: QuantileSumma
         <div
           className="absolute top-0 bottom-0 w-1 bg-blue-500 z-5"
           style={{
-            left: `${((q50 - minQ) / range) * 100}%`,
+            left: `${Math.max(0, Math.min(100, q50Position))}%`,
           }}
         />
       </div>
 
       <div className="flex justify-between text-xs text-slate-400">
-        <span>Floor ({q10.toFixed(1)})</span>
-        <span className="text-blue-400">Median ({q50.toFixed(1)})</span>
-        <span>Ceiling ({q90.toFixed(1)})</span>
+        <span>Floor ({safeFixed(q10)})</span>
+        <span className="text-blue-400">Median ({safeFixed(q50)})</span>
+        <span>Ceiling ({safeFixed(q90)})</span>
       </div>
     </div>
   )

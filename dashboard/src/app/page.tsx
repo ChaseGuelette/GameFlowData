@@ -27,6 +27,7 @@ export default function HomePage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<FilterOption>('all')
+  const [teamFilter, setTeamFilter] = useState<string>('all')
   const [selectedPrediction, setSelectedPrediction] = useState<Prediction | null>(null)
   const [bankroll, setBankroll] = useState<number | undefined>(undefined)
 
@@ -101,10 +102,21 @@ export default function HomePage() {
     fetchData()
   }, [])
 
-  // Filter predictions by stat type
-  const filteredPredictions = filter === 'all'
-    ? predictions
-    : predictions.filter(p => p.stat === filter)
+  // Get unique matchups from predictions for dropdown (e.g., "LAL vs SAS")
+  const availableMatchups = [...new Set(predictions.map(p => {
+    const teams = [p.team_abbrev || 'UNK', p.opponent_abbrev || 'UNK'].sort()
+    return `${teams[0]} vs ${teams[1]}`
+  }))].sort()
+
+  // Filter predictions by stat type and matchup
+  const filteredPredictions = predictions.filter(p => {
+    const matchesStat = filter === 'all' || p.stat === filter
+    if (teamFilter === 'all') return matchesStat
+    // Check if either team in the matchup matches
+    const matchupTeams = teamFilter.split(' vs ')
+    const matchesMatchup = matchupTeams.includes(p.team_abbrev || '') || matchupTeams.includes(p.opponent_abbrev || '')
+    return matchesStat && matchesMatchup
+  })
 
   // Sort by max edge
   const sortedPredictions = [...filteredPredictions].sort((a, b) => {
@@ -119,12 +131,25 @@ export default function HomePage() {
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>
             <h1 className="text-2xl font-bold text-slate-50">Today&apos;s Props</h1>
-            <p className="text-slate-400">{formatDate(new Date())}</p>
+            <p className="text-slate-400">{formatDate(new Date())} • {sortedPredictions.length} picks</p>
           </div>
-          <FilterTabs activeFilter={filter} onFilterChange={setFilter} />
+          <div className="flex items-center gap-3">
+            {/* Matchup Filter */}
+            <select
+              value={teamFilter}
+              onChange={(e) => setTeamFilter(e.target.value)}
+              className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            >
+              <option value="all">All Games</option>
+              {availableMatchups.map((matchup) => (
+                <option key={matchup} value={matchup}>{matchup}</option>
+              ))}
+            </select>
+            <FilterTabs activeFilter={filter} onFilterChange={setFilter} />
+          </div>
         </div>
 
         {/* Content */}
