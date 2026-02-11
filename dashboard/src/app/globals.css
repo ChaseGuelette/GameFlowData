@@ -14,9 +14,15 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #020617;
+    --foreground: #f8fafc;
   }
+}
+
+/* Force dark mode background for the app */
+html.dark {
+  --background: #020617;
+  --foreground: #f8fafc;
 }
 
 body {

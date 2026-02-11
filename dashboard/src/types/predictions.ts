@@ -34,6 +34,9 @@ export interface Prediction {
   best_over_book?: string
   best_under_book?: string
 
+  // Game time (UTC timestamp from NBA API)
+  game_time?: string
+
   // Feature columns for insights (optional, may not exist yet)
   feat_rest_days?: number
   feat_is_back_to_back?: boolean
@@ -61,6 +64,13 @@ export interface PlayerGameStats {
   ast: number
   fg3m: number
   min: number
+}
+
+export interface BookmakerLine {
+  bookmaker: string
+  line: number
+  over_odds: number
+  under_odds: number
 }
 
 export interface PaperTradingSummary {

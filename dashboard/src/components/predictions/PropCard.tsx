@@ -3,7 +3,7 @@
 import { PlayerAvatar } from '@/components/shared/PlayerAvatar'
 import { Badge, EdgeBadge } from '@/components/shared/Badge'
 import { type Prediction } from '@/types/predictions'
-import { cn, getEdgeTier, formatProb } from '@/lib/utils'
+import { cn, getEdgeTier, formatProb, formatGameTime } from '@/lib/utils'
 
 interface PropCardProps {
   prediction: Prediction
@@ -50,6 +50,9 @@ export function PropCard({ prediction, onAnalyze }: PropCardProps) {
           </h3>
           <p className="text-slate-400 text-sm">
             {prediction.team_abbrev || '???'} vs {prediction.opponent_abbrev || '???'}
+            {prediction.game_time && (
+              <span className="ml-2 text-slate-500">• {formatGameTime(prediction.game_time)}</span>
+            )}
           </p>
         </div>
       </div>

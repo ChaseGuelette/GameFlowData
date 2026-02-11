@@ -4,6 +4,12 @@ Run a backtest over a date range using trained model artifacts.
 Usage:
     python src/backtesting/run_backtest.py --model-dir src/models/artifacts/run_XXXXX --start 2024-10-22 --end 2025-01-15
     python src/backtesting/run_backtest.py --start 2024-11-01 --end 2024-12-31  # auto-finds latest run
+
+    # Per-stat edge thresholds
+    python src/backtesting/run_backtest.py --start 2024-11-01 --end 2024-12-31 --edge-threshold pts=0.10 reb=0.07 ast=0.15
+
+    # Per-stat BL tau (use "none" to disable BL for a stat)
+    python src/backtesting/run_backtest.py --start 2024-11-01 --end 2024-12-31 --bl-tau pts=0.05 reb=0.10 ast=none
 """
 
 import argparse
@@ -15,6 +21,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.backtesting.backtest_harness import BacktestHarness
+from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
 from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
@@ -66,7 +73,12 @@ def main():
         "--n-samples", type=int, default=5000, help="Monte Carlo samples (more = slower but more precise)"
     )
     parser.add_argument("--stats", nargs="+", default=["pts", "reb", "ast"], help="Stats to predict")
-    parser.add_argument("--edge-threshold", type=float, default=0.05, help="Minimum edge to place bet")
+    parser.add_argument(
+        "--edge-threshold",
+        nargs="+",
+        default=["0.05"],
+        help="Minimum edge to place bet. Global (0.05) or per-stat (pts=0.10 reb=0.07)",
+    )
     parser.add_argument("--starting-bankroll", type=float, default=10000.0, help="Starting bankroll amount")
     parser.add_argument(
         "--kelly-fraction", type=float, default=0.125, help="Kelly Criterion fraction (e.g., 0.125 for 1/8th)"
@@ -101,9 +113,9 @@ def main():
     )
     parser.add_argument(
         "--bl-tau",
-        type=float,
+        nargs="+",
         default=None,
-        help="Black-Litterman tau parameter. Enables BL blending when set (e.g., 0.05=conservative). None=disabled.",
+        help="Black-Litterman tau. Global (0.05) or per-stat (pts=0.05 reb=0.10 ast=none). None=disabled.",
     )
     parser.add_argument(
         "--bl-sizing-tau",
@@ -114,9 +126,17 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate BL tau parameters (negative values invert blending direction)
-    if args.bl_tau is not None and args.bl_tau < 0:
-        parser.error("--bl-tau must be non-negative (0.0 or greater)")
+    # Build StatConfigSet from CLI args
+    try:
+        stat_config = StatConfigSet.from_cli_args(
+            edge_values=args.edge_threshold,
+            tau_values=args.bl_tau,
+            stats=args.stats,
+        )
+    except ValueError as e:
+        parser.error(str(e))
+
+    # Validate BL sizing tau (still global-only for now)
     if args.bl_sizing_tau is not None and args.bl_sizing_tau < 0:
         parser.error("--bl-sizing-tau must be non-negative (0.0 or greater)")
 
@@ -163,13 +183,16 @@ def main():
     logger.info(f"Initializing Monte Carlo predictor (n_samples={args.n_samples})...")
     predictor = MonteCarloPredictor(pipeline, n_samples=args.n_samples, copula_params=copula_params)
 
-    # Configure Black-Litterman blender for edge filtering (optional)
-    bl_blender = None
-    if args.bl_tau is not None:
-        from src.models.black_litterman import BlackLittermanBlender, BLConfig
+    # Log per-stat configuration
+    logger.info(f"Stat config: global_edge={stat_config.global_edge_threshold}")
+    for stat in args.stats:
+        edge = stat_config.get_edge_threshold(stat)
+        tau = stat_config.get_bl_tau(stat)
+        tau_str = f"{tau}" if tau is not None else "disabled"
+        logger.info(f"  {stat}: edge={edge}, bl_tau={tau_str}")
 
-        bl_blender = BlackLittermanBlender(BLConfig(tau=args.bl_tau))
-        logger.info(f"Black-Litterman edge filtering enabled (tau={args.bl_tau})")
+    # bl_blender is no longer needed as a single instance - per-stat blenders are created in harness
+    bl_blender = None
 
     # Configure Black-Litterman blender for sizing only (optional)
     bl_sizing_blender = None
@@ -186,7 +209,7 @@ def main():
         model_pipeline=pipeline,
         predictor=predictor,
         stats=args.stats,
-        edge_threshold=args.edge_threshold,
+        edge_threshold=stat_config.global_edge_threshold,
         starting_bankroll=args.starting_bankroll,
         kelly_fraction=args.kelly_fraction,
         max_bet_pct=args.max_bet_pct,
@@ -194,6 +217,7 @@ def main():
         allowed_bets=allowed_bets,
         bl_blender=bl_blender,
         bl_sizing_blender=bl_sizing_blender,
+        stat_config=stat_config,
     )
 
     if args.max_bet_pct:

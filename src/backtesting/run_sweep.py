@@ -32,6 +32,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.backtesting.backtest_harness import BacktestHarness, BacktestResult
 from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
+from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
 from src.models.black_litterman import BLConfig, BlackLittermanBlender
 from src.models.feature_store import FeatureStore
@@ -229,7 +230,13 @@ def run_single_config(
     """Run edge calculation + simulation + metrics for one sweep config."""
     t0 = time.time()
 
-    # Create BL blender for this config
+    # Create StatConfigSet from sweep config (global values for all stats)
+    stat_config = StatConfigSet(
+        global_edge_threshold=config.edge_threshold,
+        global_bl_tau=config.tau,
+    )
+
+    # Create BL blender for this config (used as fallback, but per-stat blenders are in harness)
     bl_blender = None
     if config.tau is not None:
         bl_blender = BlackLittermanBlender(BLConfig(tau=config.tau, z_max=config.z_max))
@@ -248,6 +255,7 @@ def run_single_config(
         stats=stats,
         allowed_bets=allowed_bets,
         bl_blender=bl_blender,
+        stat_config=stat_config,
     )
 
     # Phase 1.5: Calculate edges for each date with this config's blender
@@ -290,6 +298,7 @@ def run_single_config(
         kelly_fraction=config.kelly_fraction,
         max_bet_pct=max_bet_pct,
         allowed_bets=set(allowed_bets) if allowed_bets else None,
+        stat_config=stat_config,
     )
 
     if not predictions_df.empty:

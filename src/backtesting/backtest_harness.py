@@ -2,11 +2,14 @@
 Backtesting harness for evaluating prediction models on historical data.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import joblib
 import pandas as pd
@@ -15,7 +18,10 @@ from sqlalchemy import bindparam, text
 
 from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
-from src.models.black_litterman import BlackLittermanBlender
+from src.models.black_litterman import BLConfig, BlackLittermanBlender
+
+if TYPE_CHECKING:
+    from src.config.stat_config import StatConfigSet
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +91,12 @@ class BacktestHarness:
     allowed_bets: list[tuple[str, str]] | None = None  # e.g., [("pts", "under"), ("reb", "over")]
     bl_blender: BlackLittermanBlender | None = None  # Black-Litterman probability blender (for edge filtering)
     bl_sizing_blender: BlackLittermanBlender | None = None  # BL for Kelly sizing only (edge detection uses raw probs)
+    stat_config: StatConfigSet | None = None  # Per-stat edge thresholds and BL tau values
 
     # Internal state
     _simulator: BetSimulator = field(init=False)
     _metrics_calc: MetricsCalculator = field(init=False)
+    _stat_blenders: dict[str, BlackLittermanBlender | None] = field(init=False)
 
     def __post_init__(self):
         self._simulator = BetSimulator(
@@ -98,8 +106,29 @@ class BacktestHarness:
             max_bet_pct=self.max_bet_pct,
             allowed_bets=set(self.allowed_bets) if self.allowed_bets else None,
             use_bl_for_sizing=self.bl_sizing_blender is not None,
+            stat_config=self.stat_config,
         )
         self._metrics_calc = MetricsCalculator()
+
+        # Create per-stat BL blenders based on stat_config
+        self._stat_blenders = {}
+        if self.stat_config is not None:
+            for stat in self.stats:
+                tau = self.stat_config.get_bl_tau(stat)
+                if tau is not None:
+                    self._stat_blenders[stat] = BlackLittermanBlender(BLConfig(tau=tau))
+                else:
+                    self._stat_blenders[stat] = None
+        elif self.bl_blender is not None:
+            # Fallback: use same blender for all stats
+            for stat in self.stats:
+                self._stat_blenders[stat] = self.bl_blender
+
+    def _get_blender_for_stat(self, stat: str) -> BlackLittermanBlender | None:
+        """Get BL blender for a specific stat, or None if BL is disabled for that stat."""
+        if self._stat_blenders:
+            return self._stat_blenders.get(stat)
+        return self.bl_blender
 
     def run(
         self,
@@ -653,8 +682,13 @@ class BacktestHarness:
             else:
                 return abs(odds) / (abs(odds) + 100)
 
-        if self.bl_blender is not None:
-            # ── Black-Litterman path ──
+        # Check if any stat has BL enabled
+        has_any_bl = self.bl_blender is not None or any(
+            self._stat_blenders.get(s) is not None for s in self.stats
+        )
+
+        if has_any_bl:
+            # ── Black-Litterman path (per-stat or global) ──
             # Uses devigged market probs, per-prediction confidence, and log-odds blending.
             bl_results = []
             for _, row in merged.iterrows():
@@ -664,22 +698,26 @@ class BacktestHarness:
                         "market_over": None, "market_under": None,
                         "confidence": None,
                         "posterior_over": None, "posterior_under": None,
+                        "bl_enabled": False,
                     })
                     continue
 
-                samples = prediction_samples.get((row["player_id"], row["game_id"], row["stat"]))
+                stat = row["stat"]
+                blender = self._get_blender_for_stat(stat)
+                samples = prediction_samples.get((row["player_id"], row["game_id"], stat))
 
-                if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
-                    result = self.bl_blender.blend_prediction(
+                if blender is not None and samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
+                    result = blender.blend_prediction(
                         samples=samples,
                         line=row["line"],
                         over_odds=int(row["over_odds"]),
                         under_odds=int(row["under_odds"]),
                     )
-                else:
-                    # No samples — fall back to market prior (no bet will be placed)
+                    result["bl_enabled"] = True
+                elif blender is not None:
+                    # BL enabled but no samples — fall back to market prior (no bet will be placed)
                     try:
-                        mkt_over, mkt_under = self.bl_blender.devig(
+                        mkt_over, mkt_under = blender.devig(
                             int(row["over_odds"]), int(row["under_odds"])
                         )
                     except Exception:
@@ -690,6 +728,21 @@ class BacktestHarness:
                         "market_over": mkt_over, "market_under": mkt_under,
                         "confidence": 0.0,
                         "posterior_over": mkt_over, "posterior_under": mkt_under,
+                        "bl_enabled": True,
+                    }
+                else:
+                    # No BL for this stat — use raw empirical CDF
+                    if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
+                        over_prob = float((samples > row["line"]).mean())
+                    else:
+                        over_prob = 0.5
+
+                    result = {
+                        "model_over": over_prob, "model_under": 1.0 - over_prob,
+                        "market_over": None, "market_under": None,
+                        "confidence": None,
+                        "posterior_over": over_prob, "posterior_under": 1.0 - over_prob,
+                        "bl_enabled": False,
                     }
 
                 bl_results.append(result)
@@ -702,9 +755,22 @@ class BacktestHarness:
             merged["over_prob"] = merged["posterior_over"]
             merged["under_prob"] = merged["posterior_under"]
 
-            # Use devigged market probs as the baseline for edge calculation
-            merged["implied_over"] = merged["market_over"]
-            merged["implied_under"] = merged["market_under"]
+            # For rows with BL enabled, use devigged market probs as baseline for edge
+            # For rows without BL, calculate implied probs from raw odds
+            raw_over = merged["over_odds"].apply(odds_to_prob)
+            raw_under = merged["under_odds"].apply(odds_to_prob)
+            booksum = raw_over + raw_under
+            # Fill in implied probs: use market probs if BL was applied, else devigged raw odds
+            merged["implied_over"] = merged.apply(
+                lambda r: r["market_over"] if r.get("bl_enabled") and pd.notna(r.get("market_over"))
+                else (raw_over[r.name] / booksum[r.name] if pd.notna(booksum[r.name]) and booksum[r.name] > 0 else None),
+                axis=1
+            )
+            merged["implied_under"] = merged.apply(
+                lambda r: r["market_under"] if r.get("bl_enabled") and pd.notna(r.get("market_under"))
+                else (raw_under[r.name] / booksum[r.name] if pd.notna(booksum[r.name]) and booksum[r.name] > 0 else None),
+                axis=1
+            )
 
         else:
             # ── Original path (no BL) ──

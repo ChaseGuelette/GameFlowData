@@ -22,7 +22,7 @@ PREDICTION_COLS = [
     "opponent_id", "stat", "pred_mean", "pred_std", "pred_median",
     "pred_q10", "pred_q25", "pred_q50", "pred_q75", "pred_q90",
     "line", "over_odds", "under_odds", "over_prob", "under_prob",
-    "implied_over", "implied_under", "over_edge", "under_edge",
+    "implied_over", "implied_under", "over_edge", "under_edge", "game_time",
 ]
 
 

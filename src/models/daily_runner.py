@@ -111,6 +111,7 @@ class DailyPredictionRunner:
                     row_df["player_name"] = player["player_name"]
                     row_df["game_id"] = player["game_id"]
                     row_df["team_id"] = player["team_id"]
+                    row_df["game_time"] = player.get("game_time")
                     all_features.append(row_df)
             except Exception as e:
                 logger.error(f"Error building features for player {player['player_id']}: {e}")
@@ -140,6 +141,8 @@ class DailyPredictionRunner:
         # Primary: NBA API ScoreboardV2 (works for scheduled/future games)
         games = self._get_games_from_nba_api(target_date)
         if games:
+            # Enrich with game times from odds API (NBA API doesn't provide scheduled start times)
+            games = self._enrich_game_times(games, target_date)
             return games
 
         # Fallback: DB query (only works for past dates with box score data)
@@ -170,6 +173,7 @@ class DailyPredictionRunner:
                     "game_id": row["GAME_ID"],
                     "home_team_id": int(row["HOME_TEAM_ID"]),
                     "away_team_id": int(row["VISITOR_TEAM_ID"]),
+                    "game_time": None,  # Will be enriched from odds API
                 })
 
             logger.info(f"Found {len(games)} games via NBA API ScoreboardV2")
@@ -193,6 +197,63 @@ class DailyPredictionRunner:
         with self.engine.connect() as conn:
             result = conn.execute(query, {"target_date": target_date})
             return [dict(row._mapping) for row in result]
+
+    def _enrich_game_times(self, games: list[dict], target_date: date) -> list[dict]:
+        """Add game_time to games from odds API (raw_game_lines_staging).
+
+        The NBA API ScoreboardV2 doesn't provide scheduled start times,
+        so we get them from the odds API instead.
+        """
+        from datetime import timedelta
+
+        # Games for target_date evening are stored with next day's UTC date
+        # (e.g., 7:30 PM ET on Feb 10 = 00:30 UTC on Feb 11)
+        utc_date = target_date + timedelta(days=1)
+
+        query = text("""
+            WITH game_times AS (
+                SELECT DISTINCT ON (home_team, away_team)
+                    home_team,
+                    away_team,
+                    commence_time
+                FROM raw_game_lines_staging
+                WHERE commence_time::date = :utc_date
+                ORDER BY home_team, away_team, snapshot_time DESC
+            )
+            SELECT
+                t_home.team_id as home_team_id,
+                t_away.team_id as away_team_id,
+                gt.commence_time
+            FROM game_times gt
+            JOIN teams t_home ON t_home.team_name = gt.home_team
+                OR (t_home.team_name = 'LA Clippers' AND gt.home_team = 'Los Angeles Clippers')
+            JOIN teams t_away ON t_away.team_name = gt.away_team
+                OR (t_away.team_name = 'LA Clippers' AND gt.away_team = 'Los Angeles Clippers')
+        """)
+
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(query, {"utc_date": utc_date})
+                time_lookup = {
+                    (row[0], row[1]): row[2]
+                    for row in result
+                }
+
+            # Enrich games with times
+            for game in games:
+                home_id = game.get("home_team_id")
+                away_id = game.get("away_team_id")
+                game_time = time_lookup.get((home_id, away_id))
+                if game_time:
+                    game["game_time"] = game_time
+                    logger.debug(f"Game {game['game_id']}: {game_time}")
+
+            logger.info(f"Enriched {len([g for g in games if g.get('game_time')])} games with start times")
+            return games
+
+        except Exception as e:
+            logger.warning(f"Failed to enrich game times: {e}")
+            return games
 
     def _get_players_for_games(self, games: list[dict], target_date: date) -> list[dict]:
         """Get expected players for games (based on recent activity)."""
@@ -235,13 +296,14 @@ class DailyPredictionRunner:
 
         # Map each player to their game and opponent
         # Build team -> game mapping
-        team_game_map = {}  # team_id -> (game_id, opponent_id, is_home)
+        team_game_map = {}  # team_id -> (game_id, opponent_id, is_home, game_time)
         for g in games:
             home = g.get("home_team_id")
             away = g.get("away_team_id")
+            game_time = g.get("game_time")
             if home and away:
-                team_game_map[home] = {"game_id": g["game_id"], "opponent_id": away, "is_home": True}
-                team_game_map[away] = {"game_id": g["game_id"], "opponent_id": home, "is_home": False}
+                team_game_map[home] = {"game_id": g["game_id"], "opponent_id": away, "is_home": True, "game_time": game_time}
+                team_game_map[away] = {"game_id": g["game_id"], "opponent_id": home, "is_home": False, "game_time": game_time}
 
         result_players = []
         for p in players:
@@ -250,6 +312,7 @@ class DailyPredictionRunner:
                 p["game_id"] = mapping["game_id"]
                 p["opponent_id"] = mapping["opponent_id"]
                 p["is_home"] = mapping["is_home"]
+                p["game_time"] = mapping.get("game_time")
                 result_players.append(p)
 
         return result_players
@@ -257,30 +320,43 @@ class DailyPredictionRunner:
     def _filter_injured_players(self, players: list[dict], target_date: date) -> list[dict]:
         """Remove players listed as 'Out' using rapidapi_injuries (player_id matching).
 
-        Uses the most recent injury report on or before target_date.
+        Gets each player's MOST RECENT status from the last 7 days, filtering out
+        players whose latest status is 'Out'. This handles cases where a player
+        is marked Out on day N but not re-listed on day N+1.
+
         Matches by player_id (integer) for reliable filtering, consistent
         with the feature_store and backtest harness injury queries.
         """
         try:
-            # Get the most recent report_date on or before target_date
+            # Get players whose most recent status (in last 7 days) is 'Out'
+            # This fixes the bug where players marked Out yesterday but not
+            # re-listed today would slip through
             query = text("""
-                SELECT DISTINCT player_id
-                FROM rapidapi_injuries
-                WHERE report_date = (
-                    SELECT MAX(report_date)
+                WITH recent_injuries AS (
+                    SELECT
+                        player_id,
+                        status,
+                        report_date,
+                        ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY report_date DESC) as rn
                     FROM rapidapi_injuries
-                    WHERE report_date <= :target_date
+                    WHERE report_date >= :cutoff_date
+                      AND report_date <= :target_date
+                      AND player_id IS NOT NULL
                 )
-                AND status = 'Out'
-                AND player_id IS NOT NULL
+                SELECT DISTINCT player_id
+                FROM recent_injuries
+                WHERE rn = 1 AND status = 'Out'
             """)
 
+            # Look back 7 days for injury reports
+            cutoff_date = target_date - timedelta(days=7)
+
             with self.engine.connect() as conn:
-                result = conn.execute(query, {"target_date": target_date})
+                result = conn.execute(query, {"target_date": target_date, "cutoff_date": cutoff_date})
                 out_player_ids = {row[0] for row in result}
 
             if not out_player_ids:
-                logger.info("No 'Out' players found in injury report.")
+                logger.info("No 'Out' players found in recent injury reports.")
                 return players
 
             active_players = [p for p in players if p["player_id"] not in out_player_ids]

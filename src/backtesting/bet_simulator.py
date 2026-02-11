@@ -2,11 +2,17 @@
 Bet simulation and P&L tracking for backtesting.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
+from typing import TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from src.config.stat_config import StatConfigSet
 
 
 class BetSide(Enum):
@@ -95,6 +101,9 @@ class Bet:
 class BetSimulator:
     """
     Simulates betting based on model predictions and tracks P&L.
+
+    Supports per-stat edge thresholds via stat_config. When stat_config is
+    provided, edge_threshold serves as the global fallback.
     """
 
     edge_threshold: float = 0.05
@@ -105,12 +114,19 @@ class BetSimulator:
     max_odds: int = 200  # Don't bet on long shots
     allowed_bets: set[tuple[str, str]] | None = None  # e.g., {("pts", "under"), ("reb", "over")}
     use_bl_for_sizing: bool = False  # Use BL-blended probs for Kelly sizing (sizing_prob_* columns)
+    stat_config: StatConfigSet | None = None  # Per-stat edge thresholds
 
     bets: list[Bet] = field(default_factory=list)
     current_bankroll: float = field(init=False)
 
     def __post_init__(self):
         self.current_bankroll = self.starting_bankroll
+
+    def _get_edge_threshold(self, stat: str) -> float:
+        """Get edge threshold for a stat, using per-stat config if available."""
+        if self.stat_config is not None:
+            return self.stat_config.get_edge_threshold(stat)
+        return self.edge_threshold
 
     def _calculate_kelly_stake(self, odds: int, model_prob: float) -> float:
         """Calculate stake using fractional Kelly Criterion with optional cap."""
@@ -152,8 +168,14 @@ class BetSimulator:
         implied_prob: float,
         odds: int,
         side: BetSide,
+        stat: str | None = None,
     ) -> bool:
-        """Determine if a bet should be placed based on edge and filters."""
+        """Determine if a bet should be placed based on edge and filters.
+
+        Args:
+            stat: Stat type for per-stat edge threshold lookup. If None,
+                  uses global edge_threshold.
+        """
         if model_prob is None or implied_prob is None or odds is None:
             return False
 
@@ -162,8 +184,9 @@ class BetSimulator:
 
         edge = model_prob - implied_prob
 
-        # Must have minimum edge
-        if edge < self.edge_threshold:
+        # Must have minimum edge (per-stat or global)
+        threshold = self._get_edge_threshold(stat) if stat else self.edge_threshold
+        if edge < threshold:
             return False
 
         # Filter extreme odds
@@ -254,6 +277,7 @@ class BetSimulator:
                     implied_prob=row.get("implied_over"),
                     odds=row.get("over_odds"),
                     side=BetSide.OVER,
+                    stat=stat,
                 ):
                     # Get sizing prob for Kelly when BL sizing is enabled
                     sizing_prob = None
@@ -292,6 +316,7 @@ class BetSimulator:
                     implied_prob=row.get("implied_under"),
                     odds=row.get("under_odds"),
                     side=BetSide.UNDER,
+                    stat=stat,
                 ):
                     # Get sizing prob for Kelly when BL sizing is enabled
                     sizing_prob = None

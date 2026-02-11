@@ -37,6 +37,7 @@ export default function HomePage() {
 
       // Fetch predictions for today
       // Filter out NaN edges by checking line is not null (NaN edges have null lines)
+      console.log('Fetching predictions for date:', today)
       const { data: predictionsData, error: predictionsError } = await supabase
         .from('daily_predictions')
         .select('*')
@@ -44,6 +45,12 @@ export default function HomePage() {
         .not('line', 'is', null)
         .or('over_edge.gte.0.03,under_edge.gte.0.03')
         .order('over_edge', { ascending: false })
+
+      console.log('Predictions result:', {
+        count: predictionsData?.length || 0,
+        error: predictionsError?.message || null,
+        today
+      })
 
       if (!predictionsError && predictionsData) {
         // Map DB columns to frontend expected names and add team abbrevs

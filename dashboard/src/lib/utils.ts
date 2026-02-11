@@ -15,12 +15,15 @@ export function formatDate(date: string | Date): string {
   })
 }
 
-// Format date as "YYYY-MM-DD" for API queries
+// Format date as "YYYY-MM-DD" for API queries (local timezone)
 export function formatDateISO(date: Date): string {
-  return date.toISOString().split('T')[0]
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
-// Get today's date in YYYY-MM-DD format
+// Get today's date in YYYY-MM-DD format (local timezone)
 export function getToday(): string {
   return formatDateISO(new Date())
 }
@@ -69,5 +72,21 @@ export function americanToImplied(american: number): number {
     return 100 / (american + 100)
   } else {
     return Math.abs(american) / (Math.abs(american) + 100)
+  }
+}
+
+// Format game time for display (e.g., "7:30 PM")
+export function formatGameTime(gameTime: string | undefined): string {
+  if (!gameTime) return ''
+  try {
+    const date = new Date(gameTime)
+    if (isNaN(date.getTime())) return ''
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+  } catch {
+    return ''
   }
 }

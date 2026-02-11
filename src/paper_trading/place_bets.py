@@ -6,6 +6,9 @@ Usage:
     python src/paper_trading/place_bets.py --date 2026-02-04
     python src/paper_trading/place_bets.py --date 2026-02-04 --dry-run
     python src/paper_trading/place_bets.py --date 2026-02-04 --edge-threshold 0.08
+
+    # Per-stat edge thresholds
+    python src/paper_trading/place_bets.py --date 2026-02-04 --edge-threshold pts=0.10 reb=0.07 ast=0.15
 """
 
 import argparse
@@ -13,6 +16,7 @@ import logging
 import sys
 from datetime import date, datetime
 
+from src.config.stat_config import StatConfigSet
 from src.paper_trading.paper_trader import PaperTrader
 
 logging.basicConfig(
@@ -73,9 +77,9 @@ def main():
     )
     parser.add_argument(
         "--edge-threshold",
-        type=float,
-        default=0.05,
-        help="Minimum edge to place bet (default: 0.05)",
+        nargs="+",
+        default=["0.05"],
+        help="Minimum edge to place bet. Global (0.05) or per-stat (pts=0.10 reb=0.07). Default: 0.05",
     )
     parser.add_argument(
         "--kelly-fraction",
@@ -92,15 +96,29 @@ def main():
 
     args = parser.parse_args()
 
+    # Build StatConfigSet from CLI args
+    stats = ["pts", "reb", "ast"]
+    try:
+        stat_config = StatConfigSet.from_cli_args(
+            edge_values=args.edge_threshold,
+            tau_values=None,
+            stats=stats,
+        )
+    except ValueError as e:
+        parser.error(str(e))
+
     logger.info(f"Paper Bet Placement for {args.date}")
-    logger.info(f"Edge threshold: {args.edge_threshold:.1%}")
+    logger.info(f"Edge threshold: global={stat_config.global_edge_threshold}")
+    for stat in stats:
+        logger.info(f"  {stat}: edge={stat_config.get_edge_threshold(stat)}")
     logger.info(f"Kelly fraction: {args.kelly_fraction}")
 
     # Initialize trader
     trader = PaperTrader(
-        edge_threshold=args.edge_threshold,
+        edge_threshold=stat_config.global_edge_threshold,
         kelly_fraction=args.kelly_fraction,
         starting_bankroll=args.bankroll,
+        stat_config=stat_config,
     )
 
     # Select bets

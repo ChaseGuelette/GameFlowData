@@ -5,15 +5,20 @@ Converts daily predictions into paper bets with Kelly-based stake sizing,
 and resolves bets against actual game results.
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
+
+if TYPE_CHECKING:
+    from src.config.stat_config import StatConfigSet
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,7 @@ class PaperTrader:
     Converts daily predictions into paper bets and tracks P&L.
 
     Supports standalone operation for dashboard integration.
+    Supports per-stat edge thresholds via stat_config.
     """
 
     edge_threshold: float = 0.05
@@ -35,9 +41,16 @@ class PaperTrader:
     starting_bankroll: float = 10000.0
     min_odds: int = -200  # Don't bet heavy favorites
     max_odds: int = 200  # Don't bet long shots
+    stat_config: StatConfigSet | None = None  # Per-stat edge thresholds
 
     def __post_init__(self):
         self.engine = get_engine()
+
+    def _get_edge_threshold(self, stat: str) -> float:
+        """Get edge threshold for a stat, using per-stat config if available."""
+        if self.stat_config is not None:
+            return self.stat_config.get_edge_threshold(stat)
+        return self.edge_threshold
 
     def _american_to_decimal(self, odds: float) -> float:
         """Convert American odds to decimal odds."""
@@ -134,6 +147,9 @@ class PaperTrader:
 
         bets = []
         for _, row in df.iterrows():
+            stat = row["stat"]
+            threshold = self._get_edge_threshold(stat)
+
             # Determine which direction has better edge
             over_edge = row["over_edge"] if pd.notna(row["over_edge"]) else 0
             under_edge = row["under_edge"] if pd.notna(row["under_edge"]) else 0
@@ -145,13 +161,13 @@ class PaperTrader:
             model_prob = 0
             implied_prob = 0
 
-            if over_edge > under_edge and over_edge >= self.edge_threshold:
+            if over_edge > under_edge and over_edge >= threshold:
                 direction = "over"
                 edge = over_edge
                 odds = row["over_odds"]
                 model_prob = row["over_prob"]
                 implied_prob = row["implied_over"]
-            elif under_edge >= self.edge_threshold:
+            elif under_edge >= threshold:
                 direction = "under"
                 edge = under_edge
                 odds = row["under_odds"]
