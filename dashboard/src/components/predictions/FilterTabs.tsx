@@ -16,7 +16,6 @@ const filters: { value: FilterOption; label: string }[] = [
   { value: 'pts', label: STAT_LABELS.pts },
   { value: 'reb', label: STAT_LABELS.reb },
   { value: 'ast', label: STAT_LABELS.ast },
-  { value: 'threes', label: STAT_LABELS.threes },
 ]
 
 export function FilterTabs({ activeFilter, onFilterChange, className }: FilterTabsProps) {

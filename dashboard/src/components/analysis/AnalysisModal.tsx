@@ -19,7 +19,6 @@ const STAT_COLUMN_MAP: Record<StatType, keyof PlayerGameStats> = {
   pts: 'pts',
   reb: 'reb',
   ast: 'ast',
-  threes: 'fg3m',
 }
 
 export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
@@ -45,12 +44,18 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
     fetchHistory()
   }, [prediction.player_id])
 
-  // Determine bet direction
-  const isOverBet = prediction.over_edge > prediction.under_edge
-  const edge = isOverBet ? prediction.over_edge : prediction.under_edge
+  // Determine bet direction (with NaN safety)
+  const overEdge = Number.isFinite(prediction.over_edge) ? prediction.over_edge : 0
+  const underEdge = Number.isFinite(prediction.under_edge) ? prediction.under_edge : 0
+  const isOverBet = overEdge > underEdge
+  const edge = isOverBet ? overEdge : underEdge
   const direction = isOverBet ? 'Over' : 'Under'
-  const probability = isOverBet ? prediction.model_prob_over : prediction.model_prob_under
-  const marketProb = isOverBet ? prediction.implied_prob_over : prediction.implied_prob_under
+  const probability = isOverBet
+    ? (Number.isFinite(prediction.model_prob_over) ? prediction.model_prob_over : 0)
+    : (Number.isFinite(prediction.model_prob_under) ? prediction.model_prob_under : 0)
+  const marketProb = isOverBet
+    ? (Number.isFinite(prediction.implied_prob_over) ? prediction.implied_prob_over : 0)
+    : (Number.isFinite(prediction.implied_prob_under) ? prediction.implied_prob_under : 0)
 
   // Get stat values for chart
   const statColumn = STAT_COLUMN_MAP[prediction.stat]

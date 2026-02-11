@@ -11,9 +11,11 @@ interface PropCardProps {
 }
 
 export function PropCard({ prediction, onAnalyze }: PropCardProps) {
-  // Determine which direction has positive edge
-  const isOverBet = prediction.over_edge > prediction.under_edge
-  const edge = isOverBet ? prediction.over_edge : prediction.under_edge
+  // Determine which direction has positive edge (with NaN safety)
+  const overEdge = Number.isFinite(prediction.over_edge) ? prediction.over_edge : 0
+  const underEdge = Number.isFinite(prediction.under_edge) ? prediction.under_edge : 0
+  const isOverBet = overEdge > underEdge
+  const edge = isOverBet ? overEdge : underEdge
   const direction = isOverBet ? 'Over' : 'Under'
   const probability = isOverBet ? prediction.model_prob_over : prediction.model_prob_under
   const edgeTier = getEdgeTier(edge)
@@ -24,8 +26,9 @@ export function PropCard({ prediction, onAnalyze }: PropCardProps) {
     low: 'border-slate-700',
   }
 
-  // Calculate stars (1-5 based on edge)
-  const stars = Math.min(5, Math.max(1, Math.ceil(Math.abs(edge) * 50)))
+  // Calculate stars (1-5 based on edge) with NaN safety
+  const safeEdge = Number.isFinite(edge) ? edge : 0
+  const stars = Math.min(5, Math.max(1, Math.ceil(Math.abs(safeEdge) * 50)))
 
   return (
     <div

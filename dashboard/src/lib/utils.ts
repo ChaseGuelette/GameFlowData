@@ -25,14 +25,16 @@ export function getToday(): string {
   return formatDateISO(new Date())
 }
 
-// Format edge as percentage with sign
+// Format edge as percentage with sign (NaN-safe)
 export function formatEdge(edge: number): string {
+  if (!Number.isFinite(edge)) return '—'
   const sign = edge >= 0 ? '+' : ''
   return `${sign}${(edge * 100).toFixed(1)}%`
 }
 
-// Format probability as percentage
+// Format probability as percentage (NaN-safe)
 export function formatProb(prob: number): string {
+  if (!Number.isFinite(prob)) return '—'
   return `${(prob * 100).toFixed(1)}%`
 }
 

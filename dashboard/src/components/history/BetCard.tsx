@@ -48,7 +48,7 @@ export function BetCard({ bet }: BetCardProps) {
       {/* Header: Player + Date */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
-          <PlayerAvatar playerId={bet.player_id} size="sm" />
+          <PlayerAvatar playerId={bet.player_id} playerName={bet.player_name} size="sm" />
           <div>
             <div className="font-medium text-slate-50">{bet.player_name}</div>
             <div className="text-xs text-slate-400">{bet.game_date}</div>
