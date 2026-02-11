@@ -1,5 +1,57 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-10 — Session 24)
+
+### What We Did
+
+**Enhanced Dashboard Analysis Modal with Line Shopping and Kelly Sizing.** Major improvements to the dashboard's analysis modal for better betting decision support.
+
+**Key features added:**
+
+1. **Sportsbook Line Shopping** — Shows all available bookmaker lines for each prop with:
+   - Actual edge calculation using quantile-based probability estimation
+   - Proper Under bet EV calculation (higher lines = easier to hit for unders)
+   - Lines sorted by edge magnitude with "BEST" indicator
+   - Bookmaker name formatting for cleaner display
+
+2. **Kelly Bet Sizing Calculator** — Interactive bet sizing tool:
+   - Bankroll input persisted to localStorage
+   - Preset Kelly fractions (Full, Half, Quarter, Eighth) via dropdown
+   - Toggle to switch to custom decimal input
+   - Displays recommended bet size based on edge, odds, and Kelly fraction
+   - Fixed leading zeros issue in bankroll input
+
+3. **Matchup Filter** — Changed team filter from individual teams to matchup format:
+   - "LAL vs SAS" instead of separate "LAL" and "SAS" options
+   - More intuitive for filtering by game
+
+4. **RLS Policies** — Added Supabase Row Level Security policies:
+   - `player_game_stats` — for Last 5 games chart data
+   - `raw_player_props_combined` — for sportsbook lines data
+   - Enables browser-side access without auth issues
+
+**Bug fixes:**
+- Fixed Under bet probability estimation (was treating lower lines as better)
+- Added NaN guards to EdgeBadge and QuantileSummary components
+- Fixed useState lazy initialization pattern (removed useEffect setState warning)
+- Removed unused variable in calculateKelly function
+
+**Files modified:**
+- `dashboard/src/components/analysis/AnalysisModal.tsx` — Major changes for line shopping, Kelly sizing
+- `dashboard/src/app/page.tsx` — Matchup filter format
+- `dashboard/src/components/shared/Badge.tsx` — NaN guards
+- `dashboard/src/components/analysis/QuantileSummary.tsx` — NaN guards
+
+**Tests:** 570 passed, 0 failures
+
+### Next Step
+
+1. **Paper trade** — Begin daily paper trading with optimized dashboard
+2. **Mobile responsiveness** — Add responsive design for mobile viewing
+3. **Date range selector** — Allow viewing historical predictions
+
+---
+
 ## Session Summary (2026-02-10 — Session 23)
 
 ### What We Did

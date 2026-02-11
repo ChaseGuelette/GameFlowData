@@ -5,6 +5,104 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-10 Session 24] — Dashboard Line Shopping & Kelly Sizing
+
+### Added
+
+- **Sportsbook Line Shopping** in `AnalysisModal`:
+  - Displays all available bookmaker lines for each prop
+  - Calculates actual edge using quantile-based probability estimation
+  - Proper Under bet EV calculation (higher lines = easier to hit)
+  - Lines sorted by edge magnitude with "BEST" indicator
+  - `formatBookmakerName()` helper for cleaner sportsbook display
+
+- **Kelly Bet Sizing Calculator** in `AnalysisModal`:
+  - `bankroll` state with localStorage persistence (lazy initialization)
+  - `kellyFraction` state with preset dropdown (Full 1.0, Half 0.5, Quarter 0.25, Eighth 0.125)
+  - `customKelly` state with toggle for custom decimal input
+  - `calculateKelly()` function for recommended bet size
+  - `oddsToImpliedProb()` helper for odds conversion
+
+- **Matchup Filter** in `page.tsx`:
+  - Changed from individual team dropdown to matchup format
+  - "LAL vs SAS" style options instead of separate team entries
+  - Sorted alphabetically for consistent display
+
+- **Supabase RLS Policies** (via migration):
+  - `Allow public read access on player_game_stats` — enables Last 5 chart
+  - `Allow public read access on raw_player_props_combined` — enables line shopping
+
+- **`estimateUnderProb()` function** in `AnalysisModal`:
+  - 5-point quantile interpolation for Under probability estimation
+  - Proper extrapolation beyond q90 (higher lines → higher Under prob)
+  - Linear interpolation between quantile points
+
+### Changed
+
+- **`dashboard/src/components/analysis/AnalysisModal.tsx`:**
+  - Added Kelly sizing UI with bankroll input and fraction selector
+  - Added sportsbook lines section with edge calculation
+  - Refactored probability estimation for Under bets
+  - Added toggle between preset and custom Kelly fractions
+
+- **`dashboard/src/app/page.tsx`:**
+  - Matchup filter format: `[team1, team2].sort().join(' vs ')`
+  - Filter logic updated to check both teams in matchup string
+
+- **`dashboard/src/components/shared/Badge.tsx`:**
+  - Added NaN guard in `EdgeBadge` component
+  - Returns dash (—) for non-finite edge values
+
+- **`dashboard/src/components/analysis/QuantileSummary.tsx`:**
+  - Added `safeFixed()` helper for NaN-safe toFixed calls
+  - Added safety checks for q50Position calculation
+
+### Fixed
+
+- **Under bet EV calculation** — Was incorrectly treating lower lines as better (copied Over logic). Now properly estimates that higher lines are easier to hit for Under bets.
+
+- **Bankroll input leading zeros** — Changed from `String(value)` to lazy initialization pattern, preventing "0" prefix when backspacing.
+
+- **useState in useEffect lint error** — Replaced `useEffect` + `setState` with lazy initialization `useState(() => ...)` pattern for bankroll and kellyFraction.
+
+- **Unused variable `q`** — Removed from `calculateKelly` function to fix lint warning.
+
+- **RLS blocking modal data** — Added public read policies for `player_game_stats` and `raw_player_props_combined` tables.
+
+### Technical Notes
+
+**Kelly Formula Implementation:**
+```typescript
+const calculateKelly = (modelProb: number, odds: number, kellyFraction: number): number => {
+  const b = odds > 0 ? odds / 100 : 100 / Math.abs(odds)  // decimal odds - 1
+  const f = (modelProb * (b + 1) - 1) / b  // full Kelly fraction
+  return Math.min(f * kellyFraction, 0.25)  // cap at 25% of bankroll
+}
+```
+
+**Under Probability Estimation:**
+- Uses 5 quantile points: (q10, 0.90), (q25, 0.75), (q50, 0.50), (q75, 0.25), (q90, 0.10)
+- Linear interpolation between adjacent points
+- Extrapolation above q90 uses slope continuation (higher lines → higher Under prob)
+- Capped between 0.90 and 0.99 for lines beyond q90
+
+**LocalStorage Pattern:**
+```typescript
+const [bankroll, setBankroll] = useState<number>(() => {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('gameflow_bankroll')
+    return saved ? parseFloat(saved) : 1000
+  }
+  return 1000
+})
+```
+
+### Test Results
+
+- 570 tests passed, 0 failures
+
+---
+
 ## [2026-02-10 Session 23] — Per-Stat Configuration System
 
 ### Added

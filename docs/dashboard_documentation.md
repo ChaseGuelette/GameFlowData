@@ -132,6 +132,32 @@ Player reference data for name enrichment.
 - `player_id` — NBA player ID
 - `full_name` — Display name
 
+### `player_game_stats`
+
+Historical game performance for Last 5 chart in AnalysisModal.
+
+**Columns used:**
+- `player_id` — NBA player ID
+- `game_id` — NBA game ID
+- `game_date` — Date of game
+- `pts`, `reb`, `ast`, `fg3m` — Stat values for chart
+
+**RLS Policy:** `Allow public read access on player_game_stats` (added Session 24)
+
+### `raw_player_props_combined`
+
+Sportsbook lines for line shopping in AnalysisModal.
+
+**Columns used:**
+- `player_id` — NBA player ID
+- `game_id` — NBA game ID
+- `market_key` — e.g., `player_points`, `player_rebounds`
+- `bookmaker_key` — e.g., `draftkings`, `fanduel`
+- `point` — Line value
+- `over_price`, `under_price` — Odds for each side
+
+**RLS Policy:** `Allow public read access on raw_player_props_combined` (added Session 24)
+
 ### `paper_trading_daily_log`
 
 Paper trading results for bankroll display and performance tracking.
@@ -177,7 +203,7 @@ Displays navigation and current bankroll.
 
 ### FilterTabs
 
-Stat type filtering with All/PTS/REB/AST/THREES options.
+Stat type filtering with All/PTS/REB/AST options (THREES removed in Session 22).
 
 ```tsx
 <FilterTabs
@@ -185,6 +211,22 @@ Stat type filtering with All/PTS/REB/AST/THREES options.
   onFilterChange={(filter) => setFilter(filter)}
 />
 ```
+
+### Matchup Filter
+
+Game filter dropdown on the main page (added Session 24).
+
+**Format:** `"LAL vs SAS"` — Teams sorted alphabetically
+
+**Implementation:**
+```typescript
+const availableMatchups = [...new Set(predictions.map(p => {
+  const teams = [p.team_abbrev || 'UNK', p.opponent_abbrev || 'UNK'].sort()
+  return `${teams[0]} vs ${teams[1]}`
+}))].sort()
+```
+
+**Filter logic:** Matches predictions where either team is in the selected matchup.
 
 ### PropCard
 
@@ -205,9 +247,11 @@ Individual prediction card with:
 ### AnalysisModal
 
 Detailed analysis popup with:
-- Last 5 games bar chart
-- Quantile distribution summary
-- Full prediction metadata
+- Last 5 games bar chart (from `player_game_stats` table)
+- Quantile distribution summary with visual bar
+- Sportsbook line shopping with edge calculations
+- Kelly bet sizing calculator with bankroll input
+- Model probabilities, market implied probabilities, and edge breakdown
 
 ```tsx
 <AnalysisModal
@@ -215,6 +259,28 @@ Detailed analysis popup with:
   onClose={() => setSelected(null)}
 />
 ```
+
+**Features (as of Session 24):**
+
+1. **Line Shopping** — Displays all available bookmaker lines for the prop:
+   - Fetches from `raw_player_props_combined` table
+   - Calculates actual edge using quantile-based probability estimation
+   - For Under bets, higher lines = easier to hit (properly calculated)
+   - Lines sorted by edge magnitude with "BEST" indicator
+   - Bookmaker names formatted for cleaner display
+
+2. **Kelly Bet Sizing** — Interactive bet sizing calculator:
+   - Bankroll input persisted to localStorage
+   - Preset Kelly fractions: Full (1.0), Half (0.5), Quarter (0.25), Eighth (0.125)
+   - Toggle to switch to custom decimal input
+   - Displays recommended bet size based on edge, odds, and Kelly fraction
+   - Formula: `f = (p(b+1) - 1) / b` where p = model probability, b = decimal odds - 1
+
+3. **Probability Estimation** — For line shopping edge calculations:
+   - Uses 5-point quantile interpolation: (q10, 0.90), (q25, 0.75), (q50, 0.50), (q75, 0.25), (q90, 0.10)
+   - Linear interpolation between adjacent points
+   - Extrapolation above q90 for Under bets (higher lines = higher Under probability)
+   - Capped between 0.90 and 0.99 for lines beyond q90
 
 ### PlayerAvatar
 

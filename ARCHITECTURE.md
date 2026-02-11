@@ -382,8 +382,15 @@ dashboard/
 ```
 
 **Key Features:**
-- **Predictions View (`/`):** Displays today's predictions filtered by stat type (pts/reb/ast/threes), sorted by edge magnitude.
-- **Analysis Modal:** Click any prop card to see Last 5 games chart, quantile distribution summary, and detailed prediction metadata.
+- **Predictions View (`/`):** Displays today's predictions filtered by stat type (pts/reb/ast), sorted by edge magnitude. Matchup filter allows viewing predictions for specific games (e.g., "LAL vs SAS").
+- **Analysis Modal:** Click any prop card to see:
+  - Last 5 games chart with performance history
+  - Quantile distribution summary with visual bar
+  - Sportsbook line shopping with actual edge calculations
+  - Kelly bet sizing calculator with bankroll input and fraction selection
+  - Model probabilities, market implied probabilities, and edge breakdown
+- **Line Shopping:** Shows all available bookmaker lines for each prop. For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line.
+- **Kelly Sizing:** Bankroll persisted to localStorage. Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds.
 - **History View (`/history`):** Shows past betting results with status filters (All/Won/Lost/Push), summary stats bar, and individual bet cards with actual vs line comparison.
 - **Performance View (`/performance`):** KPI cards (bankroll, P&L, ROI, win rate), bankroll over time chart (Recharts AreaChart), and performance breakdown by stat type.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
@@ -393,6 +400,8 @@ dashboard/
 **Data Sources:**
 - `daily_predictions` table — prediction quantiles, edges, implied probabilities
 - `players` table — player names for enrichment
+- `player_game_stats` table — historical game performance for Last 5 chart
+- `raw_player_props_combined` table — bookmaker lines for line shopping
 - `paper_bets` table — individual bet records with status and P&L
 - `paper_trading_daily_log` table — daily aggregated stats, bankroll tracking
 
@@ -740,7 +749,7 @@ See `ACTIONITEMS.md` for full details.
 
 **Prediction storage + query tool (2026-01-31):** Daily predictions and MC samples now persisted to PostgreSQL (`daily_predictions` + `daily_prediction_samples` tables). CLI query tool (`src/tools/query_player.py`) enables ad-hoc probability queries against stored distributions. Daily runner refactored: NBA API ScoreboardV2 for game discovery, `rapidapi_injuries` for injury filtering, MC samples for edge calculation, `ROW_NUMBER` snapshot ranking for line freshness.
 
-**Current state (2026-02-10):** Models trained for PTS, REB, AST stats — latest complete artifact: `run_20260205_165808`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. **THREES model archived (2026-02-10):** All THREES-related code (C3 hurdle, C4 NegBin, C5 multiclass) moved to `archive/threes_model/` due to poor market coverage (50% missing lines) and insufficient betting volume (2 bets out of 78 in backtest). Scrapers still collect `player_threes` market data for future optionality. **Training safety pattern added** — Training creates `_incomplete` suffix directory, renamed atomically after all artifacts saved. Inference job filters out incomplete directories. Prevents race condition when training and inference overlap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). **E6 Daily Pipeline Automation (2026-02-05):** Three frequency-separated job scripts created for cron scheduling — `daily_stats_job.py` (once daily), `lines_job.py` (multiple times daily), `inference_job.py` (pre-game). Cron template at `cron/gameflow_crontab.txt`. **Dashboard History & Performance Pages (2026-02-10):** Added `/history` and `/performance` routes with full UI components for viewing betting history and performance metrics.
+**Current state (2026-02-10):** Models trained for PTS, REB, AST stats — latest complete artifact: `run_20260205_165808`. Daily inference pipeline fully wired to DB storage. BL confidence function fixed with linear ramp — now produces meaningful weights for realistic edges. **THREES model archived (2026-02-10):** All THREES-related code (C3 hurdle, C4 NegBin, C5 multiclass) moved to `archive/threes_model/` due to poor market coverage (50% missing lines) and insufficient betting volume (2 bets out of 78 in backtest). Scrapers still collect `player_threes` market data for future optionality. **Training safety pattern added** — Training creates `_incomplete` suffix directory, renamed atomically after all artifacts saved. Inference job filters out incomplete directories. Prevents race condition when training and inference overlap. **Incremental linker added:** Lightweight `incremental` command for daily automated linking without downloading full 25M+ row tables. Queries only unlinked records, matches against reference tables, updates directly via batched SQL. Integrated into `run_daily.py`. Test results: 99.3% player match rate, 40.7% game match rate (future games not yet in DB). **E6 Daily Pipeline Automation (2026-02-05):** Three frequency-separated job scripts created for cron scheduling — `daily_stats_job.py` (once daily), `lines_job.py` (multiple times daily), `inference_job.py` (pre-game). Cron template at `cron/gameflow_crontab.txt`. **Dashboard History & Performance Pages (2026-02-10):** Added `/history` and `/performance` routes with full UI components for viewing betting history and performance metrics. **Dashboard Analysis Modal Enhancements (2026-02-10):** Added sportsbook line shopping with proper Under bet EV calculation (higher lines = easier to hit), Kelly bet sizing calculator with localStorage-persisted bankroll and preset/custom fraction toggle, matchup-based game filter on main page. RLS policies added for `player_game_stats` and `raw_player_props_combined` tables to enable browser-side data access.
 
 **Backtesting fixes (2026-02-07):**
 1. **Incomplete model directory validation:** `find_latest_model_dir()` in `run_sweep.py` now skips incomplete training runs (directories without `minutes_model.joblib`). Prevents silent failures when an aborted training run is selected.
