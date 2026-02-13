@@ -210,7 +210,7 @@ def run_live_scrape(scraper):
             total_rows += rows
             logger.info(f"  Saved {rows} props.")
 
-        time.sleep(0.2)
+        time.sleep(0.05)  # Odds API allows 30 req/s; 0.05s = 20 req/s max
 
     logger.info(f"Live scrape complete. Saved {total_rows} rows. Used {total_creds} credits.")
 
@@ -246,7 +246,7 @@ def run_historical_scrape(scraper, date_str):
                 rows = scraper.parse_and_store(data, snap_ts, "raw_player_props_combined")
                 logger.info(f"  Saved {rows} rows for game {event['id']}")
 
-            time.sleep(0.2)
+            time.sleep(0.05)  # Odds API allows 30 req/s; 0.05s = 20 req/s max
 
     logger.info(f"Historical scrape complete. Used {total_creds} credits.")
 

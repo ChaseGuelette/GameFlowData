@@ -406,9 +406,14 @@ class DailyPredictionRunner:
 
         markets = [stat_to_market[s] for s in stats if s in stat_to_market]
 
-        # Get the most recent snapshot per player/game/market/bookmaker/line/side
-        # NOTE: raw_player_props_combined stores 8-digit game_ids (e.g., "22500769")
-        # but NBA API returns 10-digit game_ids (e.g., "0022500769"). Use LPAD to match.
+        # Create both 10-digit and 8-digit versions of game_ids to search
+        # raw_player_props_combined has mixed formats (some 8-digit, some 10-digit)
+        # Searching both avoids LPAD() in WHERE clause which prevents index usage on 26M rows
+        game_ids_10digit = [g.zfill(10) for g in game_ids]  # Ensure 10-digit
+        game_ids_8digit = [g.lstrip('0') for g in game_ids]  # Strip leading zeros
+        all_game_ids = list(set(game_ids_10digit + game_ids_8digit))
+
+        start_time = time.perf_counter()
         query = text("""
             WITH ranked_lines AS (
                 SELECT
@@ -425,7 +430,7 @@ class DailyPredictionRunner:
                         ORDER BY snapshot_time DESC
                     ) as rn
                 FROM raw_player_props_combined
-                WHERE LPAD(game_id, 10, '0') IN :game_ids
+                WHERE game_id IN :game_ids
                   AND market_key IN :markets
                   AND player_id IS NOT NULL
             )
@@ -446,7 +451,10 @@ class DailyPredictionRunner:
         )
 
         with self.engine.connect() as conn:
-            all_lines = pd.read_sql(query, conn, params={"game_ids": list(game_ids), "markets": list(markets)})
+            all_lines = pd.read_sql(query, conn, params={"game_ids": all_game_ids, "markets": list(markets)})
+
+        elapsed = time.perf_counter() - start_time
+        logger.info(f"Fetched {len(all_lines)} prop lines in {elapsed:.1f}s")
 
         if all_lines.empty:
             return all_lines

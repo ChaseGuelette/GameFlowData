@@ -184,7 +184,7 @@ if __name__ == "__main__":
                 rows = bot.parse_and_store(data, ts)
                 pbar.set_description(f"Rows: {rows} | Cost: {total_credits}")
 
-            time.sleep(0.2)  # Avoid rate limits
+            time.sleep(0.05)  # Odds API allows 30 req/s; 0.05s = 20 req/s max
 
     except KeyboardInterrupt:
         print("\n🛑 User Stopped.")
