@@ -179,10 +179,10 @@ def main():
             "python src/processing/nba_linker_local.py incremental",
             "Linking Players (Incremental)",
         ),
-        # Step 3: Backfill team IDs
+        # Step 3: Backfill team IDs (incremental - only recent data)
         (
-            "python src/processing/backfill_team_ids.py",
-            "Backfilling Team IDs",
+            "python src/processing/backfill_team_ids_incremental.py --days-back 7",
+            "Backfilling Team IDs (Incremental)",
         ),
         # Step 4: Update player positions
         (
