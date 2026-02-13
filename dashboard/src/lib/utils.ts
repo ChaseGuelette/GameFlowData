@@ -6,8 +6,21 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 // Format date as "Jan 16, 2026"
+// Handles date-only strings (YYYY-MM-DD) without timezone shift
 export function formatDate(date: string | Date): string {
-  const d = typeof date === 'string' ? new Date(date) : date
+  let d: Date
+  if (typeof date === 'string') {
+    // For date-only strings like "2026-02-10", parse components to avoid timezone shift
+    // new Date("2026-02-10") interprets as UTC, which shifts when converted to local time
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      const [year, month, day] = date.split('-').map(Number)
+      d = new Date(year, month - 1, day) // month is 0-indexed
+    } else {
+      d = new Date(date)
+    }
+  } else {
+    d = date
+  }
   return d.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',

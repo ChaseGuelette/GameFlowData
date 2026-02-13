@@ -90,19 +90,12 @@ export default function HomePage() {
     async function fetchInitialData() {
       const supabase = createClient()
 
-      // Fetch available dates (last 30 days with predictions)
-      const thirtyDaysAgo = new Date()
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-      const startDate = thirtyDaysAgo.toISOString().split('T')[0]
+      // Fetch available dates using RPC function (efficient distinct query)
+      const { data: datesData, error: datesError } = await supabase
+        .rpc('get_prediction_dates', { days_back: 30 })
 
-      const { data: datesData } = await supabase
-        .from('daily_predictions')
-        .select('prediction_date')
-        .gte('prediction_date', startDate)
-        .order('prediction_date', { ascending: false })
-
-      if (datesData) {
-        const uniqueDates = [...new Set(datesData.map(d => d.prediction_date))]
+      if (!datesError && datesData) {
+        const uniqueDates = datesData.map((d: { prediction_date: string }) => d.prediction_date)
         setAvailableDates(uniqueDates)
 
         // If today has no predictions, default to most recent date
@@ -110,6 +103,8 @@ export default function HomePage() {
         if (uniqueDates.length > 0 && !uniqueDates.includes(today)) {
           setSelectedDate(uniqueDates[0])
         }
+      } else if (datesError) {
+        console.error('Error fetching dates:', datesError)
       }
 
       // Fetch latest bankroll from paper trading log

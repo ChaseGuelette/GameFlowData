@@ -414,11 +414,13 @@ class DailyPredictionRunner:
         all_game_ids = list(set(game_ids_10digit + game_ids_8digit))
 
         start_time = time.perf_counter()
+        # Query uses both 8-digit and 10-digit game_ids to match mixed data formats
+        # After index creation on game_id, this should be very fast
         query = text("""
             WITH ranked_lines AS (
                 SELECT
                     player_id,
-                    LPAD(game_id, 10, '0') as game_id,
+                    game_id,
                     bookmaker,
                     market_key,
                     line,
@@ -426,7 +428,7 @@ class DailyPredictionRunner:
                     odds_american,
                     snapshot_time,
                     ROW_NUMBER() OVER (
-                        PARTITION BY player_id, LPAD(game_id, 10, '0'), market_key, bookmaker, line, outcome_label
+                        PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
                         ORDER BY snapshot_time DESC
                     ) as rn
                 FROM raw_player_props_combined
@@ -436,7 +438,7 @@ class DailyPredictionRunner:
             )
             SELECT
                 player_id,
-                game_id,
+                LPAD(game_id, 10, '0') as game_id,
                 bookmaker,
                 market_key,
                 line,
