@@ -359,3 +359,276 @@ class TestPaperTraderDefaultValues:
         trader = PaperTrader()
         assert trader.min_odds == -200
         assert trader.max_odds == 200
+
+
+class TestResolveAllPending:
+    """Tests for resolve_all_pending() method."""
+
+    @patch("src.paper_trading.paper_trader.get_engine")
+    def test_resolve_all_pending_no_pending_bets(self, mock_get_engine):
+        """Test resolve_all_pending returns zeros when no pending bets exist."""
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        # Mock empty result for pending dates query
+        def mock_connect():
+            conn = MagicMock()
+            conn.__enter__ = MagicMock(return_value=conn)
+            conn.__exit__ = MagicMock(return_value=False)
+            conn.execute.return_value.fetchall.return_value = []
+            return conn
+
+        mock_engine.connect = mock_connect
+
+        trader = PaperTrader()
+        result = trader.resolve_all_pending()
+
+        assert result["dates_processed"] == 0
+        assert result["dates_skipped"] == 0
+        assert result["total_resolved"] == 0
+        assert result["total_won"] == 0
+        assert result["total_lost"] == 0
+        assert result["total_push"] == 0
+        assert result["total_cancelled"] == 0
+        assert result["by_date"] == {}
+
+    @patch("src.paper_trading.paper_trader.get_engine")
+    def test_resolve_all_pending_skips_dates_without_stats(self, mock_get_engine):
+        """Test resolve_all_pending skips dates where game stats aren't available yet."""
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        future_date = date(2026, 12, 31)  # Future date with no stats
+
+        call_count = [0]
+
+        def mock_connect():
+            conn = MagicMock()
+            conn.__enter__ = MagicMock(return_value=conn)
+            conn.__exit__ = MagicMock(return_value=False)
+
+            def mock_execute(query, params=None):
+                call_count[0] += 1
+                result = MagicMock()
+                # First call: get pending dates
+                if call_count[0] == 1:
+                    result.fetchall.return_value = [(future_date,)]
+                # Second call: check if stats exist for the date
+                else:
+                    result.scalar.return_value = 0  # No stats available
+                return result
+
+            conn.execute = mock_execute
+            return conn
+
+        mock_engine.connect = mock_connect
+
+        trader = PaperTrader()
+        result = trader.resolve_all_pending()
+
+        assert result["dates_processed"] == 0
+        assert result["dates_skipped"] == 1
+        assert result["total_resolved"] == 0
+        assert str(future_date) in result["by_date"]
+        assert result["by_date"][str(future_date)]["skipped"] is True
+
+    @patch("src.paper_trading.paper_trader.get_engine")
+    def test_resolve_all_pending_processes_dates_with_stats(self, mock_get_engine):
+        """Test resolve_all_pending processes dates that have game stats available."""
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        past_date = date(2026, 2, 10)
+
+        call_count = [0]
+
+        # Create mock bet and actuals data
+        bets_df = pd.DataFrame([{
+            "id": 1,
+            "player_id": 101,
+            "stat_type": "pts",
+            "line": 20.5,
+            "bet_direction": "over",
+            "odds_at_bet": -110.0,
+            "stake": 100.0,
+        }])
+
+        actuals_df = pd.DataFrame([{
+            "player_id": 101,
+            "pts": 25.0,  # Above line, over wins
+            "reb": 8.0,
+            "ast": 5.0,
+            "did_not_play": False,
+        }])
+
+        def mock_connect():
+            conn = MagicMock()
+            conn.__enter__ = MagicMock(return_value=conn)
+            conn.__exit__ = MagicMock(return_value=False)
+
+            def mock_execute(query, params=None):
+                call_count[0] += 1
+                result = MagicMock()
+                # First call: get pending dates
+                if call_count[0] == 1:
+                    result.fetchall.return_value = [(past_date,)]
+                # Second call: check if stats exist
+                elif call_count[0] == 2:
+                    result.scalar.return_value = 10  # Stats available
+                # Later calls: aggregation, prev log, etc.
+                else:
+                    result.fetchone.return_value = (1, 1, 0, 0, 0, 100.0, 90.91)
+                return result
+
+            conn.execute = mock_execute
+            conn.commit = MagicMock()
+            return conn
+
+        mock_engine.connect = mock_connect
+
+        # Mock pandas read_sql to return our test data
+        with patch("pandas.read_sql") as mock_read_sql:
+            mock_read_sql.side_effect = [bets_df, actuals_df]
+
+            trader = PaperTrader()
+            result = trader.resolve_all_pending()
+
+        assert result["dates_processed"] == 1
+        assert result["dates_skipped"] == 0
+        assert result["total_resolved"] == 1
+        assert result["total_won"] == 1
+        assert result["total_lost"] == 0
+
+    @patch("src.paper_trading.paper_trader.get_engine")
+    def test_resolve_all_pending_multiple_dates(self, mock_get_engine):
+        """Test resolve_all_pending processes multiple dates correctly."""
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        date1 = date(2026, 2, 10)
+        date2 = date(2026, 2, 11)
+
+        call_count = [0]
+
+        # Create mock bet data for each date
+        bets_df_date1 = pd.DataFrame([{
+            "id": 1,
+            "player_id": 101,
+            "stat_type": "pts",
+            "line": 20.5,
+            "bet_direction": "over",
+            "odds_at_bet": -110.0,
+            "stake": 100.0,
+        }])
+
+        bets_df_date2 = pd.DataFrame([{
+            "id": 2,
+            "player_id": 102,
+            "stat_type": "reb",
+            "line": 8.5,
+            "bet_direction": "under",
+            "odds_at_bet": -110.0,
+            "stake": 100.0,
+        }])
+
+        actuals_df_date1 = pd.DataFrame([{
+            "player_id": 101,
+            "pts": 25.0,  # Over wins
+            "reb": 8.0,
+            "ast": 5.0,
+            "did_not_play": False,
+        }])
+
+        actuals_df_date2 = pd.DataFrame([{
+            "player_id": 102,
+            "pts": 15.0,
+            "reb": 10.0,  # Above 8.5, under loses
+            "ast": 3.0,
+            "did_not_play": False,
+        }])
+
+        def mock_connect():
+            conn = MagicMock()
+            conn.__enter__ = MagicMock(return_value=conn)
+            conn.__exit__ = MagicMock(return_value=False)
+
+            def mock_execute(query, params=None):
+                call_count[0] += 1
+                result = MagicMock()
+                # First call: get pending dates
+                if call_count[0] == 1:
+                    result.fetchall.return_value = [(date1,), (date2,)]
+                # Stats checks and aggregations
+                elif call_count[0] in (2, 6):  # Stats check calls
+                    result.scalar.return_value = 10
+                else:
+                    result.fetchone.return_value = (1, 1, 0, 0, 0, 100.0, 90.91)
+                return result
+
+            conn.execute = mock_execute
+            conn.commit = MagicMock()
+            return conn
+
+        mock_engine.connect = mock_connect
+
+        read_sql_calls = [0]
+
+        def mock_read_sql(*args, **kwargs):
+            read_sql_calls[0] += 1
+            if read_sql_calls[0] == 1:
+                return bets_df_date1
+            elif read_sql_calls[0] == 2:
+                return actuals_df_date1
+            elif read_sql_calls[0] == 3:
+                return bets_df_date2
+            else:
+                return actuals_df_date2
+
+        with patch("pandas.read_sql", side_effect=mock_read_sql):
+            trader = PaperTrader()
+            result = trader.resolve_all_pending()
+
+        assert result["dates_processed"] == 2
+        assert result["dates_skipped"] == 0
+        assert result["total_resolved"] == 2
+        # First bet wins (over and actual > line)
+        # Second bet loses (under and actual > line)
+        assert result["total_won"] == 1
+        assert result["total_lost"] == 1
+
+    @patch("src.paper_trading.paper_trader.get_engine")
+    def test_resolve_all_pending_idempotent(self, mock_get_engine):
+        """Test that calling resolve_all_pending twice doesn't re-resolve bets."""
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        # First call returns pending bets, second call returns empty
+        # (because they were resolved in first call)
+        call_count = [0]
+
+        def mock_connect():
+            conn = MagicMock()
+            conn.__enter__ = MagicMock(return_value=conn)
+            conn.__exit__ = MagicMock(return_value=False)
+
+            def mock_execute(query, params=None):
+                call_count[0] += 1
+                result = MagicMock()
+                result.fetchall.return_value = []  # No pending bets
+                return result
+
+            conn.execute = mock_execute
+            return conn
+
+        mock_engine.connect = mock_connect
+
+        trader = PaperTrader()
+
+        # First call
+        result1 = trader.resolve_all_pending()
+        # Second call
+        result2 = trader.resolve_all_pending()
+
+        # Both should return zeros (nothing to resolve)
+        assert result1["total_resolved"] == 0
+        assert result2["total_resolved"] == 0

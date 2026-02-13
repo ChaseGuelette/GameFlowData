@@ -2,6 +2,7 @@
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 
 import numpy as np
@@ -89,9 +90,15 @@ class DailyPredictionRunner:
         return predictions_df, samples_dict
 
     def _build_features_df(self, players: list[dict], target_date: date) -> pd.DataFrame:
-        """Build a single features DataFrame for all players."""
-        all_features = []
-        for player in players:
+        """Build features DataFrame for all players using parallel execution.
+
+        Uses ThreadPoolExecutor to fetch features concurrently, reducing
+        wall-clock time from O(n * query_time) to O(n * query_time / workers).
+        """
+        start_time = time.perf_counter()
+
+        def fetch_single(player: dict) -> pd.DataFrame | None:
+            """Thread-safe feature fetch for a single player."""
             try:
                 features = self.feature_store.get_player_game_features(
                     player_id=player["player_id"],
@@ -102,20 +109,29 @@ class DailyPredictionRunner:
                     is_home=player.get("is_home"),
                 )
                 if features is not None:
-                    # get_player_game_features returns a dict; convert to single-row DF
-                    if isinstance(features, dict):
-                        row_df = pd.DataFrame([features])
-                    else:
-                        row_df = features
+                    row_df = pd.DataFrame([features]) if isinstance(features, dict) else features
                     row_df["player_id"] = player["player_id"]
                     row_df["player_name"] = player["player_name"]
                     row_df["game_id"] = player["game_id"]
                     row_df["team_id"] = player["team_id"]
                     row_df["game_time"] = player.get("game_time")
-                    all_features.append(row_df)
+                    return row_df
             except Exception as e:
                 logger.error(f"Error building features for player {player['player_id']}: {e}")
-                continue
+            return None
+
+        all_features = []
+        max_workers = min(8, len(players)) if players else 1
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(fetch_single, p): p for p in players}
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    all_features.append(result)
+
+        elapsed = time.perf_counter() - start_time
+        logger.info(f"Built features for {len(all_features)} players in {elapsed:.1f}s ({max_workers} workers)")
 
         if all_features:
             return pd.concat(all_features, ignore_index=True)

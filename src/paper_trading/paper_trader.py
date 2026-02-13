@@ -384,6 +384,104 @@ class PaperTrader:
         )
         return results
 
+    def resolve_all_pending(self) -> dict[str, Any]:
+        """
+        Resolve ALL pending bets where game results are available.
+
+        This handles multi-day catchup (weekend gaps, job failures).
+        Safe to run multiple times - only resolves bets with available stats.
+
+        Returns:
+            dict with {dates_processed: int, dates_skipped: int,
+                       total_resolved: int, by_date: {...}}
+        """
+        # Get all unique dates with pending bets
+        dates_query = text("""
+            SELECT DISTINCT game_date
+            FROM paper_bets
+            WHERE status = 'pending'
+            ORDER BY game_date ASC
+        """)
+
+        with self.engine.connect() as conn:
+            dates_result = conn.execute(dates_query).fetchall()
+
+        if not dates_result:
+            logger.info("No pending bets to resolve")
+            return {
+                "dates_processed": 0,
+                "dates_skipped": 0,
+                "total_resolved": 0,
+                "total_won": 0,
+                "total_lost": 0,
+                "total_push": 0,
+                "total_cancelled": 0,
+                "by_date": {},
+            }
+
+        pending_dates = [row[0] for row in dates_result]
+        logger.info(f"Found {len(pending_dates)} dates with pending bets: {pending_dates}")
+
+        # Check which dates have game stats available
+        dates_processed = 0
+        dates_skipped = 0
+        total_resolved = 0
+        total_won = 0
+        total_lost = 0
+        total_push = 0
+        total_cancelled = 0
+        by_date: dict[str, dict[str, Any]] = {}
+
+        for game_date in pending_dates:
+            # Check if we have stats for this date
+            stats_check_query = text("""
+                SELECT COUNT(*)
+                FROM team_game_stats
+                WHERE game_date = :game_date
+            """)
+
+            with self.engine.connect() as conn:
+                stats_count = conn.execute(
+                    stats_check_query, {"game_date": game_date}
+                ).scalar()
+
+            if stats_count == 0:
+                logger.info(f"Skipping {game_date}: no game stats available yet")
+                dates_skipped += 1
+                by_date[str(game_date)] = {"skipped": True, "reason": "no_stats"}
+                continue
+
+            # Resolve bets for this date
+            logger.info(f"Resolving bets for {game_date}...")
+            result = self.resolve_bets(game_date)
+
+            dates_processed += 1
+            total_resolved += result["resolved"]
+            total_won += result["won"]
+            total_lost += result["lost"]
+            total_push += result["push"]
+            total_cancelled += result["cancelled"]
+            by_date[str(game_date)] = result
+
+        summary = {
+            "dates_processed": dates_processed,
+            "dates_skipped": dates_skipped,
+            "total_resolved": total_resolved,
+            "total_won": total_won,
+            "total_lost": total_lost,
+            "total_push": total_push,
+            "total_cancelled": total_cancelled,
+            "by_date": by_date,
+        }
+
+        logger.info(
+            f"Resolution complete: {dates_processed} dates processed, "
+            f"{dates_skipped} skipped, {total_resolved} total bets resolved "
+            f"({total_won}W {total_lost}L {total_push}P {total_cancelled}C)"
+        )
+
+        return summary
+
     def _update_daily_log(self, game_date: date) -> None:
         """Update or create daily log entry with aggregated bet stats."""
         # Aggregate stats for the date

@@ -2,15 +2,16 @@
 """
 Daily Stats Job - NBA Game Results & Processing
 ================================================
-Run once daily (recommended: 6 AM ET) after previous night's games are final.
+Run once daily (recommended: 9 AM ET) after previous night's games are final.
 
 This job:
 1. Scrapes latest NBA game results from NBA API
 2. Runs full processing pipeline (linker, averages, opponent stats)
-3. Does NOT scrape odds or run inference (separate jobs)
+3. Resolves pending paper bets using newly available game results
+4. Does NOT scrape odds or run inference (separate jobs)
 
 Usage:
-    python src/orchestration/daily_stats_job.py [--dry-run]
+    python src/orchestration/daily_stats_job.py [--dry-run] [--skip-resolution]
 
 Examples:
     # Normal run
@@ -18,6 +19,9 @@ Examples:
 
     # Dry run (show what would be executed)
     python src/orchestration/daily_stats_job.py --dry-run
+
+    # Skip bet resolution
+    python src/orchestration/daily_stats_job.py --skip-resolution
 """
 
 import argparse
@@ -49,6 +53,51 @@ logger = logging.getLogger("DailyStatsJob")
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def resolve_pending_bets(dry_run: bool = False) -> bool:
+    """Resolve all pending paper bets using newly available game stats.
+
+    This is a separate function (not subprocess) for better error handling.
+    Resolution failure should NOT fail the entire stats job.
+    """
+    logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: Resolving Pending Paper Bets")
+
+    if dry_run:
+        logger.info("  Would call: PaperTrader().resolve_all_pending()")
+        return True
+
+    start_time = time.time()
+    try:
+        from src.paper_trading.paper_trader import PaperTrader
+
+        trader = PaperTrader()
+        result = trader.resolve_all_pending()
+
+        elapsed = time.time() - start_time
+
+        if result["dates_processed"] == 0 and result["dates_skipped"] == 0:
+            logger.info(f"COMPLETED: No pending bets to resolve ({elapsed:.1f}s)")
+        else:
+            logger.info(
+                f"COMPLETED: Bet resolution - {result['total_resolved']} bets across "
+                f"{result['dates_processed']} dates ({result['dates_skipped']} skipped) "
+                f"[{result['total_won']}W {result['total_lost']}L {result['total_push']}P] ({elapsed:.1f}s)"
+            )
+
+        return True
+
+    except ImportError as e:
+        elapsed = time.time() - start_time
+        logger.warning(f"SKIPPED: Bet resolution - paper trading module not found ({elapsed:.1f}s)")
+        logger.warning(f"  Import error: {e}")
+        return True  # Don't fail the job for missing optional module
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error(f"FAILED: Bet resolution ({elapsed:.1f}s)")
+        logger.error(f"  Exception: {e}")
+        return True  # Don't fail the job for resolution errors (stats are more important)
 
 
 def run_command(command: str, description: str, dry_run: bool = False) -> bool:
@@ -106,6 +155,11 @@ def main():
         action="store_true",
         help="Show what would be executed without running",
     )
+    parser.add_argument(
+        "--skip-resolution",
+        action="store_true",
+        help="Skip paper bet resolution step",
+    )
     args = parser.parse_args()
 
     start_time = time.time()
@@ -157,6 +211,13 @@ def main():
             success = False
             logger.error(f"Job failed at step: {description}")
             break
+
+    # Step 8: Resolve pending paper bets (runs even if previous steps failed)
+    # This is separate from the main loop because:
+    # 1. It uses direct Python import, not subprocess
+    # 2. It should not fail the job if it fails (stats are more critical)
+    if not args.skip_resolution:
+        resolve_pending_bets(args.dry_run)
 
     elapsed = time.time() - start_time
     logger.info("=" * 60)

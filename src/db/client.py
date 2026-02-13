@@ -16,8 +16,8 @@ if not DATABASE_URL:
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,  # detect stale pgBouncer connections
-    pool_size=5,  # max persistent connections
-    max_overflow=2,  # extra connections under load
+    pool_size=10,  # max persistent connections (increased for parallel feature building)
+    max_overflow=6,  # extra connections under load
     pool_recycle=300,  # recycle every 5 min (pgBouncer compat)
     connect_args={
         "options": "-c statement_timeout=300000"  # 5 min per statement

@@ -3,8 +3,13 @@
 CLI script to resolve paper bets using actual game results.
 
 Usage:
+    # Resolve bets for a specific date:
     python src/paper_trading/resolve_bets.py --date 2026-02-04
     python src/paper_trading/resolve_bets.py --date 2026-02-04 --dry-run
+
+    # Resolve ALL pending bets (multi-day catchup):
+    python src/paper_trading/resolve_bets.py --all-pending
+    python src/paper_trading/resolve_bets.py --all-pending --dry-run
 """
 
 import argparse
@@ -93,45 +98,54 @@ def format_summary(summary: dict | None) -> str:
     return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Resolve paper bets with actual results")
-    parser.add_argument(
-        "--date",
-        required=True,
-        type=parse_date,
-        help="Game date to resolve (YYYY-MM-DD)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show results without updating database",
+def format_all_pending_summary(result: dict) -> str:
+    """Format summary for --all-pending resolution."""
+    lines = []
+    lines.append(f"Dates processed: {result['dates_processed']}")
+    lines.append(f"Dates skipped:   {result['dates_skipped']} (no game stats yet)")
+    lines.append(f"Total resolved:  {result['total_resolved']}")
+    lines.append(
+        f"Record:          {result['total_won']}W - {result['total_lost']}L - "
+        f"{result['total_push']}P - {result['total_cancelled']}C"
     )
 
-    args = parser.parse_args()
+    if result["by_date"]:
+        lines.append("\nBy Date:")
+        for date_str, date_result in result["by_date"].items():
+            if date_result.get("skipped"):
+                lines.append(f"  {date_str}: SKIPPED ({date_result.get('reason', 'unknown')})")
+            else:
+                lines.append(
+                    f"  {date_str}: {date_result['resolved']} bets "
+                    f"({date_result['won']}W {date_result['lost']}L "
+                    f"{date_result['push']}P {date_result['cancelled']}C)"
+                )
 
-    logger.info(f"Resolving bets for {args.date}")
+    return "\n".join(lines)
 
-    # Initialize trader
-    trader = PaperTrader()
+
+def run_single_date_resolution(trader: PaperTrader, game_date: date, dry_run: bool) -> int:
+    """Resolve bets for a single date."""
+    logger.info(f"Resolving bets for {game_date}")
 
     # Get pending bets for preview
-    pending_bets = trader.get_pending_bets(args.date)
+    pending_bets = trader.get_pending_bets(game_date)
 
     if pending_bets.empty:
-        print(f"\nNo pending bets found for {args.date}")
+        print(f"\nNo pending bets found for {game_date}")
         # Show existing bets if any
-        all_bets = trader.get_bets_for_date(args.date)
+        all_bets = trader.get_bets_for_date(game_date)
         if not all_bets.empty:
-            print(f"\nExisting bets for {args.date}:")
+            print(f"\nExisting bets for {game_date}:")
             print(format_resolution_table(all_bets))
         return 0
 
     print(f"\n{'='*80}")
-    print(f"RESOLVING BETS FOR {args.date}")
+    print(f"RESOLVING BETS FOR {game_date}")
     print(f"{'='*80}")
     print(f"\nPending bets to resolve: {len(pending_bets)}")
 
-    if args.dry_run:
+    if dry_run:
         print("\n[DRY RUN] Would resolve the following bets:\n")
         print(format_resolution_table(pending_bets))
         print("\n[DRY RUN] Bets were NOT updated in database.")
@@ -139,7 +153,7 @@ def main():
         return 0
 
     # Resolve bets
-    results = trader.resolve_bets(args.date)
+    results = trader.resolve_bets(game_date)
 
     # Display results
     print(f"\nResolution Complete:")
@@ -149,20 +163,102 @@ def main():
     print(f"  - Cancelled: {results['cancelled']}")
 
     # Show resolved bets
-    resolved_bets = trader.get_bets_for_date(args.date)
+    resolved_bets = trader.get_bets_for_date(game_date)
     print(f"\n{'='*80}")
     print("RESOLVED BETS")
     print(f"{'='*80}\n")
     print(format_resolution_table(resolved_bets))
 
     # Show daily summary
-    summary = trader.get_daily_summary(args.date)
+    summary = trader.get_daily_summary(game_date)
     print(f"\n{'='*80}")
     print("DAILY SUMMARY")
     print(f"{'='*80}\n")
     print(format_summary(summary))
 
     return 0
+
+
+def run_all_pending_resolution(trader: PaperTrader, dry_run: bool) -> int:
+    """Resolve all pending bets across all dates."""
+    logger.info("Resolving ALL pending bets")
+
+    # Get all pending bets for preview
+    all_pending = trader.get_pending_bets()
+
+    if all_pending.empty:
+        print("\nNo pending bets found.")
+        return 0
+
+    # Group by date for display
+    dates_with_pending = all_pending["game_date"].unique()
+    print(f"\n{'='*80}")
+    print("RESOLVING ALL PENDING BETS")
+    print(f"{'='*80}")
+    print(f"\nFound {len(all_pending)} pending bets across {len(dates_with_pending)} dates:")
+    for d in sorted(dates_with_pending):
+        count = len(all_pending[all_pending["game_date"] == d])
+        print(f"  - {d}: {count} bets")
+
+    if dry_run:
+        print("\n[DRY RUN] Would resolve the following bets:\n")
+        print(format_resolution_table(all_pending))
+        print("\n[DRY RUN] Bets were NOT updated in database.")
+        logger.info(f"[DRY RUN] Would resolve {len(all_pending)} bets")
+        return 0
+
+    # Resolve all pending bets
+    result = trader.resolve_all_pending()
+
+    # Display results
+    print(f"\n{'='*80}")
+    print("RESOLUTION SUMMARY")
+    print(f"{'='*80}\n")
+    print(format_all_pending_summary(result))
+
+    # Show final bankroll
+    bankroll = trader._get_current_bankroll()
+    print(f"\n{'='*80}")
+    print(f"CURRENT BANKROLL: ${bankroll:,.2f}")
+    print(f"{'='*80}")
+
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Resolve paper bets with actual results")
+    parser.add_argument(
+        "--date",
+        type=parse_date,
+        help="Game date to resolve (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--all-pending",
+        action="store_true",
+        help="Resolve ALL pending bets across all dates (for multi-day catchup)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show results without updating database",
+    )
+
+    args = parser.parse_args()
+
+    # Validate: require either --date or --all-pending
+    if not args.date and not args.all_pending:
+        parser.error("Must specify either --date YYYY-MM-DD or --all-pending")
+
+    if args.date and args.all_pending:
+        parser.error("Cannot use both --date and --all-pending together")
+
+    # Initialize trader
+    trader = PaperTrader()
+
+    if args.all_pending:
+        return run_all_pending_resolution(trader, args.dry_run)
+    else:
+        return run_single_date_resolution(trader, args.date, args.dry_run)
 
 
 if __name__ == "__main__":
