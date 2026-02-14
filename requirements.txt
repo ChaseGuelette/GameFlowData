@@ -4,7 +4,7 @@ numpy==2.4.1
 optuna==4.7.0
 pandas==3.0.0
 plotly==6.5.2
-psycopg2==2.9.11
+psycopg2-binary==2.9.10
 python-dotenv==1.0.1
 pytz==2025.2
 requests==2.32.5
