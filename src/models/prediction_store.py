@@ -23,6 +23,12 @@ PREDICTION_COLS = [
     "pred_q10", "pred_q25", "pred_q50", "pred_q75", "pred_q90",
     "line", "over_odds", "under_odds", "over_prob", "under_prob",
     "implied_over", "implied_under", "over_edge", "under_edge", "game_time",
+    # Feature columns for dashboard insights
+    "feat_rest_days", "feat_is_back_to_back", "feat_games_last_7d",
+    "feat_team_out_count", "feat_team_out_min_sum", "feat_opp_out_count",
+    "feat_player_is_questionable", "feat_player_is_probable",
+    "feat_player_avg_stat_l3", "feat_player_avg_stat_l5", "feat_player_avg_stat_l15",
+    "feat_stat_l3_l15_ratio", "feat_stat_std_l5", "feat_opp_abbrev",
 ]
 
 

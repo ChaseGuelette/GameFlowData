@@ -1,0 +1,13 @@
+# Nixpacks build configuration for Railway
+# https://nixpacks.com/docs/configuration/file
+
+[phases.setup]
+nixPkgs = ["python311", "gcc", "libffi", "openssl"]
+
+[phases.install]
+cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
+
+[variables]
+PYTHON_VERSION = "3.11"
+# Ensure model artifacts are included
+PYTHONPATH = "/app/src"

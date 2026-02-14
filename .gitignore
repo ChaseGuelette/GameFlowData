@@ -69,8 +69,9 @@ tmpclaude-*
 node_modules/
 node_modules\
 
-# Ignore model artifacts and logs
-src/models/artifacts/
+# Ignore model training runs but keep production model
+src/models/artifacts/run_*/
+!src/models/artifacts/production/
 
 #Ignore backtest results
 backtest_results/

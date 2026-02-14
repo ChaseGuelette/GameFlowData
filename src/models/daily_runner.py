@@ -87,6 +87,9 @@ class DailyPredictionRunner:
         else:
             logger.warning("No prop lines found for today's games. Skipping edge calculation.")
 
+        # 8. Map feature values to predictions for dashboard insights
+        predictions_df = self._map_features_to_predictions(predictions_df, features_df)
+
         return predictions_df, samples_dict
 
     def _build_features_df(self, players: list[dict], target_date: date) -> pd.DataFrame:
@@ -148,6 +151,100 @@ class DailyPredictionRunner:
         )
         return predictions_df
 
+    def _map_features_to_predictions(
+        self, predictions_df: pd.DataFrame, features_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Map feature values to predictions for dashboard insights.
+
+        Extracts B1 (injury), B2 (rest/schedule), and B3 (trend) features from the
+        features DataFrame and attaches them to predictions for display in the
+        dashboard's Analysis Modal.
+        """
+        if features_df.empty:
+            return predictions_df
+
+        # Create lookup from (player_id, game_id) to feature row
+        # Use first occurrence if duplicates exist
+        features_df = features_df.drop_duplicates(subset=["player_id", "game_id"], keep="first")
+        feature_lookup = features_df.set_index(["player_id", "game_id"])
+
+        # Get opponent abbreviations from database
+        opp_abbrev_map = self._get_opponent_abbrevs(predictions_df)
+
+        # Initialize feat_* columns with None
+        feat_cols = [
+            "feat_rest_days", "feat_is_back_to_back", "feat_games_last_7d",
+            "feat_team_out_count", "feat_team_out_min_sum", "feat_opp_out_count",
+            "feat_player_is_questionable", "feat_player_is_probable",
+            "feat_player_avg_stat_l3", "feat_player_avg_stat_l5", "feat_player_avg_stat_l15",
+            "feat_stat_l3_l15_ratio", "feat_stat_std_l5", "feat_opp_abbrev",
+        ]
+        for col in feat_cols:
+            predictions_df[col] = None
+
+        # Map features to each prediction row
+        for idx, row in predictions_df.iterrows():
+            key = (row["player_id"], row["game_id"])
+            if key not in feature_lookup.index:
+                continue
+
+            feat = feature_lookup.loc[key]
+            stat = row["stat"]
+
+            # B2: Rest/Schedule (same for all stats)
+            predictions_df.at[idx, "feat_rest_days"] = int(feat.get("rest_days", 0) or 0)
+            predictions_df.at[idx, "feat_is_back_to_back"] = bool(feat.get("is_back_to_back", 0))
+            predictions_df.at[idx, "feat_games_last_7d"] = int(feat.get("games_in_last_7_days", 0) or 0)
+
+            # B1: Injury Context
+            predictions_df.at[idx, "feat_team_out_count"] = int(feat.get("team_out_count", 0) or 0)
+            predictions_df.at[idx, "feat_team_out_min_sum"] = float(feat.get("team_out_min_sum", 0) or 0)
+            predictions_df.at[idx, "feat_opp_out_count"] = int(feat.get("opp_out_count", 0) or 0)
+            predictions_df.at[idx, "feat_player_is_questionable"] = bool(feat.get("player_is_questionable", 0))
+            predictions_df.at[idx, "feat_player_is_probable"] = bool(feat.get("player_is_probable", 0))
+
+            # B3: Stat-specific averages/trends
+            if stat in ("pts", "reb", "ast"):
+                s = stat
+                avg_l3 = feat.get(f"player_avg_{s}_l3")
+                avg_l5 = feat.get(f"player_avg_{s}_l5")
+                avg_l15 = feat.get(f"player_avg_{s}_l15")
+                ratio = feat.get(f"player_{s}_l3_l15_ratio")
+                std = feat.get(f"player_std_{s}_l5")
+
+                predictions_df.at[idx, "feat_player_avg_stat_l3"] = float(avg_l3) if avg_l3 is not None else None
+                predictions_df.at[idx, "feat_player_avg_stat_l5"] = float(avg_l5) if avg_l5 is not None else None
+                predictions_df.at[idx, "feat_player_avg_stat_l15"] = float(avg_l15) if avg_l15 is not None else None
+                predictions_df.at[idx, "feat_stat_l3_l15_ratio"] = float(ratio) if ratio is not None else None
+                predictions_df.at[idx, "feat_stat_std_l5"] = float(std) if std is not None else None
+
+            # Opponent abbreviation
+            opp_id = row.get("opponent_id")
+            if opp_id and opp_id in opp_abbrev_map:
+                predictions_df.at[idx, "feat_opp_abbrev"] = opp_abbrev_map[opp_id]
+
+        logger.info(f"Mapped insight features for {len(predictions_df)} predictions")
+        return predictions_df
+
+    def _get_opponent_abbrevs(self, predictions_df: pd.DataFrame) -> dict[int, str]:
+        """Get team abbreviations for opponent_ids using hardcoded map."""
+        # NBA team ID to abbreviation map (same as dashboard)
+        team_abbrev = {
+            1610612737: 'ATL', 1610612738: 'BOS', 1610612751: 'BKN',
+            1610612766: 'CHA', 1610612741: 'CHI', 1610612739: 'CLE',
+            1610612742: 'DAL', 1610612743: 'DEN', 1610612765: 'DET',
+            1610612744: 'GSW', 1610612745: 'HOU', 1610612754: 'IND',
+            1610612746: 'LAC', 1610612747: 'LAL', 1610612763: 'MEM',
+            1610612748: 'MIA', 1610612749: 'MIL', 1610612750: 'MIN',
+            1610612740: 'NOP', 1610612752: 'NYK', 1610612760: 'OKC',
+            1610612753: 'ORL', 1610612755: 'PHI', 1610612756: 'PHX',
+            1610612757: 'POR', 1610612758: 'SAC', 1610612759: 'SAS',
+            1610612761: 'TOR', 1610612762: 'UTA', 1610612764: 'WAS',
+        }
+
+        opp_ids = predictions_df["opponent_id"].dropna().unique().tolist()
+        return {int(tid): team_abbrev.get(int(tid), 'UNK') for tid in opp_ids if tid}
+
     def _get_games_for_date(self, target_date: date) -> list[dict]:
         """Get all games for target date via NBA API ScoreboardV2.
 
@@ -206,7 +303,7 @@ class DailyPredictionRunner:
                    MAX(CASE WHEN team_matchup LIKE '%vs.%' THEN team_id END) as home_team_id,
                    MAX(CASE WHEN team_matchup LIKE '%@%' THEN team_id END) as away_team_id
             FROM team_game_stats
-            WHERE team_game_date::date = :target_date
+            WHERE game_date = :target_date
             GROUP BY game_id
         """)
 

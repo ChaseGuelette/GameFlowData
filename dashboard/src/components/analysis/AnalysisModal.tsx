@@ -8,6 +8,7 @@ import { Last5Chart } from './Last5Chart'
 import { QuantileSummary } from './QuantileSummary'
 import { type Prediction, type PlayerGameStats, type StatType, type BookmakerLine, STAT_LABELS } from '@/types/predictions'
 import { formatProb } from '@/lib/utils'
+import { generateInsights, type Insight } from '@/lib/insights'
 
 interface AnalysisModalProps {
   prediction: Prediction
@@ -424,6 +425,37 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
             </div>
           )}
         </div>
+
+        {/* Model Context / Insights */}
+        {(() => {
+          const insights = generateInsights(prediction)
+          if (insights.length === 0) return null
+
+          return (
+            <div className="p-6 border-b border-slate-700">
+              <h3 className="text-lg font-semibold text-slate-50 mb-3">Model Context</h3>
+              <div className="space-y-2">
+                {insights.map((insight, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-center gap-2 text-sm ${
+                      insight.sentiment === 'positive'
+                        ? 'text-green-400'
+                        : insight.sentiment === 'negative'
+                          ? 'text-red-400'
+                          : 'text-slate-300'
+                    }`}
+                  >
+                    <span className="w-4 text-center">
+                      {insight.sentiment === 'positive' ? '✓' : insight.sentiment === 'negative' ? '⚠' : '•'}
+                    </span>
+                    <span>{insight.text}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Sportsbook Lines */}
         <div className="p-6 border-b border-slate-700">

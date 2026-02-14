@@ -1272,11 +1272,11 @@ Next.js dashboard for viewing predictions and paper trading results. Full spec: 
 **Design:** Desktop-first, dark theme
 
 - [x] **G1. Project setup** — *(DONE — 2026-02-09)* Next.js 16 with TypeScript, Tailwind, Supabase SSR client, email/password auth
-- [ ] **G2. Database migration** — Add `feat_*` columns to `daily_predictions` for insight generation
-- [ ] **G3. Update prediction storage** — Modify `prediction_store.py` and `daily_runner.py` to save feature values
+- [x] **G2. Database migration** — *(DONE — 2026-02-14)* Added `feat_*` columns to `daily_predictions` for insight generation
+- [x] **G3. Update prediction storage** — *(DONE — 2026-02-14)* Modified `prediction_store.py` and `daily_runner.py` to save feature values
 - [x] **G4. Home page MVP** — *(DONE — 2026-02-09)* Prop cards grid with filtering (All/PTS/REB/AST/THREES), edge sorting, player name enrichment
-- [x] **G5. Analysis modal** — *(PARTIAL — 2026-02-09)* Last 5 games chart + quantile summary created. Template-based insights pending (needs G2/G3).
-- [ ] **G6. Hero section** — "Lock of the Day" with top pick by edge
+- [x] **G5. Analysis modal** — *(DONE — 2026-02-14)* Last 5 games chart + quantile summary + template-based insights ("Model Context" section)
+- [x] **G6. Hero section** — *(DONE — 2026-02-13)* "Play of the Day" with top pick by edge, star rating, analyze button
 - [x] **G7. Player headshots** — *(DONE — 2026-02-09)* NBA CDN integration with inline SVG fallback
 - [x] **G8. Paper trading views** — *(DONE — 2026-02-10)* History page and Performance page created:
   - `/history` — Bet history with status filters (All/Won/Lost/Push), summary bar, bet cards

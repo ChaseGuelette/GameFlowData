@@ -109,8 +109,13 @@ def main():
 
         # Check if artifacts_path contains models directly or has run_* subdirs
         if (artifacts_path / "minutes_model.joblib").exists():
+            # Direct path to model artifacts (e.g., --model-dir src/models/artifacts/run_xxx)
             model_path = artifacts_path
+        elif (artifacts_path / "production" / "minutes_model.joblib").exists():
+            # Use production model (preferred for Railway/deployed environments)
+            model_path = artifacts_path / "production"
         else:
+            # Fall back to latest run_* directory (local development)
             # Filter out _incomplete directories (training in progress)
             runs = sorted([
                 d for d in artifacts_path.iterdir()
@@ -120,8 +125,11 @@ def main():
             ])
             if not runs:
                 raise FileNotFoundError(
-                    f"No completed run_* directories found in {artifacts_path}. "
-                    "Check if training is still in progress (_incomplete directories exist)."
+                    f"No model found. Checked:\n"
+                    f"  - {artifacts_path}/minutes_model.joblib\n"
+                    f"  - {artifacts_path}/production/\n"
+                    f"  - {artifacts_path}/run_*/\n"
+                    "Run training first or promote a model to production."
                 )
             model_path = runs[-1]
 
