@@ -416,6 +416,7 @@ dashboard/
 ```
 
 **Key Features:**
+- **Play of the Day:** Featured card at the top of the dashboard highlighting the model's highest-edge pick. Amber/gold visual treatment with trophy badge, large player avatar, star rating, and prominent edge display. Respects current filter settings (date, edge threshold, BL blending). Clicking "Analyze Pick" opens the analysis modal.
 - **Predictions View (`/`):** Displays predictions filtered by stat type (pts/reb/ast), sorted by edge magnitude. Matchup filter allows viewing predictions for specific games (e.g., "LAL vs SAS"). Includes:
   - **Date Selector:** View predictions from any date in the last 30 days (uses `get_prediction_dates()` RPC function for efficient distinct query)
   - **Edge Threshold Filter:** Filter picks by minimum edge (All, ≥3%, ≥5%, ≥7%, ≥10%, ≥15%, ≥20%)

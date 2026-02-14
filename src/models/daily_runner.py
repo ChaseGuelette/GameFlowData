@@ -255,20 +255,46 @@ class DailyPredictionRunner:
                     for row in result
                 }
 
+            # Log if no times found in database
+            if not time_lookup:
+                logger.warning(
+                    f"No game times found in raw_game_lines_staging for UTC date {utc_date}. "
+                    "Ensure lines_job ran before inference."
+                )
+                return games
+
             # Enrich games with times
+            enriched_count = 0
             for game in games:
                 home_id = game.get("home_team_id")
                 away_id = game.get("away_team_id")
                 game_time = time_lookup.get((home_id, away_id))
                 if game_time:
                     game["game_time"] = game_time
+                    enriched_count += 1
                     logger.debug(f"Game {game['game_id']}: {game_time}")
 
-            logger.info(f"Enriched {len([g for g in games if g.get('game_time')])} games with start times")
+            # Log enrichment results with visibility into partial failures
+            if enriched_count == len(games):
+                logger.info(f"Enriched {enriched_count} games with start times")
+            elif enriched_count > 0:
+                logger.warning(
+                    f"Partial game time enrichment: {enriched_count}/{len(games)} games. "
+                    "Some games may display without times in dashboard."
+                )
+            else:
+                logger.error(
+                    f"Failed to enrich ANY game times (0/{len(games)} games). "
+                    "Dashboard will not display game times. Check team name matching."
+                )
+
             return games
 
         except Exception as e:
-            logger.warning(f"Failed to enrich game times: {e}")
+            logger.error(
+                f"Game time enrichment failed with exception: {e}. "
+                "Dashboard will not display game times for these predictions."
+            )
             return games
 
     def _get_players_for_games(self, games: list[dict], target_date: date) -> list[dict]:

@@ -33,6 +33,7 @@ dashboard/
 │   │   │   └── Navbar.tsx      # Navigation with bankroll display
 │   │   ├── predictions/        # Prediction display components
 │   │   │   ├── FilterTabs.tsx  # Stat type filtering
+│   │   │   ├── PlayOfTheDay.tsx# Featured top pick card
 │   │   │   ├── PropCard.tsx    # Individual prediction card
 │   │   │   └── PropGrid.tsx    # Grid layout for cards
 │   │   ├── analysis/           # Analysis components
@@ -676,9 +677,54 @@ Per-stat performance table.
 - P&L
 - ROI
 
+### Play of the Day (Session 28)
+
+Featured hero card highlighting the model's highest-edge pick.
+
+**Location:** Rendered above PropGrid on the main page
+
+**Features:**
+- Trophy badge header with amber/gold visual treatment
+- Large player avatar (96x96), player name, team matchup, game time
+- Stat badge + bet direction/line display
+- Star rating visualization (1-5 based on edge magnitude)
+- Edge badge and model probability display
+- "Analyze Pick" button opens analysis modal
+- Responsive layout (stacked mobile, horizontal desktop)
+
+**Filter Integration:**
+- Respects all active filters (date, edge threshold, BL blending, stat type, matchup)
+- Uses `sortedPredictions[0]` — already filtered and sorted by max edge
+- Hidden when no predictions available or during loading
+
+**Usage:**
+```tsx
+<PlayOfTheDay
+  prediction={sortedPredictions[0]}
+  onAnalyze={(p) => setSelectedPrediction(p)}
+/>
+```
+
+**Styling:**
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  🏆 PLAY OF THE DAY                                                 │
+├────────────────────────────────────────────────────────────────────┤
+│  [Avatar]  Player Name           [Stat]           Over/Under XX.X  │
+│            Team vs Opponent      ★★★★★           +12.3% Edge       │
+│            Game Time                              62.1% Model Prob │
+│                                                  [Analyze Pick]    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**Colors:**
+- Border: `border-2 border-amber-400/50`
+- Background: `bg-gradient-to-r from-amber-950/30 to-slate-800`
+- Trophy and stars: `text-amber-400`
+- CTA button: `bg-amber-600 hover:bg-amber-500`
+
 ## Future Enhancements
 
 1. **Feature-based insights** — Display why the model likes a prop (e.g., "Team missing key rebounder")
-2. **Lock of the Day** — Hero section highlighting top pick
-3. **Date range selector** — Allow selecting custom date ranges for history/performance
-4. **Vercel deployment** — Production hosting with environment variables
+2. **Date range selector** — Allow selecting custom date ranges for history/performance
+3. **Vercel deployment** — Production hosting with environment variables

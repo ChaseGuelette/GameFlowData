@@ -381,6 +381,7 @@ class MonteCarloPredictor:
         game_ids = features_df["game_id"].values
         player_names = features_df["player_name"].values if "player_name" in features_df.columns else [None] * n_players
         team_ids = features_df["team_id"].values if "team_id" in features_df.columns else [None] * n_players
+        game_times = features_df["game_time"].values if "game_time" in features_df.columns else [None] * n_players
 
         # If no other stats to process, return early
         if not stats:
@@ -465,6 +466,7 @@ class MonteCarloPredictor:
                         "player_name": player_names[i],
                         "game_id": game_ids[i],
                         "team_id": team_ids[i],
+                        "game_time": game_times[i],
                         "stat": stat,
                         "pred_mean": float(stat_samples.mean()),
                         "pred_std": float(stat_samples.std()),

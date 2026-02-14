@@ -1,5 +1,40 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-13 — Session 28)
+
+### What We Did
+
+**Added "Play of the Day" featured card to dashboard.** Created a prominent hero card at the top of the predictions page highlighting the model's highest-edge pick.
+
+**Key features:**
+- Trophy badge header with amber/gold visual treatment
+- Large player avatar (96x96), player name, team matchup, game time
+- Stat badge + bet direction/line with star rating (1-5)
+- Edge badge and model probability display
+- "Analyze Pick" button opens analysis modal
+- Responsive layout (stacked on mobile, horizontal on desktop)
+
+**Filter integration:**
+- Respects all current filters (date, edge threshold, BL blending, stat type, matchup)
+- Uses `sortedPredictions[0]` — already filtered and sorted by max edge
+- Disappears when no predictions available
+
+**Files created:**
+- `dashboard/src/components/predictions/PlayOfTheDay.tsx` — New featured card component (~85 lines)
+
+**Files modified:**
+- `dashboard/src/app/page.tsx` — Import and render PlayOfTheDay above PropGrid
+
+**Tests:** 575 passed, 0 failures
+
+### Next Step
+
+1. **Paper trade** — Continue daily paper trading with automated pipeline
+2. **Mobile responsiveness** — Test and refine dashboard on mobile devices
+3. **Discord bot** — Follow development plan in `docs/discord_bot_development.md`
+
+---
+
 ## Session Summary (2026-02-13 — Session 27)
 
 ### What We Did

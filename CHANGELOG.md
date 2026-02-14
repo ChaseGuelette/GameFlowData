@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-13 Session 28] — Play of the Day Featured Card
+
+### Added
+
+- **Play of the Day Component** (`dashboard/src/components/predictions/PlayOfTheDay.tsx`):
+  - Featured hero card highlighting the model's highest-edge pick
+  - Trophy badge header with amber/gold visual treatment
+  - Large player avatar (96x96), player name, team matchup, game time
+  - Stat badge + bet direction/line display
+  - Star rating visualization (1-5 based on edge magnitude)
+  - Edge badge and model probability display
+  - "Analyze Pick" button opens analysis modal
+  - Responsive layout (stacked mobile, horizontal desktop)
+
+### Changed
+
+- **Main Dashboard** (`dashboard/src/app/page.tsx`):
+  - Added PlayOfTheDay component above PropGrid
+  - Renders when predictions exist, hidden during loading or empty state
+  - Uses `sortedPredictions[0]` — respects all active filters
+
+### Technical Notes
+
+**Filter Integration:**
+- Play of the Day respects current filters: date, edge threshold, BL blending, stat type, matchup
+- Updates automatically when filters change
+- Shows best pick within the filtered view, not absolute best
+
+**Visual Design:**
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  🏆 PLAY OF THE DAY                                                 │
+├────────────────────────────────────────────────────────────────────┤
+│  [Avatar]  Player Name           [Stat]           Over/Under XX.X  │
+│            Team vs Opponent      ★★★★★           +12.3% Edge       │
+│            Game Time                              62.1% Model Prob │
+│                                                  [Analyze Pick]    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**Styling:**
+- Border: `border-2 border-amber-400/50`
+- Background: `bg-gradient-to-r from-amber-950/30 to-slate-800`
+- Stars: `text-amber-400`
+- CTA button: `bg-amber-600 hover:bg-amber-500`
+
+### Test Results
+
+- 575 tests passed, 0 failures
+
+---
+
 ## [2026-02-13 Session 27] — Inference Job Performance Optimization + Discord Bot Plan
 
 ### Added

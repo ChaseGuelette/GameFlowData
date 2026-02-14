@@ -63,6 +63,7 @@ class DatabaseHealthChecker:
         self._check_injury_linking()
         self._check_position_history()
         self._check_prediction_coverage()
+        self._check_prediction_game_times()
         self._check_foreign_keys()
 
         self._print_summary()
@@ -70,7 +71,7 @@ class DatabaseHealthChecker:
 
     def _check_data_freshness(self):
         """Check 1: Data freshness across key tables."""
-        print("[1/8] DATA FRESHNESS")
+        print("[1/9] DATA FRESHNESS")
 
         queries = {
             "player_game_stats": "SELECT MAX(game_date)::text FROM player_game_stats",
@@ -115,7 +116,7 @@ class DatabaseHealthChecker:
 
     def _check_game_data_completeness(self):
         """Check 2: Game data completeness in recent days."""
-        print("[2/8] GAME DATA COMPLETENESS")
+        print("[2/9] GAME DATA COMPLETENESS")
 
         query = text("""
             SELECT
@@ -166,7 +167,7 @@ class DatabaseHealthChecker:
 
     def _check_prop_linking(self):
         """Check 3: Prop linking health (using staging_id ranges to avoid timeouts)."""
-        print("[3/8] PROP LINKING HEALTH")
+        print("[3/9] PROP LINKING HEALTH")
 
         # Get staging_id range for recent data using a faster query
         try:
@@ -240,7 +241,7 @@ class DatabaseHealthChecker:
 
     def _check_aggregation_sync(self):
         """Check 4: Aggregation tables are in sync with source data."""
-        print("[4/8] AGGREGATION TABLE SYNC")
+        print("[4/9] AGGREGATION TABLE SYNC")
 
         checks = [
             {
@@ -298,7 +299,7 @@ class DatabaseHealthChecker:
 
     def _check_injury_linking(self):
         """Check 5: Injury data linking health."""
-        print("[5/8] INJURY DATA LINKING")
+        print("[5/9] INJURY DATA LINKING")
 
         query = text("""
             SELECT
@@ -344,7 +345,7 @@ class DatabaseHealthChecker:
 
     def _check_position_history(self):
         """Check 6: Position history coverage for active players."""
-        print("[6/8] POSITION HISTORY COVERAGE")
+        print("[6/9] POSITION HISTORY COVERAGE")
 
         query = text("""
             SELECT COUNT(DISTINCT pgs.player_id) as active_players,
@@ -394,7 +395,7 @@ class DatabaseHealthChecker:
 
     def _check_prediction_coverage(self):
         """Check 7: Prediction coverage for recent games."""
-        print("[7/8] PREDICTION COVERAGE")
+        print("[7/9] PREDICTION COVERAGE")
 
         query = text("""
             SELECT
@@ -443,9 +444,66 @@ class DatabaseHealthChecker:
             ))
         print()
 
+    def _check_prediction_game_times(self):
+        """Check 8: Game time enrichment for predictions."""
+        print("[8/9] PREDICTION GAME TIMES")
+
+        query = text("""
+            SELECT
+                prediction_date::text,
+                COUNT(*) as total,
+                COUNT(game_time) as with_time,
+                COUNT(*) - COUNT(game_time) as missing_time
+            FROM daily_predictions
+            WHERE prediction_date >= :cutoff
+            GROUP BY prediction_date
+            ORDER BY prediction_date DESC
+        """)
+
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(query, {"cutoff": self.cutoff_date}).fetchall()
+
+            details = {}
+            has_warning = False
+
+            if not rows:
+                print("  ⚠️ No predictions in recent days")
+                has_warning = True
+            else:
+                for row in rows:
+                    pred_date, total, with_time, missing = row
+                    pct = (with_time / total * 100) if total > 0 else 0
+                    status = "✓" if pct >= 95 else "⚠️"
+                    if pct < 95:
+                        has_warning = True
+                    print(f"  {status} {pred_date}: {with_time}/{total} predictions have game_time ({pct:.0f}%)")
+                    details[pred_date] = {
+                        "total": total,
+                        "with_game_time": with_time,
+                        "pct_with_time": round(pct, 1)
+                    }
+
+            self.results.append(CheckResult(
+                name="prediction_game_times",
+                status="warn" if has_warning else "pass",
+                message="Prediction game time enrichment",
+                details=details
+            ))
+
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+            self.results.append(CheckResult(
+                name="prediction_game_times",
+                status="fail",
+                message=f"Error: {e}",
+                details={}
+            ))
+        print()
+
     def _check_foreign_keys(self):
-        """Check 8: Soft foreign key integrity."""
-        print("[8/8] FOREIGN KEY INTEGRITY")
+        """Check 9: Soft foreign key integrity."""
+        print("[9/9] FOREIGN KEY INTEGRITY")
 
         checks = [
             {
