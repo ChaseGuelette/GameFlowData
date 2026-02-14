@@ -2,12 +2,13 @@
 # https://nixpacks.com/docs/configuration/file
 
 [phases.setup]
-nixPkgs = ["python311", "gcc", "libffi", "openssl"]
+nixPkgs = ["python311", "python311Packages.pip", "gcc", "libffi", "openssl", "postgresql"]
 
 [phases.install]
-cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
+cmds = ["python3.11 -m pip install --upgrade pip", "python3.11 -m pip install -r requirements.txt"]
+
+[start]
+cmd = "python3.11 src/orchestration/scheduler.py"
 
 [variables]
-PYTHON_VERSION = "3.11"
-# Ensure model artifacts are included
-PYTHONPATH = "/app/src"
+PYTHONUNBUFFERED = "1"
