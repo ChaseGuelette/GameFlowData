@@ -37,6 +37,24 @@ export default function HomePage() {
   const [blTau, setBlTau] = useState<number | null>(null)  // null = no BL blending
   const [showModelPicks, setShowModelPicks] = useState<boolean>(false)  // Model Picks toggle
 
+  // Optimal model config (from backtest sweep)
+  const MODEL_PICKS_EDGE = 0.09
+  const MODEL_PICKS_TAU = 0.50
+
+  // Handle Model Picks toggle - auto-set optimal config
+  const handleModelPicksToggle = (enabled: boolean) => {
+    setShowModelPicks(enabled)
+    if (enabled) {
+      // Set optimal config when enabling Model Picks
+      setEdgeThreshold(MODEL_PICKS_EDGE)
+      setBlTau(MODEL_PICKS_TAU)
+    } else {
+      // Reset to defaults when disabling
+      setEdgeThreshold(0.03)
+      setBlTau(null)
+    }
+  }
+
   // Fetch predictions for a specific date
   const fetchPredictions = useCallback(async (date: string) => {
     setLoading(true)
@@ -226,7 +244,7 @@ export default function HomePage() {
             {/* Model Picks Toggle */}
             <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
               <button
-                onClick={() => setShowModelPicks(false)}
+                onClick={() => handleModelPicksToggle(false)}
                 className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
                   !showModelPicks
                     ? 'bg-slate-700 text-slate-100'
@@ -236,7 +254,7 @@ export default function HomePage() {
                 All Bets
               </button>
               <button
-                onClick={() => setShowModelPicks(true)}
+                onClick={() => handleModelPicksToggle(true)}
                 className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
                   showModelPicks
                     ? 'bg-green-600 text-white'
@@ -277,8 +295,9 @@ export default function HomePage() {
             >
               <option value={0}>Edge: All</option>
               <option value={0.03}>Edge: ≥3%</option>
-              <option value={0.05}>Edge: ≥5% (Rec)</option>
+              <option value={0.05}>Edge: ≥5%</option>
               <option value={0.07}>Edge: ≥7%</option>
+              <option value={0.09}>Edge: ≥9% (Model)</option>
               <option value={0.10}>Edge: ≥10%</option>
               <option value={0.15}>Edge: ≥15%</option>
               <option value={0.20}>Edge: ≥20%</option>
@@ -292,9 +311,10 @@ export default function HomePage() {
               <option value="none">BL: Off</option>
               <option value={0.03}>BL: τ=0.03</option>
               <option value={0.05}>BL: τ=0.05</option>
-              <option value={0.10}>BL: τ=0.10 (Rec)</option>
+              <option value={0.10}>BL: τ=0.10</option>
               <option value={0.15}>BL: τ=0.15</option>
               <option value={0.25}>BL: τ=0.25</option>
+              <option value={0.50}>BL: τ=0.50 (Model)</option>
             </select>
             <FilterTabs activeFilter={filter} onFilterChange={setFilter} />
           </div>
