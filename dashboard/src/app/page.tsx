@@ -76,6 +76,15 @@ export default function HomePage() {
     })
 
     if (!predictionsError && predictionsData) {
+      // DEBUG: Check is_recommended values from Supabase
+      const recommendedCount = predictionsData.filter((p: any) => p.is_recommended === true).length
+      const recommendedPlayers = predictionsData.filter((p: any) => p.is_recommended === true)
+      console.log(`DEBUG FETCH [${date}]: Total predictions from DB: ${predictionsData.length}`)
+      console.log(`DEBUG FETCH [${date}]: Recommended count (is_recommended=true): ${recommendedCount}`)
+      if (recommendedPlayers.length > 0) {
+        console.log(`DEBUG FETCH [${date}]: Recommended players:`, recommendedPlayers.map((p: any) => `${p.player_name} (${p.stat})`))
+      }
+
       // Map DB columns to frontend expected names and add team abbrevs
       const mappedPredictions = predictionsData
         .filter(p => {
@@ -159,6 +168,17 @@ export default function HomePage() {
     const teams = [p.team_abbrev || 'UNK', p.opponent_abbrev || 'UNK'].sort()
     return `${teams[0]} vs ${teams[1]}`
   }))].sort()
+
+  // DEBUG: Log filtering when Model Picks is active
+  if (showModelPicks) {
+    const recommendedInState = predictions.filter(p => p.is_recommended === true)
+    console.log(`DEBUG [${selectedDate}]: Model Picks active`)
+    console.log(`DEBUG [${selectedDate}]: predictions in state: ${predictions.length}`)
+    console.log(`DEBUG [${selectedDate}]: with is_recommended=true: ${recommendedInState.length}`)
+    if (recommendedInState.length > 0) {
+      console.log(`DEBUG [${selectedDate}]: all recommended:`, recommendedInState.map(p => `${p.player_name} (${p.stat})`))
+    }
+  }
 
   // Filter predictions by stat type, matchup, edge threshold, and Model Picks toggle
   const filteredPredictions = predictions.filter(p => {
