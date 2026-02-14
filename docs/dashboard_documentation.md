@@ -228,6 +228,94 @@ const availableMatchups = [...new Set(predictions.map(p => {
 
 **Filter logic:** Matches predictions where either team is in the selected matchup.
 
+### Date Selector
+
+Date dropdown for viewing predictions from previous dates (added Session 26).
+
+**Features:**
+- Fetches available dates via `get_prediction_dates()` RPC function
+- Defaults to today if predictions exist, otherwise most recent date
+- Shows up to 30 days of historical data
+
+**Implementation:**
+```typescript
+const [selectedDate, setSelectedDate] = useState<string>(getToday())
+const [availableDates, setAvailableDates] = useState<string[]>([])
+
+// Fetched via Supabase RPC
+const { data } = await supabase.rpc('get_prediction_dates', { days_back: 30 })
+```
+
+### Edge Threshold Filter
+
+Minimum edge filter dropdown (added Session 26).
+
+**Options:**
+| Value | Display | Description |
+|-------|---------|-------------|
+| 0 | Edge: All | Show all predictions with prop lines |
+| 0.03 | Edge: ≥3% | Default threshold |
+| 0.05 | Edge: ≥5% (Rec) | Recommended based on backtesting |
+| 0.07 | Edge: ≥7% | Conservative |
+| 0.10 | Edge: ≥10% | Selective |
+| 0.15 | Edge: ≥15% | High edge only |
+| 0.20 | Edge: ≥20% | Ultra selective |
+
+**Filter logic:** Shows predictions where `max(over_edge, under_edge) >= threshold`
+
+### Black-Litterman Blending Filter
+
+BL probability blending dropdown (added Session 26).
+
+**Options:**
+| Value | Display | Description |
+|-------|---------|-------------|
+| none | BL: Off | Raw model probabilities |
+| 0.03 | BL: τ=0.03 | Conservative - trust market more |
+| 0.05 | BL: τ=0.05 | Moderate |
+| 0.10 | BL: τ=0.10 (Rec) | Recommended - balanced |
+| 0.15 | BL: τ=0.15 | Moderate aggressive |
+| 0.25 | BL: τ=0.25 | Aggressive - trust model more |
+
+**How BL Blending Works:**
+
+1. **Confidence** = `min(|pred_mean - line| / pred_std / z_max, 1.0)`
+   - Measures how far the line is from the model's prediction center
+   - z_max = 1.0 (constant)
+
+2. **Blending weight** = `min(tau * confidence, max_weight)`
+   - tau controls model influence
+   - max_weight = 0.50 (cap)
+
+3. **Posterior probability** = blend in log-odds space:
+   ```typescript
+   const posteriorLogit = impliedLogit + w * (modelLogit - impliedLogit)
+   const posteriorProb = 1 / (1 + Math.exp(-posteriorLogit))
+   ```
+
+4. **Blended edge** = `posteriorProb - impliedProb`
+
+**Implementation:**
+```typescript
+const [edgeThreshold, setEdgeThreshold] = useState<number>(0.03)
+const [blTau, setBlTau] = useState<number | null>(null)
+
+// In filtering logic
+if (blTau !== null && p.pred_mean && p.pred_std) {
+  const confidence = calculateBLConfidence(p.pred_mean, p.pred_std, p.prop_line)
+  const blendedOver = blendProbability(p.model_prob_over, p.implied_prob_over, blTau, confidence)
+  effectiveOverEdge = blendedOver - p.implied_prob_over
+}
+```
+
+**UI Layout (Session 26):**
+```
+┌──────────┐ ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌───────────┐
+│ Feb 13 ▼ │ │All Games▼│ │Edge: ≥5% ▼│ │BL: τ=0.10 ▼│ │All│PTS│...│
+└──────────┘ └──────────┘ └───────────┘ └────────────┘ └───────────┘
+ Date        Matchup       Edge Filter   BL Blending   Stat Filter
+```
+
 ### PropCard
 
 Individual prediction card with:
@@ -363,6 +451,32 @@ Build NBA CDN headshot URL.
 getHeadshotUrl(201566)
 // → 'https://cdn.nba.com/headshots/nba/latest/1040x760/201566.png'
 ```
+
+### `calculateBLConfidence(predMean, predStd, line)` (Session 26)
+
+Calculate Black-Litterman confidence from model distribution.
+
+```typescript
+calculateBLConfidence(25.5, 5.2, 24.0)
+// → 0.288 (z = |25.5 - 24| / 5.2 = 0.288)
+```
+
+**Formula:** `min(|predMean - line| / predStd / Z_MAX, 1.0)` where Z_MAX = 1.0
+
+### `blendProbability(modelProb, impliedProb, tau, confidence)` (Session 26)
+
+Blend model and market probabilities in log-odds space.
+
+```typescript
+blendProbability(0.65, 0.52, 0.10, 0.50)
+// → 0.556 (blended posterior probability)
+```
+
+**Formula:**
+1. Convert to log-odds
+2. `w = min(tau * confidence, 0.50)`
+3. `posteriorLogit = impliedLogit + w * (modelLogit - impliedLogit)`
+4. Convert back to probability
 
 ## Styling
 

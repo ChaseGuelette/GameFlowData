@@ -352,7 +352,7 @@ A simulation environment to validate betting strategies.
 | `lines_job.py` | 12 PM, 4 PM, 6 PM ET | Player props + injuries + incremental linking |
 | `inference_job.py` | 6:30 PM ET (once) | Generate predictions with latest lines |
 
-**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → resolve pending paper bets. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Runtime: ~5-10 minutes (optimized from ~30 minutes via incremental scripts).
+**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~5-10 minutes (optimized from ~30 minutes via incremental scripts).
 
 **`lines_job.py`** — Multiple-times-daily props and injuries scraping. Steps: `daily_game_lines_scraper.py` → `daily_player_props_scraper.py` → `rapidapi_injury_backfill.py` (optional) → `link_injury_data.py` (optional) → `nba_linker_local.py incremental` (optional). Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`. Runtime: ~30-90 seconds.
 
@@ -414,7 +414,10 @@ dashboard/
 ```
 
 **Key Features:**
-- **Predictions View (`/`):** Displays today's predictions filtered by stat type (pts/reb/ast), sorted by edge magnitude. Matchup filter allows viewing predictions for specific games (e.g., "LAL vs SAS").
+- **Predictions View (`/`):** Displays predictions filtered by stat type (pts/reb/ast), sorted by edge magnitude. Matchup filter allows viewing predictions for specific games (e.g., "LAL vs SAS"). Includes:
+  - **Date Selector:** View predictions from any date in the last 30 days (uses `get_prediction_dates()` RPC function for efficient distinct query)
+  - **Edge Threshold Filter:** Filter picks by minimum edge (All, ≥3%, ≥5%, ≥7%, ≥10%, ≥15%, ≥20%)
+  - **Black-Litterman Blending Filter:** Optionally apply BL blending to edges (Off, τ=0.03, τ=0.05, τ=0.10, τ=0.15, τ=0.25). BL calculation implemented client-side using `calculateBLConfidence()` and `blendProbability()` utility functions.
 - **Analysis Modal:** Click any prop card to see:
   - Last 5 games chart with performance history
   - Quantile distribution summary with visual bar

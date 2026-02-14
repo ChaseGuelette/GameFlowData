@@ -1,5 +1,46 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-13 — Session 26)
+
+### What We Did
+
+**Automated paper bet resolution.** Added `resolve_all_pending()` method to `PaperTrader` class that resolves ALL pending bets across multiple dates in a single call. Integrated into `daily_stats_job.py` as the final step — runs after stats are scraped and processed, automatically resolving any outstanding bets from previous days.
+
+**Key features:**
+- Multi-day catchup: finds all dates with pending bets, checks if game stats are available, resolves automatically
+- Graceful failure: resolution errors don't fail the main stats job (stats are prioritized)
+- CLI support: `resolve_bets.py --all-pending` for manual multi-day resolution
+- Added `--skip-resolution` flag to daily_stats_job.py for debugging
+
+**Dashboard date selector.** Added dropdown to view predictions from any date in the last 30 days:
+- Uses `get_prediction_dates()` PostgreSQL RPC function for efficient distinct query (avoids Supabase 1000 row limit issue)
+- Defaults to today, falls back to most recent date if today has no predictions
+- Fixed timezone bug in `formatDate()` — was showing Feb 9 instead of Feb 10 due to UTC midnight interpretation
+
+**Dashboard model parameter filters.** Added edge threshold and Black-Litterman blending dropdowns to filter predictions:
+- **Edge threshold filter:** All, ≥3%, ≥5% (Rec), ≥7%, ≥10%, ≥15%, ≥20%
+- **BL tau filter:** Off, τ=0.03, τ=0.05, τ=0.10 (Rec), τ=0.15, τ=0.25
+- BL blending calculated client-side using `calculateBLConfidence()` and `blendProbability()` utility functions
+- Removed hardcoded 3% edge filter from Supabase query — now filtered client-side based on user selection
+
+**Files created/modified:**
+- `src/paper_trading/paper_trader.py` — Added `resolve_all_pending()` method
+- `src/paper_trading/resolve_bets.py` — Added `--all-pending` flag
+- `src/orchestration/daily_stats_job.py` — Added `resolve_pending_bets()` as Step 8
+- `dashboard/src/lib/utils.ts` — Fixed `formatDate()` timezone bug, added BL blending functions
+- `dashboard/src/app/page.tsx` — Added date selector, edge/BL dropdowns, updated filtering logic
+- `dashboard/src/types/predictions.ts` — Added `pred_mean`, `pred_std` fields
+
+**Tests:** 575 passed, 0 failures (added 5 new tests for `resolve_all_pending()`)
+
+### Next Step
+
+1. **Paper trade** — Continue daily paper trading with automated resolution
+2. **Mobile responsiveness** — Add responsive design for mobile viewing
+3. **Health check integration** — Consider adding db_health_check to daily pipeline as monitoring step
+
+---
+
 ## Session Summary (2026-02-13 — Session 25)
 
 ### What We Did

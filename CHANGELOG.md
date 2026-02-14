@@ -5,6 +5,90 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-13 Session 26] — Dashboard Model Parameter Filters
+
+### Added
+
+- **Edge Threshold Filter Dropdown** in `dashboard/src/app/page.tsx`:
+  - Filter predictions by minimum edge: All, ≥3%, ≥5% (Rec), ≥7%, ≥10%, ≥15%, ≥20%
+  - Client-side filtering with `edgeThreshold` state
+  - Default: 3% (matches previous hardcoded behavior)
+
+- **Black-Litterman Blending Filter Dropdown** in `dashboard/src/app/page.tsx`:
+  - Apply BL blending to probabilities before filtering: Off, τ=0.03, τ=0.05, τ=0.10 (Rec), τ=0.15, τ=0.25
+  - Client-side BL calculation using model's distribution parameters
+  - `blTau` state (null = no blending, number = tau value)
+
+- **BL Blending Utility Functions** in `dashboard/src/lib/utils.ts`:
+  - `calculateBLConfidence(predMean, predStd, line)` — z-score based confidence (0-1)
+  - `blendProbability(modelProb, impliedProb, tau, confidence)` — log-odds space blending
+  - Constants: `BL_Z_MAX = 1.0`, `BL_MAX_WEIGHT = 0.50`
+
+- **Distribution Parameters** in `dashboard/src/types/predictions.ts`:
+  - `pred_mean: number` — Model's predicted mean
+  - `pred_std: number` — Model's standard deviation
+
+- **Automated Bet Resolution** in `src/paper_trading/paper_trader.py`:
+  - `resolve_all_pending()` method for multi-day catchup resolution
+  - Resolves all pending bets with available actuals
+
+- **Bet Resolution Step** in `src/orchestration/daily_stats_job.py`:
+  - Step 8: Automatic bet resolution after stats collection
+  - `--skip-resolution` flag to disable
+  - `resolve_pending_bets()` helper function
+
+### Changed
+
+- **`dashboard/src/app/page.tsx`:**
+  - Added `edgeThreshold` state (default 0.03)
+  - Added `blTau` state (default null = off)
+  - Added edge and BL dropdown UI components
+  - Updated filtering logic with BL blending support
+  - Added `pred_mean` and `pred_std` to prediction mapping
+  - Removed hardcoded `.or('over_edge.gte.0.03,under_edge.gte.0.03')` from Supabase query
+
+- **`dashboard/src/lib/utils.ts`:**
+  - Fixed timezone bug in `formatDate()` — `new Date("YYYY-MM-DD")` interprets as UTC midnight, causing off-by-one in Eastern timezone
+  - Manual parsing for date-only strings: `date.split('-').map(Number)` → `new Date(year, month - 1, day)`
+
+### Fixed
+
+- **Date dropdown showing only one date** — Supabase default 1000 row limit caused dates with >1000 predictions to be excluded from distinct query. Created `get_prediction_dates()` PostgreSQL RPC function using `SELECT DISTINCT`.
+
+- **Date display off-by-one** — Dashboard showed "Feb 9, 2026" instead of "Feb 10, 2026" due to JavaScript `new Date("2026-02-10")` interpreting as UTC midnight.
+
+### Technical Notes
+
+**BL Blending Formula (same as backtesting):**
+```typescript
+// Confidence from model's prediction distribution
+const confidence = Math.min(|predMean - line| / predStd / Z_MAX, 1.0)
+
+// Blending weight (capped at 50%)
+const w = Math.min(tau * confidence, 0.50)
+
+// Blend in log-odds space
+const posteriorLogit = impliedLogit + w * (modelLogit - impliedLogit)
+const posteriorProb = 1 / (1 + exp(-posteriorLogit))
+
+// Blended edge
+const blendedEdge = posteriorProb - impliedProb
+```
+
+**UI Layout:**
+```
+┌──────────┐ ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌───────────┐
+│ Feb 13 ▼ │ │All Games▼│ │Edge: ≥5% ▼│ │BL: τ=0.10 ▼│ │All│PTS│...│
+└──────────┘ └──────────┘ └───────────┘ └────────────┘ └───────────┘
+ Date        Matchup       Edge Filter   BL Blending   Stat Filter
+```
+
+### Test Results
+
+- 575 tests passed, 0 failures
+
+---
+
 ## [2026-02-13 Session 25] — Database Health Check & Incremental Backfill
 
 ### Added
