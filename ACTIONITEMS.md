@@ -1,5 +1,43 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-13 — Session 27)
+
+### What We Did
+
+**Massive inference job performance optimization.** Reduced total inference job runtime from ~180s to ~16s (10x faster) through two key optimizations:
+
+**1. Parallel Feature Building:**
+- Replaced sequential player-by-player feature store queries with `ThreadPoolExecutor` (8 workers)
+- Increased connection pool from 5→10 and max_overflow from 2→6 in `src/db/client.py`
+- Runtime: 65s → 4.8s (13x faster)
+
+**2. Prop Lines Query Optimization:**
+- Identified bottleneck: `raw_player_props_combined` table has 26.2M rows, `LPAD()` function in WHERE clause prevented index usage
+- Modified query to search both 8-digit and 10-digit game_id formats without `LPAD()` in WHERE/PARTITION BY
+- Created indexes via Supabase Dashboard: `idx_props_game_id`, `idx_props_game_market`, `idx_props_game_id_padded`
+- Query runtime: 137s → 0.2s (685x faster)
+
+**Reduced Odds API rate limiting.** Decreased sleep from 0.2s to 0.05s in scrapers (Odds API allows 30 req/s).
+
+**Discord bot development planning.** Created comprehensive development plan for interactive Discord bot with slash commands (`/picks`, `/player`, `/bankroll`, `/performance`) and automated alerts after inference. Full plan at `docs/discord_bot_development.md`.
+
+**Files modified:**
+- `src/db/client.py` — Increased connection pool for parallel queries
+- `src/models/daily_runner.py` — Parallel feature building + optimized lines query
+- `src/scrapers/daily_player_props_scraper.py` — Reduced rate limiting
+- `src/scrapers/game_lines_scraper.py` — Reduced rate limiting
+- `docs/discord_bot_development.md` — New Discord bot development plan
+
+**Tests:** 575 passed, 0 failures
+
+### Next Step
+
+1. **Discord bot implementation** — Follow development plan in `docs/discord_bot_development.md`
+2. **Paper trade** — Continue daily paper trading with automated pipeline
+3. **Mobile responsiveness** — Add responsive design to dashboard
+
+---
+
 ## Session Summary (2026-02-13 — Session 26)
 
 ### What We Did
@@ -1214,6 +1252,43 @@ Next.js dashboard for viewing predictions and paper trading results. Full spec: 
 
 ---
 
+## Track H: Discord Bot (Planned)
+
+Interactive Discord bot for daily prediction alerts and command-based queries. Full development plan at `docs/discord_bot_development.md`.
+
+**Prerequisites (Manual Setup Required):**
+- Create Discord server with channels (`#predictions`, `#alerts`, `#performance`)
+- Create Discord application and bot at https://discord.com/developers/applications
+- Generate bot token and channel IDs
+- Add to `.env`: `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_PREDICTIONS`, `DISCORD_CHANNEL_ALERTS`
+
+**Implementation Items:**
+- [ ] **H1. Bot foundation** — Entry point (`run_bot.py`), Discord.py setup, slash command registration
+- [ ] **H2. Prediction service** — Query `daily_predictions` for today's picks, player predictions, top edges
+- [ ] **H3. `/picks` command** — Get today's top predictions (filterable by stat type and min edge)
+- [ ] **H4. `/player` command** — Get predictions for a specific player (fuzzy match supported)
+- [ ] **H5. `/bankroll` command** — Show paper trading balance from `paper_trading_daily_log`
+- [ ] **H6. `/performance` command** — Show model stats (win rate, ROI, total bets) from `paper_bets`
+- [ ] **H7. Automated alerts** — Send top picks to Discord after inference job completes
+- [ ] **H8. Bot hosting** — Windows Task Scheduler or Windows service for continuous running
+
+**Files to Create:**
+| File | Purpose |
+|------|---------|
+| `src/discord_bot/__init__.py` | Package init |
+| `src/discord_bot/run_bot.py` | Entry point |
+| `src/discord_bot/bot.py` | Bot class and command registration |
+| `src/discord_bot/commands/picks.py` | `/picks` command |
+| `src/discord_bot/commands/player.py` | `/player` command |
+| `src/discord_bot/commands/bankroll.py` | `/bankroll` command |
+| `src/discord_bot/commands/performance.py` | `/performance` command |
+| `src/discord_bot/services/predictions.py` | Prediction queries |
+| `src/discord_bot/services/paper_trading.py` | Paper trading queries |
+| `src/discord_bot/formatters/embeds.py` | Discord embed builders |
+| `src/discord_bot/alerts.py` | Alert sending functions |
+
+---
+
 ## Priority Matrix
 
 | Item | Effort | Expected Value | Notes |
@@ -1246,6 +1321,7 @@ Next.js dashboard for viewing predictions and paper trading results. Full spec: 
 | ~~G7 (Player headshots)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — NBA CDN with SVG fallback |
 | ~~G8 (Paper trading views)~~ | ~~Medium~~ | ~~High~~ | **DONE** — History page, Performance page with charts |
 | G5-G6, G9 (Dashboard) | Medium | Mid-High | In progress. Spec: `.session/specs/dashboard_implementation.md` |
+| H1-H8 (Discord Bot) | Medium | High | Full spec at `docs/discord_bot_development.md`. Requires manual Discord setup first. |
 
 ---
 

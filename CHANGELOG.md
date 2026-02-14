@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-13 Session 27] — Inference Job Performance Optimization + Discord Bot Plan
+
+### Added
+
+- **Discord Bot Development Plan** (`docs/discord_bot_development.md`):
+  - Full specification for interactive Discord bot with slash commands
+  - `/picks`, `/player`, `/bankroll`, `/performance` command designs
+  - Automated alerts after inference job completes
+  - File structure, database queries, and testing plan
+  - ~3.5 hours estimated implementation time
+
+- **Track H: Discord Bot** in `ACTIONITEMS.md`:
+  - 8 implementation items (H1-H8)
+  - Prerequisites for Discord setup
+  - Files to create listed
+
+### Changed
+
+- **Parallel Feature Building** in `src/models/daily_runner.py`:
+  - Replaced sequential player loop with `ThreadPoolExecutor` (8 workers)
+  - Runtime: 65s → 4.8s (13x faster)
+  - Added timing logs for feature building phase
+
+- **Connection Pool** in `src/db/client.py`:
+  - Increased `pool_size` from 5 → 10
+  - Increased `max_overflow` from 2 → 6
+  - Enables concurrent feature store queries
+
+- **Prop Lines Query Optimization** in `src/models/daily_runner.py`:
+  - Query now searches both 8-digit and 10-digit `game_id` formats
+  - Removed `LPAD()` from WHERE and PARTITION BY clauses
+  - Enables index usage on `raw_player_props_combined.game_id`
+  - Query runtime: 137s → 0.2s (685x faster)
+
+- **Rate Limiting** in scrapers:
+  - `src/scrapers/daily_player_props_scraper.py`: `time.sleep(0.2)` → `time.sleep(0.05)`
+  - `src/scrapers/game_lines_scraper.py`: `time.sleep(0.2)` → `time.sleep(0.05)`
+  - Odds API allows 30 req/s; 0.05s = 20 req/s max (safe margin)
+
+### Technical Notes
+
+**Database Indexes Created (via Supabase Dashboard):**
+- `idx_props_game_id` on `raw_player_props_combined(game_id)`
+- `idx_props_game_market` on `raw_player_props_combined(game_id, market_key)`
+- `idx_props_game_id_padded` on `raw_player_props_combined(LPAD(game_id, 10, '0'))`
+
+**Total Inference Job Performance:**
+- Before: ~180s (3 minutes)
+- After: ~16s
+- **10x overall speedup**
+
+**Breakdown of optimizations:**
+| Component | Before | After | Speedup |
+|-----------|--------|-------|---------|
+| Feature building | 65s | 4.8s | 13x |
+| Prop lines query | 137s | 0.2s | 685x |
+| Other (model, MC) | ~10s | ~11s | — |
+
+### Test Results
+
+- 575 tests passed, 0 failures
+
+---
+
 ## [2026-02-13 Session 26] — Dashboard Model Parameter Filters
 
 ### Added

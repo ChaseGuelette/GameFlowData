@@ -10,7 +10,9 @@ The daily pipeline is split into three jobs based on execution frequency:
 |-----|---------------|---------|---------|
 | `daily_stats_job.py` | 9:00 AM | NBA game results + processing | ~5-10 min |
 | `lines_job.py` | 12 PM, 4 PM, 6 PM | Props + injuries + linking | ~30-90 sec |
-| `inference_job.py` | 6:30 PM | Generate predictions | ~1-3 min |
+| `inference_job.py` | 6:30 PM | Generate predictions | ~16 sec |
+
+**Note:** Inference job optimized from ~3 min to ~16 sec in Session 27 via parallel feature building and prop lines query optimization.
 
 ## Pipeline Timeline
 
@@ -178,9 +180,20 @@ python src/orchestration/inference_job.py --stats pts reb
 2. Initialize FeatureStore and MonteCarloPredictor (10,000 samples)
 3. Load Gaussian copula params for correlated sampling
 4. Run `DailyPredictionRunner.run_for_date()`
+   - **Parallel feature building** (8 workers, ~5s) — queries feature store concurrently
+   - **Optimized prop lines query** (~0.2s) — searches both 8/10-digit game_id formats
 5. Store predictions to `daily_predictions` table
 6. Store MC samples to `daily_prediction_samples` table
 7. Export CSV backup to `predictions/predictions_YYYY-MM-DD.csv`
+
+### Performance
+
+| Component | Before | After | Speedup |
+|-----------|--------|-------|---------|
+| Feature building | 65s | 4.8s | 13x |
+| Prop lines query | 137s | 0.2s | 685x |
+| Other (model, MC) | ~10s | ~11s | — |
+| **Total** | ~180s | ~16s | **10x** |
 
 ### Logs
 

@@ -82,7 +82,7 @@ GameFlowData/
 ### 1. Database Layer (`src/db/`)
 
 **`client.py`** — Singleton SQLAlchemy engine with connection pooling.
-- Pool size 5, max overflow 2, 5-minute connection recycle.
+- Pool size 10, max overflow 6, 5-minute connection recycle (optimized for parallel feature building).
 - 5-minute statement timeout.
 - pgBouncer compatible.
 
@@ -285,7 +285,9 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 - **Game Discovery:** Primary source is `nba_api.stats.endpoints.ScoreboardV2` (works for scheduled/future games). Falls back to `team_game_stats` DB query for past dates when NBA API is unavailable.
 - **Injury Filtering:** Queries `rapidapi_injuries` table by `player_id` (integer matching). Uses most recent `report_date` on or before target date. Filters players with `status = 'Out'`.
 - **Batch Prediction:** Uses `predict_batch_for_date()` — 4 total XGBoost calls (1 minutes + 3 rates) for all players, instead of N per-player calls.
+- **Parallel Feature Building (optimized 2026-02-13):** Uses `ThreadPoolExecutor` with 8 workers to parallelize feature store queries. Runtime reduced from ~65s to ~5s (13x faster). Connection pool increased to handle concurrent queries.
 - **Sharpest-Book Selection:** Fetches lines from all bookmakers via `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY snapshot_time DESC)` to get only the latest snapshot, then selects the lowest-vig (smallest booksum) line per player/game/market. Applies multiplicative devigging to implied probabilities for edge calculation.
+- **Optimized Prop Lines Query (2026-02-13):** Query searches both 8-digit and 10-digit game_id formats to avoid `LPAD()` function in WHERE clause, enabling index usage. With `idx_props_game_id` index on `raw_player_props_combined.game_id`, query reduced from ~137s to ~0.2s (685x faster).
 - **Edge Calculation:** Uses MC samples empirical CDF (`(samples > line).mean()`) for probability estimation. Falls back to 5-point quantile interpolation when samples are unavailable.
 
 #### Prediction Storage (`prediction_store.py`)
@@ -482,6 +484,25 @@ After daily_runner.py completes (predictions stored):
 - Compare actual vs line → won/lost/push/cancelled
 - Calculate P&L: won = stake × (decimal_odds - 1), lost = -stake
 - Update `paper_trading_daily_log` with aggregates
+
+### 12. Discord Bot (Planned — `src/discord_bot/`)
+
+Interactive Discord bot for sending daily prediction alerts and responding to commands. Full development plan at `docs/discord_bot_development.md`.
+
+**Planned Commands:**
+- `/picks` — Get today's top predictions (filterable by stat type and min edge)
+- `/player <name>` — Get predictions for a specific player (fuzzy match supported)
+- `/bankroll` — Show paper trading balance
+- `/performance` — Show model performance stats (win rate, ROI, total bets)
+
+**Architecture:**
+- Discord.py with slash commands via `@bot.tree.command()`
+- Services layer queries Supabase (`daily_predictions`, `paper_bets`, `paper_trading_daily_log`)
+- Embed formatters for rich Discord messages
+- Automated alerts triggered after inference job completes
+- Windows Task Scheduler for bot hosting (runs at system startup)
+
+**Database Queries:** Uses existing tables — `daily_predictions` for picks, `paper_trading_daily_log` for bankroll, `paper_bets` for performance stats.
 
 ---
 

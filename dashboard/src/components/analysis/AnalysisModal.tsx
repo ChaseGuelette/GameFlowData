@@ -438,34 +438,47 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
           ) : bookmakerLines.length > 0 ? (
             <div className="space-y-2">
               {/* Calculate edge for each line and sort by best edge */}
-              {[...bookmakerLines]
-                .map((line) => {
-                  // Estimate model probability at this line using quantiles
-                  const underProb = estimateUnderProb(
-                    line.line,
-                    prediction.q10,
-                    prediction.q25,
-                    prediction.q50,
-                    prediction.q75,
-                    prediction.q90
-                  )
-                  const overProb = 1 - underProb
+              {(() => {
+                // Process all lines with edge calculations
+                const processedLines = [...bookmakerLines]
+                  .map((line) => {
+                    // Estimate model probability at this line using quantiles
+                    const underProb = estimateUnderProb(
+                      line.line,
+                      prediction.q10,
+                      prediction.q25,
+                      prediction.q50,
+                      prediction.q75,
+                      prediction.q90
+                    )
+                    const overProb = 1 - underProb
 
-                  // Get relevant odds and calculate edge
-                  const relevantOdds = isOverBet ? line.over_odds : line.under_odds
-                  const modelProb = isOverBet ? overProb : underProb
-                  const impliedProb = oddsToImpliedProb(relevantOdds)
-                  const lineEdge = modelProb - impliedProb
+                    // Get relevant odds and calculate edge
+                    const relevantOdds = isOverBet ? line.over_odds : line.under_odds
+                    const modelProb = isOverBet ? overProb : underProb
+                    const impliedProb = oddsToImpliedProb(relevantOdds)
+                    const lineEdge = modelProb - impliedProb
 
-                  return { ...line, modelProb, impliedProb, lineEdge, relevantOdds }
-                })
-                .sort((a, b) => b.lineEdge - a.lineEdge) // Best edge first
-                .slice(0, 10)
-                .map((line, i) => {
-                  const hasPositiveEdge = line.lineEdge > 0
-                  const isBestEdge = i === 0 && hasPositiveEdge
+                    return { ...line, modelProb, impliedProb, lineEdge, relevantOdds }
+                  })
+                  .sort((a, b) => b.lineEdge - a.lineEdge) // Best edge first
 
-                  return (
+                // Get top 10 lines by edge for display
+                const displayedLines = processedLines.slice(0, 10)
+
+                // Find the line that's easiest to hit for this bet direction
+                // (among displayed lines only)
+                // Under: highest line is easiest | Over: lowest line is easiest
+                const easiestLineValue = isOverBet
+                  ? Math.min(...displayedLines.map(l => l.line))
+                  : Math.max(...displayedLines.map(l => l.line))
+
+                return displayedLines.map((line, i) => {
+                    const hasPositiveEdge = line.lineEdge > 0
+                    const isBestEdge = i === 0 && hasPositiveEdge
+                    const isEasiestLine = line.line === easiestLineValue
+
+                    return (
                     <div
                       key={i}
                       className={`flex items-center justify-between rounded px-3 py-2 ${
@@ -484,7 +497,12 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
                         <span className="text-slate-400 text-sm">{formatBookmaker(line.bookmaker)}</span>
                         {isBestEdge && (
                           <span className="text-xs bg-green-600/40 text-green-300 px-1.5 py-0.5 rounded font-medium">
-                            BEST
+                            BEST EDGE
+                          </span>
+                        )}
+                        {isEasiestLine && (
+                          <span className="text-xs bg-blue-600/40 text-blue-300 px-1.5 py-0.5 rounded font-medium">
+                            EASIEST
                           </span>
                         )}
                       </div>
@@ -502,7 +520,8 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
                       </div>
                     </div>
                   )
-                })}
+                })
+              })()}
             </div>
           ) : (
             <div className="text-slate-400 text-sm">No lines available</div>
