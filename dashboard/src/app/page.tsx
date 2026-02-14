@@ -62,12 +62,14 @@ export default function HomePage() {
 
     console.log('Fetching predictions for date:', date)
     // Fetch all predictions with prop lines (filtering done client-side based on user selection)
+    // Note: Supabase has a default 1000 row limit - we need to fetch more for busy game days
     const { data: predictionsData, error: predictionsError } = await supabase
       .from('daily_predictions')
       .select('*')
       .eq('prediction_date', date)
       .not('line', 'is', null)
       .order('over_edge', { ascending: false })
+      .limit(3000)  // Override default 1000 limit to get all predictions
 
     console.log('Predictions result:', {
       count: predictionsData?.length || 0,
