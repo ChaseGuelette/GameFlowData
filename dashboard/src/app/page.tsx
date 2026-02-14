@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Navbar } from '@/components/layout/Navbar'
 import { FilterTabs, type FilterOption } from '@/components/predictions/FilterTabs'
 import { PropGrid } from '@/components/predictions/PropGrid'
+import { PlayOfTheDay } from '@/components/predictions/PlayOfTheDay'
 import { AnalysisModal } from '@/components/analysis/AnalysisModal'
 import { type Prediction } from '@/types/predictions'
 import { getToday, formatDate, calculateBLConfidence, blendProbability } from '@/lib/utils'
@@ -243,6 +244,14 @@ export default function HomePage() {
             <FilterTabs activeFilter={filter} onFilterChange={setFilter} />
           </div>
         </div>
+
+        {/* Play of the Day */}
+        {!loading && sortedPredictions.length > 0 && (
+          <PlayOfTheDay
+            prediction={sortedPredictions[0]}
+            onAnalyze={setSelectedPrediction}
+          />
+        )}
 
         {/* Content */}
         {loading ? (
