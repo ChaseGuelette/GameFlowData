@@ -57,6 +57,7 @@ dashboard/
 │   │   │   ├── client.ts       # Browser client
 │   │   │   ├── server.ts       # Server client
 │   │   │   └── middleware.ts   # Session handling
+│   │   ├── insights.ts         # Template-based insight generator
 │   │   └── utils.ts            # Utility functions
 │   ├── types/
 │   │   └── predictions.ts      # TypeScript interfaces
@@ -723,8 +724,136 @@ Featured hero card highlighting the model's highest-edge pick.
 - Trophy and stars: `text-amber-400`
 - CTA button: `bg-amber-600 hover:bg-amber-500`
 
+## Model Context Insights (Session 29)
+
+The Analysis Modal displays template-based insights explaining **why** the model made its prediction. Insights are generated from feature values stored in `daily_predictions` table.
+
+### Insight Generator
+
+**File:** `dashboard/src/lib/insights.ts`
+
+**Functions:**
+- `generateInsights(prediction)` — Returns array of `Insight` objects
+- `getInsightSummary(insights)` — Returns summary text like "2 favorable factors"
+
+### Insight Categories
+
+| Category | Feature Source | Examples |
+|----------|----------------|----------|
+| rest | `feat_rest_days`, `feat_is_back_to_back`, `feat_games_last_7d` | "Playing on a back-to-back", "Well-rested (3 days off)" |
+| injury | `feat_team_out_count`, `feat_opp_out_count`, `feat_player_is_questionable` | "2 teammates out (45 combined MPG)", "Listed as Questionable" |
+| trend | `feat_stat_l3_l15_ratio` | "Hot streak: L3 avg 15% above L15", "Cold stretch: L3 avg 12% below L15" |
+| consistency | `feat_stat_std_l5` | "Very consistent (low variance)", "High variance game-to-game" |
+| average | `feat_player_avg_stat_l5`, `prop_line` | "L5 avg (24.2) is 3.2 above line" |
+
+### Context-Aware Sentiments
+
+Insight sentiments depend on the bet direction (determined by comparing `over_edge` vs `under_edge`):
+
+| Insight | Over Bet Sentiment | Under Bet Sentiment |
+|---------|-------------------|---------------------|
+| L5 avg above line | ✓ positive (green) | ⚠ negative (red) |
+| L5 avg below line | ⚠ negative (red) | ✓ positive (green) |
+| Hot streak (L3 > L15) | ✓ positive (green) | ⚠ negative (red) |
+| Cold streak (L3 < L15) | ⚠ negative (red) | ✓ positive (green) |
+
+### Feature Columns
+
+Stored in `daily_predictions` table:
+
+```
+-- B2: Rest/Schedule
+feat_rest_days INTEGER
+feat_is_back_to_back BOOLEAN
+feat_games_last_7d INTEGER
+
+-- B1: Injury Context
+feat_team_out_count INTEGER
+feat_team_out_min_sum REAL
+feat_opp_out_count INTEGER
+feat_player_is_questionable BOOLEAN
+feat_player_is_probable BOOLEAN
+
+-- B3: Stat-specific Trends (populated per stat)
+feat_player_avg_stat_l3 REAL
+feat_player_avg_stat_l5 REAL
+feat_player_avg_stat_l15 REAL
+feat_stat_l3_l15_ratio REAL
+feat_stat_std_l5 REAL
+
+-- Opponent Context
+feat_opp_abbrev VARCHAR(3)
+```
+
+### Usage in AnalysisModal
+
+```tsx
+import { generateInsights } from '@/lib/insights'
+
+const insights = generateInsights(prediction)
+
+{insights.length > 0 && (
+  <div className="p-6 border-b border-slate-700">
+    <h3 className="text-lg font-semibold text-slate-50 mb-3">Model Context</h3>
+    <div className="space-y-2">
+      {insights.map((insight, i) => (
+        <div key={i} className={`flex items-center gap-2 text-sm ${
+          insight.sentiment === 'positive' ? 'text-green-400' :
+          insight.sentiment === 'negative' ? 'text-red-400' : 'text-slate-300'
+        }`}>
+          <span className="w-4 text-center">
+            {insight.sentiment === 'positive' ? '✓' : insight.sentiment === 'negative' ? '⚠' : '•'}
+          </span>
+          <span>{insight.text}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+```
+
+## Vercel Deployment (Session 29)
+
+Dashboard is deployed to Vercel at `game-flow-data.vercel.app`.
+
+### Configuration
+
+| Setting | Value |
+|---------|-------|
+| Root Directory | `dashboard` |
+| Framework | Next.js (auto-detected) |
+| Build Command | `npm run build` |
+| Output Directory | `.next` |
+
+### Environment Variables
+
+Set in Vercel Dashboard → Project Settings → Environment Variables:
+
+| Variable | Description |
+|----------|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key |
+
+### Vercel MCP Integration
+
+Add Vercel MCP to Claude Code for deployment management:
+
+```bash
+claude mcp add --transport http vercel https://mcp.vercel.com
+```
+
+Then authenticate with `/mcp` in Claude Code.
+
+### Deployment Process
+
+1. Push code to GitHub
+2. Vercel automatically builds and deploys
+3. Preview deployments created for PRs
+4. Production deployment on merge to main
+
 ## Future Enhancements
 
-1. **Feature-based insights** — Display why the model likes a prop (e.g., "Team missing key rebounder")
-2. **Date range selector** — Allow selecting custom date ranges for history/performance
-3. **Vercel deployment** — Production hosting with environment variables
+1. **Date range selector** — Allow selecting custom date ranges for history/performance
+2. **Vercel Analytics** — Add `@vercel/analytics` for page view tracking
+3. **Error monitoring** — Add Sentry for error tracking
+4. **Health check endpoint** — `/api/health` for uptime monitoring

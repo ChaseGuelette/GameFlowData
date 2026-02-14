@@ -9,7 +9,14 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
 
+from src.models.black_litterman import BLConfig, BlackLittermanBlender
+
 logger = logging.getLogger(__name__)
+
+# Optimal BL config from backtest sweep (61.5% hit rate, 7.72% ROI)
+DEFAULT_BL_TAU = 0.5
+DEFAULT_BL_Z_MAX = 1.0
+DEFAULT_BL_EDGE_THRESHOLD = 0.09
 
 
 class DailyPredictionRunner:
@@ -87,7 +94,10 @@ class DailyPredictionRunner:
         else:
             logger.warning("No prop lines found for today's games. Skipping edge calculation.")
 
-        # 8. Map feature values to predictions for dashboard insights
+        # 8. Compute BL-blended recommendations ("Model Picks")
+        predictions_df = self._compute_bl_recommendations(predictions_df, samples_dict)
+
+        # 9. Map feature values to predictions for dashboard insights
         predictions_df = self._map_features_to_predictions(predictions_df, features_df)
 
         return predictions_df, samples_dict
@@ -161,6 +171,12 @@ class DailyPredictionRunner:
         dashboard's Analysis Modal.
         """
         if features_df.empty:
+            return predictions_df
+
+        # Ensure required columns exist for mapping
+        required_cols = ["player_id", "game_id", "stat"]
+        if not all(col in predictions_df.columns for col in required_cols):
+            logger.warning("predictions_df missing required columns for feature mapping")
             return predictions_df
 
         # Create lookup from (player_id, game_id) to feature row
@@ -242,6 +258,8 @@ class DailyPredictionRunner:
             1610612761: 'TOR', 1610612762: 'UTA', 1610612764: 'WAS',
         }
 
+        if "opponent_id" not in predictions_df.columns:
+            return {}
         opp_ids = predictions_df["opponent_id"].dropna().unique().tolist()
         return {int(tid): team_abbrev.get(int(tid), 'UNK') for tid in opp_ids if tid}
 
@@ -685,3 +703,92 @@ class DailyPredictionRunner:
         merged["under_edge"] = merged["under_prob"] - merged["implied_under"]
 
         return merged
+
+    def _compute_bl_recommendations(
+        self,
+        predictions_df: pd.DataFrame,
+        samples_dict: dict[tuple, np.ndarray] | None = None,
+    ) -> pd.DataFrame:
+        """Compute Black-Litterman blended probabilities and mark recommended picks.
+
+        Uses the optimal BL config from backtest sweeps (tau=0.5, z_max=1.0)
+        to blend model probabilities with market priors. Predictions with
+        BL edge >= 9% are marked as recommended ("Model Picks").
+
+        Args:
+            predictions_df: DataFrame with raw model predictions and edges.
+            samples_dict: MC samples for empirical probability estimation.
+
+        Returns:
+            DataFrame with added columns: bl_over_prob, bl_under_prob,
+            bl_over_edge, bl_under_edge, bl_confidence, is_recommended.
+        """
+        # Initialize BL columns
+        predictions_df["bl_over_prob"] = None
+        predictions_df["bl_under_prob"] = None
+        predictions_df["bl_over_edge"] = None
+        predictions_df["bl_under_edge"] = None
+        predictions_df["bl_confidence"] = None
+        predictions_df["is_recommended"] = False
+
+        if samples_dict is None or not samples_dict:
+            logger.warning("No MC samples available for BL blending. Skipping BL computation.")
+            return predictions_df
+
+        # Initialize BL blender with optimal config
+        bl_config = BLConfig(tau=DEFAULT_BL_TAU, z_max=DEFAULT_BL_Z_MAX)
+        blender = BlackLittermanBlender(config=bl_config)
+
+        bl_computed = 0
+        recommended_count = 0
+
+        for idx, row in predictions_df.iterrows():
+            # Skip rows without lines or odds
+            if pd.isna(row.get("line")) or pd.isna(row.get("over_odds")) or pd.isna(row.get("under_odds")):
+                continue
+
+            # Get MC samples for this prediction
+            key = (row["player_id"], row["game_id"], row["stat"])
+            samples = samples_dict.get(key)
+
+            if samples is None or len(samples) == 0:
+                continue
+
+            # Compute BL-blended prediction
+            bl_result = blender.blend_prediction(
+                samples=samples,
+                line=row["line"],
+                over_odds=row["over_odds"],
+                under_odds=row["under_odds"],
+            )
+
+            # Store BL values
+            predictions_df.at[idx, "bl_over_prob"] = bl_result["posterior_over"]
+            predictions_df.at[idx, "bl_under_prob"] = bl_result["posterior_under"]
+            predictions_df.at[idx, "bl_confidence"] = bl_result["confidence"]
+
+            # Compute BL edges (posterior - implied market)
+            implied_over = row.get("implied_over")
+            implied_under = row.get("implied_under")
+
+            if pd.notna(implied_over) and pd.notna(implied_under):
+                bl_over_edge = bl_result["posterior_over"] - implied_over
+                bl_under_edge = bl_result["posterior_under"] - implied_under
+
+                predictions_df.at[idx, "bl_over_edge"] = bl_over_edge
+                predictions_df.at[idx, "bl_under_edge"] = bl_under_edge
+
+                # Mark as recommended if max BL edge meets threshold
+                max_bl_edge = max(bl_over_edge, bl_under_edge)
+                if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
+                    predictions_df.at[idx, "is_recommended"] = True
+                    recommended_count += 1
+
+            bl_computed += 1
+
+        logger.info(
+            f"Computed BL blending for {bl_computed} predictions, "
+            f"{recommended_count} marked as recommended (edge >= {DEFAULT_BL_EDGE_THRESHOLD*100:.0f}%)"
+        )
+
+        return predictions_df

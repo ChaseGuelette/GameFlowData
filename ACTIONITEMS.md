@@ -1,5 +1,41 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-14 — Session 29)
+
+### What We Did
+
+**Implemented G2/G3 dashboard insight features.** Added 14 `feat_*` columns to `daily_predictions` table and template-based insight generation for the Analysis Modal. Features explain WHY the model made its prediction.
+
+**Key features:**
+- **Database migration (G2):** Added columns for B2 rest/schedule, B1 injury context, B3 stat-specific trends, and opponent abbreviation via Supabase migration
+- **Prediction storage update (G3):** `daily_runner.py` now maps feature values from `features_df` to predictions via `_map_features_to_predictions()` method
+- **Insights generator:** New `dashboard/src/lib/insights.ts` generates template-based insights from feature values. Categories: rest, injury, trend, consistency, average
+- **Context-aware sentiments:** Insight sentiments consider bet direction — for Under bets, L5 avg below line is positive (green), not negative
+- **Analysis Modal update:** Added "Model Context" section displaying insights with color-coded sentiments
+
+**Created historical backfill script.** `src/tools/backfill_prediction_features.py` populates `feat_*` columns for old predictions without modifying prediction values. Successfully backfilled Feb 10-12 (1,338 predictions).
+
+**Deployed dashboard to Vercel (G9).** Dashboard live at `game-flow-data.vercel.app`. Configuration: root directory `dashboard`, environment variables `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Vercel MCP available via `claude mcp add --transport http vercel https://mcp.vercel.com`.
+
+**Files created:**
+- `dashboard/src/lib/insights.ts` — Template-based insight generator (~155 lines)
+- `src/tools/backfill_prediction_features.py` — Historical feature backfill script (~315 lines)
+
+**Files modified:**
+- `src/models/prediction_store.py` — Added 14 feat_* columns to PREDICTION_COLS
+- `src/models/daily_runner.py` — Added `_map_features_to_predictions()` and `_get_opponent_abbrevs()` methods, defensive column checks
+- `dashboard/src/components/analysis/AnalysisModal.tsx` — Added "Model Context" insights section
+
+**Tests:** 575 passed, 0 failures
+
+### Next Step
+
+1. **Monitor Vercel deployment** — Check analytics and error logs
+2. **Paper trade** — Continue daily paper trading with automated pipeline
+3. **Discord bot** — Follow development plan in `docs/discord_bot_development.md`
+
+---
+
 ## Session Summary (2026-02-13 — Session 28)
 
 ### What We Did
@@ -1283,7 +1319,7 @@ Next.js dashboard for viewing predictions and paper trading results. Full spec: 
   - `/performance` — KPI cards, bankroll chart, stat breakdown table
   - Components: BetCard, BetList, HistoryFilters, HistorySummary, KPICard, BankrollChart, StatBreakdown
   - Auth callback route for email confirmation added
-- [ ] **G9. Vercel deployment** — Production deployment with environment variables
+- [x] **G9. Vercel deployment** — *(DONE — 2026-02-14)* Production deployment at `game-flow-data.vercel.app` with environment variables
 
 ---
 

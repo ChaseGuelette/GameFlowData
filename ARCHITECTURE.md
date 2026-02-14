@@ -828,3 +828,12 @@ See `ACTIONITEMS.md` for full details.
 2. **CLI format:** `--edge-threshold pts=0.10 reb=0.07 ast=0.15` for per-stat, or `--edge-threshold 0.05` for global (backward compatible).
 3. **Files updated:** `bet_simulator.py`, `backtest_harness.py`, `run_backtest.py`, `run_sweep.py`, `paper_trader.py`, `place_bets.py` now accept `StatConfigSet`.
 4. **Tests:** 30 new tests in `tests/test_stat_config.py`. All 570 tests pass.
+
+**Dashboard insight features (G2/G3 — 2026-02-14):** Added 14 `feat_*` columns to `daily_predictions` table for template-based insights in the Analysis Modal. Features explain WHY the model made its prediction.
+1. **Database migration (G2):** Added columns for B2 rest/schedule (`feat_rest_days`, `feat_is_back_to_back`, `feat_games_last_7d`), B1 injury context (`feat_team_out_count`, `feat_team_out_min_sum`, `feat_opp_out_count`, `feat_player_is_questionable`, `feat_player_is_probable`), B3 stat-specific trends (`feat_player_avg_stat_l3/l5/l15`, `feat_stat_l3_l15_ratio`, `feat_stat_std_l5`), and opponent abbreviation (`feat_opp_abbrev`).
+2. **Prediction storage update (G3):** `daily_runner.py` now maps feature values from `features_df` to predictions via `_map_features_to_predictions()` method. Uses hardcoded `TEAM_ABBREV` map (same as dashboard) for opponent abbreviations.
+3. **Insights generator:** New `dashboard/src/lib/insights.ts` generates template-based insights from feature values. Categories: rest, injury, trend, consistency, average. Sentiments are context-aware — considers bet direction (Over vs Under) when determining if a signal is positive/negative.
+4. **Analysis Modal update:** Added "Model Context" section displaying insights with color-coded sentiments (green=positive, red=negative, neutral=gray).
+5. **Historical backfill:** `src/tools/backfill_prediction_features.py` script populates feat_* columns for historical predictions without modifying prediction values. Supports `--date`, `--start/--end`, `--dry-run` flags.
+
+**Dashboard Vercel deployment (2026-02-14):** Dashboard deployed to Vercel at `game-flow-data.vercel.app`. Configuration: root directory `dashboard`, environment variables `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Vercel MCP available via `claude mcp add --transport http vercel https://mcp.vercel.com`.

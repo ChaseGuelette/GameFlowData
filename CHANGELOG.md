@@ -5,6 +5,89 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-14 Session 29] — Dashboard Insight Features & Vercel Deployment
+
+### Added
+
+- **Dashboard Insight Features (G2/G3)**:
+  - 14 `feat_*` columns in `daily_predictions` table for template-based insights
+  - B2 rest/schedule features: `feat_rest_days`, `feat_is_back_to_back`, `feat_games_last_7d`
+  - B1 injury features: `feat_team_out_count`, `feat_team_out_min_sum`, `feat_opp_out_count`, `feat_player_is_questionable`, `feat_player_is_probable`
+  - B3 stat-specific trends: `feat_player_avg_stat_l3/l5/l15`, `feat_stat_l3_l15_ratio`, `feat_stat_std_l5`
+  - Opponent context: `feat_opp_abbrev` (3-letter team abbreviation)
+
+- **Insights Generator** (`dashboard/src/lib/insights.ts`):
+  - `generateInsights(prediction)` — template-based insight generation from feature values
+  - Categories: rest, injury, trend, consistency, average
+  - Context-aware sentiments — considers bet direction (Over vs Under) for positive/negative determination
+  - `getInsightSummary(insights)` — quick summary text for display
+
+- **"Model Context" Section** in `AnalysisModal.tsx`:
+  - Displays insights with color-coded sentiments (green=positive, red=negative, gray=neutral)
+  - Icons per sentiment: ✓ (positive), ⚠ (negative), • (neutral)
+  - Positioned after Last 5 Games chart
+
+- **Historical Backfill Script** (`src/tools/backfill_prediction_features.py`):
+  - Populates `feat_*` columns for historical predictions without modifying prediction values
+  - Uses `FeatureStore.get_player_game_features()` for feature extraction
+  - Supports `--date`, `--start/--end`, `--dry-run` CLI flags
+  - Successfully backfilled Feb 10-12 (1,338 predictions)
+
+- **Vercel Deployment (G9)**:
+  - Dashboard live at `game-flow-data.vercel.app`
+  - Root directory: `dashboard`
+  - Environment variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - Vercel MCP integration: `claude mcp add --transport http vercel https://mcp.vercel.com`
+
+### Changed
+
+- **`src/models/prediction_store.py`**:
+  - Added 14 `feat_*` columns to `PREDICTION_COLS` list
+
+- **`src/models/daily_runner.py`**:
+  - Added `_map_features_to_predictions()` method — extracts B1/B2/B3 features from `features_df` and attaches to predictions
+  - Added `_get_opponent_abbrevs()` method — uses hardcoded `TEAM_ABBREV` map (same as dashboard)
+  - Added defensive column checks for missing `player_id`/`game_id`/`stat` columns
+  - Added defensive check for missing `opponent_id` column
+
+- **`dashboard/src/lib/insights.ts`**:
+  - Trend insights now consider bet direction — hot streak is positive for Over, negative for Under
+  - Average vs line insights now consider bet direction — L5 avg below line is positive for Under bets
+
+### Technical Notes
+
+**Insight Sentiment Logic (context-aware):**
+| Insight | Over Bet | Under Bet |
+|---------|----------|-----------|
+| L5 avg above line | ✓ positive | ⚠ negative |
+| L5 avg below line | ⚠ negative | ✓ positive |
+| Hot streak (L3 > L15) | ✓ positive | ⚠ negative |
+| Cold stretch (L3 < L15) | ⚠ negative | ✓ positive |
+
+**Feature Column Mapping:**
+```python
+# B2: Rest/Schedule (same for all stats)
+feat_rest_days = features["rest_days"]
+feat_is_back_to_back = features["is_back_to_back"]
+feat_games_last_7d = features["games_in_last_7_days"]
+
+# B1: Injury Context
+feat_team_out_count = features["team_out_count"]
+feat_team_out_min_sum = features["team_out_min_sum"]
+feat_opp_out_count = features["opp_out_count"]
+
+# B3: Stat-specific (e.g., for pts)
+feat_player_avg_stat_l3 = features["player_avg_pts_l3"]
+feat_stat_l3_l15_ratio = features["player_pts_l3_l15_ratio"]
+feat_stat_std_l5 = features["player_std_pts_l5"]
+```
+
+### Test Results
+
+- 575 tests passed, 0 failures
+
+---
+
 ## [2026-02-13 Session 28] — Play of the Day Featured Card
 
 ### Added

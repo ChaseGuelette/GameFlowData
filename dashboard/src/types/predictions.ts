@@ -41,6 +41,14 @@ export interface Prediction {
   // Game time (UTC timestamp from NBA API)
   game_time?: string
 
+  // Black-Litterman blended values (server-computed for Model Picks)
+  bl_over_prob?: number
+  bl_under_prob?: number
+  bl_over_edge?: number
+  bl_under_edge?: number
+  bl_confidence?: number
+  is_recommended?: boolean
+
   // Feature columns for insights (optional, may not exist yet)
   feat_rest_days?: number
   feat_is_back_to_back?: boolean

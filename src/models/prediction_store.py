@@ -29,6 +29,9 @@ PREDICTION_COLS = [
     "feat_player_is_questionable", "feat_player_is_probable",
     "feat_player_avg_stat_l3", "feat_player_avg_stat_l5", "feat_player_avg_stat_l15",
     "feat_stat_l3_l15_ratio", "feat_stat_std_l5", "feat_opp_abbrev",
+    # Black-Litterman blended values for "Model Picks"
+    "bl_over_prob", "bl_under_prob", "bl_over_edge", "bl_under_edge",
+    "bl_confidence", "is_recommended",
 ]
 
 
