@@ -43,6 +43,7 @@ GameFlowData/
 │   ├── db/                     # Database connection layer
 │   ├── scrapers/               # Data ingestion (13 modules)
 │   ├── processing/             # Data pipeline: linking, averages, backfill
+│   ├── diagnostics/            # Database health monitoring tools
 │   ├── models/                 # ML core: features, training, inference, storage
 │   ├── backtesting/            # Historical replay and bet simulation
 │   ├── tools/                  # CLI query tools
@@ -137,7 +138,38 @@ Serves as the bridge between NBA and sportsbook data:
 | `feature_selection.py` | `ImprovedFeatureSelector` — per-quantile feature selection with time-series aware 3-split CV and permutation importance. |
 | `link_injury_data.py` | Links RapidAPI injury records to NBA player/team IDs via 3-tier cascade: manual CSV overrides → exact normalized match → SequenceMatcher fuzzy match (threshold 0.80, +0.15 last name bonus). 99.3% coverage. |
 
-### 4. Feature Store (`src/models/feature_store.py`)
+### 4. Diagnostics (`src/diagnostics/`)
+
+Database health monitoring tools.
+
+| Module | Purpose |
+|--------|---------|
+| `db_health_check.py` | Comprehensive database health check script with 8 validation categories |
+
+**`db_health_check.py`** — Validates data integrity, freshness, and linkage across all tables:
+- **Data Freshness** — Latest dates for key tables (player_game_stats, daily_predictions, injuries)
+- **Game Data Completeness** — Games per date, player counts per game
+- **Prop Linking Health** — NULL game_id/player_id/team_id rates
+- **Aggregation Sync** — player_average_game_stats coverage vs player_game_stats
+- **Injury Linking** — Injuries without player_id
+- **Position History** — Active players with position data
+- **Prediction Coverage** — Games with/without predictions
+- **Foreign Key Integrity** — Soft FK validation
+
+**Usage:**
+```bash
+python src/diagnostics/db_health_check.py              # Basic run
+python src/diagnostics/db_health_check.py --days 14    # Check last 14 days
+python src/diagnostics/db_health_check.py --verbose    # Detailed breakdowns
+python src/diagnostics/db_health_check.py --json       # JSON output for automation
+```
+
+**Exit Codes:**
+- `0` = All checks passed
+- `1` = Warnings present
+- `2` = Critical errors found
+
+### 5. Feature Store (`src/models/feature_store.py`)
 
 Centralized engine for converting raw stats into model-ready features.
 
@@ -166,7 +198,7 @@ Centralized engine for converting raw stats into model-ready features.
 - `MINUTES_FEATURES` — Playing time prediction features (includes `line_spread`, `line_total`, B2 rest/schedule, B3 minutes L3 trend, B4 minutes stability).
 - Configuration via `FeatureConfig` dataclass.
 
-### 5. Machine Learning Pipeline (`src/models/`)
+### 6. Machine Learning Pipeline (`src/models/`)
 
 The modeling engine predicts the probability distribution of player stats.
 
@@ -277,7 +309,7 @@ CLI tool for querying stored daily predictions. Three modes:
 | `analyze_calibration_drift.py` | Post-hoc calibration analysis. Detects drift in quantile coverage over time. |
 | `analyze_minutes_bimodality.py` | Diagnostic for minutes distribution shape. Finding: bimodality is not real (closed). |
 
-### 6. Backtesting Harness (`src/backtesting/`)
+### 7. Backtesting Harness (`src/backtesting/`)
 
 A simulation environment to validate betting strategies.
 
@@ -302,13 +334,13 @@ A simulation environment to validate betting strategies.
     - **BL enabled (`--bl-tau`):** Devigged market prior + log-odds BL blending → edge = posterior_prob - devigged_market_prob. Adds diagnostic columns: `model_over/under`, `market_over/under`, `confidence`, `posterior_over/under`.
 - **Parameter Sweep:** `run_sweep.py` enables efficient grid search across BL tau, edge threshold, and Kelly fraction values by caching all shared data (features, lines, actuals, MC predictions/samples) and replaying only edge calculation + bet simulation per configuration.
 
-### 7. Query Tools (`src/tools/`)
+### 8. Query Tools (`src/tools/`)
 
 | Module | Purpose |
 |--------|---------|
 | `query_player.py` | CLI tool for querying stored predictions. Modes: line probability, player overview, top edges. |
 
-### 8. Orchestration (`src/orchestration/`)
+### 9. Orchestration (`src/orchestration/`)
 
 **`run_daily.py`** — Full pipeline orchestrator (legacy). Triggers complete workflow: data scraping → linking → feature store → predictions → storage → CSV export. Supports `--skip-storage` to skip DB persistence. The `--scrape-injuries` flag fetches current injuries from RapidAPI into `rapidapi_injuries` and runs `link_injury_data.py` to populate `player_id` for feature generation and filtering.
 
@@ -320,7 +352,7 @@ A simulation environment to validate betting strategies.
 | `lines_job.py` | 12 PM, 4 PM, 6 PM ET | Player props + injuries + incremental linking |
 | `inference_job.py` | 6:30 PM ET (once) | Generate predictions with latest lines |
 
-**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed.py`. Supports `--dry-run` to preview commands. Runtime: ~5-10 minutes (optimized from ~30 minutes via incremental rolling averages).
+**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → resolve pending paper bets. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Runtime: ~5-10 minutes (optimized from ~30 minutes via incremental scripts).
 
 **`lines_job.py`** — Multiple-times-daily props and injuries scraping. Steps: `daily_game_lines_scraper.py` → `daily_player_props_scraper.py` → `rapidapi_injury_backfill.py` (optional) → `link_injury_data.py` (optional) → `nba_linker_local.py incremental` (optional). Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`. Runtime: ~30-90 seconds.
 
@@ -335,11 +367,11 @@ A simulation environment to validate betting strategies.
 
 Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, GameFlow-Lines-6PM, GameFlow-Inference) execute these batch scripts at configured times. See `scripts/` directory for implementation.
 
-### 9. Paper Trading (`src/paper_trading/`)
+### 10. Paper Trading (`src/paper_trading/`)
 
 Standalone CLI scripts to convert stored `daily_predictions` into paper bets with bet selection, outcome resolution, and P&L tracking. Integrated with the Dashboard for visualization.
 
-### 10. Dashboard (`dashboard/`)
+### 11. Dashboard (`dashboard/`)
 
 Next.js web application for viewing daily predictions, analyzing player props, and tracking paper trading performance.
 

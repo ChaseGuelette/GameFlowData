@@ -1,5 +1,43 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-13 — Session 25)
+
+### What We Did
+
+**Created comprehensive database health check script.** Built `src/diagnostics/db_health_check.py` with 8 validation categories to monitor data integrity, freshness, and linkage across all tables.
+
+**Health check categories:**
+1. **Data Freshness** — Latest dates for player_game_stats, raw_player_props_combined, rapidapi_injuries, daily_predictions
+2. **Game Data Completeness** — Games per date, player counts per game (alerts if <20 players)
+3. **Prop Linking Health** — NULL game_id/player_id/team_id rates (alerts if >10% unlinked)
+4. **Aggregation Sync** — player_average_game_stats coverage vs player_game_stats
+5. **Injury Linking** — Injuries without player_id (alerts if >20% unlinked)
+6. **Position History** — Active players with position data
+7. **Prediction Coverage** — Games with/without predictions, orphaned predictions
+8. **Foreign Key Integrity** — Soft FK validation for player_id, team_id references
+
+**Created incremental team_id backfill script.** Built `src/processing/backfill_team_ids_incremental.py` to process only recent data via staging_id threshold instead of all 26M+ rows.
+
+**Updated daily_stats_job.py** to use incremental backfill (Step 3) instead of full table scan.
+
+**Files created:**
+- `src/diagnostics/__init__.py` — Package init
+- `src/diagnostics/db_health_check.py` — Health check script (~580 lines)
+- `src/processing/backfill_team_ids_incremental.py` — Incremental backfill (~160 lines)
+
+**Files modified:**
+- `src/orchestration/daily_stats_job.py` — Updated Step 3 to use incremental backfill
+
+**Tests:** 575 passed, 0 failures
+
+### Next Step
+
+1. **Run inference** — Generate predictions for Feb 12-13
+2. **Paper trade** — Continue daily paper trading
+3. **Consider adding health check to daily pipeline** — Optional monitoring step
+
+---
+
 ## Session Summary (2026-02-10 — Session 24)
 
 ### What We Did

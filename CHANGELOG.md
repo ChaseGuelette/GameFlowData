@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-13 Session 25] — Database Health Check & Incremental Backfill
+
+### Added
+
+- **Database Health Check Script** (`src/diagnostics/db_health_check.py`):
+  - `DatabaseHealthChecker` class with 8 validation categories
+  - `CheckResult` dataclass for structured results (status: passed/warning/failed)
+  - Data freshness checks for key tables (player_game_stats, props, injuries, predictions)
+  - Game data completeness checks (games per date, player counts)
+  - Prop linking health (NULL game_id/player_id/team_id rates)
+  - Aggregation sync validation (player_average_game_stats coverage)
+  - Injury linking validation
+  - Position history coverage
+  - Prediction coverage analysis
+  - Foreign key integrity checks
+  - CLI arguments: `--days`, `--verbose`, `--json`
+  - Exit codes: 0 (pass), 1 (warnings), 2 (critical)
+
+- **`src/diagnostics/__init__.py`** — Package initialization
+
+- **Incremental Team ID Backfill** (`src/processing/backfill_team_ids_incremental.py`):
+  - Only processes recent rows by staging_id threshold
+  - `--days-back` parameter (default 7 days)
+  - `--staging-id-threshold` for explicit cutoff
+  - Batch processing with progress bar
+  - Avoids full table scan on 26M+ row table
+
+### Changed
+
+- **`src/orchestration/daily_stats_job.py`:**
+  - Step 3 now uses `backfill_team_ids_incremental.py --days-back 7` instead of full backfill
+  - Prevents unnecessary processing of historical data that may have unresolvable team_id issues
+
+### Technical Notes
+
+**Health Check Categories:**
+
+| Check | Alert Condition |
+|-------|-----------------|
+| Data Freshness | Any table >1 day stale on game days |
+| Game Completeness | Game has <20 players or missing team stats |
+| Prop Linking | >10% of recent props unlinked |
+| Aggregation Sync | Recent games missing aggregations |
+| Injury Linking | >20% of recent injuries unlinked |
+| Position History | Active players lack position data |
+| Prediction Coverage | Games without predictions or orphaned predictions |
+| Foreign Keys | player_id/team_id references invalid |
+
+**Usage:**
+```bash
+# Basic run
+python src/diagnostics/db_health_check.py
+
+# Extended check period
+python src/diagnostics/db_health_check.py --days 14
+
+# Detailed output
+python src/diagnostics/db_health_check.py --verbose
+
+# JSON for automation
+python src/diagnostics/db_health_check.py --json
+```
+
+### Test Results
+
+- 575 tests passed, 0 failures (coverage warning: 51.06% < 60% target)
+
+---
+
 ## [2026-02-10 Session 24] — Dashboard Line Shopping & Kelly Sizing
 
 ### Added
