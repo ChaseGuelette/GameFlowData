@@ -103,3 +103,44 @@ export function formatGameTime(gameTime: string | undefined): string {
     return ''
   }
 }
+
+// =============================================================================
+// Black-Litterman Blending Functions
+// =============================================================================
+
+// BL blending constants (from src/models/black_litterman.py)
+const BL_Z_MAX = 1.0
+const BL_MAX_WEIGHT = 0.50
+
+// Calculate BL confidence from prediction distribution
+// Higher confidence when line is far from model's prediction center
+export function calculateBLConfidence(predMean: number, predStd: number, line: number): number {
+  if (!predStd || predStd < 0.001) return 0
+  const z = Math.abs(predMean - line) / predStd
+  return Math.min(z / BL_Z_MAX, 1.0)
+}
+
+// Blend model probability with implied probability in log-odds space
+export function blendProbability(
+  modelProb: number,
+  impliedProb: number,
+  tau: number,
+  confidence: number
+): number {
+  // Clamp to avoid log(0)
+  const modelP = Math.max(0.01, Math.min(0.99, modelProb))
+  const impliedP = Math.max(0.01, Math.min(0.99, impliedProb))
+
+  // Convert to log-odds
+  const modelLogit = Math.log(modelP / (1 - modelP))
+  const impliedLogit = Math.log(impliedP / (1 - impliedP))
+
+  // Blending weight (capped at max_weight)
+  const w = Math.min(tau * confidence, BL_MAX_WEIGHT)
+
+  // Blend in log-odds space
+  const posteriorLogit = impliedLogit + w * (modelLogit - impliedLogit)
+
+  // Convert back to probability
+  return 1 / (1 + Math.exp(-posteriorLogit))
+}

@@ -7,7 +7,7 @@ import { FilterTabs, type FilterOption } from '@/components/predictions/FilterTa
 import { PropGrid } from '@/components/predictions/PropGrid'
 import { AnalysisModal } from '@/components/analysis/AnalysisModal'
 import { type Prediction } from '@/types/predictions'
-import { getToday, formatDate } from '@/lib/utils'
+import { getToday, formatDate, calculateBLConfidence, blendProbability } from '@/lib/utils'
 
 // NBA team ID to abbreviation map
 const TEAM_ABBREV: Record<number, string> = {
@@ -32,6 +32,8 @@ export default function HomePage() {
   const [bankroll, setBankroll] = useState<number | undefined>(undefined)
   const [selectedDate, setSelectedDate] = useState<string>(getToday())
   const [availableDates, setAvailableDates] = useState<string[]>([])
+  const [edgeThreshold, setEdgeThreshold] = useState<number>(0.03)  // Default 3%
+  const [blTau, setBlTau] = useState<number | null>(null)  // null = no BL blending
 
   // Fetch predictions for a specific date
   const fetchPredictions = useCallback(async (date: string) => {
@@ -39,12 +41,12 @@ export default function HomePage() {
     const supabase = createClient()
 
     console.log('Fetching predictions for date:', date)
+    // Fetch all predictions with prop lines (filtering done client-side based on user selection)
     const { data: predictionsData, error: predictionsError } = await supabase
       .from('daily_predictions')
       .select('*')
       .eq('prediction_date', date)
       .not('line', 'is', null)
-      .or('over_edge.gte.0.03,under_edge.gte.0.03')
       .order('over_edge', { ascending: false })
 
     console.log('Predictions result:', {
@@ -73,6 +75,8 @@ export default function HomePage() {
           q50: p.pred_q50,
           q75: p.pred_q75,
           q90: p.pred_q90,
+          pred_mean: p.pred_mean,
+          pred_std: p.pred_std,
           team_abbrev: TEAM_ABBREV[p.team_id] || 'UNK',
           opponent_abbrev: TEAM_ABBREV[p.opponent_id] || 'UNK',
         }))
@@ -136,14 +140,33 @@ export default function HomePage() {
     return `${teams[0]} vs ${teams[1]}`
   }))].sort()
 
-  // Filter predictions by stat type and matchup
+  // Filter predictions by stat type, matchup, and edge threshold (with optional BL blending)
   const filteredPredictions = predictions.filter(p => {
-    const matchesStat = filter === 'all' || p.stat === filter
-    if (teamFilter === 'all') return matchesStat
-    // Check if either team in the matchup matches
-    const matchupTeams = teamFilter.split(' vs ')
-    const matchesMatchup = matchupTeams.includes(p.team_abbrev || '') || matchupTeams.includes(p.opponent_abbrev || '')
-    return matchesStat && matchesMatchup
+    // Stat type filter
+    if (filter !== 'all' && p.stat !== filter) return false
+
+    // Team/matchup filter
+    if (teamFilter !== 'all') {
+      const matchupTeams = teamFilter.split(' vs ')
+      if (!matchupTeams.includes(p.team_abbrev || '') && !matchupTeams.includes(p.opponent_abbrev || '')) {
+        return false
+      }
+    }
+
+    // Calculate effective edges (raw or BL-blended)
+    let effectiveOverEdge = p.over_edge
+    let effectiveUnderEdge = p.under_edge
+
+    if (blTau !== null && p.pred_mean && p.pred_std) {
+      const confidence = calculateBLConfidence(p.pred_mean, p.pred_std, p.prop_line)
+      const blendedOver = blendProbability(p.model_prob_over, p.implied_prob_over, blTau, confidence)
+      const blendedUnder = blendProbability(p.model_prob_under, p.implied_prob_under, blTau, confidence)
+      effectiveOverEdge = blendedOver - p.implied_prob_over
+      effectiveUnderEdge = blendedUnder - p.implied_prob_under
+    }
+
+    // At least one direction must meet edge threshold
+    return Math.max(effectiveOverEdge, effectiveUnderEdge) >= edgeThreshold
   })
 
   // Sort by max edge
@@ -189,6 +212,33 @@ export default function HomePage() {
               {availableMatchups.map((matchup) => (
                 <option key={matchup} value={matchup}>{matchup}</option>
               ))}
+            </select>
+            {/* Edge Threshold Filter */}
+            <select
+              value={edgeThreshold}
+              onChange={(e) => setEdgeThreshold(Number(e.target.value))}
+              className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            >
+              <option value={0}>Edge: All</option>
+              <option value={0.03}>Edge: ≥3%</option>
+              <option value={0.05}>Edge: ≥5% (Rec)</option>
+              <option value={0.07}>Edge: ≥7%</option>
+              <option value={0.10}>Edge: ≥10%</option>
+              <option value={0.15}>Edge: ≥15%</option>
+              <option value={0.20}>Edge: ≥20%</option>
+            </select>
+            {/* BL Tau Filter */}
+            <select
+              value={blTau === null ? 'none' : blTau}
+              onChange={(e) => setBlTau(e.target.value === 'none' ? null : Number(e.target.value))}
+              className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            >
+              <option value="none">BL: Off</option>
+              <option value={0.03}>BL: τ=0.03</option>
+              <option value={0.05}>BL: τ=0.05</option>
+              <option value={0.10}>BL: τ=0.10 (Rec)</option>
+              <option value={0.15}>BL: τ=0.15</option>
+              <option value={0.25}>BL: τ=0.25</option>
             </select>
             <FilterTabs activeFilter={filter} onFilterChange={setFilter} />
           </div>

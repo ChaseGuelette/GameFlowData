@@ -19,6 +19,10 @@ export interface Prediction {
   q75: number
   q90: number
 
+  // Distribution parameters (for BL blending)
+  pred_mean: number
+  pred_std: number
+
   // Edge calculations
   over_edge: number
   under_edge: number
