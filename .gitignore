@@ -25,6 +25,7 @@ data/
 !package.json
 !package-lock.json
 !vercel.json
+!tsconfig.json
 .mcp.json     # (Exception: if you want to track your tool config)
 
 # --- IDE Settings ---
