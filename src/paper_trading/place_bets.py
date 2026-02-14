@@ -9,6 +9,9 @@ Usage:
 
     # Per-stat edge thresholds
     python src/paper_trading/place_bets.py --date 2026-02-04 --edge-threshold pts=0.10 reb=0.07 ast=0.15
+
+    # With Black-Litterman blending (recommended for production)
+    python src/paper_trading/place_bets.py --date 2026-02-04 --bl-tau 0.5 --z-max 1.0 --edge-threshold 0.09
 """
 
 import argparse
@@ -93,6 +96,21 @@ def main():
         default=10000.0,
         help="Starting bankroll if no previous bets (default: 10000)",
     )
+    parser.add_argument(
+        "--bl-tau",
+        type=float,
+        default=None,
+        help="Black-Litterman tau for probability blending. "
+             "If set, recalculates edges using BL blending with MC samples. "
+             "Recommended: 0.5 (use with --z-max 1.0 --edge-threshold 0.09)",
+    )
+    parser.add_argument(
+        "--z-max",
+        type=float,
+        default=1.0,
+        help="BL z-score saturation threshold (default: 1.0). "
+             "Lower values = more aggressive blending.",
+    )
 
     args = parser.parse_args()
 
@@ -112,6 +130,10 @@ def main():
     for stat in stats:
         logger.info(f"  {stat}: edge={stat_config.get_edge_threshold(stat)}")
     logger.info(f"Kelly fraction: {args.kelly_fraction}")
+    if args.bl_tau is not None:
+        logger.info(f"BL blending: tau={args.bl_tau}, z_max={args.z_max}")
+    else:
+        logger.info("BL blending: disabled (using raw model edges)")
 
     # Initialize trader
     trader = PaperTrader(
@@ -119,6 +141,8 @@ def main():
         kelly_fraction=args.kelly_fraction,
         starting_bankroll=args.bankroll,
         stat_config=stat_config,
+        bl_tau=args.bl_tau,
+        bl_z_max=args.z_max,
     )
 
     # Select bets

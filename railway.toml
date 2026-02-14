@@ -1,78 +1,10 @@
 # Railway Configuration for GameFlowData
-# Cron jobs for NBA data pipeline
-#
-# Schedule times are in UTC. Convert from ET:
-#   EST (Nov-Mar): ET + 5 hours = UTC
-#   EDT (Mar-Nov): ET + 4 hours = UTC
-#
-# Current schedules assume EST (winter):
-#   9:00 AM ET  → 14:00 UTC
-#   12:00 PM ET → 17:00 UTC
-#   4:00 PM ET  → 21:00 UTC
-#   6:00 PM ET  → 23:00 UTC
-#   6:30 PM ET  → 23:30 UTC
+# Single worker service that runs scheduled jobs via APScheduler
 
 [build]
 builder = "nixpacks"
 
 [deploy]
+startCommand = "python src/orchestration/scheduler.py"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
-
-# ============================================================
-# CRON JOB SERVICES
-# Each job runs as a separate Railway service
-# ============================================================
-
-# Daily Stats Job - Scrapes NBA results and updates derived stats
-# Runs once daily at 9:00 AM ET (14:00 UTC)
-[[services]]
-name = "daily-stats"
-cron = "0 14 * * *"
-buildCommand = "pip install -r requirements.txt"
-startCommand = "python src/orchestration/daily_stats_job.py"
-
-[services.healthcheck]
-enabled = false
-
-# Lines Job - Noon run (12:00 PM ET = 17:00 UTC)
-# Scrapes props, injuries, and game lines
-[[services]]
-name = "lines-noon"
-cron = "0 17 * * *"
-buildCommand = "pip install -r requirements.txt"
-startCommand = "python src/orchestration/lines_job.py"
-
-[services.healthcheck]
-enabled = false
-
-# Lines Job - 4 PM run (4:00 PM ET = 21:00 UTC)
-[[services]]
-name = "lines-4pm"
-cron = "0 21 * * *"
-buildCommand = "pip install -r requirements.txt"
-startCommand = "python src/orchestration/lines_job.py"
-
-[services.healthcheck]
-enabled = false
-
-# Lines Job - 6 PM run (6:00 PM ET = 23:00 UTC)
-[[services]]
-name = "lines-6pm"
-cron = "0 23 * * *"
-buildCommand = "pip install -r requirements.txt"
-startCommand = "python src/orchestration/lines_job.py"
-
-[services.healthcheck]
-enabled = false
-
-# Inference Job - Generates predictions
-# Runs at 6:30 PM ET (23:30 UTC), 30 min before typical game start
-[[services]]
-name = "inference"
-cron = "30 23 * * *"
-buildCommand = "pip install -r requirements.txt"
-startCommand = "python src/orchestration/inference_job.py"
-
-[services.healthcheck]
-enabled = false

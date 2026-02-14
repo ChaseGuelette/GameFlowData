@@ -71,21 +71,24 @@ export function generateInsights(prediction: Prediction): Insight[] {
   }
 
   // B3: Trend Insights
+  // Sentiment depends on bet direction: hot streak supports Over, cold stretch supports Under
   if (prediction.feat_stat_l3_l15_ratio) {
     const ratio = prediction.feat_stat_l3_l15_ratio
+    const favorsOver = (prediction.over_edge ?? 0) > (prediction.under_edge ?? 0)
+
     if (ratio > 1.15) {
       const pct = ((ratio - 1) * 100).toFixed(0)
       insights.push({
         category: 'trend',
         text: `Hot streak: L3 avg ${pct}% above L15`,
-        sentiment: 'positive'
+        sentiment: favorsOver ? 'positive' : 'negative'
       })
     } else if (ratio < 0.85) {
       const pct = ((1 - ratio) * 100).toFixed(0)
       insights.push({
         category: 'trend',
         text: `Cold stretch: L3 avg ${pct}% below L15`,
-        sentiment: 'negative'
+        sentiment: favorsOver ? 'negative' : 'positive'
       })
     }
   }
@@ -109,22 +112,27 @@ export function generateInsights(prediction: Prediction): Insight[] {
   }
 
   // Average vs Line Insights (if we have both L5 avg and the line)
+  // Sentiment depends on bet direction: for Over bets, above line is positive;
+  // for Under bets, below line is positive
   if (prediction.feat_player_avg_stat_l5 && prediction.prop_line) {
     const avg = prediction.feat_player_avg_stat_l5
     const line = prediction.prop_line
     const diff = avg - line
 
+    // Determine favored bet direction based on edge
+    const favorsOver = (prediction.over_edge ?? 0) > (prediction.under_edge ?? 0)
+
     if (diff > 3) {
       insights.push({
         category: 'average',
         text: `L5 avg (${avg.toFixed(1)}) is ${diff.toFixed(1)} above line`,
-        sentiment: 'positive'
+        sentiment: favorsOver ? 'positive' : 'negative'
       })
     } else if (diff < -3) {
       insights.push({
         category: 'average',
         text: `L5 avg (${avg.toFixed(1)}) is ${Math.abs(diff).toFixed(1)} below line`,
-        sentiment: 'negative'
+        sentiment: favorsOver ? 'negative' : 'positive'
       })
     }
   }

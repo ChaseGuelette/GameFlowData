@@ -3,19 +3,25 @@ Paper Trading Module for NBA Player Props.
 
 Converts daily predictions into paper bets with Kelly-based stake sizing,
 and resolves bets against actual game results.
+
+Supports Black-Litterman probability blending to anchor model probabilities
+to market priors, improving edge calibration.
 """
 
 from __future__ import annotations
 
+import gzip
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
+from src.models.black_litterman import BLConfig, BlackLittermanBlender
 
 if TYPE_CHECKING:
     from src.config.stat_config import StatConfigSet
@@ -33,6 +39,7 @@ class PaperTrader:
 
     Supports standalone operation for dashboard integration.
     Supports per-stat edge thresholds via stat_config.
+    Supports Black-Litterman blending via bl_tau and bl_z_max parameters.
     """
 
     edge_threshold: float = 0.05
@@ -42,9 +49,56 @@ class PaperTrader:
     min_odds: int = -200  # Don't bet heavy favorites
     max_odds: int = 200  # Don't bet long shots
     stat_config: StatConfigSet | None = None  # Per-stat edge thresholds
+    bl_tau: float | None = None  # Black-Litterman tau (None = no BL blending)
+    bl_z_max: float = 1.0  # BL z-score saturation threshold
+    _bl_blender: BlackLittermanBlender | None = field(init=False, default=None)
 
     def __post_init__(self):
         self.engine = get_engine()
+        # Initialize BL blender if tau is set
+        if self.bl_tau is not None:
+            self._bl_blender = BlackLittermanBlender(
+                BLConfig(tau=self.bl_tau, z_max=self.bl_z_max)
+            )
+            logger.info(f"BL blending enabled: tau={self.bl_tau}, z_max={self.bl_z_max}")
+
+    def _load_samples_for_date(self, game_date: date) -> dict[tuple, np.ndarray]:
+        """Load all MC samples for a date from daily_prediction_samples.
+
+        Returns:
+            Dict mapping (player_id, game_id, stat) -> np.ndarray of samples
+        """
+        query = text("""
+            SELECT player_id, game_id, stat, n_samples, samples_gz
+            FROM daily_prediction_samples
+            WHERE prediction_date = :game_date
+        """)
+
+        samples_dict: dict[tuple, np.ndarray] = {}
+        with self.engine.connect() as conn:
+            results = conn.execute(query, {"game_date": game_date}).fetchall()
+
+        for row in results:
+            player_id = int(row[0])
+            game_id = str(row[1])
+            stat = str(row[2])
+            n_samples = int(row[3])
+            blob = row[4]
+
+            # Handle memoryview (psycopg2 returns bytea as memoryview)
+            if isinstance(blob, memoryview):
+                blob = bytes(blob)
+
+            try:
+                samples = np.frombuffer(
+                    gzip.decompress(blob), dtype=np.float64, count=n_samples
+                )
+                samples_dict[(player_id, game_id, stat)] = samples
+            except Exception as e:
+                logger.warning(f"Failed to decompress samples for {player_id}/{stat}: {e}")
+
+        logger.info(f"Loaded {len(samples_dict)} sample arrays for {game_date}")
+        return samples_dict
 
     def _get_edge_threshold(self, stat: str) -> float:
         """Get edge threshold for a stat, using per-stat config if available."""
@@ -109,9 +163,19 @@ class PaperTrader:
         Query daily_predictions for game_date, filter by edge threshold,
         and calculate Kelly stakes.
 
+        When BL blending is enabled (bl_tau is set), loads MC samples and
+        recalculates probabilities/edges using Black-Litterman blending.
+
         Returns list of bet dictionaries ready for placement.
         """
         bankroll = self._get_current_bankroll()
+
+        # Load MC samples if BL blending is enabled
+        samples_dict: dict[tuple, np.ndarray] = {}
+        if self._bl_blender is not None:
+            samples_dict = self._load_samples_for_date(game_date)
+            if not samples_dict:
+                logger.warning(f"BL enabled but no samples found for {game_date}")
 
         # Query predictions with edge
         query = text("""
@@ -147,32 +211,73 @@ class PaperTrader:
 
         bets = []
         for _, row in df.iterrows():
-            stat = row["stat"]
+            stat = str(row["stat"])
             threshold = self._get_edge_threshold(stat)
+            player_id = int(row["player_id"])
+            game_id = str(row["game_id"])
+            line = float(row["line"]) if pd.notna(row["line"]) else None
 
-            # Determine which direction has better edge
-            over_edge = row["over_edge"] if pd.notna(row["over_edge"]) else 0
-            under_edge = row["under_edge"] if pd.notna(row["under_edge"]) else 0
+            if line is None:
+                continue
+
+            over_odds = row["over_odds"]
+            under_odds = row["under_odds"]
+
+            # Skip if missing odds
+            if pd.isna(over_odds) or pd.isna(under_odds):
+                continue
+
+            over_odds = int(over_odds)
+            under_odds = int(under_odds)
+
+            # Apply BL blending if enabled and samples available
+            if self._bl_blender is not None:
+                samples = samples_dict.get((player_id, game_id, stat))
+                if samples is not None and len(samples) > 0:
+                    # Use BL blending
+                    bl_result = self._bl_blender.blend_prediction(
+                        samples=samples,
+                        line=line,
+                        over_odds=over_odds,
+                        under_odds=under_odds,
+                    )
+                    over_prob = bl_result["posterior_over"]
+                    under_prob = bl_result["posterior_under"]
+                    implied_over = bl_result["market_over"]
+                    implied_under = bl_result["market_under"]
+                    over_edge = over_prob - implied_over
+                    under_edge = under_prob - implied_under
+                else:
+                    # No samples - skip this prediction
+                    continue
+            else:
+                # No BL - use stored values
+                over_edge = float(row["over_edge"]) if pd.notna(row["over_edge"]) else 0
+                under_edge = float(row["under_edge"]) if pd.notna(row["under_edge"]) else 0
+                over_prob = float(row["over_prob"]) if pd.notna(row["over_prob"]) else 0.5
+                under_prob = float(row["under_prob"]) if pd.notna(row["under_prob"]) else 0.5
+                implied_over = float(row["implied_over"]) if pd.notna(row["implied_over"]) else 0.5
+                implied_under = float(row["implied_under"]) if pd.notna(row["implied_under"]) else 0.5
 
             # Select the direction with higher edge that meets threshold
             direction = None
-            edge = 0
+            edge = 0.0
             odds = 0
-            model_prob = 0
-            implied_prob = 0
+            model_prob = 0.0
+            implied_prob = 0.0
 
             if over_edge > under_edge and over_edge >= threshold:
                 direction = "over"
                 edge = over_edge
-                odds = row["over_odds"]
-                model_prob = row["over_prob"]
-                implied_prob = row["implied_over"]
+                odds = over_odds
+                model_prob = over_prob
+                implied_prob = implied_over
             elif under_edge >= threshold:
                 direction = "under"
                 edge = under_edge
-                odds = row["under_odds"]
-                model_prob = row["under_prob"]
-                implied_prob = row["implied_under"]
+                odds = under_odds
+                model_prob = under_prob
+                implied_prob = implied_under
 
             if direction is None:
                 continue
