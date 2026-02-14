@@ -22,7 +22,9 @@ data/
 
 # If you have specific large JSON dumps, ignore them too
 *.json
-!package.json  # (Exception: if you use JS, don't ignore package.json)
+!package.json
+!package-lock.json
+!vercel.json
 .mcp.json     # (Exception: if you want to track your tool config)
 
 # --- IDE Settings ---
