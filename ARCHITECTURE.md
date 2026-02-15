@@ -367,7 +367,16 @@ A simulation environment to validate betting strategies.
 - `scripts/run_lines.bat` — Runs lines job
 - `scripts/run_inference.bat` — Runs inference job
 
-Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, GameFlow-Lines-6PM, GameFlow-Inference) execute these batch scripts at configured times. See `scripts/` directory for implementation.
+Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, GameFlow-Lines-6PM, GameFlow-Inference) execute these batch scripts at configured times. See `scripts/` directory for implementation. **Note:** Local tasks disabled as of 2026-02-14 in favor of Railway deployment.
+
+**Railway Cloud Deployment (2026-02-14):** Production deployment uses Railway with APScheduler for job orchestration:
+- `railway.toml` — Nixpacks build config with start command
+- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs all jobs on cron schedule (UTC times)
+- Single always-on worker process handles all scheduled jobs
+- Environment variables: `DATABASE_URL`, `ODDS_API_KEY`, `RAPIDAPI_KEY`
+- Model artifacts use "production folder" strategy: `src/models/artifacts/production/` is committed to git, `run_*/` directories are gitignored
+- Promote models via `scripts/promote_model.py` — copies latest training run to production folder
+- See `docs/railway_deployment.md` for full setup guide
 
 ### 10. Paper Trading (`src/paper_trading/`)
 
@@ -404,7 +413,7 @@ dashboard/
 │   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
 │   │   ├── history/            # BetCard, BetList, HistoryFilters, HistorySummary
 │   │   ├── performance/        # KPICard, BankrollChart, StatBreakdown
-│   │   └── shared/             # PlayerAvatar, Badge components
+│   │   └── shared/             # PlayerAvatar, Badge, BetSourceFilter components
 │   ├── lib/
 │   │   ├── supabase/           # Client, server, and middleware helpers
 │   │   └── utils.ts            # Formatting, edge tiers, headshot URLs
@@ -429,8 +438,8 @@ dashboard/
   - Model probabilities, market implied probabilities, and edge breakdown
 - **Line Shopping:** Shows all available bookmaker lines for each prop. For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line.
 - **Kelly Sizing:** Bankroll persisted to localStorage. Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds.
-- **History View (`/history`):** Shows past betting results with status filters (All/Won/Lost/Push), summary stats bar, and individual bet cards with actual vs line comparison.
-- **Performance View (`/performance`):** KPI cards (bankroll, P&L, ROI, win rate), bankroll over time chart (Recharts AreaChart), and performance breakdown by stat type.
+- **History View (`/history`):** Shows past betting results with bet source filter (Model Picks/All Bets), status filters (All/Won/Lost/Push), summary stats bar, and individual bet cards with actual vs line comparison. Model Picks filter shows only bets with edge ≥9% (matching production model configuration).
+- **Performance View (`/performance`):** KPI cards (bankroll, P&L, ROI, win rate), bankroll over time chart (Recharts AreaChart), and performance breakdown by stat type. Includes bet source filter to view Model Picks performance separately from all bets. Model Picks view simulates what bankroll would be if only high-edge bets were taken.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
 - **Auth Protection:** Middleware redirects unauthenticated users to `/login`.

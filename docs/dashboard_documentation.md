@@ -51,7 +51,8 @@ dashboard/
 │   │   │   └── StatBreakdown.tsx   # Per-stat performance table
 │   │   └── shared/             # Shared components
 │   │       ├── PlayerAvatar.tsx     # NBA headshots
-│   │       └── Badge.tsx            # Stat and edge badges
+│   │       ├── Badge.tsx            # Stat and edge badges
+│   │       └── BetSourceFilter.tsx  # Model Picks vs All Bets toggle
 │   ├── lib/
 │   │   ├── supabase/           # Supabase client configuration
 │   │   │   ├── client.ts       # Browser client
@@ -562,12 +563,14 @@ turbopack: {
 Displays bet history with filtering and summary statistics.
 
 **Features:**
+- **Bet Source Filter:** Toggle between "Model Picks" (edge ≥9%) and "All Bets" — defaults to Model Picks
 - Status filter tabs: All, Won, Lost, Push
-- Summary bar with totals: bets, wins, losses, win rate, P&L
+- Summary bar with totals: bets, wins, losses, win rate, P&L (reflects bet source filter)
 - Individual bet cards showing result vs line
 - Last 30 days of data
 
 **Components used:**
+- `BetSourceFilter` — Model Picks vs All Bets toggle
 - `HistoryFilters` — Status filter tabs
 - `HistorySummary` — Summary stats bar
 - `BetList` → `BetCard` — Grid of bet results
@@ -577,14 +580,66 @@ Displays bet history with filtering and summary statistics.
 Displays overall performance metrics and visualizations.
 
 **Features:**
-- KPI cards: Current Bankroll, Total P&L, Overall ROI, Win Rate
-- Bankroll over time chart (Recharts AreaChart)
-- Performance breakdown by stat type table
+- **Bet Source Filter:** Toggle between "Model Picks" (edge ≥9%) and "All Bets" — defaults to Model Picks
+- KPI cards: Current Bankroll, Total P&L, Overall ROI, Win Rate (all recalculated based on bet source)
+- Bankroll over time chart (Recharts AreaChart) — simulates model-picks-only progression when filtered
+- Performance breakdown by stat type table (filtered by bet source)
 
 **Components used:**
+- `BetSourceFilter` — Model Picks vs All Bets toggle
 - `KPICard` — Individual metric cards
 - `BankrollChart` — Time series chart
 - `StatBreakdown` — Per-stat table
+
+### BetSourceFilter Component (Session 31)
+
+Toggle between viewing Model Picks only or all bets.
+
+**File:** `dashboard/src/components/shared/BetSourceFilter.tsx`
+
+**Usage:**
+```tsx
+<BetSourceFilter
+  activeSource={betSource}   // 'model' | 'all'
+  onSourceChange={setBetSource}
+/>
+```
+
+**Options:**
+| Value | Label | Description |
+|-------|-------|-------------|
+| `'model'` | Model Picks | Bets with edge ≥9% (matches production model config) |
+| `'all'` | All Bets | All placed bets regardless of edge |
+
+**Default:** `'model'` — Shows actual model performance
+
+**Threshold:**
+```typescript
+export const MODEL_PICKS_EDGE_THRESHOLD = 0.09  // 9% edge
+```
+
+**Implementation in Performance Page:**
+```typescript
+// Filter bets by source
+const filteredBets = useMemo(() => {
+  if (betSource === 'model') {
+    return allBets.filter(b => b.edge >= MODEL_PICKS_EDGE_THRESHOLD)
+  }
+  return allBets
+}, [allBets, betSource])
+
+// Recalculate KPIs from filtered bets
+const { totalPnl, totalWins, totalLosses } = useMemo(() => {
+  // ... computed from filteredBets
+}, [filteredBets])
+
+// Simulate model-picks-only bankroll progression
+const chartData = useMemo(() => {
+  if (betSource === 'all') return dailyData
+  // Group filtered bets by date, calculate cumulative P&L
+  // ...
+}, [dailyData, filteredBets, betSource])
+```
 
 ### History Components
 

@@ -1,5 +1,89 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-14 — Session 31)
+
+### What We Did
+
+**Fixed Vercel deployment and added Model Picks filtering to dashboard.** Two main accomplishments this session.
+
+**Vercel deployment fix:**
+- Root cause: `dashboard/package.json` and `dashboard/tsconfig.json` were never committed due to `*.json` in `.gitignore`
+- Added exceptions to `.gitignore`: `!package.json`, `!package-lock.json`, `!vercel.json`, `!tsconfig.json`
+- Committed missing config files with `baseUrl: "."` in tsconfig.json for `@/*` path alias resolution
+- User disabled "Include files outside the root directory" in Vercel settings
+- Dashboard now live and serving pages at `game-flow-data.vercel.app`
+
+**Model Picks filtering (History & Performance pages):**
+- Created `BetSourceFilter` component (`dashboard/src/components/shared/BetSourceFilter.tsx`)
+- Toggle between "Model Picks" (edge ≥9%) and "All Bets" — defaults to Model Picks
+- History page: Filters bet list and summary stats by bet source
+- Performance page: Recalculates all KPIs (P&L, ROI, Win Rate) from filtered bets, simulates model-picks-only bankroll progression
+- Allows viewing actual model performance separate from all placed bets
+
+**Files created:**
+- `dashboard/src/components/shared/BetSourceFilter.tsx` — Bet source toggle component (~45 lines)
+
+**Files modified:**
+- `.gitignore` — Added exceptions for JSON config files
+- `dashboard/src/app/history/page.tsx` — Added bet source filter and filtering logic
+- `dashboard/src/app/performance/page.tsx` — Added bet source filter with recalculated KPIs
+- `ARCHITECTURE.md` — Updated dashboard documentation
+
+**Tests:** 575 passed, 0 failures
+
+### Next Step
+
+1. **Paper trade** — Continue daily paper trading with Railway automation
+2. **Monitor Vercel deployment** — Check analytics and error logs
+3. **Discord bot** — Follow development plan in `docs/discord_bot_development.md`
+
+---
+
+## Session Summary (2026-02-14 — Session 30)
+
+### What We Did
+
+**Deployed to Railway cloud platform.** Migrated from local Windows Task Scheduler to Railway for production job scheduling. Single always-on worker runs APScheduler-based scheduler.
+
+**Railway deployment setup:**
+- Created `railway.toml` for build configuration (Nixpacks)
+- Created `src/orchestration/scheduler.py` with APScheduler (5 cron jobs, UTC times)
+- Added `apscheduler==3.10.4` to requirements.txt
+- Changed `psycopg2` to `psycopg2-binary` (pre-compiled, no build deps)
+- Set environment variables via Railway CLI: `DATABASE_URL`, `ODDS_API_KEY`, `RAPIDAPI_KEY`
+
+**Production model workflow:**
+- Created `src/models/artifacts/production/` folder (committed to git)
+- Updated `.gitignore` to ignore `run_*/` but allow `production/`
+- Created `scripts/promote_model.py` to copy training runs to production
+- Updated `inference_job.py` to check `production/` folder before falling back to latest `run_*`
+
+**Disabled local scheduled tasks:**
+- All 5 Windows Task Scheduler tasks (GameFlow-*) disabled to avoid conflicts with Railway
+- Created high-priority work items for monitoring Railway tasks and adding Discord notifications
+
+**Documentation:**
+- Created `docs/railway_deployment.md` — full deployment guide
+- Created `docs/scalability.md` — architecture capacity analysis and scaling path
+- Updated `ARCHITECTURE.md` with Railway deployment section
+
+**Files created:**
+- `railway.toml` — Railway service configuration
+- `src/orchestration/scheduler.py` — APScheduler-based job scheduler (~145 lines)
+- `scripts/promote_model.py` — Model promotion script (~100 lines)
+- `docs/railway_deployment.md` — Deployment guide (~130 lines)
+- `docs/scalability.md` — Scalability analysis (~65 lines)
+
+**Tests:** 575 passed, 0 failures
+
+### Next Step
+
+1. **Monitor Railway scheduled tasks** — Check logs via `railway logs` after first scheduled runs
+2. **Add Discord webhook notifications** — Work item `feature_add_discord_webhook_notificati` (high priority)
+3. **Paper trade** — Continue daily paper trading with Railway automation
+
+---
+
 ## Session Summary (2026-02-14 — Session 29)
 
 ### What We Did

@@ -272,9 +272,23 @@ schtasks /delete /tn "GameFlow-DailyStats" /f
 
 **Note:** Windows tasks only run if PC is on and user is logged in. Missed tasks do NOT run retroactively.
 
-### Option 2: Linux Cron (Server)
+### Option 2: Railway Cloud (Recommended)
 
-For server deployment, use the template at `cron/gameflow_crontab.txt`.
+**Current production deployment.** Single always-on worker running APScheduler.
+
+See [Railway Deployment](railway_deployment.md) for full setup guide.
+
+**Key benefits:**
+- Always-on (no missed runs)
+- Automatic restarts on failure
+- Centralized logging via `railway logs`
+- ~$5/month cost
+
+**Note:** Local Windows tasks have been disabled to avoid conflicts with Railway.
+
+### Option 3: Linux Cron (Server)
+
+For self-hosted server deployment, use the template at `cron/gameflow_crontab.txt`.
 
 **Example (UTC times for EST):**
 
@@ -359,6 +373,8 @@ ORDER BY 1 DESC;
 
 ## Related Documentation
 
+- [Railway Deployment](railway_deployment.md) - Cloud deployment guide (current production)
+- [Scalability](scalability.md) - Architecture capacity and scaling path
 - [Model Pipeline Runbook](model_pipeline_runbook.md) - Full training and inference guide
 - [NBA Linker Local](nba_linker_local_documentation.md) - ID matching and linking
 - [Feature Store](feature_store_documentation.md) - Feature generation

@@ -5,6 +5,137 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-14 Session 31] — Vercel Deployment Fix & Model Picks Filtering
+
+### Added
+
+- **Model Picks Filtering (History & Performance Pages)**:
+  - `BetSourceFilter` component (`dashboard/src/components/shared/BetSourceFilter.tsx`)
+  - Toggle between "Model Picks" (edge ≥9%) and "All Bets"
+  - Defaults to Model Picks view to show actual model performance
+  - History page: Filters bet list and summary stats by bet source
+  - Performance page: Recalculates all KPIs from filtered bets, simulates model-picks-only bankroll
+
+### Changed
+
+- **`.gitignore`**:
+  - Added exceptions for JSON config files: `!package.json`, `!package-lock.json`, `!vercel.json`, `!tsconfig.json`
+  - Root cause fix: these files were never committed due to `*.json` rule
+
+- **`dashboard/src/app/history/page.tsx`**:
+  - Added `betSource` state defaulting to 'model'
+  - Filter bets by edge threshold (≥9%) when Model Picks selected
+  - HistorySummary now receives filtered bets
+
+- **`dashboard/src/app/performance/page.tsx`**:
+  - Added `betSource` state defaulting to 'model'
+  - Recalculates KPIs (P&L, ROI, Win Rate) from filtered bets using `useMemo`
+  - Simulates bankroll progression for Model Picks only
+  - Chart shows model-picks-only equity curve when filter active
+
+- **`ARCHITECTURE.md`**:
+  - Updated dashboard documentation to reflect bet source filtering
+
+### Fixed
+
+- **Vercel Deployment**:
+  - `dashboard/package.json` was never committed (blocked by `*.json` gitignore)
+  - `dashboard/tsconfig.json` was never committed (same issue)
+  - Added `baseUrl: "."` to tsconfig.json for `@/*` path alias resolution
+  - User disabled "Include files outside the root directory" in Vercel settings
+  - Dashboard now live at `game-flow-data.vercel.app`
+
+### Technical Notes
+
+**Model Picks Threshold:**
+```typescript
+export const MODEL_PICKS_EDGE_THRESHOLD = 0.09  // 9% edge
+```
+
+**Performance Page KPI Recalculation:**
+```typescript
+// Filter bets by source
+const filteredBets = betSource === 'model'
+  ? allBets.filter(b => b.edge >= MODEL_PICKS_EDGE_THRESHOLD)
+  : allBets
+
+// Recalculate all metrics from filtered bets
+const { totalPnl, totalWins, totalLosses, overallRoi, winRate } = useMemo(() => {
+  // ... calculated from filteredBets
+}, [filteredBets])
+```
+
+### Test Results
+
+- 575 tests passed, 0 failures
+
+---
+
+## [2026-02-14 Session 30] — Railway Cloud Deployment
+
+### Added
+
+- **Railway Cloud Deployment:**
+  - APScheduler-based job scheduler (`src/orchestration/scheduler.py`) running 5 cron jobs on UTC schedule
+  - `railway.toml` configuration for Nixpacks build and service deployment
+  - Production model workflow with `src/models/artifacts/production/` folder
+  - Model promotion script (`scripts/promote_model.py`) to copy training runs to production
+
+- **Documentation:**
+  - `docs/railway_deployment.md` — Full deployment guide (~130 lines)
+  - `docs/scalability.md` — Architecture capacity analysis (~65 lines)
+
+### Changed
+
+- **`src/orchestration/inference_job.py`:**
+  - Now checks `production/` folder before falling back to latest `run_*` directory
+  - Filters out `_incomplete` directories when auto-selecting model
+
+- **`.gitignore`:**
+  - Ignores `run_*/` training directories but allows `production/` folder
+
+- **`requirements.txt`:**
+  - Added `apscheduler==3.10.4` for job scheduling
+  - Changed `psycopg2` to `psycopg2-binary` (pre-compiled, avoids build dependencies)
+
+- **Local scheduled tasks disabled:**
+  - All 5 Windows Task Scheduler tasks (GameFlow-*) disabled to avoid conflicts with Railway
+
+### Technical Notes
+
+**Railway Architecture:**
+```
+Railway (always-on worker)
+    └── scheduler.py (APScheduler)
+        ├── daily_stats_job (14:00 UTC / 9 AM ET)
+        ├── lines_noon (17:00 UTC / 12 PM ET)
+        ├── lines_4pm (21:00 UTC / 4 PM ET)
+        ├── lines_6pm (23:00 UTC / 6 PM ET)
+        └── inference (23:30 UTC / 6:30 PM ET)
+```
+
+**Production Model Workflow:**
+```bash
+# Promote latest model to production
+python scripts/promote_model.py
+
+# Or specify a specific run
+python scripts/promote_model.py run_20260214_183000
+```
+
+**Scalability Capacity:**
+| Tier | Concurrent Users | Monthly Users | Cost |
+|------|------------------|---------------|------|
+| Current | 30-50 | 500-1K | ~$5/mo |
+| Starter | 100-200 | 5K | ~$50/mo |
+| Growth | 500-1K | 20K | ~$200/mo |
+
+### Test Results
+
+- 575 tests passed, 0 failures
+
+---
+
 ## [2026-02-14 Session 29] — Dashboard Insight Features & Vercel Deployment
 
 ### Added
