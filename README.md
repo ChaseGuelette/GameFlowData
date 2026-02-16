@@ -1,101 +1,177 @@
 # GameFlowData
 
-An NBA analytics and machine learning pipeline that scrapes real-time NBA game and player statistics, stores them in a PostgreSQL database, and prepares feature-engineered datasets for predictive modeling.
+An NBA player prop betting analytics platform that combines machine learning predictions with real-time sportsbook odds to identify profitable betting opportunities.
 
 ## Overview
 
-GameFlowData is a comprehensive Python-based data pipeline and analysis project focused on NBA (National Basketball Association) data. It scrapes, processes, stores, and analyzes a wide range of information, including game statistics, player data, betting lines, and injury reports. The project also includes components for developing predictive models and serves data via a FastAPI backend.
+GameFlowData is a comprehensive data pipeline and prediction system for NBA player props. It scrapes game statistics and betting lines, trains quantile regression models with Monte Carlo simulation, and surfaces high-edge betting opportunities through a web dashboard and Discord bot.
 
 ## Features
 
-- **Data Scraping**: Collects data from various sources:
-    - ESPN for injury reports.
-    - NBA APIs for player positions, stats, and game details (`nba_unified_scraper`).
-    - Game and betting lines.
-- **Data Processing**: Cleans, links, and backfills data to create a robust and consistent dataset. This includes handling team IDs, player names, and opponent-adjusted stats.
-- **Database Management**: Uses a SQL database with Alembic for schema migrations to store the collected data.
-- **Predictive Modeling**: Includes notebooks and scripts for developing machine learning models (e.g., Monte Carlo simulations, quantile trainers).
-- **API**: A FastAPI application to serve the collected and processed data.
+- **Data Pipeline**: Automated scraping of NBA stats, player props, and injury reports
+- **ML Predictions**: Quantile regression + Monte Carlo simulation for probability distributions
+- **Edge Detection**: Compares model probabilities against sportsbook odds to find value
+- **Paper Trading**: Simulated betting with Kelly criterion sizing and P&L tracking
+- **Web Dashboard**: Next.js app for viewing predictions, analyzing players, and tracking performance
+- **Discord Bot**: Slash commands for daily picks and automated alerts
+- **Cloud Deployment**: Railway (cron jobs) + Vercel (dashboard) + Supabase (database)
 
 ## Technology Stack
 
-- **Backend**: Python, FastAPI
-- **Data Manipulation**: Pandas, NumPy
-- **Database**: SQLAlchemy, SQLModel, Alembic, PostgreSQL
-- **Testing**: Pytest, pytest-asyncio
-- **Linting & Formatting**: Ruff
-- **Development**: Jupyter Notebooks
+| Layer | Technologies |
+|-------|-------------|
+| **Backend** | Python 3.11+, SQLAlchemy, Pandas, NumPy |
+| **ML** | XGBoost, Scikit-Learn, Optuna |
+| **Database** | PostgreSQL (Supabase) |
+| **Dashboard** | Next.js 16, TypeScript, Tailwind CSS, Recharts |
+| **Bot** | Discord.py 2.6+ |
+| **Deployment** | Railway (jobs), Vercel (dashboard) |
+| **Testing** | Pytest (575 tests, 60% coverage target) |
 
 ## Project Structure
 
 ```
-├───src/                # Core source code
-│   ├───scrapers/       # Data collection scripts
-│   ├───processing/     # Data cleaning and transformation scripts
-│   ├───models/         # Predictive modeling components
-│   └───db/             # Database client and interaction logic
-├───tests/              # Unit and integration tests
-├───notebooks/          # Jupyter notebooks for exploration and research
-├───database/           # SQL schema definitions
-├───alembic.ini         # Alembic migration configuration
-├───pyproject.toml      # Project metadata and dependencies
-└───requirements.txt    # Production dependencies
+GameFlowData/
+├── src/
+│   ├── scrapers/           # Data collection (NBA API, Odds API, ESPN)
+│   ├── processing/         # Data linking, rolling averages, feature engineering
+│   ├── models/             # ML pipeline: training, inference, storage
+│   ├── backtesting/        # Historical replay and bet simulation
+│   ├── paper_trading/      # Paper bet placement and resolution
+│   ├── orchestration/      # Daily job scripts and scheduler
+│   ├── discord_bot/        # Discord bot with slash commands
+│   └── db/                 # Database client
+├── dashboard/              # Next.js web application
+├── tests/                  # Unit and integration tests
+├── docs/                   # Component documentation
+├── notebooks/              # Research notebooks
+└── database/               # SQL schema definitions
 ```
 
-## Setup and Installation
+## Quick Start
 
-1.  **Clone the repository:**
-    ```bash
-    git clone <repository-url>
-    cd GameFlowData
-    ```
-2.  **Create a virtual environment:**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-    ```
-3.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    pip install -r requirements-dev.txt # For development and running tests
-    ```
-4.  **Setup Environment Variables:**
-    Create a `.env` file in the root directory and add your `DATABASE_URL`.
-    ```
-    DATABASE_URL="postgresql://user:password@host:port/database"
-    ```
-5.  **Setup the database:**
-    - Ensure you have a running PostgreSQL instance.
-    - Configure the database connection in your `.env` file.
-    - Run migrations:
-        ```bash
-        alembic upgrade head
-        ```
+### 1. Clone and Install
+
+```bash
+git clone <repository-url>
+cd GameFlowData
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Configure Environment
+
+Create a `.env` file:
+
+```env
+DATABASE_URL=postgresql://user:password@host:port/database
+ODDS_API_KEY=your-odds-api-key
+RAPIDAPI_KEY=your-rapidapi-key
+DISCORD_BOT_TOKEN=your-discord-bot-token
+```
+
+### 3. Run Daily Pipeline
+
+```bash
+# Scrape stats (after games complete)
+python src/orchestration/daily_stats_job.py
+
+# Scrape props and injuries (multiple times daily)
+python src/orchestration/lines_job.py
+
+# Generate predictions (before games start)
+python src/orchestration/inference_job.py
+```
+
+### 4. Start Dashboard
+
+```bash
+cd dashboard
+npm install
+npm run dev
+# Open http://localhost:3000
+```
+
+## Deployment
+
+### Railway (Cron Jobs)
+
+The scheduler runs all jobs automatically:
+
+| Job | Schedule (ET) | Purpose |
+|-----|---------------|---------|
+| daily_stats_job | 9:00 AM | Scrape NBA game results |
+| lines_job | 12 PM, 4 PM, 6 PM | Scrape props and injuries |
+| inference_job | 6:30 PM | Generate predictions |
+
+See `docs/railway_deployment.md` for setup guide.
+
+### Vercel (Dashboard)
+
+Dashboard deploys automatically from `/dashboard` directory.
+
+Live at: `game-flow-data.vercel.app`
 
 ## Usage
 
-### Running the API Server
+### Query Predictions
 
-To start the FastAPI application, use uvicorn:
 ```bash
-uvicorn src.main:app --reload
+# Player probability at a line
+python src/tools/query_player.py --player "Cade Cunningham" --stat pts --line 25.5
+
+# Top edges for today
+python src/tools/query_player.py --top 20
 ```
 
-### Running Tests
+### Paper Trading
 
-To run the test suite, use pytest:
 ```bash
-pytest
+# Place bets from predictions
+python src/paper_trading/place_bets.py --date 2026-02-15
+
+# Resolve bets after games complete
+python src/paper_trading/resolve_bets.py --date 2026-02-15
 ```
 
-### Running Scrapers
+### Backtesting
 
-Scrapers can be run as individual scripts. For example:
 ```bash
-python -m src.scrapers.espn_injury_scraper
+# Run historical backtest
+python src/backtesting/run_backtest.py --start 2026-01-01 --end 2026-01-31
+
+# Parameter sweep
+python src/backtesting/run_sweep.py --start 2026-01-01 --end 2026-01-31 \
+    --tau none 0.05 0.10 --edge 0.05 0.07 --kelly 0.10 0.125
 ```
 
-<!-- SOLOKIT_SESSION_MANAGEMENT -->
+## Testing
+
+```bash
+pytest                          # Run all tests
+pytest tests/test_paper_trader.py -v  # Run specific test file
+pytest --cov=src --cov-report=html    # With coverage report
+```
+
+## Documentation
+
+- `ARCHITECTURE.md` — System design and data flows
+- `ACTIONITEMS.md` — Roadmap and session summaries
+- `CHANGELOG.md` — Version history
+- `docs/` — Component-level documentation
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/models/daily_runner.py` | Daily prediction pipeline |
+| `src/models/monte_carlo.py` | Monte Carlo simulation engine |
+| `src/paper_trading/paper_trader.py` | Bet selection and Kelly sizing |
+| `src/orchestration/scheduler.py` | APScheduler-based job runner |
+| `dashboard/src/app/page.tsx` | Main predictions dashboard |
+
+---
 
 ## Session-Driven Development
 
