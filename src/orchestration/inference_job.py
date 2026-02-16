@@ -82,6 +82,11 @@ def main():
         default=["pts", "reb", "ast"],
         help="Stats to predict (default: pts reb ast)",
     )
+    parser.add_argument(
+        "--skip-discord",
+        action="store_true",
+        help="Skip sending Discord alert after predictions",
+    )
     args = parser.parse_args()
 
     target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
@@ -184,6 +189,23 @@ def main():
         output_file = output_dir / f"predictions_{target_date}.csv"
         preds.to_csv(output_file, index=False)
         logger.info(f"Exported CSV: {output_file}")
+
+        # Send Discord alert
+        if not args.dry_run and not args.skip_discord:
+            try:
+                import os
+                if os.getenv("DISCORD_BOT_TOKEN"):
+                    from src.discord_bot.alerts import send_predictions_alert_sync
+                    logger.info("Sending Discord alert...")
+                    success = send_predictions_alert_sync(preds, target_date)
+                    if success:
+                        logger.info("Discord alert sent successfully")
+                    else:
+                        logger.warning("Discord alert failed (non-fatal)")
+                else:
+                    logger.debug("Discord not configured, skipping alert")
+            except Exception as e:
+                logger.warning(f"Discord alert failed: {e} (non-fatal)")
 
         elapsed = time.time() - start_time
         logger.info("=" * 60)

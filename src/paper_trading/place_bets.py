@@ -2,16 +2,25 @@
 """
 CLI script to place paper bets from daily predictions.
 
+Default configuration matches optimal backtest sweep results:
+- BL tau=0.5, z_max=1.0, edge_threshold=0.09 (9% BL edge)
+- Kelly fraction=0.125, no bet size cap (true Kelly sizing)
+
 Usage:
+    # Optimal defaults (BL enabled, 9% edge, true Kelly sizing)
     python src/paper_trading/place_bets.py --date 2026-02-04
+
+    # Dry run to preview bets
     python src/paper_trading/place_bets.py --date 2026-02-04 --dry-run
-    python src/paper_trading/place_bets.py --date 2026-02-04 --edge-threshold 0.08
+
+    # Conservative: add 5% bet cap
+    python src/paper_trading/place_bets.py --date 2026-02-04 --max-bet-pct 0.05
 
     # Per-stat edge thresholds
     python src/paper_trading/place_bets.py --date 2026-02-04 --edge-threshold pts=0.10 reb=0.07 ast=0.15
 
-    # With Black-Litterman blending (recommended for production)
-    python src/paper_trading/place_bets.py --date 2026-02-04 --bl-tau 0.5 --z-max 1.0 --edge-threshold 0.09
+    # Disable BL blending (raw model edges)
+    python src/paper_trading/place_bets.py --date 2026-02-04 --bl-tau 0 --edge-threshold 0.05
 """
 
 import argparse
@@ -81,14 +90,22 @@ def main():
     parser.add_argument(
         "--edge-threshold",
         nargs="+",
-        default=["0.05"],
-        help="Minimum edge to place bet. Global (0.05) or per-stat (pts=0.10 reb=0.07). Default: 0.05",
+        default=["0.09"],
+        help="Minimum edge to place bet. Global (0.09) or per-stat (pts=0.10 reb=0.07). "
+             "Default: 0.09 (optimal for BL blending)",
     )
     parser.add_argument(
         "--kelly-fraction",
         type=float,
         default=0.125,
         help="Kelly fraction for stake sizing (default: 0.125)",
+    )
+    parser.add_argument(
+        "--max-bet-pct",
+        type=float,
+        default=None,
+        help="Maximum bet as %% of bankroll (e.g., 0.05 = 5%%). "
+             "Default: None (no cap, true Kelly sizing matching backtest)",
     )
     parser.add_argument(
         "--bankroll",
@@ -99,10 +116,9 @@ def main():
     parser.add_argument(
         "--bl-tau",
         type=float,
-        default=None,
+        default=0.5,
         help="Black-Litterman tau for probability blending. "
-             "If set, recalculates edges using BL blending with MC samples. "
-             "Recommended: 0.5 (use with --z-max 1.0 --edge-threshold 0.09)",
+             "Default: 0.5 (optimal from backtest sweeps)",
     )
     parser.add_argument(
         "--z-max",
@@ -130,6 +146,10 @@ def main():
     for stat in stats:
         logger.info(f"  {stat}: edge={stat_config.get_edge_threshold(stat)}")
     logger.info(f"Kelly fraction: {args.kelly_fraction}")
+    if args.max_bet_pct is not None:
+        logger.info(f"Max bet: {args.max_bet_pct*100:.1f}% of bankroll")
+    else:
+        logger.info("Max bet: No cap (true Kelly sizing)")
     if args.bl_tau is not None:
         logger.info(f"BL blending: tau={args.bl_tau}, z_max={args.z_max}")
     else:
@@ -139,6 +159,7 @@ def main():
     trader = PaperTrader(
         edge_threshold=stat_config.global_edge_threshold,
         kelly_fraction=args.kelly_fraction,
+        max_bet_pct=args.max_bet_pct,
         starting_bankroll=args.bankroll,
         stat_config=stat_config,
         bl_tau=args.bl_tau,

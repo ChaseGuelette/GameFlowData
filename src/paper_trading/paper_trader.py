@@ -6,12 +6,20 @@ and resolves bets against actual game results.
 
 Supports Black-Litterman probability blending to anchor model probabilities
 to market priors, improving edge calibration.
+
+Configuration via environment variables:
+    PAPER_TRADING_BANKROLL: Starting bankroll (default: 10000)
+    PAPER_TRADING_KELLY_FRACTION: Kelly fraction (default: 0.125)
+    PAPER_TRADING_EDGE_THRESHOLD: Edge threshold (default: 0.09)
+    PAPER_TRADING_MAX_BET_PCT: Max bet as % of bankroll (default: None = no cap)
+    PAPER_TRADING_BL_TAU: Black-Litterman tau (default: 0.5)
 """
 
 from __future__ import annotations
 
 import gzip
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Any
@@ -32,6 +40,40 @@ logger = logging.getLogger(__name__)
 SUPPORTED_STATS = {"pts", "reb", "ast"}
 
 
+def _get_env_float(name: str, default: float) -> float:
+    """Get float from environment variable."""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except ValueError:
+        logger.warning(f"Invalid {name}={val}, using default {default}")
+        return default
+
+
+def _get_env_float_or_none(name: str, default: float | None) -> float | None:
+    """Get float or None from environment variable."""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    if val.lower() in ("none", "null", ""):
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        logger.warning(f"Invalid {name}={val}, using default {default}")
+        return default
+
+
+# Default configuration (can be overridden via environment variables)
+DEFAULT_BANKROLL = _get_env_float("PAPER_TRADING_BANKROLL", 10000.0)
+DEFAULT_KELLY_FRACTION = _get_env_float("PAPER_TRADING_KELLY_FRACTION", 0.125)
+DEFAULT_EDGE_THRESHOLD = _get_env_float("PAPER_TRADING_EDGE_THRESHOLD", 0.09)
+DEFAULT_MAX_BET_PCT = _get_env_float_or_none("PAPER_TRADING_MAX_BET_PCT", None)
+DEFAULT_BL_TAU = _get_env_float_or_none("PAPER_TRADING_BL_TAU", 0.5)
+
+
 @dataclass
 class PaperTrader:
     """
@@ -40,21 +82,40 @@ class PaperTrader:
     Supports standalone operation for dashboard integration.
     Supports per-stat edge thresholds via stat_config.
     Supports Black-Litterman blending via bl_tau and bl_z_max parameters.
+
+    Default configuration matches optimal backtest sweep results:
+    - BL tau=0.5, z_max=1.0, edge_threshold=0.09 (9% BL edge)
+    - Kelly fraction=0.125, no bet size cap (true Kelly sizing)
+
+    Configuration can be overridden via environment variables:
+    - PAPER_TRADING_BANKROLL: Starting bankroll
+    - PAPER_TRADING_KELLY_FRACTION: Kelly fraction
+    - PAPER_TRADING_EDGE_THRESHOLD: Edge threshold
+    - PAPER_TRADING_MAX_BET_PCT: Max bet % (set to "none" for no cap)
+    - PAPER_TRADING_BL_TAU: Black-Litterman tau
     """
 
-    edge_threshold: float = 0.05
-    kelly_fraction: float = 0.125
-    max_bet_pct: float = 0.05  # Max 5% of bankroll per bet
-    starting_bankroll: float = 10000.0
+    edge_threshold: float = field(default_factory=lambda: DEFAULT_EDGE_THRESHOLD)
+    kelly_fraction: float = field(default_factory=lambda: DEFAULT_KELLY_FRACTION)
+    max_bet_pct: float | None = field(default_factory=lambda: DEFAULT_MAX_BET_PCT)
+    starting_bankroll: float = field(default_factory=lambda: DEFAULT_BANKROLL)
     min_odds: int = -200  # Don't bet heavy favorites
     max_odds: int = 200  # Don't bet long shots
     stat_config: StatConfigSet | None = None  # Per-stat edge thresholds
-    bl_tau: float | None = None  # Black-Litterman tau (None = no BL blending)
+    bl_tau: float | None = field(default_factory=lambda: DEFAULT_BL_TAU)
     bl_z_max: float = 1.0  # BL z-score saturation threshold
     _bl_blender: BlackLittermanBlender | None = field(init=False, default=None)
 
     def __post_init__(self):
         self.engine = get_engine()
+
+        # Log active configuration
+        logger.info(
+            f"PaperTrader initialized: bankroll=${self.starting_bankroll:,.0f}, "
+            f"kelly={self.kelly_fraction}, edge_threshold={self.edge_threshold}, "
+            f"max_bet_pct={self.max_bet_pct or 'None (no cap)'}"
+        )
+
         # Initialize BL blender if tau is set
         if self.bl_tau is not None:
             self._bl_blender = BlackLittermanBlender(
@@ -139,9 +200,12 @@ class PaperTrader:
 
         stake = f_fractional * bankroll
 
-        # Cap at max_bet_pct
-        max_stake = self.max_bet_pct * bankroll
-        return min(stake, max_stake, bankroll)
+        # Cap at max_bet_pct if set (None = no cap, true Kelly sizing)
+        if self.max_bet_pct is not None:
+            max_stake = self.max_bet_pct * bankroll
+            stake = min(stake, max_stake)
+
+        return min(stake, bankroll)
 
     def _get_current_bankroll(self) -> float:
         """Get current bankroll from most recent daily log entry."""

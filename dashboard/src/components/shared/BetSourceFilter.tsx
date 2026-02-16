@@ -11,7 +11,7 @@ interface BetSourceFilterProps {
 }
 
 const SOURCES: { value: BetSource; label: string; description: string }[] = [
-  { value: 'model', label: 'Model Picks', description: 'Edge ≥9%' },
+  { value: 'model', label: 'Model Picks', description: 'BL Edge ≥9% (τ=0.50)' },
   { value: 'all', label: 'All Bets', description: 'All placed bets' },
 ]
 
@@ -36,6 +36,3 @@ export function BetSourceFilter({ activeSource, onSourceChange, className }: Bet
     </div>
   )
 }
-
-// Model picks threshold - bets with edge >= 9%
-export const MODEL_PICKS_EDGE_THRESHOLD = 0.09

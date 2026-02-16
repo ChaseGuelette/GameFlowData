@@ -68,6 +68,7 @@ export default function HomePage() {
       .select('*')
       .eq('prediction_date', date)
       .not('line', 'is', null)
+      .order('is_recommended', { ascending: false, nullsFirst: false })  // Recommended picks first!
       .order('over_edge', { ascending: false })
       .limit(3000)  // Override default 1000 limit to get all predictions
 

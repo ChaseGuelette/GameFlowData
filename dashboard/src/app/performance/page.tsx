@@ -6,12 +6,17 @@ import { Navbar } from '@/components/layout/Navbar'
 import { KPICard } from '@/components/performance/KPICard'
 import { BankrollChart } from '@/components/performance/BankrollChart'
 import { StatBreakdown } from '@/components/performance/StatBreakdown'
-import { BetSourceFilter, type BetSource, MODEL_PICKS_EDGE_THRESHOLD } from '@/components/shared/BetSourceFilter'
+import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFilter'
 import { type DailyPerformance, type StatPerformance, type PaperBet, type StatType } from '@/types/predictions'
+
+// Extended type to include is_recommended from joined daily_predictions
+interface PaperBetWithRecommended extends PaperBet {
+  is_recommended?: boolean
+}
 
 export default function PerformancePage() {
   const [dailyData, setDailyData] = useState<DailyPerformance[]>([])
-  const [allBets, setAllBets] = useState<PaperBet[]>([])
+  const [allBets, setAllBets] = useState<PaperBetWithRecommended[]>([])
   const [loading, setLoading] = useState(true)
   const [currentBankroll, setCurrentBankroll] = useState<number>(0)
   const [betSource, setBetSource] = useState<BetSource>('model') // Default to Model Picks
@@ -33,7 +38,7 @@ export default function PerformancePage() {
         }
       }
 
-      // Fetch all resolved bets with edge for filtering
+      // Fetch all resolved bets
       const { data: betsData, error: betsError } = await supabase
         .from('paper_bets')
         .select('*')
@@ -41,7 +46,30 @@ export default function PerformancePage() {
         .order('game_date', { ascending: true })
 
       if (!betsError && betsData) {
-        setAllBets(betsData as PaperBet[])
+        // Get unique prediction IDs to fetch is_recommended status
+        const predictionIds = [...new Set(betsData.map(b => b.prediction_id).filter(Boolean))]
+
+        // Fetch is_recommended for these predictions
+        const { data: predictionsData } = await supabase
+          .from('daily_predictions')
+          .select('id, is_recommended')
+          .in('id', predictionIds)
+
+        // Create a map for quick lookup
+        const recommendedMap = new Map<number, boolean>()
+        if (predictionsData) {
+          for (const p of predictionsData) {
+            recommendedMap.set(p.id, p.is_recommended ?? false)
+          }
+        }
+
+        // Merge is_recommended into bets
+        const enrichedBets = betsData.map(bet => ({
+          ...bet,
+          is_recommended: recommendedMap.get(bet.prediction_id) ?? false,
+        })) as PaperBetWithRecommended[]
+
+        setAllBets(enrichedBets)
       }
 
       setLoading(false)
@@ -50,10 +78,10 @@ export default function PerformancePage() {
     fetchData()
   }, [])
 
-  // Filter bets based on source (Model Picks vs All)
+  // Filter bets based on source (Model Picks = is_recommended from daily_predictions)
   const filteredBets = useMemo(() => {
     if (betSource === 'model') {
-      return allBets.filter(b => b.edge >= MODEL_PICKS_EDGE_THRESHOLD)
+      return allBets.filter(b => b.is_recommended === true)
     }
     return allBets
   }, [allBets, betSource])
@@ -163,7 +191,7 @@ export default function PerformancePage() {
           <div>
             <h1 className="text-2xl font-bold text-slate-50">Performance</h1>
             <p className="text-slate-400">
-              {betSource === 'model' ? 'Model Picks only (Edge ≥9%)' : 'All bets'}
+              {betSource === 'model' ? 'Model Picks only (BL Edge ≥9%)' : 'All bets'}
             </p>
           </div>
           <BetSourceFilter activeSource={betSource} onSourceChange={setBetSource} />

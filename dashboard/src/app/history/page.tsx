@@ -6,11 +6,16 @@ import { Navbar } from '@/components/layout/Navbar'
 import { HistoryFilters, type StatusFilter } from '@/components/history/HistoryFilters'
 import { HistorySummary } from '@/components/history/HistorySummary'
 import { BetList } from '@/components/history/BetList'
-import { BetSourceFilter, type BetSource, MODEL_PICKS_EDGE_THRESHOLD } from '@/components/shared/BetSourceFilter'
+import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFilter'
 import { type PaperBet } from '@/types/predictions'
 
+// Extended type to include is_recommended from joined daily_predictions
+interface PaperBetWithRecommended extends PaperBet {
+  is_recommended?: boolean
+}
+
 export default function HistoryPage() {
-  const [bets, setBets] = useState<PaperBet[]>([])
+  const [bets, setBets] = useState<PaperBetWithRecommended[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<StatusFilter>('all')
   const [betSource, setBetSource] = useState<BetSource>('model') // Default to Model Picks
@@ -32,7 +37,30 @@ export default function HistoryPage() {
         .order('game_date', { ascending: false })
 
       if (!betsError && betsData) {
-        setBets(betsData as PaperBet[])
+        // Get unique prediction IDs to fetch is_recommended status
+        const predictionIds = [...new Set(betsData.map(b => b.prediction_id).filter(Boolean))]
+
+        // Fetch is_recommended for these predictions
+        const { data: predictionsData } = await supabase
+          .from('daily_predictions')
+          .select('id, is_recommended')
+          .in('id', predictionIds)
+
+        // Create a map for quick lookup
+        const recommendedMap = new Map<number, boolean>()
+        if (predictionsData) {
+          for (const p of predictionsData) {
+            recommendedMap.set(p.id, p.is_recommended ?? false)
+          }
+        }
+
+        // Merge is_recommended into bets
+        const enrichedBets = betsData.map(bet => ({
+          ...bet,
+          is_recommended: recommendedMap.get(bet.prediction_id) ?? false,
+        })) as PaperBetWithRecommended[]
+
+        setBets(enrichedBets)
       }
 
       // Fetch latest bankroll
@@ -53,9 +81,9 @@ export default function HistoryPage() {
     fetchData()
   }, [])
 
-  // Filter bets by source (Model Picks vs All)
+  // Filter bets by source (Model Picks = is_recommended from daily_predictions)
   const sourcedBets = betSource === 'model'
-    ? bets.filter(b => b.edge >= MODEL_PICKS_EDGE_THRESHOLD)
+    ? bets.filter(b => b.is_recommended === true)
     : bets
 
   // Filter bets by status
