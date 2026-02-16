@@ -1,5 +1,45 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-15 — Session 34)
+
+### What We Did
+
+**Added Discord job status alerts and daily P&L summary notifications.**
+
+**Job status alerts (all scheduled jobs):**
+- Scheduler now sends Discord notifications after every job completes (daily_stats, lines, inference)
+- Success alerts show job name, duration, and extracted metrics (when available)
+- Failure alerts include error details for debugging
+- Alerts go to `#alerts` channel via REST API (no bot process required)
+- Non-fatal — alert failures logged but don't affect job execution
+
+**Daily P&L summary (after bet resolution):**
+- After `daily_stats_job.py` resolves pending bets, sends P&L summary to `#performance` channel
+- Shows win/loss/push record, daily P&L, cumulative P&L, and current bankroll
+- Uses green/red embed colors based on daily profit/loss
+
+**Channel organization:**
+- `#predictions` — Top picks after inference job (existing)
+- `#alerts` — Job status notifications (new)
+- `#performance` — Daily P&L summaries (new)
+
+**Files modified:**
+- `src/discord_bot/alerts.py` — Added `send_job_alert()`, `send_pnl_summary()` and sync wrappers (~200 lines added)
+- `src/orchestration/scheduler.py` — Added job alert integration after each subprocess (~50 lines added)
+- `src/orchestration/daily_stats_job.py` — Added P&L summary after bet resolution (~30 lines added)
+- `requirements.txt` — Added `aiohttp>=3.9.0` for async HTTP
+- `ARCHITECTURE.md` — Updated Discord Bot and Orchestration sections
+
+**Tests:** 575 passed, 0 failures
+
+### Next Step
+
+1. **Verify alerts on Railway** — Next job run should trigger Discord notification
+2. **Check environment variables** — Ensure `DISCORD_CHANNEL_ALERTS` and `DISCORD_CHANNEL_PERFORMANCE` are set on Railway
+3. **Continue paid subscription plan** — Track I documented in `docs/paid_subscription_plan.md`
+
+---
+
 ## Session Summary (2026-02-15 — Session 33)
 
 ### What We Did
@@ -1554,6 +1594,52 @@ Interactive Discord bot for daily prediction alerts and command-based queries. F
 
 ---
 
+## Track I: Paid Subscriptions (Planned)
+
+User authentication and paid subscription system for monetizing predictions. Full development plan at `docs/paid_subscription_plan.md`.
+
+**Pricing:** $19.99/month for full prediction access
+
+**Prerequisites (Manual Setup Required):**
+- Create Stripe account at stripe.com
+- Create product ($19.99/month recurring)
+- Generate API keys and webhook secret
+- Add Stripe keys to Vercel environment variables
+
+**Implementation Items:**
+- [ ] **I1. Database schema** — Create `user_subscriptions` table, link to `auth.users`
+- [ ] **I2. RLS policies** — Enable Row-Level Security on `daily_predictions`, restrict to active subscribers
+- [ ] **I3. Stripe integration** — Checkout session API, webhook handler, customer portal
+- [ ] **I4. Middleware** — Add subscription status checks for protected routes
+- [ ] **I5. Pricing page** — Public page with plan details and checkout button
+- [ ] **I6. Landing page** — Public marketing page with hero, features, CTA
+- [ ] **I7. Legal pages** — Terms of Service, Privacy Policy
+- [ ] **I8. Route restructuring** — Reorganize into (public), (auth), (protected) route groups
+
+**Architecture:**
+```
+User Flow: Landing → Sign Up → Subscribe (Stripe) → Access Dashboard
+                        ↓              ↓                  ↓
+                   Supabase Auth   Stripe Checkout    RLS Policy
+                        ↓              ↓                  ↓
+                   auth.users    user_subscriptions   daily_predictions
+```
+
+**Files to Create:**
+| File | Purpose |
+|------|---------|
+| `dashboard/src/lib/stripe.ts` | Stripe client |
+| `dashboard/src/app/api/stripe/create-checkout/route.ts` | Checkout session |
+| `dashboard/src/app/api/stripe/webhook/route.ts` | Webhook handler |
+| `dashboard/src/app/api/stripe/portal/route.ts` | Customer portal |
+| `dashboard/src/app/(public)/page.tsx` | Landing page |
+| `dashboard/src/app/(public)/pricing/page.tsx` | Pricing page |
+| `dashboard/src/app/(public)/terms/page.tsx` | Terms of Service |
+| `dashboard/src/app/(public)/privacy/page.tsx` | Privacy Policy |
+| `dashboard/src/components/SubscriptionGate.tsx` | Access control |
+
+---
+
 ## Priority Matrix
 
 | Item | Effort | Expected Value | Notes |
@@ -1587,6 +1673,7 @@ Interactive Discord bot for daily prediction alerts and command-based queries. F
 | ~~G8 (Paper trading views)~~ | ~~Medium~~ | ~~High~~ | **DONE** — History page, Performance page with charts |
 | G5-G6, G9 (Dashboard) | Medium | Mid-High | In progress. Spec: `.session/specs/dashboard_implementation.md` |
 | ~~H1-H8 (Discord Bot)~~ | ~~Medium~~ | ~~High~~ | **DONE** — All slash commands, alerts, and hosting implemented. |
+| I1-I8 (Paid Subscriptions) | Medium-High | Critical | Monetization. Requires Stripe setup. Plan: `docs/paid_subscription_plan.md` |
 
 ---
 

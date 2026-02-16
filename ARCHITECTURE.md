@@ -376,8 +376,9 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
   - `daily_stats_job.py` — 9 AM ET (scrapes NBA game results)
   - `lines_job.py` — 12 PM, 4 PM, 6 PM ET (scrapes props and injuries)
   - `inference_job.py` — 6:30 PM ET (generates predictions)
+- **Discord job status alerts (2026-02-15):** Scheduler sends success/failure notifications to `#alerts` channel after each job completes. Includes job name, duration, metrics (when available), and error details for failures. Non-fatal — alert failures don't affect job execution.
 - Single always-on worker process handles all scheduled jobs
-- Environment variables: `DATABASE_URL`, `ODDS_API_KEY`, `RAPIDAPI_KEY`
+- Environment variables: `DATABASE_URL`, `ODDS_API_KEY`, `RAPIDAPI_KEY`, `DISCORD_CHANNEL_ALERTS`
 - Model artifacts use "production folder" strategy: `src/models/artifacts/production/` is committed to git, `run_*/` directories are gitignored
 - Promote models via `scripts/promote_model.py` — copies latest training run to production folder
 - See `docs/railway_deployment.md` for full setup guide
@@ -535,10 +536,11 @@ src/discord_bot/
 - **Graceful shutdown** — SIGINT/SIGTERM handling for Railway compatibility
 
 **Automated Alerts:**
-- Inference job (`src/orchestration/inference_job.py`) triggers alert after predictions stored
-- Uses `send_predictions_alert_sync()` — works without bot process running
-- Posts top 5 high-edge picks to #alerts channel
-- Skip with `--skip-discord` flag
+- **Prediction alerts:** Inference job triggers alert after predictions stored → `#predictions` channel
+- **Job status alerts:** Scheduler sends success/failure notifications for all jobs (daily_stats, lines, inference) → `#alerts` channel
+- **Daily P&L summary:** After bet resolution, sends daily P&L, win/loss record, and bankroll → `#performance` channel
+- Uses `send_*_sync()` wrappers — works without bot process running via REST API
+- Skip prediction alerts with `--skip-discord` flag on inference job
 
 **Environment Variables:**
 ```

@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-15 Session 34] — Discord Job Alerts, P&L Summary
+
+### Added
+
+- **Discord job status alerts:**
+  - Scheduler sends success/failure notifications after every job (daily_stats, lines, inference)
+  - Success alerts: job name, duration, extracted metrics (when available)
+  - Failure alerts: error details for debugging
+  - Alerts go to `#alerts` channel via REST API
+  - Non-fatal: alert failures don't affect job execution
+
+- **Daily P&L summary notifications:**
+  - After bet resolution in `daily_stats_job.py`, sends P&L summary to `#performance` channel
+  - Shows win/loss/push record, daily P&L, cumulative P&L, current bankroll
+  - Green/red embed colors based on daily profit/loss
+
+- **New alert functions in `alerts.py`:**
+  - `send_job_alert()` / `send_job_alert_sync()` — job completion notifications
+  - `send_pnl_summary()` / `send_pnl_summary_sync()` — daily P&L summaries
+  - `_format_duration()` — human-readable duration formatting
+  - `_build_job_alert_embed()` / `_build_pnl_summary_embed()` — Discord embed builders
+
+- **Paid subscription planning (Track I):**
+  - Created comprehensive plan at `docs/paid_subscription_plan.md`
+  - $19.99/month for read-only prediction access
+  - Stripe integration, Supabase RLS, middleware enhancement
+  - Track I items (I1-I8) added to ACTIONITEMS.md
+
+### Changed
+
+- **`src/orchestration/scheduler.py`:**
+  - Added `_send_job_alert()` function called after each subprocess
+  - Added `JOB_NAMES` mapping for display names
+  - Added `_parse_metrics_from_output()` for job-specific metric extraction
+
+- **`src/orchestration/daily_stats_job.py`:**
+  - Added `_send_pnl_summary()` called after bet resolution
+  - Fetches bankroll data from `get_bankroll_summary()`
+
+- **`requirements.txt`:**
+  - Added `aiohttp>=3.9.0` for async HTTP requests
+
+### Documentation
+
+- Updated ARCHITECTURE.md with Discord alerts and Railway job notifications
+- Created `docs/paid_subscription_plan.md` — full Stripe/Supabase implementation plan
+
+---
+
 ## [2026-02-15 Session 33] — Railway Fixes, Dashboard UI, Bookmaker Tracking
 
 ### Added

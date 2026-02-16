@@ -41,10 +41,22 @@ railway link
 In Railway dashboard or CLI:
 
 ```bash
+# Core database and API keys
 railway variables set DATABASE_URL="postgresql://user:pass@host:port/db"
 railway variables set ODDS_API_KEY="your-odds-api-key"
 railway variables set RAPIDAPI_KEY="your-rapidapi-key"
+
+# Discord alerts (optional - for job notifications)
+railway variables set DISCORD_BOT_TOKEN="your-bot-token"
+railway variables set DISCORD_CHANNEL_ALERTS="channel-id-for-job-status"
+railway variables set DISCORD_CHANNEL_PREDICTIONS="channel-id-for-predictions"
+railway variables set DISCORD_CHANNEL_PERFORMANCE="channel-id-for-pnl-summary"
 ```
+
+**Discord Alerts:** When configured, the scheduler sends:
+- Job success/failure notifications to `#alerts` after every scheduled job
+- Daily P&L summary to `#performance` after bet resolution
+- Top picks to `#predictions` after inference job
 
 ### 4. Deploy
 

@@ -1,9 +1,14 @@
 # GameFlowData Discord Bot
 
-> **Status: ✅ IMPLEMENTED** (2026-02-15, Session 32)
+> **Status: ✅ IMPLEMENTED** (2026-02-15, Sessions 32-34)
 >
 > This document was originally a development plan. The Discord bot is now fully implemented.
-> See `ARCHITECTURE.md` Section 11 for current architecture documentation.
+> See `ARCHITECTURE.md` Section 12 for current architecture documentation.
+>
+> **Session 34 additions:**
+> - Job status alerts for all scheduled jobs (daily_stats, lines, inference) → `#alerts`
+> - Daily P&L summary after bet resolution → `#performance`
+> - Prediction alerts now go to `#predictions` (fixed from `#alerts`)
 
 ## Overview
 
