@@ -1,5 +1,55 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-15 — Session 33)
+
+### What We Did
+
+**Railway deployment fixes, dashboard UI improvements, and bookmaker tracking.**
+
+**Railway deployment:**
+- Diagnosed NBA All-Star break (Feb 13-15) as reason for no predictions — not a system failure
+- Fixed Railway build error ("No module named pip") by creating `nixpacks.toml` with explicit pip installation via ensurepip
+- Verified APScheduler-based job scheduling is correctly configured for all cron jobs
+
+**Dashboard improvements:**
+- Enhanced navbar tab highlighting — active tab now has `bg-blue-600 text-white` styling with clear visual distinction from inactive tabs
+- Added bookmaker tracking to bet history — displays which sportsbook had the sharpest line for each bet
+- Fixed Feb 11 Model Picks bug — Supabase returns bigint inconsistently as number/string, fixed using `String()` for Map keys
+
+**Backend changes:**
+- Added `bookmaker` column to `daily_predictions` table via Supabase migration
+- Updated `daily_runner.py` to preserve bookmaker column instead of dropping it
+- Added bookmaker to `PREDICTION_COLS` in `prediction_store.py`
+
+**Test fixes:**
+- Fixed 5 failing tests caused by recent changes:
+  - `test_get_current_lines_success` — updated assertion for bookmaker column presence
+  - `test_select_bets_over/under_direction` — added `bl_tau=None` to disable BL blending
+  - `test_default_edge_threshold/bankroll` — changed to test explicit parameter passing
+
+**Files created:**
+- `nixpacks.toml` — Nixpacks build configuration for Railway (~15 lines)
+
+**Files modified:**
+- `dashboard/src/components/layout/Navbar.tsx` — Active tab highlighting with `usePathname()`
+- `dashboard/src/app/history/page.tsx` — Fetch and display bookmaker from daily_predictions
+- `dashboard/src/components/history/BetCard.tsx` — Display bookmaker badge
+- `dashboard/src/types/predictions.ts` — Added bookmaker to PaperBet interface
+- `src/models/daily_runner.py` — Keep bookmaker column in sharpest-book selection
+- `src/models/prediction_store.py` — Added bookmaker to PREDICTION_COLS
+- `tests/test_daily_runner.py` — Updated bookmaker assertion
+- `tests/test_paper_trader.py` — Fixed BL blending and default value tests
+
+**Tests:** 575 passed, 0 failures
+
+### Next Step
+
+1. **Monitor Railway deployment** — Jobs should resume after NBA All-Star break (Feb 16)
+2. **Paper trade** — Continue daily paper trading with bookmaker tracking
+3. **Discord bot** — Continue following development plan
+
+---
+
 ## Session Summary (2026-02-15 — Session 32)
 
 ### What We Did

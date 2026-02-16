@@ -191,8 +191,9 @@ def test_get_current_lines_success(runner, mock_engine):
 
         assert len(df) == 1
         assert df.iloc[0]["line"] == 20.5
-        # bookmaker column is dropped after sharpest-book selection
-        assert "bookmaker" not in df.columns
+        # bookmaker column is now kept for tracking purposes
+        assert "bookmaker" in df.columns
+        assert df.iloc[0]["bookmaker"] == "fanduel"
         mock_read_sql.assert_called_once()
 
 

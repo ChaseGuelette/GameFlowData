@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-15 Session 33] — Railway Fixes, Dashboard UI, Bookmaker Tracking
+
+### Added
+
+- **Nixpacks configuration** (`nixpacks.toml`):
+  - Fixed Railway build error ("No module named pip")
+  - Explicit pip installation via ensurepip
+  - Python 3.11 with pip package in Nix setup phase
+
+- **Bookmaker tracking in bet history:**
+  - Added `bookmaker` column to `daily_predictions` table via Supabase migration
+  - Dashboard bet history page now displays which sportsbook had the sharpest line
+  - Bookmaker badge on BetCard component
+
+- **Dashboard navbar improvements:**
+  - Active tab highlighting with `usePathname()` hook
+  - Active state: `bg-blue-600 text-white` for clear visual distinction
+  - Inactive state: `text-slate-400` with hover effects
+
+### Changed
+
+- **`src/models/daily_runner.py`:**
+  - Keep bookmaker column in sharpest-book selection (line 623)
+  - Previously dropped bookmaker column after line selection
+
+- **`src/models/prediction_store.py`:**
+  - Added `bookmaker` to `PREDICTION_COLS` for storage
+
+- **`dashboard/src/app/history/page.tsx`:**
+  - Fetch `is_recommended` and `bookmaker` from `daily_predictions`
+  - Use `String()` for Map keys to handle Supabase bigint inconsistency
+
+- **`dashboard/src/components/history/BetCard.tsx`:**
+  - Display bookmaker badge in bet details row
+
+- **`dashboard/src/types/predictions.ts`:**
+  - Added `bookmaker?: string` to `PaperBet` interface
+
+### Fixed
+
+- **Railway build error:** "No module named pip" — fixed with nixpacks.toml
+
+- **Feb 11 Model Picks bug:** Supabase returns bigint values inconsistently as number or string. Fixed by using `String()` conversion on Map keys for consistent lookup.
+
+- **Test failures (5 tests):**
+  - `test_get_current_lines_success` — updated assertion for bookmaker column presence
+  - `test_select_bets_over/under_direction` — added `bl_tau=None` to disable BL blending
+  - `test_default_edge_threshold` and `test_default_bankroll` — changed to test explicit parameter passing
+
+### Technical Notes
+
+**NBA All-Star break (Feb 13-15, 2026):**
+- No NBA games during this period — expected behavior for no predictions
+- Railway jobs are correctly configured; will resume when games resume
+
+---
+
 ## [2026-02-15 Session 32] — Discord Bot Implementation (Track H Complete)
 
 ### Added

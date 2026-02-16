@@ -172,6 +172,33 @@ Your jobs:
 1. Ensure `PYTHONPATH` includes `/app/src`
 2. Check `requirements.txt` has all dependencies
 
+### "No module named pip" Error
+
+Railway's Nixpacks builder may fail with `python3.11: No module named pip`:
+
+```
+/root/.nix-profile/bin/python3.11: No module named pip
+```
+
+**Fix:** Create `nixpacks.toml` with explicit pip installation:
+
+```toml
+[phases.setup]
+nixPkgs = ["python311", "python311Packages.pip"]
+
+[phases.install]
+cmds = [
+    "python3.11 -m ensurepip --upgrade",
+    "python3.11 -m pip install --upgrade pip",
+    "python3.11 -m pip install -r requirements.txt"
+]
+
+[start]
+cmd = "python3.11 src/orchestration/scheduler.py"
+```
+
+This ensures pip is properly installed before attempting to install dependencies.
+
 ### Model Not Found
 
 1. Verify `src/models/artifacts/run_*` directories are committed

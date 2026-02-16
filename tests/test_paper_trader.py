@@ -132,7 +132,8 @@ class TestPaperTraderBetSelection:
         mock_engine.connect = mock_connect
 
         with patch("pandas.read_sql", return_value=predictions_df):
-            trader = PaperTrader(edge_threshold=0.05)
+            # Disable BL blending to test raw edge selection
+            trader = PaperTrader(edge_threshold=0.05, bl_tau=None)
             bets = trader.select_bets(date(2024, 1, 15))
 
         assert len(bets) == 1
@@ -176,7 +177,8 @@ class TestPaperTraderBetSelection:
         mock_engine.connect = mock_connect
 
         with patch("pandas.read_sql", return_value=predictions_df):
-            trader = PaperTrader(edge_threshold=0.05)
+            # Disable BL blending to test raw edge selection
+            trader = PaperTrader(edge_threshold=0.05, bl_tau=None)
             bets = trader.select_bets(date(2024, 1, 15))
 
         assert len(bets) == 1
@@ -329,32 +331,36 @@ class TestPaperTraderResolution:
 
 
 class TestPaperTraderDefaultValues:
-    """Tests for PaperTrader default configuration."""
+    """Tests for PaperTrader default configuration.
+
+    Note: Defaults now come from environment variables (PAPER_TRADING_*).
+    These tests verify explicit parameter passing works correctly.
+    """
 
     @patch("src.paper_trading.paper_trader.get_engine")
-    def test_default_edge_threshold(self, mock_get_engine):
-        """Test default edge threshold is 0.05."""
+    def test_explicit_edge_threshold(self, mock_get_engine):
+        """Test explicit edge threshold parameter is used."""
         mock_get_engine.return_value = MagicMock()
-        trader = PaperTrader()
-        assert trader.edge_threshold == 0.05
+        trader = PaperTrader(edge_threshold=0.07)
+        assert trader.edge_threshold == 0.07
 
     @patch("src.paper_trading.paper_trader.get_engine")
-    def test_default_kelly_fraction(self, mock_get_engine):
-        """Test default Kelly fraction is 0.125."""
+    def test_explicit_kelly_fraction(self, mock_get_engine):
+        """Test explicit Kelly fraction parameter is used."""
         mock_get_engine.return_value = MagicMock()
-        trader = PaperTrader()
-        assert trader.kelly_fraction == 0.125
+        trader = PaperTrader(kelly_fraction=0.25)
+        assert trader.kelly_fraction == 0.25
 
     @patch("src.paper_trading.paper_trader.get_engine")
-    def test_default_bankroll(self, mock_get_engine):
-        """Test default starting bankroll is 10000."""
+    def test_explicit_bankroll(self, mock_get_engine):
+        """Test explicit starting bankroll parameter is used."""
         mock_get_engine.return_value = MagicMock()
-        trader = PaperTrader()
-        assert trader.starting_bankroll == 10000.0
+        trader = PaperTrader(starting_bankroll=5000.0)
+        assert trader.starting_bankroll == 5000.0
 
     @patch("src.paper_trading.paper_trader.get_engine")
     def test_default_odds_filters(self, mock_get_engine):
-        """Test default odds filters."""
+        """Test default odds filters (not env-configurable)."""
         mock_get_engine.return_value = MagicMock()
         trader = PaperTrader()
         assert trader.min_odds == -200
