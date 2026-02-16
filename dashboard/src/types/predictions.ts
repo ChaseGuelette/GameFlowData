@@ -113,6 +113,7 @@ export interface PaperBet {
   status: BetStatus
   actual_value: number | null
   pnl: number | null
+  bookmaker?: string  // Which sportsbook had the line
 }
 
 export interface DailyPerformance {

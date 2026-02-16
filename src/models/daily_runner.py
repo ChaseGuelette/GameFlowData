@@ -620,7 +620,7 @@ class DailyPredictionRunner:
 
         # Keep the row with the lowest booksum (sharpest) per player/game/market
         idx = all_lines.groupby(["player_id", "game_id", "market_key"])["_booksum"].idxmin()
-        best_lines = all_lines.loc[idx].drop(columns=["_raw_over", "_raw_under", "_booksum", "bookmaker"])
+        best_lines = all_lines.loc[idx].drop(columns=["_raw_over", "_raw_under", "_booksum"])
 
         return best_lines.reset_index(drop=True)
 
@@ -645,9 +645,12 @@ class DailyPredictionRunner:
         lines_df = lines_df.copy()
         lines_df["stat"] = lines_df["market_key"].map(market_to_stat)
 
-        # Merge
+        # Merge (include bookmaker for tracking which book had best line)
+        merge_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds"]
+        if "bookmaker" in lines_df.columns:
+            merge_cols.append("bookmaker")
         merged = predictions_df.merge(
-            lines_df[["player_id", "game_id", "stat", "line", "over_odds", "under_odds"]],
+            lines_df[merge_cols],
             on=["player_id", "game_id", "stat"],
             how="left",
         )

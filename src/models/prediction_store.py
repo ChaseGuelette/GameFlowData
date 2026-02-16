@@ -23,6 +23,7 @@ PREDICTION_COLS = [
     "pred_q10", "pred_q25", "pred_q50", "pred_q75", "pred_q90",
     "line", "over_odds", "under_odds", "over_prob", "under_prob",
     "implied_over", "implied_under", "over_edge", "under_edge", "game_time",
+    "bookmaker",  # Which bookmaker had the sharpest line
     # Feature columns for dashboard insights
     "feat_rest_days", "feat_is_back_to_back", "feat_games_last_7d",
     "feat_team_out_count", "feat_team_out_min_sum", "feat_opp_out_count",

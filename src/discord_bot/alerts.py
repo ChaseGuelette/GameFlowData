@@ -115,9 +115,9 @@ async def send_predictions_alert(
         logger.warning("DISCORD_BOT_TOKEN not configured, skipping alert")
         return False
 
-    channel_id = channel_id or os.getenv("DISCORD_CHANNEL_ALERTS")
+    channel_id = channel_id or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
     if not channel_id:
-        logger.warning("DISCORD_CHANNEL_ALERTS not configured, skipping alert")
+        logger.warning("DISCORD_CHANNEL_PREDICTIONS not configured, skipping alert")
         return False
 
     # Filter to high-edge predictions (>=9%)

@@ -9,9 +9,10 @@ import { BetList } from '@/components/history/BetList'
 import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFilter'
 import { type PaperBet } from '@/types/predictions'
 
-// Extended type to include is_recommended from joined daily_predictions
+// Extended type to include is_recommended and bookmaker from joined daily_predictions
 interface PaperBetWithRecommended extends PaperBet {
   is_recommended?: boolean
+  bookmaker?: string
 }
 
 export default function HistoryPage() {
@@ -40,24 +41,29 @@ export default function HistoryPage() {
         // Get unique prediction IDs to fetch is_recommended status
         const predictionIds = [...new Set(betsData.map(b => b.prediction_id).filter(Boolean))]
 
-        // Fetch is_recommended for these predictions
+        // Fetch is_recommended and bookmaker for these predictions
         const { data: predictionsData } = await supabase
           .from('daily_predictions')
-          .select('id, is_recommended')
+          .select('id, is_recommended, bookmaker')
           .in('id', predictionIds)
 
-        // Create a map for quick lookup
+        // Create maps for quick lookup
         const recommendedMap = new Map<number, boolean>()
+        const bookmakerMap = new Map<number, string>()
         if (predictionsData) {
           for (const p of predictionsData) {
             recommendedMap.set(p.id, p.is_recommended ?? false)
+            if (p.bookmaker) {
+              bookmakerMap.set(p.id, p.bookmaker)
+            }
           }
         }
 
-        // Merge is_recommended into bets
+        // Merge is_recommended and bookmaker into bets
         const enrichedBets = betsData.map(bet => ({
           ...bet,
           is_recommended: recommendedMap.get(bet.prediction_id) ?? false,
+          bookmaker: bookmakerMap.get(bet.prediction_id),
         })) as PaperBetWithRecommended[]
 
         setBets(enrichedBets)

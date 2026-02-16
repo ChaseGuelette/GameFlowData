@@ -70,6 +70,11 @@ export function BetCard({ bet }: BetCardProps) {
         <span className="text-slate-500 text-sm">
           ({formatOdds(bet.odds_at_bet)})
         </span>
+        {bet.bookmaker && (
+          <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">
+            {bet.bookmaker}
+          </span>
+        )}
       </div>
 
       {/* Result Row */}
