@@ -1,8 +1,13 @@
-# GameFlowData Discord Bot - Development Plan
+# GameFlowData Discord Bot
+
+> **Status: ✅ IMPLEMENTED** (2026-02-15, Session 32)
+>
+> This document was originally a development plan. The Discord bot is now fully implemented.
+> See `ARCHITECTURE.md` Section 11 for current architecture documentation.
 
 ## Overview
 
-Build an interactive Discord bot that sends daily prediction alerts and responds to commands for querying predictions, player stats, and paper trading performance.
+Interactive Discord bot that sends daily prediction alerts and responds to slash commands for querying predictions, player stats, and paper trading performance.
 
 ---
 
@@ -452,3 +457,43 @@ DISCORD_ENABLED=true  # Set to false to disable alerts
 4. `/bankroll` shows current paper trading balance
 5. Running inference job sends alert to #predictions channel
 6. Bot continues running after system restart (Task Scheduler)
+
+---
+
+## Implementation Notes (2026-02-15)
+
+### Changes from Original Plan
+
+**Simplified Architecture:**
+- Commands are inline in `bot.py` instead of separate files per command (simpler, less boilerplate)
+- No separate `players.py` service — player lookup is part of `predictions.py`
+- No `tables.py` formatter — embeds handle all formatting
+
+**Additional Commands:**
+- Added `/toppicks` command for quick top 5 view
+
+**Database Schema Differences:**
+- `paper_bets` table uses `status` not `result`, values are `'won'`/`'lost'` not `'win'`/`'loss'`
+- `paper_bets` uses `stat_type`, `bet_direction`, `odds_at_bet` not `stat`, `side`, `odds`
+- `paper_trading_daily_log` uses `bankroll_after` not `current_bankroll`
+- `teams` table only has `team_name`, not `abbreviation` — use `feat_opp_abbrev` from predictions
+
+**Files Actually Created:**
+| File | Purpose |
+|------|---------|
+| `src/discord_bot/__init__.py` | Package init |
+| `src/discord_bot/commands/__init__.py` | Commands package init |
+| `src/discord_bot/services/__init__.py` | Services package init |
+| `src/discord_bot/formatters/__init__.py` | Formatters package init |
+| `src/discord_bot/run_bot.py` | Entry point with graceful shutdown |
+| `src/discord_bot/bot.py` | Bot class with all slash commands (250 lines) |
+| `src/discord_bot/services/predictions.py` | Prediction queries (225 lines) |
+| `src/discord_bot/services/paper_trading.py` | Paper trading queries (225 lines) |
+| `src/discord_bot/formatters/embeds.py` | Discord embed builders (280 lines) |
+| `src/discord_bot/alerts.py` | REST API alert sender (195 lines) |
+| `scripts/run_discord_bot.bat` | Windows Task Scheduler script |
+
+**Hosting:**
+- `scripts/run_discord_bot.bat` uses `venv\` not `.venv\`
+- Sets `PYTHONPATH` for module imports
+- Railway-ready architecture with graceful shutdown handlers

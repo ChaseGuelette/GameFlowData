@@ -1,5 +1,62 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-15 — Session 32)
+
+### What We Did
+
+**Implemented Discord bot (Track H complete).** Built interactive Discord bot with slash commands and automated alerts for daily predictions and paper trading status.
+
+**Slash commands implemented:**
+- `/picks` — Get today's top predictions (filterable by stat type and min edge)
+- `/player <name>` — Get predictions for a specific player (fuzzy match supported)
+- `/bankroll` — Show current paper trading balance and P&L
+- `/performance` — Show model performance stats (win rate, ROI, total bets)
+- `/toppicks` — Quick view of top 5 picks for daily alerts
+
+**Architecture:**
+- Discord.py 2.6+ with slash commands via `@bot.tree.command()`
+- Async database queries using `asyncio.to_thread()` for SQLAlchemy
+- Discord REST API for alerts (works without bot process running)
+- Rich embeds for formatted Discord messages
+- Graceful shutdown handling (SIGINT/SIGTERM) for Railway compatibility
+
+**Alerts integration:**
+- Automated alerts triggered after inference job completes
+- Uses Discord REST API directly — no bot process required
+- `--skip-discord` flag added to inference job for debugging
+
+**Bug fixes during implementation:**
+- Fixed `teams` table query — `team_name` instead of non-existent `abbreviation` column
+- Fixed `paper_bets` table columns — `status` not `result`, `stat_type` not `stat`, `bet_direction` not `side`, `odds_at_bet` not `odds`
+- Fixed `paper_trading_daily_log` columns — `bankroll_after` not `current_bankroll`, `total_pnl`/`cumulative_pnl` for P&L values
+
+**Files created:**
+- `src/discord_bot/__init__.py`, `commands/__init__.py`, `services/__init__.py`, `formatters/__init__.py` — Package init files
+- `src/discord_bot/bot.py` — Main bot class with all slash commands (~250 lines)
+- `src/discord_bot/run_bot.py` — Entry point with graceful shutdown (~65 lines)
+- `src/discord_bot/services/predictions.py` — Prediction database queries (~225 lines)
+- `src/discord_bot/services/paper_trading.py` — Paper trading database queries (~225 lines)
+- `src/discord_bot/formatters/embeds.py` — Discord embed builders (~280 lines)
+- `src/discord_bot/alerts.py` — REST API alert sender (~195 lines)
+- `scripts/run_discord_bot.bat` — Windows Task Scheduler script (~40 lines)
+
+**Files modified:**
+- `.env` — Renamed `BOT_TOKEN` to `DISCORD_BOT_TOKEN`, added channel IDs
+- `requirements.txt` — Added `discord.py>=2.3.0`
+- `src/orchestration/inference_job.py` — Added Discord alert trigger with `--skip-discord` flag
+- `ARCHITECTURE.md` — Updated Discord Bot section from "Planned" to "Implemented"
+
+**Tests:** 571 passed, 4 pre-existing failures (paper trading config defaults, unrelated to Discord bot)
+
+### Next Step
+
+1. **Start the Discord bot** — Run `scripts\run_discord_bot.bat` or add to Task Scheduler
+2. **Test slash commands** — Commands should sync within 1 minute of bot startup
+3. **Verify alerts** — Run inference job to test automated alert delivery
+4. **Paper trade** — Continue daily paper trading with Discord notifications
+
+---
+
 ## Session Summary (2026-02-14 — Session 31)
 
 ### What We Did
@@ -1407,40 +1464,43 @@ Next.js dashboard for viewing predictions and paper trading results. Full spec: 
 
 ---
 
-## Track H: Discord Bot (Planned)
+## Track H: Discord Bot (Implemented)
 
 Interactive Discord bot for daily prediction alerts and command-based queries. Full development plan at `docs/discord_bot_development.md`.
 
-**Prerequisites (Manual Setup Required):**
-- Create Discord server with channels (`#predictions`, `#alerts`, `#performance`)
-- Create Discord application and bot at https://discord.com/developers/applications
-- Generate bot token and channel IDs
-- Add to `.env`: `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_PREDICTIONS`, `DISCORD_CHANNEL_ALERTS`
+**Configuration (in `.env`):**
+- `DISCORD_BOT_TOKEN` — Bot authentication token
+- `DISCORD_CHANNEL_PREDICTIONS` — Channel for prediction queries
+- `DISCORD_CHANNEL_ALERTS` — Channel for automated daily alerts
+- `DISCORD_CHANNEL_PERFORMANCE` — Channel for performance updates
 
 **Implementation Items:**
-- [ ] **H1. Bot foundation** — Entry point (`run_bot.py`), Discord.py setup, slash command registration
-- [ ] **H2. Prediction service** — Query `daily_predictions` for today's picks, player predictions, top edges
-- [ ] **H3. `/picks` command** — Get today's top predictions (filterable by stat type and min edge)
-- [ ] **H4. `/player` command** — Get predictions for a specific player (fuzzy match supported)
-- [ ] **H5. `/bankroll` command** — Show paper trading balance from `paper_trading_daily_log`
-- [ ] **H6. `/performance` command** — Show model stats (win rate, ROI, total bets) from `paper_bets`
-- [ ] **H7. Automated alerts** — Send top picks to Discord after inference job completes
-- [ ] **H8. Bot hosting** — Windows Task Scheduler or Windows service for continuous running
+- [x] **H1. Bot foundation** — *(DONE — 2026-02-15)* Entry point (`run_bot.py`), Discord.py 2.6+ setup, slash command registration via `@bot.tree.command()`
+- [x] **H2. Prediction service** — *(DONE — 2026-02-15)* Query `daily_predictions` for today's picks, player predictions, top edges via `services/predictions.py`
+- [x] **H3. `/picks` command** — *(DONE — 2026-02-15)* Get today's top predictions (filterable by stat type and min edge)
+- [x] **H4. `/player` command** — *(DONE — 2026-02-15)* Get predictions for a specific player (fuzzy match supported)
+- [x] **H5. `/bankroll` command** — *(DONE — 2026-02-15)* Show paper trading balance from `paper_trading_daily_log`
+- [x] **H6. `/performance` command** — *(DONE — 2026-02-15)* Show model stats (win rate, ROI, total bets) from `paper_bets`
+- [x] **H7. Automated alerts** — *(DONE — 2026-02-15)* Send top picks to Discord after inference job completes via REST API (no bot process needed)
+- [x] **H8. Bot hosting** — *(DONE — 2026-02-15)* Windows batch script (`scripts/run_discord_bot.bat`) for Task Scheduler; Railway-ready architecture
 
-**Files to Create:**
+**Files Created:**
 | File | Purpose |
 |------|---------|
 | `src/discord_bot/__init__.py` | Package init |
-| `src/discord_bot/run_bot.py` | Entry point |
-| `src/discord_bot/bot.py` | Bot class and command registration |
-| `src/discord_bot/commands/picks.py` | `/picks` command |
-| `src/discord_bot/commands/player.py` | `/player` command |
-| `src/discord_bot/commands/bankroll.py` | `/bankroll` command |
-| `src/discord_bot/commands/performance.py` | `/performance` command |
-| `src/discord_bot/services/predictions.py` | Prediction queries |
-| `src/discord_bot/services/paper_trading.py` | Paper trading queries |
+| `src/discord_bot/run_bot.py` | Entry point with graceful shutdown |
+| `src/discord_bot/bot.py` | Bot class with all slash commands |
+| `src/discord_bot/services/predictions.py` | Prediction database queries |
+| `src/discord_bot/services/paper_trading.py` | Paper trading database queries |
 | `src/discord_bot/formatters/embeds.py` | Discord embed builders |
-| `src/discord_bot/alerts.py` | Alert sending functions |
+| `src/discord_bot/alerts.py` | REST API alert sender (works without bot running) |
+| `scripts/run_discord_bot.bat` | Windows Task Scheduler script |
+
+**Architecture:**
+- Slash commands require bot process running continuously (use `scripts/run_discord_bot.bat`)
+- Automated alerts use Discord REST API directly — triggered by inference job without bot process
+- All database queries use `asyncio.to_thread()` for async wrapping of synchronous SQLAlchemy
+- Railway-ready: env vars, no Windows-specific code, graceful SIGINT/SIGTERM handling
 
 ---
 
@@ -1476,7 +1536,7 @@ Interactive Discord bot for daily prediction alerts and command-based queries. F
 | ~~G7 (Player headshots)~~ | ~~Low~~ | ~~Medium~~ | **DONE** — NBA CDN with SVG fallback |
 | ~~G8 (Paper trading views)~~ | ~~Medium~~ | ~~High~~ | **DONE** — History page, Performance page with charts |
 | G5-G6, G9 (Dashboard) | Medium | Mid-High | In progress. Spec: `.session/specs/dashboard_implementation.md` |
-| H1-H8 (Discord Bot) | Medium | High | Full spec at `docs/discord_bot_development.md`. Requires manual Discord setup first. |
+| ~~H1-H8 (Discord Bot)~~ | ~~Medium~~ | ~~High~~ | **DONE** — All slash commands, alerts, and hosting implemented. |
 
 ---
 

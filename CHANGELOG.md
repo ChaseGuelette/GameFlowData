@@ -5,6 +5,115 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-15 Session 32] — Discord Bot Implementation (Track H Complete)
+
+### Added
+
+- **Discord Bot Package** (`src/discord_bot/`):
+  - Interactive Discord bot with slash commands for daily predictions and paper trading
+  - Discord.py 2.6+ with `@bot.tree.command()` slash command registration
+  - Async database queries using `asyncio.to_thread()` for SQLAlchemy wrapping
+  - Graceful shutdown handling (SIGINT/SIGTERM) for Railway compatibility
+
+- **Slash Commands:**
+  - `/picks` — Get today's top predictions (filterable by stat type and min edge)
+  - `/player <name>` — Get predictions for specific player (fuzzy match supported)
+  - `/bankroll` — Show current paper trading balance and P&L
+  - `/performance` — Show model performance stats (win rate, ROI, total bets)
+  - `/toppicks` — Quick view of top 5 picks for alerts
+
+- **Files Created:**
+  - `src/discord_bot/__init__.py` — Package init
+  - `src/discord_bot/commands/__init__.py` — Commands package init
+  - `src/discord_bot/services/__init__.py` — Services package init
+  - `src/discord_bot/formatters/__init__.py` — Formatters package init
+  - `src/discord_bot/bot.py` — Main bot class with all slash commands (~250 lines)
+  - `src/discord_bot/run_bot.py` — Entry point with graceful shutdown (~65 lines)
+  - `src/discord_bot/services/predictions.py` — Prediction database queries (~225 lines)
+  - `src/discord_bot/services/paper_trading.py` — Paper trading database queries (~225 lines)
+  - `src/discord_bot/formatters/embeds.py` — Discord embed builders (~280 lines)
+  - `src/discord_bot/alerts.py` — REST API alert sender (~195 lines)
+  - `scripts/run_discord_bot.bat` — Windows Task Scheduler script (~40 lines)
+
+- **Automated Alerts:**
+  - Discord REST API alert sender (works without bot process running)
+  - `send_predictions_alert()` async function using aiohttp
+  - `send_predictions_alert_sync()` wrapper for synchronous code
+
+### Changed
+
+- **`.env`:**
+  - Renamed `BOT_TOKEN` to `DISCORD_BOT_TOKEN` for consistency
+  - Added `DISCORD_CHANNEL_PREDICTIONS=1472768933730980005`
+  - Added `DISCORD_CHANNEL_ALERTS=1472768974662926427`
+  - Added `DISCORD_CHANNEL_PERFORMANCE=1472769015725293708`
+
+- **`requirements.txt`:**
+  - Added `discord.py>=2.3.0` dependency
+
+- **`src/orchestration/inference_job.py`:**
+  - Added Discord alert trigger after predictions are saved
+  - Added `--skip-discord` CLI flag for debugging
+  - Alert wrapped in try/except so failures don't break inference
+
+- **`ARCHITECTURE.md`:**
+  - Updated Discord Bot section from "Planned" to "Implemented"
+  - Added full documentation of directory structure, commands, architecture
+
+### Fixed
+
+- **`teams` table query** in `predictions.py`:
+  - Changed `t.abbreviation` to `t.team_name` (abbreviation column doesn't exist)
+  - Used `dp.feat_opp_abbrev` for opponent directly from predictions table
+
+- **`paper_bets` table columns** in `paper_trading.py`:
+  - Changed `result` to `status`
+  - Changed `'win'`/`'loss'` to `'won'`/`'lost'` for status values
+  - Changed `stat` to `stat_type`
+  - Changed `side` to `bet_direction`
+  - Changed `odds` to `odds_at_bet`
+
+- **`paper_trading_daily_log` table columns** in `paper_trading.py`:
+  - Changed `current_bankroll` to `bankroll_after`
+  - Used `total_pnl` for daily P&L
+  - Used `cumulative_pnl` for total P&L
+
+### Technical Notes
+
+**Architecture:**
+```
+Discord Bot Architecture
+├── Slash Commands (require bot process running)
+│   ├── /picks — Query daily_predictions table
+│   ├── /player — Fuzzy match player name, get all stats
+│   ├── /bankroll — Query paper_trading_daily_log
+│   └── /performance — Query paper_bets aggregates
+│
+└── Automated Alerts (REST API, no bot needed)
+    └── Triggered by inference_job.py after predictions
+```
+
+**Database Query Pattern:**
+```python
+async def get_predictions() -> list[dict]:
+    def _query():
+        engine = get_engine()
+        with engine.connect() as conn:
+            result = conn.execute(text(query))
+            return [dict(zip(columns, row)) for row in rows]
+    return await asyncio.to_thread(_query)
+```
+
+**Bot Hosting Options:**
+1. Local: `scripts\run_discord_bot.bat` via Windows Task Scheduler
+2. Railway: Add worker service in `railway.toml` (Railway-ready architecture)
+
+### Test Results
+
+- 571 tests passed, 4 pre-existing failures (paper trading config defaults, unrelated)
+
+---
+
 ## [2026-02-14 Session 31] — Vercel Deployment Fix & Model Picks Filtering
 
 ### Added

@@ -495,24 +495,60 @@ After daily_runner.py completes (predictions stored):
 - Calculate P&L: won = stake × (decimal_odds - 1), lost = -stake
 - Update `paper_trading_daily_log` with aggregates
 
-### 12. Discord Bot (Planned — `src/discord_bot/`)
+### 12. Discord Bot (`src/discord_bot/`)
 
-Interactive Discord bot for sending daily prediction alerts and responding to commands. Full development plan at `docs/discord_bot_development.md`.
+Interactive Discord bot for sending daily prediction alerts and responding to slash commands. Development plan at `docs/discord_bot_development.md`.
 
-**Planned Commands:**
-- `/picks` — Get today's top predictions (filterable by stat type and min edge)
-- `/player <name>` — Get predictions for a specific player (fuzzy match supported)
-- `/bankroll` — Show paper trading balance
-- `/performance` — Show model performance stats (win rate, ROI, total bets)
+**Directory Structure:**
+```
+src/discord_bot/
+├── __init__.py
+├── bot.py                    # GameFlowBot class with slash commands
+├── run_bot.py                # Entry point with graceful shutdown
+├── alerts.py                 # REST API alert sender (no bot process needed)
+├── commands/__init__.py
+├── services/
+│   ├── __init__.py
+│   ├── predictions.py        # Query daily_predictions table
+│   └── paper_trading.py      # Query paper_bets, paper_trading_daily_log
+└── formatters/
+    ├── __init__.py
+    └── embeds.py             # Discord embed builders
+```
+
+**Slash Commands:**
+- `/picks [stat] [min_edge]` — Today's top predictions (filter by pts/reb/ast, edge threshold)
+- `/player <name>` — Predictions for a specific player (fuzzy match supported)
+- `/bankroll` — Paper trading balance, daily P&L, total P&L
+- `/performance [days]` — Win rate, ROI, total bets (last 30 days default)
+- `/toppicks` — Top 5 high-edge picks (alert preview)
 
 **Architecture:**
-- Discord.py with slash commands via `@bot.tree.command()`
-- Services layer queries Supabase (`daily_predictions`, `paper_bets`, `paper_trading_daily_log`)
-- Embed formatters for rich Discord messages
-- Automated alerts triggered after inference job completes
-- Windows Task Scheduler for bot hosting (runs at system startup)
+- **Discord.py 2.6+** with slash commands via `@bot.tree.command()`
+- **Async services** — `asyncio.to_thread()` wraps synchronous SQLAlchemy queries
+- **Rich embeds** — Color-coded formatters for picks, players, bankroll, performance
+- **REST API alerts** — `alerts.py` sends messages without bot process (for inference job integration)
+- **Graceful shutdown** — SIGINT/SIGTERM handling for Railway compatibility
 
-**Database Queries:** Uses existing tables — `daily_predictions` for picks, `paper_trading_daily_log` for bankroll, `paper_bets` for performance stats.
+**Automated Alerts:**
+- Inference job (`src/orchestration/inference_job.py`) triggers alert after predictions stored
+- Uses `send_predictions_alert_sync()` — works without bot process running
+- Posts top 5 high-edge picks to #alerts channel
+- Skip with `--skip-discord` flag
+
+**Environment Variables:**
+```
+DISCORD_BOT_TOKEN=...
+DISCORD_CHANNEL_PREDICTIONS=...
+DISCORD_CHANNEL_ALERTS=...
+DISCORD_CHANNEL_PERFORMANCE=...
+```
+
+**Hosting:**
+- **Phase 1 (Local):** Windows Task Scheduler via `scripts/run_discord_bot.bat`
+- **Phase 2 (Railway):** Add second service with `startCommand = "python src/discord_bot/run_bot.py"`
+
+**Database Queries:** Uses `daily_predictions` for picks, `paper_trading_daily_log` for bankroll, `paper_bets` for performance stats. Queries use correct column names: `status` (not `result`), `stat_type` (not `stat`), `bankroll_after` (not `current_bankroll`).
 
 ---
 
