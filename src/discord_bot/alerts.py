@@ -193,3 +193,214 @@ def send_predictions_alert_sync(
     except Exception as e:
         logger.exception(f"Failed to send alert synchronously: {e}")
         return False
+
+
+# =============================================================================
+# Job Status Alerts
+# =============================================================================
+
+
+def _format_duration(seconds: float) -> str:
+    """Format duration in seconds to human-readable string."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours = int(minutes // 60)
+    mins = int(minutes % 60)
+    return f"{hours}h {mins}m"
+
+
+def _build_job_alert_embed(
+    job_name: str,
+    success: bool,
+    duration_seconds: float,
+    metrics: dict | None = None,
+    error_message: str | None = None,
+) -> dict:
+    """Build Discord embed for job status alert.
+
+    Args:
+        job_name: Human-readable job name
+        success: Whether job completed successfully
+        duration_seconds: Job runtime in seconds
+        metrics: Optional dict of job-specific metrics
+        error_message: Error message if job failed
+
+    Returns:
+        Discord embed dict
+    """
+    if success:
+        title = f"Job Completed: {job_name}"
+        color = 0x2ECC71  # Green
+        status_emoji = ""
+    else:
+        title = f"Job Failed: {job_name}"
+        color = 0xE74C3C  # Red
+        status_emoji = ""
+
+    embed = {
+        "title": f"{status_emoji} {title}",
+        "color": color,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {
+                "name": "Duration",
+                "value": _format_duration(duration_seconds),
+                "inline": True,
+            },
+            {
+                "name": "Status",
+                "value": "Success" if success else "Failed",
+                "inline": True,
+            },
+        ],
+        "footer": {
+            "text": "GameFlowData Scheduler",
+        },
+    }
+
+    # Add metrics if provided
+    if metrics:
+        for key, value in metrics.items():
+            # Format key as title case with underscores replaced
+            field_name = key.replace("_", " ").title()
+            embed["fields"].append({
+                "name": field_name,
+                "value": str(value),
+                "inline": True,
+            })
+
+    # Add error message if present
+    if error_message:
+        # Truncate long error messages
+        truncated = error_message[:500] + "..." if len(error_message) > 500 else error_message
+        embed["fields"].append({
+            "name": "Error",
+            "value": f"```{truncated}```",
+            "inline": False,
+        })
+
+    return embed
+
+
+async def send_job_alert(
+    job_name: str,
+    success: bool,
+    duration_seconds: float,
+    metrics: dict | None = None,
+    error_message: str | None = None,
+    channel_id: str | None = None,
+) -> bool:
+    """Send job status alert to Discord channel.
+
+    This function uses the Discord REST API directly, so it can be called
+    from the scheduler without requiring the bot process to be running.
+
+    Args:
+        job_name: Human-readable job name (e.g., "Daily Stats", "Lines Scraper")
+        success: Whether job completed successfully
+        duration_seconds: Job runtime in seconds
+        metrics: Optional dict of job-specific metrics to display
+        error_message: Error message if job failed
+        channel_id: Discord channel ID (defaults to DISCORD_CHANNEL_ALERTS env var)
+
+    Returns:
+        True if alert was sent successfully, False otherwise
+    """
+    load_dotenv()
+
+    # Get configuration
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping job alert")
+        return False
+
+    channel_id = channel_id or os.getenv("DISCORD_CHANNEL_ALERTS")
+    if not channel_id:
+        logger.warning("DISCORD_CHANNEL_ALERTS not configured, skipping job alert")
+        return False
+
+    # Build embed
+    embed = _build_job_alert_embed(
+        job_name=job_name,
+        success=success,
+        duration_seconds=duration_seconds,
+        metrics=metrics,
+        error_message=error_message,
+    )
+
+    # Send via Discord API
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status == 200 or response.status == 201:
+                    logger.info(f"Sent job alert for '{job_name}' (success={success})")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+
+    except Exception as e:
+        logger.exception(f"Failed to send job alert: {e}")
+        return False
+
+
+def send_job_alert_sync(
+    job_name: str,
+    success: bool,
+    duration_seconds: float,
+    metrics: dict | None = None,
+    error_message: str | None = None,
+    channel_id: str | None = None,
+) -> bool:
+    """Synchronous wrapper for send_job_alert.
+
+    Use this from the scheduler which runs in synchronous context.
+
+    Args:
+        job_name: Human-readable job name
+        success: Whether job completed successfully
+        duration_seconds: Job runtime in seconds
+        metrics: Optional dict of job-specific metrics
+        error_message: Error message if job failed
+        channel_id: Discord channel ID
+
+    Returns:
+        True if alert was sent successfully, False otherwise
+    """
+    import asyncio
+
+    try:
+        # Check if we're already in an event loop
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an async context, need to use run_coroutine_threadsafe
+            future = asyncio.run_coroutine_threadsafe(
+                send_job_alert(
+                    job_name, success, duration_seconds, metrics, error_message, channel_id
+                ),
+                loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            # No event loop running, use asyncio.run
+            return asyncio.run(
+                send_job_alert(
+                    job_name, success, duration_seconds, metrics, error_message, channel_id
+                )
+            )
+
+    except Exception as e:
+        logger.exception(f"Failed to send job alert synchronously: {e}")
+        return False

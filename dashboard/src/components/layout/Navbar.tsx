@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
 
 interface NavbarProps {
   bankroll?: number
@@ -10,12 +10,26 @@ interface NavbarProps {
 
 export function Navbar({ bankroll }: NavbarProps) {
   const router = useRouter()
+  const pathname = usePathname()
   const supabase = createClient()
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
     router.push('/login')
     router.refresh()
+  }
+
+  const isActive = (path: string) => {
+    if (path === '/') return pathname === '/'
+    return pathname.startsWith(path)
+  }
+
+  const navLinkClasses = (path: string) => {
+    const base = 'px-3 py-2 rounded-md text-sm font-medium transition-colors'
+    if (isActive(path)) {
+      return `${base} bg-blue-600 text-white`
+    }
+    return `${base} text-slate-400 hover:text-slate-100 hover:bg-slate-700`
   }
 
   return (
@@ -29,23 +43,14 @@ export function Navbar({ bankroll }: NavbarProps) {
               <span className="text-lg font-semibold text-slate-50">GameFlow</span>
             </Link>
 
-            <div className="hidden md:flex items-center space-x-4">
-              <Link
-                href="/"
-                className="text-slate-300 hover:text-slate-50 px-3 py-2 rounded-md text-sm font-medium"
-              >
+            <div className="hidden md:flex items-center space-x-1">
+              <Link href="/" className={navLinkClasses('/')}>
                 Props
               </Link>
-              <Link
-                href="/history"
-                className="text-slate-400 hover:text-slate-300 px-3 py-2 rounded-md text-sm font-medium"
-              >
+              <Link href="/history" className={navLinkClasses('/history')}>
                 History
               </Link>
-              <Link
-                href="/performance"
-                className="text-slate-400 hover:text-slate-300 px-3 py-2 rounded-md text-sm font-medium"
-              >
+              <Link href="/performance" className={navLinkClasses('/performance')}>
                 Performance
               </Link>
             </div>

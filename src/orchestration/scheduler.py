@@ -16,9 +16,11 @@ Usage:
 """
 
 import logging
+import re
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -35,11 +37,108 @@ logger = logging.getLogger("Scheduler")
 # Project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# Job display names for alerts
+JOB_NAMES = {
+    "daily_stats_job.py": "Daily Stats",
+    "lines_job.py": "Lines Scraper",
+    "inference_job.py": "Inference",
+}
+
+
+def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> dict | None:
+    """Extract metrics from job output for display in alerts.
+
+    Args:
+        script_name: The script that was run
+        stdout: Standard output from the job
+        stderr: Standard error from the job
+
+    Returns:
+        Dict of metrics to display, or None if no metrics found
+    """
+    metrics = {}
+    output = stdout + "\n" + stderr
+
+    if script_name == "daily_stats_job.py":
+        # Look for step completion info
+        steps_match = re.search(r"Step (\d+)/8", output)
+        if steps_match:
+            metrics["steps_completed"] = f"{steps_match.group(1)}/8"
+
+        # Look for bet resolution stats
+        resolved_match = re.search(r"Resolved (\d+) bets?", output, re.IGNORECASE)
+        if resolved_match:
+            metrics["bets_resolved"] = resolved_match.group(1)
+
+    elif script_name == "lines_job.py":
+        # Look for props scraped info
+        props_match = re.search(r"(\d+) props?", output, re.IGNORECASE)
+        if props_match:
+            metrics["props_scraped"] = props_match.group(1)
+
+        # Look for games found
+        games_match = re.search(r"(\d+) games?", output, re.IGNORECASE)
+        if games_match:
+            metrics["games_found"] = games_match.group(1)
+
+    elif script_name == "inference_job.py":
+        # Look for predictions generated
+        preds_match = re.search(r"Generated (\d+) predictions?", output, re.IGNORECASE)
+        if preds_match:
+            metrics["predictions"] = preds_match.group(1)
+
+        # Look for high-edge count
+        edge_match = re.search(r"(\d+) with.*edge", output, re.IGNORECASE)
+        if edge_match:
+            metrics["high_edge"] = edge_match.group(1)
+
+    return metrics if metrics else None
+
+
+def _send_job_alert(
+    script_name: str,
+    success: bool,
+    duration: float,
+    stdout: str,
+    stderr: str,
+):
+    """Send Discord alert for job completion.
+
+    Non-fatal: failures are logged but don't affect job status.
+    """
+    try:
+        from src.discord_bot.alerts import send_job_alert_sync
+
+        job_name = JOB_NAMES.get(script_name, script_name)
+        metrics = _parse_metrics_from_output(script_name, stdout, stderr)
+
+        # Get error message for failed jobs
+        error_message = None
+        if not success and stderr:
+            # Get last 500 chars of stderr for error display
+            error_message = stderr.strip()[-500:]
+
+        send_job_alert_sync(
+            job_name=job_name,
+            success=success,
+            duration_seconds=duration,
+            metrics=metrics,
+            error_message=error_message,
+        )
+
+    except Exception as e:
+        logger.warning(f"Failed to send Discord alert for {script_name}: {e}")
+
 
 def run_job(script_name: str):
-    """Run a job script as a subprocess."""
+    """Run a job script as a subprocess and send alert on completion."""
     script_path = PROJECT_ROOT / "src" / "orchestration" / script_name
     logger.info(f"Starting job: {script_name}")
+
+    start_time = time.time()
+    success = False
+    stdout = ""
+    stderr = ""
 
     try:
         result = subprocess.run(
@@ -50,16 +149,41 @@ def run_job(script_name: str):
             timeout=1800,  # 30 minute timeout
         )
 
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        duration = time.time() - start_time
+
         if result.returncode == 0:
             logger.info(f"Job completed successfully: {script_name}")
+            success = True
         else:
             logger.error(f"Job failed: {script_name}")
-            logger.error(f"STDERR: {result.stderr[-2000:] if result.stderr else 'None'}")
+            logger.error(f"STDERR: {stderr[-2000:] if stderr else 'None'}")
+
+        # Send alert
+        _send_job_alert(script_name, success, duration, stdout, stderr)
 
     except subprocess.TimeoutExpired:
+        duration = time.time() - start_time
         logger.error(f"Job timed out after 30 minutes: {script_name}")
+        _send_job_alert(
+            script_name,
+            success=False,
+            duration=duration,
+            stdout="",
+            stderr="Job timed out after 30 minutes",
+        )
+
     except Exception as e:
+        duration = time.time() - start_time
         logger.error(f"Job error: {script_name} - {e}")
+        _send_job_alert(
+            script_name,
+            success=False,
+            duration=duration,
+            stdout="",
+            stderr=str(e),
+        )
 
 
 def run_daily_stats():
