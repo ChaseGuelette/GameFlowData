@@ -404,3 +404,196 @@ def send_job_alert_sync(
     except Exception as e:
         logger.exception(f"Failed to send job alert synchronously: {e}")
         return False
+
+
+# =============================================================================
+# Daily P&L Summary (Performance Channel)
+# =============================================================================
+
+
+def _build_pnl_summary_embed(
+    resolution_result: dict,
+    bankroll: float,
+    daily_pnl: float,
+    total_pnl: float,
+) -> dict:
+    """Build Discord embed for daily P&L summary.
+
+    Args:
+        resolution_result: Dict from PaperTrader.resolve_all_pending()
+        bankroll: Current bankroll balance
+        daily_pnl: Today's P&L
+        total_pnl: Cumulative P&L
+
+    Returns:
+        Discord embed dict
+    """
+    wins = resolution_result.get("total_won", 0)
+    losses = resolution_result.get("total_lost", 0)
+    pushes = resolution_result.get("total_push", 0)
+    total_resolved = resolution_result.get("total_resolved", 0)
+
+    # Determine color based on daily P&L
+    if daily_pnl > 0:
+        color = 0x2ECC71  # Green
+        pnl_emoji = "📈"
+    elif daily_pnl < 0:
+        color = 0xE74C3C  # Red
+        pnl_emoji = "📉"
+    else:
+        color = 0x95A5A6  # Gray
+        pnl_emoji = "➖"
+
+    # Build record string
+    record = f"{wins}W-{losses}L"
+    if pushes > 0:
+        record += f"-{pushes}P"
+
+    embed = {
+        "title": f"{pnl_emoji} Daily Performance Summary",
+        "color": color,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {
+                "name": "Today's Record",
+                "value": record if total_resolved > 0 else "No bets resolved",
+                "inline": True,
+            },
+            {
+                "name": "Daily P&L",
+                "value": f"${daily_pnl:+,.2f}",
+                "inline": True,
+            },
+            {
+                "name": "Bankroll",
+                "value": f"${bankroll:,.2f}",
+                "inline": True,
+            },
+            {
+                "name": "Total P&L",
+                "value": f"${total_pnl:+,.2f}",
+                "inline": True,
+            },
+        ],
+        "footer": {
+            "text": "Paper Trading | GameFlowData",
+        },
+    }
+
+    # Add win rate if we have resolved bets
+    if wins + losses > 0:
+        win_rate = wins / (wins + losses)
+        embed["fields"].append({
+            "name": "Win Rate (Today)",
+            "value": f"{win_rate:.1%}",
+            "inline": True,
+        })
+
+    return embed
+
+
+async def send_pnl_summary(
+    resolution_result: dict,
+    bankroll: float,
+    daily_pnl: float,
+    total_pnl: float,
+    channel_id: str | None = None,
+) -> bool:
+    """Send daily P&L summary to Discord performance channel.
+
+    Args:
+        resolution_result: Dict from PaperTrader.resolve_all_pending()
+        bankroll: Current bankroll balance
+        daily_pnl: Today's P&L
+        total_pnl: Cumulative P&L
+        channel_id: Discord channel ID (defaults to DISCORD_CHANNEL_PERFORMANCE)
+
+    Returns:
+        True if alert was sent successfully, False otherwise
+    """
+    load_dotenv()
+
+    # Get configuration
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping P&L summary")
+        return False
+
+    channel_id = channel_id or os.getenv("DISCORD_CHANNEL_PERFORMANCE")
+    if not channel_id:
+        logger.warning("DISCORD_CHANNEL_PERFORMANCE not configured, skipping P&L summary")
+        return False
+
+    # Build embed
+    embed = _build_pnl_summary_embed(
+        resolution_result=resolution_result,
+        bankroll=bankroll,
+        daily_pnl=daily_pnl,
+        total_pnl=total_pnl,
+    )
+
+    # Send via Discord API
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status == 200 or response.status == 201:
+                    logger.info("Sent daily P&L summary to performance channel")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+
+    except Exception as e:
+        logger.exception(f"Failed to send P&L summary: {e}")
+        return False
+
+
+def send_pnl_summary_sync(
+    resolution_result: dict,
+    bankroll: float,
+    daily_pnl: float,
+    total_pnl: float,
+    channel_id: str | None = None,
+) -> bool:
+    """Synchronous wrapper for send_pnl_summary.
+
+    Args:
+        resolution_result: Dict from PaperTrader.resolve_all_pending()
+        bankroll: Current bankroll balance
+        daily_pnl: Today's P&L
+        total_pnl: Cumulative P&L
+        channel_id: Discord channel ID
+
+    Returns:
+        True if alert was sent successfully, False otherwise
+    """
+    import asyncio
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                send_pnl_summary(
+                    resolution_result, bankroll, daily_pnl, total_pnl, channel_id
+                ),
+                loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(
+                send_pnl_summary(
+                    resolution_result, bankroll, daily_pnl, total_pnl, channel_id
+                )
+            )
+
+    except Exception as e:
+        logger.exception(f"Failed to send P&L summary synchronously: {e}")
+        return False

@@ -47,24 +47,28 @@ export default function HistoryPage() {
           .select('id, is_recommended, bookmaker')
           .in('id', predictionIds)
 
-        // Create maps for quick lookup
-        const recommendedMap = new Map<number, boolean>()
-        const bookmakerMap = new Map<number, string>()
+        // Create maps for quick lookup (use string keys for consistent bigint handling)
+        const recommendedMap = new Map<string, boolean>()
+        const bookmakerMap = new Map<string, string>()
         if (predictionsData) {
           for (const p of predictionsData) {
-            recommendedMap.set(p.id, p.is_recommended ?? false)
+            const key = String(p.id)
+            recommendedMap.set(key, p.is_recommended ?? false)
             if (p.bookmaker) {
-              bookmakerMap.set(p.id, p.bookmaker)
+              bookmakerMap.set(key, p.bookmaker)
             }
           }
         }
 
         // Merge is_recommended and bookmaker into bets
-        const enrichedBets = betsData.map(bet => ({
-          ...bet,
-          is_recommended: recommendedMap.get(bet.prediction_id) ?? false,
-          bookmaker: bookmakerMap.get(bet.prediction_id),
-        })) as PaperBetWithRecommended[]
+        const enrichedBets = betsData.map(bet => {
+          const key = String(bet.prediction_id)
+          return {
+            ...bet,
+            is_recommended: recommendedMap.get(key) ?? false,
+            bookmaker: bookmakerMap.get(key),
+          }
+        }) as PaperBetWithRecommended[]
 
         setBets(enrichedBets)
       }

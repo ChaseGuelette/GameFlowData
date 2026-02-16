@@ -55,6 +55,33 @@ logger = logging.getLogger("DailyStatsJob")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _send_pnl_summary(result: dict) -> None:
+    """Send daily P&L summary to Discord performance channel.
+
+    Non-fatal: failures are logged but don't affect job status.
+    """
+    try:
+        from src.discord_bot.alerts import send_pnl_summary_sync
+        from src.discord_bot.services.paper_trading import get_bankroll_summary
+        import asyncio
+
+        # Get current bankroll data
+        bankroll_data = asyncio.run(get_bankroll_summary())
+
+        if bankroll_data:
+            send_pnl_summary_sync(
+                resolution_result=result,
+                bankroll=bankroll_data.get("balance", 1000.0),
+                daily_pnl=bankroll_data.get("daily_pnl", 0.0),
+                total_pnl=bankroll_data.get("total_pnl", 0.0),
+            )
+        else:
+            logger.warning("Could not get bankroll data for P&L summary")
+
+    except Exception as e:
+        logger.warning(f"Failed to send P&L summary to Discord: {e}")
+
+
 def resolve_pending_bets(dry_run: bool = False) -> bool:
     """Resolve all pending paper bets using newly available game stats.
 
@@ -84,6 +111,9 @@ def resolve_pending_bets(dry_run: bool = False) -> bool:
                 f"{result['dates_processed']} dates ({result['dates_skipped']} skipped) "
                 f"[{result['total_won']}W {result['total_lost']}L {result['total_push']}P] ({elapsed:.1f}s)"
             )
+
+            # Send P&L summary to Discord performance channel
+            _send_pnl_summary(result)
 
         return True
 
