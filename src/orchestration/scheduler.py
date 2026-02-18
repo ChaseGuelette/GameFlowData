@@ -327,6 +327,20 @@ def main():
         name="Inference Job (6:30 PM ET)",
     )
 
+    # ── TEMPORARY: One-shot test job 5 min after startup ──
+    # TODO: Remove after verifying Railway + Discord alerts work
+    from datetime import datetime as dt, timedelta
+    test_run_at = dt.utcnow() + timedelta(minutes=5)
+    scheduler.add_job(
+        run_lines,
+        "date",
+        run_date=test_run_at,
+        id="test_lines_oneshot",
+        name=f"ONE-SHOT TEST: Lines Job (runs at {test_run_at.strftime('%H:%M:%S')} UTC)",
+    )
+    logger.info(f"Scheduled one-shot test: Lines Job at {test_run_at.strftime('%H:%M:%S')} UTC")
+    # ── END TEMPORARY ──
+
     # Log scheduled jobs
     logger.info("Scheduled jobs:")
     for job in scheduler.get_jobs():
