@@ -140,6 +140,126 @@ class TrainingOrchestrator:
         self.run_dir = final_run_dir
         logger.info(f"Training pipeline completed successfully. Artifacts in {self.run_dir}")
 
+    def run_partial(
+        self,
+        train_seasons: list[str],
+        calibration_season: str,
+        cal_end_date: date | None,
+        base_model_dir: str,
+        retrain_stats: list[str] | None = None,
+        retrain_minutes: bool = False,
+        reselect_features: bool = False,
+    ):
+        """
+        Surgical retrain: load an existing pipeline, retrain only specified
+        components, evaluate calibration on *all* models, and save the
+        mixed (frozen + retrained) result.
+
+        Args:
+            train_seasons: Season IDs for training data.
+            calibration_season: Season ID for calibration holdout.
+            cal_end_date: Optional end date for calibration data (exclusive).
+            base_model_dir: Path to existing production pipeline directory.
+            retrain_stats: List of stats to retrain (e.g. ["reb", "ast"]).
+            retrain_minutes: Whether to retrain the minutes model.
+            reselect_features: Whether to re-run feature selection for
+                retrained components.
+        """
+        # Save run config
+        config = {
+            "mode": "partial_retrain",
+            "train_seasons": train_seasons,
+            "calibration_season": calibration_season,
+            "cal_end_date": str(cal_end_date) if cal_end_date else None,
+            "base_model_dir": base_model_dir,
+            "retrain_stats": retrain_stats,
+            "retrain_minutes": retrain_minutes,
+            "reselect_features": reselect_features,
+            "timestamp": self.timestamp.isoformat(),
+            "calibration_tolerance": self.CALIBRATION_TOLERANCE,
+            "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
+        }
+        with open(self.run_dir / "run_config.json", "w") as f:
+            json.dump(config, f, indent=4)
+
+        logger.info("=== Surgical Retrain Mode ===")
+        logger.info(f"Base model: {base_model_dir}")
+        logger.info(f"Retrain stats: {retrain_stats or 'none'}")
+        logger.info(f"Retrain minutes: {retrain_minutes}")
+        logger.info(f"Training Seasons: {train_seasons}")
+        logger.info(f"Calibration Season: {calibration_season}")
+        if cal_end_date:
+            logger.info(f"Calibration End Date: {cal_end_date} (exclusive)")
+
+        # 1. Load existing pipeline from base_model_dir
+        logger.info(f"Loading existing pipeline from {base_model_dir}...")
+        pipeline = PlayerPropsModelPipeline.load_all(base_model_dir, self.feature_store)
+        logger.info("Loaded existing pipeline (frozen models preserved)")
+
+        # 2. Load training + calibration data
+        logger.info("Loading datasets...")
+        train_df = self.feature_store.get_training_dataset(train_seasons)
+        logger.info(f"Loaded Training Data: {len(train_df):,} rows")
+
+        cal_df = self.feature_store.get_training_dataset([calibration_season])
+        if cal_end_date:
+            pre_filter = len(cal_df)
+            cal_df = cal_df[cal_df["game_date"] < cal_end_date].reset_index(drop=True)
+            logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows (filtered from {pre_filter:,})")
+        else:
+            logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows")
+
+        # 3. Optionally reselect features for retrained components only
+        if reselect_features:
+            new_features = self._run_feature_selection_partial(train_df, retrain_stats, retrain_minutes)
+            if retrain_minutes and "minutes_features" in new_features:
+                pipeline.minutes_features = new_features["minutes_features"]
+            if retrain_stats:
+                for stat in retrain_stats:
+                    key = f"{stat}_rate_features"
+                    if key in new_features:
+                        pipeline.rate_features[stat] = new_features[key]
+
+        # 4. Retrain specified components
+        if retrain_minutes:
+            logger.info("Retraining minutes model...")
+            pipeline.train_minutes_model(train_df)
+
+        if retrain_stats:
+            logger.info(f"Retraining rate models: {[s.upper() for s in retrain_stats]}")
+            pipeline.train_rate_models(train_df, stats=retrain_stats)
+
+        # 5. Evaluate calibration (all models, not just retrained)
+        self._evaluate_calibration(pipeline, cal_df)
+
+        # 6. Recompute copula params from training data
+        copula_params = self._compute_copula_params(train_df)
+
+        # 7. Combined calibration
+        self._evaluate_combined_calibration(pipeline, cal_df, copula_params=copula_params)
+
+        # 8. Correlation analysis
+        self._analyze_minutes_rate_correlation(cal_df)
+
+        # 9. Save all (frozen + retrained)
+        pipeline.save_all(str(self.run_dir))
+
+        # Save feature config
+        feature_config = {"minutes_features": pipeline.minutes_features}
+        for stat in pipeline.rate_models:
+            feature_config[f"{stat}_rate_features"] = pipeline.rate_features.get(stat, {})
+        with open(self.feature_config_path, "w") as f:
+            json.dump(feature_config, f, indent=4)
+
+        # 10. Sanity check
+        self._run_sanity_check(pipeline, cal_df)
+
+        # 11. Finalize: rename _incomplete → final
+        final_run_dir = self.run_dir.parent / self._final_run_dir_name
+        self.run_dir.rename(final_run_dir)
+        self.run_dir = final_run_dir
+        logger.info(f"Surgical retrain complete. Artifacts in {self.run_dir}")
+
     def _save_run_config(self, train_seasons, calibration_season, cal_end_date=None):
         """Save run configuration for reproducibility."""
         config = {
@@ -263,6 +383,35 @@ class TrainingOrchestrator:
             features[f"{stat}_rate_features"] = selector.select_features_per_quantile(
                 rate_df, target, candidates, model_name=f"{stat.upper()} Rate"
             )
+
+        return features
+
+    def _run_feature_selection_partial(
+        self, df: pd.DataFrame, retrain_stats: list[str] | None, retrain_minutes: bool
+    ) -> dict:
+        """Run feature selection only for specified components."""
+        logger.info("Running Partial Feature Selection (retrained components only)...")
+        selector = FeatureSelector(n_splits=3)
+        features = {}
+
+        if retrain_minutes:
+            logger.info("Selecting Minutes features (per quantile)...")
+            target = "actual_minutes"
+            candidates = get_candidate_columns(df, target)
+            minutes_df = df[df["actual_minutes"] > 0].fillna(0)
+            features["minutes_features"] = selector.select_features_per_quantile(
+                minutes_df, target, candidates, model_name="Minutes"
+            )
+
+        if retrain_stats:
+            for stat in retrain_stats:
+                logger.info(f"Selecting {stat.upper()} features (per quantile)...")
+                target = f"{stat}_per_min"
+                rate_df = df[(df["actual_minutes"] >= 10) & (df[target].notna())].fillna(0)
+                candidates = get_candidate_columns(rate_df, target)
+                features[f"{stat}_rate_features"] = selector.select_features_per_quantile(
+                    rate_df, target, candidates, model_name=f"{stat.upper()} Rate"
+                )
 
         return features
 
@@ -753,7 +902,38 @@ if __name__ == "__main__":
         "--hyperparams-path", type=str, default=None, help="Path to existing hyperparams JSON to load (skips tuning)"
     )
 
+    # Surgical retrain options
+    parser.add_argument(
+        "--retrain-stats",
+        nargs="+",
+        default=None,
+        help="Surgically retrain only these stat rate models (e.g. --retrain-stats reb ast). Requires --base-model-dir.",
+    )
+    parser.add_argument(
+        "--retrain-minutes",
+        action="store_true",
+        help="Surgically retrain only the minutes model. Requires --base-model-dir.",
+    )
+    parser.add_argument(
+        "--base-model-dir",
+        type=str,
+        default=None,
+        help="Path to existing production pipeline to load frozen models from (e.g. src/models/artifacts/production).",
+    )
+    parser.add_argument(
+        "--reselect-features",
+        action="store_true",
+        help="Re-run feature selection for retrained components (default: keep existing features).",
+    )
+
     args = parser.parse_args()
+
+    # Determine mode: surgical retrain vs full retrain
+    is_partial = args.retrain_stats is not None or args.retrain_minutes
+    if is_partial and not args.base_model_dir:
+        parser.error("--base-model-dir is required when using --retrain-stats or --retrain-minutes")
+    if args.base_model_dir and not is_partial:
+        parser.error("--base-model-dir requires --retrain-stats and/or --retrain-minutes")
 
     orchestrator = TrainingOrchestrator(
         tune_hyperparams=args.tune,
@@ -763,4 +943,20 @@ if __name__ == "__main__":
         hyperparams_path=args.hyperparams_path,
     )
     cal_end = datetime.strptime(args.cal_end_date, "%Y-%m-%d").date() if args.cal_end_date else None
-    orchestrator.run(train_seasons=args.train_seasons, calibration_season=args.cal_season, cal_end_date=cal_end)
+
+    if is_partial:
+        orchestrator.run_partial(
+            train_seasons=args.train_seasons,
+            calibration_season=args.cal_season,
+            cal_end_date=cal_end,
+            base_model_dir=args.base_model_dir,
+            retrain_stats=args.retrain_stats,
+            retrain_minutes=args.retrain_minutes,
+            reselect_features=args.reselect_features,
+        )
+    else:
+        orchestrator.run(
+            train_seasons=args.train_seasons,
+            calibration_season=args.cal_season,
+            cal_end_date=cal_end,
+        )
