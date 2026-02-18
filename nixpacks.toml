@@ -1,15 +1,14 @@
 # Nixpacks configuration for Railway deployment
-# Fixes "No module named pip" error by using python3 with ensurepip
+# Uses a venv to avoid writing to immutable Nix store
 
 [phases.setup]
 nixPkgs = ["python311", "python311Packages.pip"]
 
 [phases.install]
 cmds = [
-    "python3.11 -m ensurepip --upgrade",
-    "python3.11 -m pip install --upgrade pip",
-    "python3.11 -m pip install -r requirements.txt"
+    "python3.11 -m venv --system-site-packages /app/venv",
+    "/app/venv/bin/python -m pip install -r requirements.txt"
 ]
 
 [start]
-cmd = "python3.11 src/orchestration/scheduler.py"
+cmd = "/app/venv/bin/python src/orchestration/scheduler.py"

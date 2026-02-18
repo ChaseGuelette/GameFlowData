@@ -1,5 +1,35 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-18 — Session 37)
+
+### What We Did
+
+**Built social media pick image generator (`src/social/`).** CLI tool that auto-generates professional dark-themed images from daily predictions for Instagram/TikTok/Discord marketing. Three card types: daily slate (top 3-5 picks), individual player feature card, and results recap with hit/miss indicators. Uses Pillow, matches dashboard color scheme, shows confidence tiers (not exact percentages) to keep premium data behind the dashboard.
+
+**New files:**
+- `src/social/theme.py` — Color palette, font helpers, edge tiers, star rating formula, drawing utilities
+- `src/social/data_provider.py` — 4 sync DB query functions (top picks, resolved bets, daily summary, performance stats)
+- `src/social/card_renderer.py` — HeadshotCache + PickCardRenderer + SlateCardRenderer + ResultsCardRenderer
+- `src/social/generate_images.py` — CLI entry point with argparse (--date, --type, --format, --individual, --dry-run)
+- `tests/test_card_renderer.py` — 33 unit tests (theme utils, renderers, headshot cache)
+- `assets/fonts/Montserrat-*.ttf` — 3 font weights from Google Fonts (OFL license)
+
+**Modified files:**
+- `requirements.txt` — Added `Pillow>=10.0.0`
+- `.gitignore` — Added `output/social/`
+
+**Tests:** 608 passed, 0 failures. New module coverage: theme.py 97%, card_renderer.py 96%.
+
+### Next Step
+
+1. **Run live test** — `python src/social/generate_images.py --date 2026-02-18 --type both` against production DB
+2. **Visual review** — Check generated PNGs for layout quality
+3. **Integrate into daily pipeline** — Add image generation step after inference job
+4. **Post to social media** — Start daily Instagram/TikTok posting cadence
+5. **Discord auto-post** — Wire image output to Discord #picks channel
+
+---
+
 ## Session Summary (2026-02-18 — Session 35)
 
 ### What We Did

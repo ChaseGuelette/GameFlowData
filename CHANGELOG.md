@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-18 Session 37] — Social Media Pick Image Generator
+
+### Added
+
+- **Social media image generator (`src/social/`):**
+  - CLI tool generating branded pick images for Instagram, TikTok, and Discord
+  - Three card types: slate (daily top picks), individual pick, results recap
+  - Dark theme matching dashboard Tailwind color scheme
+  - Star ratings (1-5) using same formula as PropCard.tsx
+  - Confidence tiers ("Strong Edge" / "High Confidence" / "Lean") — no exact percentages
+  - NBA headshot cache with CDN download and placeholder fallback
+  - Square (1080x1080) and story (1080x1920) format support
+
+- **Module files:**
+  - `src/social/theme.py` — Colors, fonts, edge tiers, drawing helpers
+  - `src/social/data_provider.py` — 4 sync DB query functions
+  - `src/social/card_renderer.py` — HeadshotCache + 3 renderer classes
+  - `src/social/generate_images.py` — CLI entry point
+
+- **Assets:**
+  - `assets/fonts/Montserrat-Bold.ttf`, `Montserrat-SemiBold.ttf`, `Montserrat-Medium.ttf`
+
+- **Tests:**
+  - `tests/test_card_renderer.py` — 33 tests covering theme utils, renderers, headshot cache
+
+### Changed
+
+- `requirements.txt` — Added `Pillow>=10.0.0`
+- `.gitignore` — Added `output/social/`
+
+### Usage
+
+```bash
+python src/social/generate_images.py --date 2026-02-18 --type picks
+python src/social/generate_images.py --date 2026-02-18 --type both --individual
+python src/social/generate_images.py --date 2026-02-18 --type picks --format story --dry-run
+```
+
+---
+
 ## [2026-02-18 Session 36] — Per-Stat Calibration Diagnostic Tool (C2)
 
 ### Added

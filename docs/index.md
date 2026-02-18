@@ -34,6 +34,9 @@
 - [Database Health Check](db_health_check_documentation.md) - Comprehensive database health validation.
 - [Per-Stat Calibration](calibration_per_stat_documentation.md) - Per-stat calibration diagnostic with quantile coverage, bias, ECE, Brier score.
 
+## Social Media
+- [Social Image Generator](social_image_generator_documentation.md) - CLI tool for generating branded pick images for Instagram/TikTok/Discord.
+
 ## Tools
 - [Query Player](query_player_documentation.md) - CLI tool for querying stored predictions.
 

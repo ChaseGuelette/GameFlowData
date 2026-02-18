@@ -28,6 +28,7 @@ GameFlowData is a data-intensive application that ingests raw NBA game statistic
 | **Data Sources** | nba_api, The Odds API, ESPN | NBA stats, sportsbook odds, injury reports |
 | **Pipeline** | Custom Python orchestration | Training, inference, and backfill jobs |
 | **Visualization** | Plotly | Backtest equity curves and diagnostic plots |
+| **Image Gen** | Pillow | Social media pick card rendering |
 | **Dashboard** | Next.js 16, TypeScript, Tailwind, Recharts | Web UI for predictions and paper trading |
 | **Testing** | Pytest, Pytest-Cov | Unit and integration testing |
 | **Linting/Types** | Ruff, Pyright | Code quality and static analysis |
@@ -48,9 +49,11 @@ GameFlowData/
 │   ├── backtesting/            # Historical replay and bet simulation
 │   ├── tools/                  # CLI query tools
 │   ├── orchestration/          # Daily workflow coordination
-│   └── paper_trading/          # Paper bet placement and resolution
+│   ├── paper_trading/          # Paper bet placement and resolution
+│   └── social/                 # Social media image generation
 ├── dashboard/                  # Next.js web dashboard (TypeScript, Tailwind)
-├── tests/                      # Unit and integration tests (33 modules)
+├── assets/fonts/               # Montserrat font files for image generation
+├── tests/                      # Unit and integration tests (34 modules)
 ├── docs/                       # Component-level documentation
 ├── notebooks/                  # Jupyter notebooks for research
 ├── database/                   # Schema definitions (schema.sql)
@@ -537,7 +540,59 @@ After daily_runner.py completes (predictions stored):
 - Calculate P&L: won = stake × (decimal_odds - 1), lost = -stake
 - Update `paper_trading_daily_log` with aggregates
 
-### 12. Discord Bot (`src/discord_bot/`)
+### 12. Social Media Image Generator (`src/social/`)
+
+CLI tool for generating branded pick images for Instagram, TikTok, and Discord marketing.
+
+**Directory Structure:**
+```
+src/social/
+├── __init__.py              # Package marker
+├── theme.py                 # Colors, fonts, layout constants, drawing helpers
+├── data_provider.py         # Sync DB queries for picks + results
+├── card_renderer.py         # HeadshotCache + 3 renderer classes
+└── generate_images.py       # CLI entry point (argparse + orchestration)
+
+assets/fonts/
+├── Montserrat-Bold.ttf      # Google Fonts (OFL license)
+├── Montserrat-SemiBold.ttf
+└── Montserrat-Medium.ttf
+```
+
+**Card Types:**
+| Card | Description | Formats |
+|------|-------------|---------|
+| **Slate Card** | Top 3-5 picks on one image — main daily post | 1080x1080, 1080x1920 |
+| **Pick Card** | Single player feature with headshot, stars, projection | 1080x1080, 1080x1920 |
+| **Results Card** | Yesterday's outcomes with hit/miss, P&L, season stats | 1080x1080, 1080x1920 |
+
+**Design:**
+- Dark theme matching dashboard Tailwind (slate-950 backgrounds, green/yellow/slate edge tiers)
+- Star ratings (1-5) using same formula as PropCard.tsx: `min(5, max(1, ceil(abs(edge) * 50)))`
+- Confidence labels ("Strong Edge" / "High Confidence" / "Lean") — no exact percentages
+- NBA player headshots from CDN with disk cache and placeholder fallback
+- Stat badges color-coded (blue=PTS, teal=REB, purple=AST)
+
+**Data Provider:** Sync SQLAlchemy queries via `get_engine()` — does NOT reuse async Discord services.
+
+**CLI Usage:**
+```bash
+# Daily slate
+python src/social/generate_images.py --date 2026-02-18 --type picks
+
+# Both picks + yesterday's results
+python src/social/generate_images.py --date 2026-02-18 --type both --individual
+
+# Story format for IG stories / TikTok
+python src/social/generate_images.py --date 2026-02-18 --type picks --format story
+
+# Dry run (no DB, no image output)
+python src/social/generate_images.py --date 2026-02-18 --type picks --dry-run
+```
+
+**Output:** Images saved to `output/social/` (gitignored). Headshots cached to `data/headshots/` (gitignored via `data/`).
+
+### 13. Discord Bot (`src/discord_bot/`)
 
 Interactive Discord bot for sending daily prediction alerts and responding to slash commands. Development plan at `docs/discord_bot_development.md`.
 
@@ -798,6 +853,24 @@ python src/tools/query_player.py --top 20
 
 # Top edges for a specific date
 python src/tools/query_player.py --date 2026-01-29 --top 10
+```
+
+### Social Media Images
+```bash
+# Daily slate card
+python src/social/generate_images.py --date 2026-02-18 --type picks
+
+# Results recap from yesterday
+python src/social/generate_images.py --date 2026-02-17 --type results
+
+# Both picks + results (results auto-fetched from yesterday)
+python src/social/generate_images.py --date 2026-02-18 --type both
+
+# Story format (1080x1920) + individual player cards
+python src/social/generate_images.py --date 2026-02-18 --type picks --format story --individual
+
+# Dry run (no DB, no images)
+python src/social/generate_images.py --date 2026-02-18 --type picks --dry-run
 ```
 
 ### Paper Trading
