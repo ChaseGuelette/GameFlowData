@@ -67,28 +67,28 @@ def main():
     # 1. Scraping (Get latest game results)
     if not args.skip_scraping:
         # Run nba_unified_scraper for current season
-        run_command(f"{sys.executable}src/scrapers/nba_unified_scraper.py", "Scraping Latest Game Results")
+        run_command(f"{sys.executable} src/scrapers/nba_unified_scraper.py", "Scraping Latest Game Results")
 
         # Scrape Daily Game Lines (Odds)
         run_command(
-            ff"{sys.executable}src/scrapers/daily_game_lines_scraper.py --date {args.date}", "Scraping Daily Game Lines (Odds)"
+            f"{sys.executable} src/scrapers/daily_game_lines_scraper.py --date {args.date}", "Scraping Daily Game Lines (Odds)"
         )
 
         # Scrape Daily Player Props (12pm/6pm snapshots)
         if args.scrape_daily_props:
             run_command(
-                ff"{sys.executable}src/scrapers/daily_player_props_scraper.py --date {args.date}",
+                f"{sys.executable} src/scrapers/daily_player_props_scraper.py --date {args.date}",
                 "Scraping Daily Player Props (Historical Snapshots)",
             )
 
         # Scrape LIVE Odds (Optional)
         if args.scrape_live_odds:
-            run_command(f"{sys.executable}src/scrapers/live_odds_scraper.py", "Scraping LIVE Odds to 'raw_game_lines_live'")
+            run_command(f"{sys.executable} src/scrapers/live_odds_scraper.py", "Scraping LIVE Odds to 'raw_game_lines_live'")
 
         # Scrape LIVE Player Props (Optional)
         if args.scrape_live_props:
             run_command(
-                f"{sys.executable}src/scrapers/daily_player_props_scraper.py --live",
+                f"{sys.executable} src/scrapers/daily_player_props_scraper.py --live",
                 "Scraping LIVE Player Props to 'raw_player_props_live'",
             )
 
@@ -96,12 +96,12 @@ def main():
         if args.scrape_injuries:
             # Fetch today's injuries from RapidAPI into rapidapi_injuries table
             run_command(
-                ff"{sys.executable}src/scrapers/rapidapi_injury_backfill.py --start {args.date} --end {args.date}",
+                f"{sys.executable} src/scrapers/rapidapi_injury_backfill.py --start {args.date} --end {args.date}",
                 "Scraping RapidAPI Injuries"
             )
             # Link player names to player_id for feature generation and injury filtering
             run_command(
-                f"{sys.executable}src/processing/link_injury_data.py",
+                f"{sys.executable} src/processing/link_injury_data.py",
                 "Linking Injury Player IDs"
             )
 
@@ -111,12 +111,12 @@ def main():
     # 2. Processing (Update Derived Stats)
     if not args.skip_processing:
         # Order matters!
-        run_command(f"{sys.executable}src/processing/nba_linker_local.py incremental", "Linking Players (Incremental)")
-        run_command(f"{sys.executable}src/processing/backfill_team_ids.py", "Backfilling Team IDs")
-        run_command(f"{sys.executable}src/scrapers/update_player_position_history.py", "Updating Player Position History")
-        run_command(f"{sys.executable}src/scrapers/update_league_position_averages.py", "Updating League Position Averages")
-        run_command(f"{sys.executable}src/processing/populate_average_stats.py", "Populating Rolling Average Stats")
-        run_command(f"{sys.executable}src/processing/backfill_opponent_allowed.py", "Updating Opponent Allowed Stats")
+        run_command(f"{sys.executable} src/processing/nba_linker_local.py incremental", "Linking Players (Incremental)")
+        run_command(f"{sys.executable} src/processing/backfill_team_ids.py", "Backfilling Team IDs")
+        run_command(f"{sys.executable} src/scrapers/update_player_position_history.py", "Updating Player Position History")
+        run_command(f"{sys.executable} src/scrapers/update_league_position_averages.py", "Updating League Position Averages")
+        run_command(f"{sys.executable} src/processing/populate_average_stats.py", "Populating Rolling Average Stats")
+        run_command(f"{sys.executable} src/processing/backfill_opponent_allowed.py", "Updating Opponent Allowed Stats")
     else:
         logger.info("Skipping Processing Step")
 

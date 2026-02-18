@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-18 Session 38] — Railway Deployment Fixes
+
+### Fixed
+
+- **Nixpacks build failure (`externally-managed-environment`):** Replaced `ensurepip` approach with Python venv + `--system-site-packages` to avoid writing to immutable Nix store
+- **Subprocess `ModuleNotFoundError`:** All orchestration job scripts (`lines_job.py`, `daily_stats_job.py`, `run_daily.py`) now use `sys.executable` instead of hardcoded `python` for subprocess calls, ensuring the venv Python (with packages) is used
+- **numpy `ImportError: libz.so.1`:** Added `zlib` and `stdenv.cc.cc.lib` to nixPkgs and set `LD_LIBRARY_PATH=/root/.nix-profile/lib` so Nix-installed shared libraries are discoverable at runtime by C extensions (numpy, scipy, xgboost)
+
+### Changed
+
+- `nixpacks.toml` — Complete rewrite: venv-based install, explicit LD_LIBRARY_PATH, system library nixPkgs
+- `railway.toml` — Start command updated to `/app/venv/bin/python`
+- `src/orchestration/scheduler.py` — Removed temporary one-shot test job
+
+### Verified
+
+- Lines job completes successfully on Railway (all 5 steps pass)
+- Discord job alerts fire correctly on success/failure
+- 608 tests pass locally
+
+---
+
 ## [2026-02-18 Session 37] — Social Media Pick Image Generator
 
 ### Added

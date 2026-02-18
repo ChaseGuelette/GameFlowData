@@ -184,32 +184,42 @@ Your jobs:
 1. Ensure `PYTHONPATH` includes `/app/src`
 2. Check `requirements.txt` has all dependencies
 
-### "No module named pip" Error
+### "externally-managed-environment" or "No module named pip" Error
 
-Railway's Nixpacks builder may fail with `python3.11: No module named pip`:
+Railway's Nixpacks builder uses an immutable Nix store. Running `ensurepip` or `pip install` directly against the system Python fails because `/nix/store` is read-only.
 
-```
-/root/.nix-profile/bin/python3.11: No module named pip
-```
-
-**Fix:** Create `nixpacks.toml` with explicit pip installation:
+**Fix:** Use a Python venv with `--system-site-packages` in `nixpacks.toml`:
 
 ```toml
 [phases.setup]
-nixPkgs = ["python311", "python311Packages.pip"]
+nixPkgs = ["python311", "python311Packages.pip", "zlib", "stdenv.cc.cc.lib"]
 
 [phases.install]
 cmds = [
-    "python3.11 -m ensurepip --upgrade",
-    "python3.11 -m pip install --upgrade pip",
-    "python3.11 -m pip install -r requirements.txt"
+    "python3.11 -m venv --system-site-packages /app/venv",
+    "/app/venv/bin/python -m pip install -r requirements.txt"
 ]
 
+[variables]
+LD_LIBRARY_PATH = "/root/.nix-profile/lib"
+
 [start]
-cmd = "python3.11 src/orchestration/scheduler.py"
+cmd = "/app/venv/bin/python src/orchestration/scheduler.py"
 ```
 
-This ensures pip is properly installed before attempting to install dependencies.
+Key points:
+- `--system-site-packages` lets the venv inherit pip from the Nix-provided `python311Packages.pip`
+- `zlib` and `stdenv.cc.cc.lib` provide `libz.so.1` and `libstdc++.so.6` needed by numpy/scipy/xgboost C extensions
+- `LD_LIBRARY_PATH` tells the dynamic linker where to find Nix-installed shared libraries at runtime
+- All subprocess scripts must use `sys.executable` (not hardcoded `python`) to ensure the venv Python is used
+
+### "ImportError: libz.so.1" or Missing Shared Library
+
+If numpy/pandas/scipy fail at runtime with `ImportError: libz.so.1: cannot open shared object file`:
+
+1. Ensure `zlib` and `stdenv.cc.cc.lib` are in `nixPkgs` (provides the libraries)
+2. Ensure `LD_LIBRARY_PATH = "/root/.nix-profile/lib"` is set in `[variables]` (makes them findable)
+3. Ensure subprocess calls use `sys.executable` not bare `python` (uses correct Python with correct library paths)
 
 ### Model Not Found
 

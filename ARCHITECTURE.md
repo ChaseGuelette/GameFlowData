@@ -391,13 +391,14 @@ A simulation environment to validate betting strategies.
 Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, GameFlow-Lines-6PM, GameFlow-Inference) execute these batch scripts at configured times. See `scripts/` directory for implementation. **Note:** Local tasks disabled as of 2026-02-14 in favor of Railway deployment.
 
 **Railway Cloud Deployment (2026-02-14):** Production deployment uses Railway with APScheduler for job orchestration:
-- `nixpacks.toml` — Nixpacks build config with explicit pip installation and ensurepip
-- `railway.toml` — Railway-specific build and deploy settings
+- `nixpacks.toml` — Nixpacks build config: Python venv with system-site-packages, explicit `LD_LIBRARY_PATH` for Nix-installed shared libraries (libz, libstdc++), zlib and stdenv.cc.cc.lib nixPkgs for numpy/scipy/xgboost C extensions
+- `railway.toml` — Railway-specific build and deploy settings (nixpacks builder, restart policy)
 - `src/orchestration/scheduler.py` — APScheduler-based scheduler runs all jobs on cron schedule (UTC times):
   - `daily_stats_job.py` — 9 AM ET (scrapes NBA game results)
   - `lines_job.py` — 12 PM, 4 PM, 6 PM ET (scrapes props and injuries)
   - `inference_job.py` — 6:30 PM ET (generates predictions)
 - **Discord job status alerts (2026-02-15):** Scheduler sends success/failure notifications to `#alerts` channel after each job completes. Includes job name, duration, metrics (when available), and error details for failures. Non-fatal — alert failures don't affect job execution.
+- **Subprocess Python path (2026-02-18):** All orchestration job scripts use `sys.executable` instead of hardcoded `python` when spawning subprocesses, ensuring the venv Python (with all installed packages) is used consistently.
 - Single always-on worker process handles all scheduled jobs
 - Environment variables: `DATABASE_URL`, `ODDS_API_KEY`, `RAPIDAPI_KEY`, `DISCORD_CHANNEL_ALERTS`
 - Model artifacts use "production folder" strategy: `src/models/artifacts/production/` is committed to git, `run_*/` directories are gitignored

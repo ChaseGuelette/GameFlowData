@@ -1,5 +1,35 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-18 — Session 38)
+
+### What We Did
+
+**Fixed Railway deployment pipeline — jobs now run successfully on Railway.**
+
+Three root causes found and fixed:
+1. **Nix immutable filesystem:** `ensurepip` tried to write to read-only `/nix/store`. Fixed by using a Python venv with `--system-site-packages` instead.
+2. **Hardcoded `python` in subprocess calls:** Job scripts (`lines_job.py`, `daily_stats_job.py`, `run_daily.py`) used bare `python` which resolved to system Nix Python (no packages). Fixed by replacing with `sys.executable` so subprocesses use the venv Python.
+3. **Missing shared libraries at runtime:** numpy/scipy/xgboost C extensions need `libz.so.1` and `libstdc++.so.6`, but Nix garbage collector deleted them. Fixed by adding `zlib` and `stdenv.cc.cc.lib` to nixPkgs and setting `LD_LIBRARY_PATH=/root/.nix-profile/lib` in nixpacks.toml.
+
+Also removed the temporary one-shot test job from `scheduler.py` after confirming all jobs pass.
+
+**Files modified:**
+- `nixpacks.toml` — Venv-based install, LD_LIBRARY_PATH, zlib + stdenv.cc.cc.lib
+- `railway.toml` — Updated start command to use venv Python
+- `src/orchestration/scheduler.py` — Removed temp test job
+- `src/orchestration/lines_job.py` — `sys.executable` for all subprocess calls
+- `src/orchestration/daily_stats_job.py` — `sys.executable` for all subprocess calls
+- `src/orchestration/run_daily.py` — `sys.executable` for all subprocess calls
+
+**Tests:** 608 passed, 0 failures.
+
+### Next Step
+
+1. **Monitor scheduled jobs** — Verify daily_stats (9 AM ET), lines (12/4/6 PM ET), and inference (6:30 PM ET) all run successfully over the next few days
+2. **Fix watchPatterns** — Railway dashboard shows empty `watchPatterns: []` which disables auto-deploy on git push. Clear the field in Railway dashboard to restore auto-deploy.
+
+---
+
 ## Session Summary (2026-02-18 — Session 37)
 
 ### What We Did
