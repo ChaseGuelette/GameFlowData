@@ -37,6 +37,11 @@ logger = logging.getLogger("Scheduler")
 # Project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# Ensure project root is on sys.path so 'src.*' imports work
+# (needed for Discord alert imports within this process)
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 # Job display names for alerts
 JOB_NAMES = {
     "daily_stats_job.py": "Daily Stats",
@@ -186,6 +191,46 @@ def run_job(script_name: str):
         )
 
 
+def _validate_environment():
+    """Log status of required and optional env vars at startup."""
+    import os
+
+    required = [
+        ("DATABASE_URL", "Required for all jobs"),
+        ("ODDS_API_KEY", "Required for lines scraping"),
+        ("RAPIDAPI_KEY", "Required for injury scraping"),
+    ]
+    optional = [
+        ("DISCORD_BOT_TOKEN", "Discord alerts"),
+        ("DISCORD_CHANNEL_ALERTS", "Job notifications"),
+        ("DISCORD_CHANNEL_PREDICTIONS", "Prediction alerts"),
+        ("DISCORD_CHANNEL_PERFORMANCE", "P&L summaries"),
+    ]
+
+    logger.info("Environment check:")
+    missing_required = []
+
+    for var, desc in required:
+        if os.getenv(var):
+            logger.info(f"  [OK]      {var} — {desc}")
+        else:
+            logger.warning(f"  [MISSING] {var} — {desc}")
+            missing_required.append(var)
+
+    for var, desc in optional:
+        if os.getenv(var):
+            logger.info(f"  [OK]      {var} — {desc}")
+        else:
+            logger.info(f"  [--]      {var} — {desc} (optional)")
+
+    if missing_required:
+        logger.warning(
+            f"Missing required env vars: {', '.join(missing_required)}. "
+            "Jobs that need these will fail. "
+            "Set them in Railway service variables or local .env file."
+        )
+
+
 def run_daily_stats():
     run_job("daily_stats_job.py")
 
@@ -202,6 +247,8 @@ def main():
     logger.info("=" * 60)
     logger.info("GameFlowData Scheduler Starting")
     logger.info("=" * 60)
+
+    _validate_environment()
 
     scheduler = BlockingScheduler(timezone="UTC")
 

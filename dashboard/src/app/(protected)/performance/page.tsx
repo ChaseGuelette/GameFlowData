@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Navbar } from '@/components/layout/Navbar'
 import { KPICard } from '@/components/performance/KPICard'
 import { BankrollChart } from '@/components/performance/BankrollChart'
 import { StatBreakdown } from '@/components/performance/StatBreakdown'
@@ -182,58 +181,54 @@ export default function PerformancePage() {
     : currentBankroll
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-900">
-      <Navbar bankroll={currentBankroll} />
-
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-50">Performance</h1>
-            <p className="text-slate-400">
-              {betSource === 'model' ? 'Model Picks only (BL Edge ≥9%)' : 'All bets'}
-            </p>
-          </div>
-          <BetSourceFilter activeSource={betSource} onSourceChange={setBetSource} />
+    <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-50">Performance</h1>
+          <p className="text-slate-400">
+            {betSource === 'model' ? 'Model Picks only (BL Edge ≥9%)' : 'All bets'}
+          </p>
         </div>
+        <BetSourceFilter activeSource={betSource} onSourceChange={setBetSource} />
+      </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <div className="text-slate-400">Loading performance data...</div>
+      {loading ? (
+        <div className="flex items-center justify-center py-16">
+          <div className="text-slate-400">Loading performance data...</div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* KPI Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <KPICard
+              label={betSource === 'model' ? 'Model P&L Bankroll' : 'Current Bankroll'}
+              value={`$${displayBankroll.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            />
+            <KPICard
+              label="Total P&L"
+              value={`${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`}
+              trend={totalPnl >= 0 ? 'up' : 'down'}
+            />
+            <KPICard
+              label="Overall ROI"
+              value={`${overallRoi >= 0 ? '+' : ''}${overallRoi.toFixed(1)}%`}
+              trend={overallRoi >= 0 ? 'up' : 'down'}
+            />
+            <KPICard
+              label="Win Rate"
+              value={`${winRate.toFixed(1)}%`}
+              subValue={`${totalWins}W - ${totalLosses}L`}
+            />
           </div>
-        ) : (
-          <div className="space-y-6">
-            {/* KPI Cards */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <KPICard
-                label={betSource === 'model' ? 'Model P&L Bankroll' : 'Current Bankroll'}
-                value={`$${displayBankroll.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              />
-              <KPICard
-                label="Total P&L"
-                value={`${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`}
-                trend={totalPnl >= 0 ? 'up' : 'down'}
-              />
-              <KPICard
-                label="Overall ROI"
-                value={`${overallRoi >= 0 ? '+' : ''}${overallRoi.toFixed(1)}%`}
-                trend={overallRoi >= 0 ? 'up' : 'down'}
-              />
-              <KPICard
-                label="Win Rate"
-                value={`${winRate.toFixed(1)}%`}
-                subValue={`${totalWins}W - ${totalLosses}L`}
-              />
-            </div>
 
-            {/* Bankroll Chart */}
-            <BankrollChart data={chartData} />
+          {/* Bankroll Chart */}
+          <BankrollChart data={chartData} />
 
-            {/* Stat Breakdown */}
-            <StatBreakdown stats={statData} />
-          </div>
-        )}
-      </main>
-    </div>
+          {/* Stat Breakdown */}
+          <StatBreakdown stats={statData} />
+        </div>
+      )}
+    </main>
   )
 }

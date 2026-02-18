@@ -1,17 +1,31 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter, usePathname } from 'next/navigation'
 
-interface NavbarProps {
-  bankroll?: number
-}
-
-export function Navbar({ bankroll }: NavbarProps) {
+export function Navbar() {
   const router = useRouter()
   const pathname = usePathname()
   const supabase = createClient()
+  const [bankroll, setBankroll] = useState<number | undefined>(undefined)
+
+  useEffect(() => {
+    async function fetchBankroll() {
+      const { data } = await supabase
+        .from('paper_trading_daily_log')
+        .select('bankroll')
+        .order('game_date', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (data?.bankroll) {
+        setBankroll(data.bankroll)
+      }
+    }
+    fetchBankroll()
+  }, [supabase])
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
@@ -20,7 +34,7 @@ export function Navbar({ bankroll }: NavbarProps) {
   }
 
   const isActive = (path: string) => {
-    if (path === '/') return pathname === '/'
+    if (path === '/dashboard') return pathname === '/dashboard'
     return pathname.startsWith(path)
   }
 
@@ -38,13 +52,13 @@ export function Navbar({ bankroll }: NavbarProps) {
         <div className="flex items-center justify-between h-16">
           {/* Logo and Nav Links */}
           <div className="flex items-center space-x-8">
-            <Link href="/" className="flex items-center space-x-2">
+            <Link href="/dashboard" className="flex items-center space-x-2">
               <span className="text-2xl font-bold text-blue-500">GF</span>
               <span className="text-lg font-semibold text-slate-50">GameFlow</span>
             </Link>
 
             <div className="hidden md:flex items-center space-x-1">
-              <Link href="/" className={navLinkClasses('/')}>
+              <Link href="/dashboard" className={navLinkClasses('/dashboard')}>
                 Props
               </Link>
               <Link href="/history" className={navLinkClasses('/history')}>
@@ -66,6 +80,12 @@ export function Navbar({ bankroll }: NavbarProps) {
                 </div>
               </div>
             )}
+            <Link
+              href="/account"
+              className="text-slate-400 hover:text-slate-300 px-3 py-2 rounded-md text-sm font-medium"
+            >
+              Account
+            </Link>
             <button
               onClick={handleLogout}
               className="text-slate-400 hover:text-slate-300 px-3 py-2 rounded-md text-sm font-medium"

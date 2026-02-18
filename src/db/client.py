@@ -9,7 +9,11 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise ValueError("DATABASE_URL not found in environment.")
+    raise ValueError(
+        "DATABASE_URL not found in environment. "
+        "Set it in your .env file (local) or Railway service variables (production). "
+        "See docs/railway_deployment.md for setup instructions."
+    )
 
 # 2. Create the engine ONCE
 # This 'engine' object is now a "Singleton" - it lives here and everyone borrows it.
