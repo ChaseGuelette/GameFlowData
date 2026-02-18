@@ -142,31 +142,31 @@ def main():
 
     # Step 1: Scrape daily game lines
     steps.append((
-        f"python src/scrapers/daily_game_lines_scraper.py --date {args.date}",
+        f"{sys.executable} src/scrapers/daily_game_lines_scraper.py --date {args.date}",
         "Scraping Daily Game Lines (Odds)",
     ))
 
     # Step 2: Scrape player props
     steps.append((
-        f"python src/scrapers/daily_player_props_scraper.py --date {args.date}",
+        f"{sys.executable} src/scrapers/daily_player_props_scraper.py --date {args.date}",
         "Scraping Player Props",
     ))
 
     # Step 3: Scrape injuries (optional)
     if not args.skip_injuries:
         steps.append((
-            f"python src/scrapers/rapidapi_injury_backfill.py --start {args.date} --end {args.date}",
+            f"{sys.executable} src/scrapers/rapidapi_injury_backfill.py --start {args.date} --end {args.date}",
             "Scraping Injuries (RapidAPI)",
         ))
         steps.append((
-            "python src/processing/link_injury_data.py",
+            f"{sys.executable} src/processing/link_injury_data.py",
             "Linking Injury Player IDs",
         ))
 
     # Step 4: Run incremental linker (optional)
     if not args.skip_linker:
         steps.append((
-            "python src/processing/nba_linker_local.py incremental",
+            f"{sys.executable} src/processing/nba_linker_local.py incremental",
             "Linking Props (Incremental)",
         ))
 

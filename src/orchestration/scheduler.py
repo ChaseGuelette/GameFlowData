@@ -330,7 +330,7 @@ def main():
     # ── TEMPORARY: One-shot test job 5 min after startup ──
     # TODO: Remove after verifying Railway + Discord alerts work
     from datetime import datetime as dt, timedelta
-    test_run_at = dt.utcnow() + timedelta(minutes=5)
+    test_run_at = dt.utcnow() + timedelta(minutes=2)
     scheduler.add_job(
         run_lines,
         "date",

@@ -201,37 +201,37 @@ def main():
     steps = [
         # Step 1: Scrape NBA game results
         (
-            "python src/scrapers/nba_unified_scraper.py",
+            f"{sys.executable} src/scrapers/nba_unified_scraper.py",
             "Scraping NBA Game Results",
         ),
         # Step 2: Run incremental linker
         (
-            "python src/processing/nba_linker_local.py incremental",
+            f"{sys.executable} src/processing/nba_linker_local.py incremental",
             "Linking Players (Incremental)",
         ),
         # Step 3: Backfill team IDs (incremental - only recent data)
         (
-            "python src/processing/backfill_team_ids_incremental.py --days-back 7",
+            f"{sys.executable} src/processing/backfill_team_ids_incremental.py --days-back 7",
             "Backfilling Team IDs (Incremental)",
         ),
         # Step 4: Update player positions
         (
-            "python src/scrapers/update_player_position_history.py",
+            f"{sys.executable} src/scrapers/update_player_position_history.py",
             "Updating Player Position History",
         ),
         # Step 5: Update league averages
         (
-            "python src/scrapers/update_league_position_averages.py",
+            f"{sys.executable} src/scrapers/update_league_position_averages.py",
             "Updating League Position Averages",
         ),
         # Step 6: Populate rolling averages (incremental - only today's games)
         (
-            "python src/processing/populate_average_stats_incremental.py",
+            f"{sys.executable} src/processing/populate_average_stats_incremental.py",
             "Populating Rolling Average Stats (Incremental)",
         ),
         # Step 7: Update opponent allowed stats (incremental - last 30 days)
         (
-            "python src/processing/backfill_opponent_allowed_incremental.py --days-back 30",
+            f"{sys.executable} src/processing/backfill_opponent_allowed_incremental.py --days-back 30",
             "Updating Opponent Allowed Stats (Incremental)",
         ),
     ]
