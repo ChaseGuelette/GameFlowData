@@ -24,6 +24,9 @@
 - Created shared `constants.ts` with `DISCORD_URL` and `TEAM_ABBREV` map
 - Dashboard page imports `TEAM_ABBREV` from constants (no duplication)
 
+**Diagnostics:**
+- Built `src/diagnostics/calibration_per_stat.py` — per-stat (PTS/REB/AST) calibration diagnostic with quantile coverage (Q10–Q90), bias, interval sharpness, Brier score, ECE, reliability curve data, and auto-diagnosis flags. Supports backtest CSV (`--csv`) or production DB (`--db`) input with JSON export (`--output`). Completes C2.
+
 **What stays intact for future Stripe:**
 - `user_subscriptions` table, `is_subscribed()` function, `subscription.ts` types/utils, `PricingCard.tsx` (dormant)
 
@@ -1447,9 +1450,8 @@ where bookmaker attention is lower.
   **Status:** Code changes applied. Models need retraining to incorporate conformal offsets. Zero-snap
   and combined eval fixes will take effect on next retrain.
 
-- [ ] **C2. Per-stat calibration breakdown**
-  Run `analyze_calibration_drift.py` with the current model to get per-stat quantile coverage.
-  This informs whether rate_factors or tail adjustments need stat-specific tuning.
+- [x] **C2. Per-stat calibration breakdown** *(Implemented — 2026-02-18)*
+  Built `src/diagnostics/calibration_per_stat.py` — standalone diagnostic producing per-stat (PTS/REB/AST) calibration report. Metrics: quantile coverage (Q10–Q90), bias (relative %), interval sharpness (80%/50% widths), Brier score, ECE, reliability curve data. Auto-diagnosis flags stats exceeding tolerance. Reads from backtest CSV (`--csv`) or production DB (`--db`). JSON export via `--output`.
 
 - [x] **C3-C5. THREES Model Experiments** *(ARCHIVED — 2026-02-10)*
   Multiple approaches attempted for modeling THREES (3-pointers):

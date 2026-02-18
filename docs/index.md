@@ -30,6 +30,10 @@
 - [Railway Deployment](railway_deployment.md) - Cloud deployment guide for Railway platform.
 - [Scalability](scalability.md) - Architecture capacity analysis and scaling path.
 
+## Diagnostics
+- [Database Health Check](db_health_check_documentation.md) - Comprehensive database health validation.
+- [Per-Stat Calibration](calibration_per_stat_documentation.md) - Per-stat calibration diagnostic with quantile coverage, bias, ECE, Brier score.
+
 ## Tools
 - [Query Player](query_player_documentation.md) - CLI tool for querying stored predictions.
 

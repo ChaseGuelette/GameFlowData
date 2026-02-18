@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-18 Session 36] — Per-Stat Calibration Diagnostic Tool (C2)
+
+### Added
+
+- **Per-stat calibration diagnostic (`src/diagnostics/calibration_per_stat.py`):**
+  - Standalone CLI tool producing per-stat (PTS/REB/AST) calibration report
+  - Quantile coverage analysis (Q10–Q90) with per-stat gap detection
+  - Bias analysis (mean predicted vs mean actual, relative %)
+  - Interval sharpness (80% and 50% prediction interval widths)
+  - Probability calibration: Brier score and Expected Calibration Error (ECE)
+  - Reliability curve data for plotting
+  - Auto-diagnosis engine flags stats exceeding configurable tolerances
+  - Two input paths: backtest CSV (`--csv`) or production DB (`--db`)
+  - JSON structured export via `--output`
+  - Windows-safe Unicode output handling
+
+### Usage
+
+```bash
+python -m src.diagnostics.calibration_per_stat --csv predictions.csv
+python -m src.diagnostics.calibration_per_stat --db --start 2025-02-10 --end 2025-02-18
+python -m src.diagnostics.calibration_per_stat --csv predictions.csv --output report.json --tolerance 0.05
+```
+
+---
+
 ## [2026-02-18 Session 35] — Free Discord Funnel Pivot
 
 ### Added

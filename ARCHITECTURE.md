@@ -140,11 +140,29 @@ Serves as the bridge between NBA and sportsbook data:
 
 ### 4. Diagnostics (`src/diagnostics/`)
 
-Database health monitoring tools.
+Database health monitoring and model calibration analysis tools.
 
 | Module | Purpose |
 |--------|---------|
 | `db_health_check.py` | Comprehensive database health check script with 8 validation categories |
+| `calibration_per_stat.py` | Per-stat (PTS/REB/AST) calibration diagnostic with quantile coverage, bias, ECE, Brier score |
+
+**`calibration_per_stat.py`** — Per-stat calibration diagnostic tool (C2):
+- **Quantile coverage** (Q10–Q90): Is P(actual <= pred_q) ≈ q? Per stat and global.
+- **Bias**: Mean predicted vs mean actual with relative percentage.
+- **Interval sharpness**: 80% and 50% prediction interval widths.
+- **Probability calibration**: Brier score and Expected Calibration Error (ECE, 10-bin).
+- **Reliability curve data**: Per-bin (predicted_prob, actual_rate, count) for plotting.
+- **Auto-diagnosis**: Flags stats exceeding configurable tolerances for coverage gap, bias, and ECE.
+- **Two input paths**: Backtest CSV (`--csv`) or production DB (`--db` with `--start`/`--end`).
+- **JSON export**: Structured report via `--output`.
+
+**Usage:**
+```bash
+python -m src.diagnostics.calibration_per_stat --csv backtest_results/predictions.csv
+python -m src.diagnostics.calibration_per_stat --db --start 2025-02-10 --end 2025-02-18
+python -m src.diagnostics.calibration_per_stat --csv predictions.csv --output report.json --tolerance 0.05
+```
 
 **`db_health_check.py`** — Validates data integrity, freshness, and linkage across all tables:
 - **Data Freshness** — Latest dates for key tables (player_game_stats, daily_predictions, injuries)
@@ -870,7 +888,7 @@ See `ACTIONITEMS.md` for full details.
 **Active tracks:**
 - **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A3b (BL confidence fix) completed. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option.
 - **Track B** (Complete): New signal sources — B1 (injury context, 10 features), B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented and included in latest training run.
-- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration) pending. C3-C5 (THREES model experiments) archived 2026-02-10 due to poor market coverage.
+- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration diagnostic) implemented 2026-02-18 — `src/diagnostics/calibration_per_stat.py`. C3-C5 (THREES model experiments) archived 2026-02-10 due to poor market coverage.
 - **Track D**: Deprioritized model items (pending recalibration).
 - **Track E**: Go-live pipeline — no-BL path shows positive ROI (+3%). E4 (daily injury pipeline) and E5 (paper trading infra) complete. E6 (scheduling) pending.
 

@@ -12,8 +12,11 @@ Schedule (ET → UTC for EST):
     6:30 PM ET  (23:30 UTC) - inference_job
 
 Usage:
-    python src/orchestration/scheduler.py
+    python src/orchestration/scheduler.py              # Start scheduler loop
+    python src/orchestration/scheduler.py --run-test   # Run test job and exit
 """
+
+from __future__ import annotations
 
 import logging
 import re
@@ -47,6 +50,7 @@ JOB_NAMES = {
     "daily_stats_job.py": "Daily Stats",
     "lines_job.py": "Lines Scraper",
     "inference_job.py": "Inference",
+    "test_job.py": "System Test",
 }
 
 
@@ -96,6 +100,17 @@ def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> di
         edge_match = re.search(r"(\d+) with.*edge", output, re.IGNORECASE)
         if edge_match:
             metrics["high_edge"] = edge_match.group(1)
+
+    elif script_name == "test_job.py":
+        # Look for checks passed
+        checks_match = re.search(r"(\d+)/(\d+) checks passed", output)
+        if checks_match:
+            metrics["checks_passed"] = f"{checks_match.group(1)}/{checks_match.group(2)}"
+
+        # Look for env var counts
+        req_match = re.search(r"Required env vars: (\d+/\d+) set", output)
+        if req_match:
+            metrics["required_env_vars"] = req_match.group(1)
 
     return metrics if metrics else None
 
@@ -244,11 +259,28 @@ def run_inference():
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="GameFlowData Scheduler")
+    parser.add_argument(
+        "--run-test",
+        action="store_true",
+        help="Run the test job immediately and exit (does not start scheduler loop)",
+    )
+    args = parser.parse_args()
+
     logger.info("=" * 60)
     logger.info("GameFlowData Scheduler Starting")
     logger.info("=" * 60)
 
     _validate_environment()
+
+    # --run-test: execute test_job.py via run_job() and exit
+    if args.run_test:
+        logger.info("Running infrastructure test job...")
+        run_job("test_job.py")
+        logger.info("Test job complete. Exiting.")
+        return
 
     scheduler = BlockingScheduler(timezone="UTC")
 
