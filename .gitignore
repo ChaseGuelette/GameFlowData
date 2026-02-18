@@ -59,7 +59,7 @@ tmpclaude*
 .swarm/
 tmpclaude-*
 .claude/flow_library/
-.claude
+# .claude
 #Gemini Files
 .gemini/
 
