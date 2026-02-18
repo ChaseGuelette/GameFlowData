@@ -6,6 +6,7 @@ import { FilterTabs, type FilterOption } from '@/components/predictions/FilterTa
 import { PropGrid } from '@/components/predictions/PropGrid'
 import { PlayOfTheDay } from '@/components/predictions/PlayOfTheDay'
 import { AnalysisModal } from '@/components/analysis/AnalysisModal'
+import { SlateModal } from '@/components/predictions/SlateModal'
 import { type Prediction } from '@/types/predictions'
 import { getToday, formatDate, calculateBLConfidence, blendProbability } from '@/lib/utils'
 import { TEAM_ABBREV } from '@/lib/constants'
@@ -22,6 +23,14 @@ export default function DashboardPage() {
   const [blTau, setBlTau] = useState<number | null>(null)  // null = no BL blending
   const [showModelPicks, setShowModelPicks] = useState<boolean>(false)  // Model Picks toggle
 
+  // Slate builder state
+  const [slateMode, setSlateMode] = useState<boolean>(false)
+  const [selectedPicks, setSelectedPicks] = useState<Set<string>>(new Set())
+  const [slateImageUrl, setSlateImageUrl] = useState<string | null>(null)
+  const [slateLoading, setSlateLoading] = useState<boolean>(false)
+
+  const MAX_SLATE_PICKS = 5
+
   // Optimal model config (from backtest sweep)
   const MODEL_PICKS_EDGE = 0.09
   const MODEL_PICKS_TAU = 0.50
@@ -37,6 +46,63 @@ export default function DashboardPage() {
       // Reset to defaults when disabling
       setEdgeThreshold(0.03)
       setBlTau(null)
+    }
+  }
+
+  // Toggle pick selection for slate
+  const handleToggleSelect = (prediction: Prediction) => {
+    const key = `${prediction.player_id}-${prediction.stat}`
+    setSelectedPicks(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        if (next.size >= MAX_SLATE_PICKS) return prev // Don't add beyond max
+        next.add(key)
+      }
+      return next
+    })
+  }
+
+  // Generate slate image
+  const handleGenerateSlate = async () => {
+    if (selectedPicks.size === 0) return
+    setSlateLoading(true)
+
+    // Build pick data from selected predictions
+    const picks = sortedPredictions
+      .filter(p => selectedPicks.has(`${p.player_id}-${p.stat}`))
+      .map(p => {
+        const overEdge = Number.isFinite(p.over_edge) ? p.over_edge : 0
+        const underEdge = Number.isFinite(p.under_edge) ? p.under_edge : 0
+        const isOver = overEdge > underEdge
+        return {
+          player_id: p.player_id,
+          player_name: p.player_name || `Player ${p.player_id}`,
+          stat: p.stat,
+          line: p.prop_line,
+          direction: (isOver ? 'Over' : 'Under') as 'Over' | 'Under',
+          edge: isOver ? overEdge : underEdge,
+          team_abbrev: p.team_abbrev || 'UNK',
+          opponent_abbrev: p.opponent_abbrev || 'UNK',
+          game_time: p.game_time,
+        }
+      })
+
+    try {
+      const res = await fetch('/api/slate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ picks, date: selectedDate }),
+      })
+      if (!res.ok) throw new Error('Failed to generate slate')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      setSlateImageUrl(url)
+    } catch (err) {
+      console.error('Slate generation error:', err)
+    } finally {
+      setSlateLoading(false)
     }
   }
 
@@ -185,7 +251,7 @@ export default function DashboardPage() {
   })
 
   return (
-    <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
+    <main className={`flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 ${slateMode ? 'pb-24' : ''}`}>
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
@@ -226,6 +292,20 @@ export default function DashboardPage() {
               Model Picks
             </button>
           </div>
+          {/* Build Slate Toggle */}
+          <button
+            onClick={() => {
+              setSlateMode(prev => !prev)
+              if (slateMode) setSelectedPicks(new Set())
+            }}
+            className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
+              slateMode
+                ? 'bg-blue-600 border-blue-500 text-white'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {slateMode ? 'Exit Slate' : 'Build Slate'}
+          </button>
           {/* Date Selector */}
           <select
             value={selectedDate}
@@ -308,7 +388,58 @@ export default function DashboardPage() {
       ) : (
         <PropGrid
           predictions={sortedPredictions}
-          onAnalyze={setSelectedPrediction}
+          onAnalyze={slateMode ? undefined : setSelectedPrediction}
+          selectable={slateMode}
+          selectedIds={selectedPicks}
+          onToggleSelect={handleToggleSelect}
+        />
+      )}
+
+      {/* Slate Builder Floating Bar */}
+      {slateMode && (
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur border-t border-slate-700 px-4 py-3">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="text-slate-300 text-sm">
+              <span className="font-semibold text-slate-50">{selectedPicks.size}</span>
+              {' / '}{MAX_SLATE_PICKS} picks selected
+              {selectedPicks.size >= MAX_SLATE_PICKS && (
+                <span className="ml-2 text-yellow-400 text-xs">Max reached</span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setSelectedPicks(new Set())}
+                className="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200 transition-colors"
+              >
+                Clear
+              </button>
+              <button
+                onClick={handleGenerateSlate}
+                disabled={selectedPicks.size === 0 || slateLoading}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
+              >
+                {slateLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                    Generating...
+                  </>
+                ) : (
+                  'Generate Slate'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Slate Image Modal */}
+      {slateImageUrl && (
+        <SlateModal
+          imageUrl={slateImageUrl}
+          onClose={() => {
+            URL.revokeObjectURL(slateImageUrl)
+            setSlateImageUrl(null)
+          }}
         />
       )}
 

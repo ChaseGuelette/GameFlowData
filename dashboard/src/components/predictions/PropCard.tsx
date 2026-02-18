@@ -8,9 +8,12 @@ import { cn, getEdgeTier, formatProb, formatGameTime } from '@/lib/utils'
 interface PropCardProps {
   prediction: Prediction
   onAnalyze?: (prediction: Prediction) => void
+  selectable?: boolean
+  selected?: boolean
+  onToggleSelect?: (prediction: Prediction) => void
 }
 
-export function PropCard({ prediction, onAnalyze }: PropCardProps) {
+export function PropCard({ prediction, onAnalyze, selectable, selected, onToggleSelect }: PropCardProps) {
   // Determine which direction has positive edge (with NaN safety)
   const overEdge = Number.isFinite(prediction.over_edge) ? prediction.over_edge : 0
   const underEdge = Number.isFinite(prediction.under_edge) ? prediction.under_edge : 0
@@ -33,10 +36,35 @@ export function PropCard({ prediction, onAnalyze }: PropCardProps) {
   return (
     <div
       className={cn(
-        'bg-slate-800 rounded-lg border-2 p-4 transition-all hover:bg-slate-750',
-        borderColors[edgeTier]
+        'bg-slate-800 rounded-lg border-2 p-4 transition-all hover:bg-slate-750 relative',
+        borderColors[edgeTier],
+        selectable && 'cursor-pointer',
+        selected && 'ring-2 ring-blue-500'
       )}
+      onClick={selectable ? () => onToggleSelect?.(prediction) : undefined}
     >
+      {/* Selection checkbox */}
+      {selectable && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleSelect?.(prediction)
+          }}
+          className={cn(
+            'absolute top-3 right-3 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors z-10',
+            selected
+              ? 'bg-blue-500 border-blue-500 text-white'
+              : 'border-slate-500 hover:border-blue-400'
+          )}
+        >
+          {selected && (
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          )}
+        </button>
+      )}
+
       {/* Header: Player info */}
       <div className="flex items-start space-x-3 mb-3">
         <PlayerAvatar
