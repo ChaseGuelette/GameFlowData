@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-18 Session 35] — Free Discord Funnel Pivot
+
+### Added
+
+- **Public picks page (`/picks`):**
+  - Server component calling `get_public_picks(3)` RPC
+  - 3 real pick cards (player, stat, line, edge, teams)
+  - 6 blurred skeleton cards with overlay: "Sign Up Free" + "Join Discord" CTAs
+  - Shareable link for social media posts
+
+- **Shared constants (`dashboard/src/lib/constants.ts`):**
+  - `DISCORD_URL` placeholder for Discord invite link
+  - `TEAM_ABBREV` map extracted from dashboard page (eliminates duplication)
+
+- **`get_public_picks()` RPC function:**
+  - Returns top N recommended picks for current date
+  - Accessible by anon and authenticated users
+  - Ordered by highest BL edge
+
+### Changed
+
+- **Database RLS policies:**
+  - Dropped subscriber-only policies on `daily_predictions`, `daily_prediction_samples`, `paper_bets`, `paper_trading_daily_log`
+  - Replaced with `authenticated USING (true)` — all logged-in users can read
+
+- **Middleware (`middleware.ts`):**
+  - Added `/picks` to `PUBLIC_ROUTES`
+  - Removed `SUBSCRIPTION_EXEMPT_ROUTES`
+  - Removed entire subscription check block (DB query + redirect)
+  - Result: auth-only gate, no paywall
+
+- **Landing page (`(public)/page.tsx`):**
+  - Replaced "Simple Pricing" + PricingCard section with "Free During Beta" + Discord CTA
+
+- **HeroSection:** "View Pricing" → "Join Discord" (external link)
+- **PublicNavbar:** "Pricing" → "Picks" link + "Discord" external link; "Sign Up" → "Sign Up Free"
+- **Footer:** Added Discord link
+- **Pricing page:** $0/mo "Beta Access" card with feature checklist, no Stripe references
+- **Subscribe page:** Replaced with `redirect('/dashboard')`
+- **Account page:** Removed subscription state/card, added "Free Beta" badge + Community/Discord card
+- **Dashboard page:** Imports `TEAM_ABBREV` from shared constants
+- **Terms of Service (Section 4):** "paid subscription at $19.99/month" → "free during beta, may add paid plans later"
+- **Privacy Policy (Sections 2-3):** Stripe references → "may add payment processing in future"
+
+### Preserved (for future Stripe activation)
+
+- `user_subscriptions` table and `is_subscribed()` function
+- `subscription.ts` types/utils
+- `PricingCard.tsx` component (dormant)
+
+---
+
 ## [2026-02-15 Session 34] — Discord Job Alerts, P&L Summary
 
 ### Added

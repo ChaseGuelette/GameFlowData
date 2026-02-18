@@ -406,24 +406,41 @@ Next.js web application for viewing daily predictions, analyzing player props, a
 dashboard/
 ├── src/
 │   ├── app/                    # Next.js App Router pages
-│   │   ├── page.tsx            # Main predictions dashboard
-│   │   ├── login/page.tsx      # Authentication page
-│   │   ├── history/page.tsx    # Bet history with filters
-│   │   ├── performance/page.tsx # Performance metrics and charts
-│   │   ├── auth/callback/route.ts # Auth callback for email confirmation
+│   │   ├── (public)/           # Public routes (no auth required)
+│   │   │   ├── page.tsx        # Landing page (free-beta + Discord CTA)
+│   │   │   ├── picks/page.tsx  # Public picks teaser (3 real + blurred)
+│   │   │   ├── pricing/page.tsx # $0/mo beta access card
+│   │   │   ├── terms/page.tsx  # Terms of Service
+│   │   │   └── privacy/page.tsx # Privacy Policy
+│   │   ├── (auth)/             # Auth routes (redirect if logged in)
+│   │   │   ├── login/page.tsx  # Login page
+│   │   │   └── signup/page.tsx # Sign-up page
+│   │   ├── (protected)/        # Auth-gated routes
+│   │   │   ├── dashboard/page.tsx  # Main predictions dashboard
+│   │   │   ├── history/page.tsx    # Bet history with filters
+│   │   │   ├── performance/page.tsx # Performance metrics
+│   │   │   ├── account/page.tsx    # Profile + community card
+│   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
+│   │   ├── auth/callback/route.ts  # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
-│   │   ├── layout/             # Navbar with bankroll display
-│   │   ├── predictions/        # PropCard, PropGrid, FilterTabs
+│   │   ├── landing/            # HeroSection, FeatureGrid
+│   │   ├── layout/             # Navbar, PublicNavbar, Footer
+│   │   ├── predictions/        # PropCard, PropGrid, FilterTabs, PlayOfTheDay
 │   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
 │   │   ├── history/            # BetCard, BetList, HistoryFilters, HistorySummary
 │   │   ├── performance/        # KPICard, BankrollChart, StatBreakdown
+│   │   ├── subscription/       # PricingCard (dormant, for future Stripe)
 │   │   └── shared/             # PlayerAvatar, Badge, BetSourceFilter components
 │   ├── lib/
 │   │   ├── supabase/           # Client, server, and middleware helpers
+│   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
+│   │   ├── insights.ts         # Template-based insight generator
+│   │   ├── subscription.ts     # Subscription types/utils (dormant)
 │   │   └── utils.ts            # Formatting, edge tiers, headshot URLs
 │   ├── types/
-│   │   └── predictions.ts      # TypeScript interfaces for predictions, bets, performance
+│   │   ├── predictions.ts      # TypeScript interfaces for predictions, bets, performance
+│   │   └── subscription.ts     # Subscription type definitions (dormant)
 │   └── middleware.ts           # Auth redirect for protected routes
 ├── .env.local                  # Supabase credentials (not committed)
 └── next.config.ts              # NBA CDN image domains
@@ -448,6 +465,8 @@ dashboard/
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
 - **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
+- **Free Beta Model:** No paywall — all authenticated users have full access. Public `/picks` page shows 3 real picks via `get_public_picks()` RPC to drive signups. All CTAs point to sign-up and Discord. Stripe infrastructure preserved (dormant) for future activation at ~200 Discord members.
+- **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account (requires auth).
 
 **Data Sources:**
 - `daily_predictions` table — prediction quantiles, edges, implied probabilities, bookmaker (sharpest line source)

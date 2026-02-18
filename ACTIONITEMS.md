@@ -1,5 +1,44 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-18 — Session 35)
+
+### What We Did
+
+**Pivoted from paid subscription to free Discord funnel.** Removed paywall, opened RLS to all authenticated users, added public picks page, and replaced all paid messaging with free-beta + Discord CTAs.
+
+**Database changes (2 Supabase migrations):**
+- Dropped subscriber-only RLS policies on 4 prediction tables, replaced with `authenticated USING (true)`
+- Created `get_public_picks(pick_limit)` RPC for anon/auth access to top recommended picks
+
+**Dashboard changes:**
+- Middleware: removed subscription check block, added `/picks` to public routes
+- New `/picks` page: 3 real pick cards from RPC + 6 blurred teaser cards with sign-up/Discord CTAs
+- Landing page: replaced "Simple Pricing" + PricingCard with "Free During Beta" + Discord CTA
+- Pricing page: $0/mo "Beta Access" card with feature checklist
+- Subscribe page: replaced with `redirect('/dashboard')` (catches stale bookmarks)
+- Account page: removed subscription info, added "Free Beta" badge + Community/Discord card
+- Hero section: "View Pricing" → "Join Discord" (external link)
+- Public navbar: "Pricing" → "Picks" + "Discord" links, "Sign Up" → "Sign Up Free"
+- Footer: added Discord link
+- Terms/Privacy: updated subscription/Stripe references to "free during beta" language
+- Created shared `constants.ts` with `DISCORD_URL` and `TEAM_ABBREV` map
+- Dashboard page imports `TEAM_ABBREV` from constants (no duplication)
+
+**What stays intact for future Stripe:**
+- `user_subscriptions` table, `is_subscribed()` function, `subscription.ts` types/utils, `PricingCard.tsx` (dormant)
+
+**Build:** `npm run build` passes cleanly
+
+### Next Step
+
+1. **Update Discord invite URL** — Replace placeholder `https://discord.gg/gameflow` in `constants.ts` with real invite
+2. **Deploy to Vercel** — Push changes and verify all pages
+3. **Create Discord server** — Set up channels for picks, discussion, alerts
+4. **Social media strategy** — Start posting picks from `/picks` page on Twitter/X
+5. **Flip Stripe on later** — Re-enable paid subscription when ~200 Discord members reached
+
+---
+
 ## Session Summary (2026-02-15 — Session 34)
 
 ### What We Did
@@ -1594,49 +1633,32 @@ Interactive Discord bot for daily prediction alerts and command-based queries. F
 
 ---
 
-## Track I: Paid Subscriptions (Planned)
+## Track I: Paid Subscriptions (Deferred — Free Beta Active)
 
-User authentication and paid subscription system for monetizing predictions. Full development plan at `docs/paid_subscription_plan.md`.
+Monetization via Stripe deferred until ~200 Discord members. Currently running free beta to build credibility via social/Discord funnel.
 
-**Pricing:** $19.99/month for full prediction access
+**Current state (Session 35):** Paywall removed, all authenticated users have full access. RLS opened to `authenticated USING (true)`. Public `/picks` page shows 3 free picks to drive signups. All paid messaging replaced with "Free During Beta" + Discord CTAs.
 
-**Prerequisites (Manual Setup Required):**
-- Create Stripe account at stripe.com
-- Create product ($19.99/month recurring)
-- Generate API keys and webhook secret
-- Add Stripe keys to Vercel environment variables
+**What stays intact for future Stripe activation:**
+- `user_subscriptions` table and `is_subscribed()` function (dormant)
+- `subscription.ts` types/utils
+- `PricingCard.tsx` component (dormant)
+- Stripe integration plan at `docs/paid_subscription_plan.md`
 
-**Implementation Items:**
-- [ ] **I1. Database schema** — Create `user_subscriptions` table, link to `auth.users`
-- [ ] **I2. RLS policies** — Enable Row-Level Security on `daily_predictions`, restrict to active subscribers
+**Completed items (infrastructure):**
+- [x] **I1. Database schema** — `user_subscriptions` table exists
+- [x] **I2. RLS policies** — Subscriber-only policies created then replaced with open auth policies (Session 35)
+- [x] **I4. Middleware** — Subscription check code written then removed (Session 35)
+- [x] **I5. Pricing page** — Now shows $0/mo beta card
+- [x] **I6. Landing page** — Done with free-beta messaging
+- [x] **I7. Legal pages** — Terms + Privacy done (updated for free beta)
+- [x] **I8. Route restructuring** — (public), (auth), (protected) route groups done
+
+**Deferred items (activate when ready for Stripe):**
 - [ ] **I3. Stripe integration** — Checkout session API, webhook handler, customer portal
-- [ ] **I4. Middleware** — Add subscription status checks for protected routes
-- [ ] **I5. Pricing page** — Public page with plan details and checkout button
-- [ ] **I6. Landing page** — Public marketing page with hero, features, CTA
-- [ ] **I7. Legal pages** — Terms of Service, Privacy Policy
-- [ ] **I8. Route restructuring** — Reorganize into (public), (auth), (protected) route groups
-
-**Architecture:**
-```
-User Flow: Landing → Sign Up → Subscribe (Stripe) → Access Dashboard
-                        ↓              ↓                  ↓
-                   Supabase Auth   Stripe Checkout    RLS Policy
-                        ↓              ↓                  ↓
-                   auth.users    user_subscriptions   daily_predictions
-```
-
-**Files to Create:**
-| File | Purpose |
-|------|---------|
-| `dashboard/src/lib/stripe.ts` | Stripe client |
-| `dashboard/src/app/api/stripe/create-checkout/route.ts` | Checkout session |
-| `dashboard/src/app/api/stripe/webhook/route.ts` | Webhook handler |
-| `dashboard/src/app/api/stripe/portal/route.ts` | Customer portal |
-| `dashboard/src/app/(public)/page.tsx` | Landing page |
-| `dashboard/src/app/(public)/pricing/page.tsx` | Pricing page |
-| `dashboard/src/app/(public)/terms/page.tsx` | Terms of Service |
-| `dashboard/src/app/(public)/privacy/page.tsx` | Privacy Policy |
-| `dashboard/src/components/SubscriptionGate.tsx` | Access control |
+- [ ] **I9. Re-enable paywall** — Restore subscriber-only RLS policies, middleware subscription check
+- [ ] **I10. Update pricing page** — Switch from $0 beta card to $19.99/mo Stripe checkout
+- [ ] **I11. Update legal pages** — Restore Stripe/billing language in Terms and Privacy
 
 ---
 
@@ -1673,7 +1695,7 @@ User Flow: Landing → Sign Up → Subscribe (Stripe) → Access Dashboard
 | ~~G8 (Paper trading views)~~ | ~~Medium~~ | ~~High~~ | **DONE** — History page, Performance page with charts |
 | G5-G6, G9 (Dashboard) | Medium | Mid-High | In progress. Spec: `.session/specs/dashboard_implementation.md` |
 | ~~H1-H8 (Discord Bot)~~ | ~~Medium~~ | ~~High~~ | **DONE** — All slash commands, alerts, and hosting implemented. |
-| I1-I8 (Paid Subscriptions) | Medium-High | Critical | Monetization. Requires Stripe setup. Plan: `docs/paid_subscription_plan.md` |
+| I1-I8 (Paid Subscriptions) | Medium-High | Critical | **DEFERRED** — Free beta active (Session 35). Stripe activation deferred until ~200 Discord members. Infrastructure in place. |
 
 ---
 

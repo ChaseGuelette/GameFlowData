@@ -22,15 +22,31 @@ The GameFlow Dashboard is a Next.js web application for viewing daily NBA player
 dashboard/
 ├── src/
 │   ├── app/                    # Next.js App Router pages
-│   │   ├── page.tsx            # Main predictions dashboard
-│   │   ├── login/page.tsx      # Authentication page
-│   │   ├── history/page.tsx    # Bet history view
-│   │   ├── performance/page.tsx # Performance metrics
+│   │   ├── (public)/           # Public routes (no auth required)
+│   │   │   ├── page.tsx        # Landing page (free-beta + Discord CTA)
+│   │   │   ├── picks/page.tsx  # Public picks teaser (SSR via RPC)
+│   │   │   ├── pricing/page.tsx # $0/mo beta access card
+│   │   │   ├── terms/page.tsx  # Terms of Service
+│   │   │   └── privacy/page.tsx # Privacy Policy
+│   │   ├── (auth)/             # Auth routes (redirect if logged in)
+│   │   │   ├── login/page.tsx  # Login page
+│   │   │   └── signup/page.tsx # Sign-up page
+│   │   ├── (protected)/        # Auth-gated routes
+│   │   │   ├── dashboard/page.tsx  # Main predictions dashboard
+│   │   │   ├── history/page.tsx    # Bet history with filters
+│   │   │   ├── performance/page.tsx # Performance metrics
+│   │   │   ├── account/page.tsx    # Profile + community card
+│   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
 │   │   ├── auth/callback/route.ts # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
+│   │   ├── landing/            # Landing page components
+│   │   │   ├── HeroSection.tsx # Hero with sign-up + Discord CTAs
+│   │   │   └── FeatureGrid.tsx # Feature cards
 │   │   ├── layout/             # Layout components
-│   │   │   └── Navbar.tsx      # Navigation with bankroll display
+│   │   │   ├── Navbar.tsx      # Protected nav with bankroll display
+│   │   │   ├── PublicNavbar.tsx # Public nav with Picks + Discord links
+│   │   │   └── Footer.tsx      # Footer with Discord link
 │   │   ├── predictions/        # Prediction display components
 │   │   │   ├── FilterTabs.tsx  # Stat type filtering
 │   │   │   ├── PlayOfTheDay.tsx# Featured top pick card
@@ -49,6 +65,8 @@ dashboard/
 │   │   │   ├── KPICard.tsx     # Single metric display
 │   │   │   ├── BankrollChart.tsx   # Bankroll over time chart
 │   │   │   └── StatBreakdown.tsx   # Per-stat performance table
+│   │   ├── subscription/       # Subscription components (dormant)
+│   │   │   └── PricingCard.tsx # Reusable pricing card for future Stripe
 │   │   └── shared/             # Shared components
 │   │       ├── PlayerAvatar.tsx     # NBA headshots
 │   │       ├── Badge.tsx            # Stat and edge badges
@@ -57,11 +75,14 @@ dashboard/
 │   │   ├── supabase/           # Supabase client configuration
 │   │   │   ├── client.ts       # Browser client
 │   │   │   ├── server.ts       # Server client
-│   │   │   └── middleware.ts   # Session handling
+│   │   │   └── middleware.ts   # Session + auth handling (no paywall)
+│   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
 │   │   ├── insights.ts         # Template-based insight generator
+│   │   ├── subscription.ts     # Subscription utils (dormant)
 │   │   └── utils.ts            # Utility functions
 │   ├── types/
-│   │   └── predictions.ts      # TypeScript interfaces
+│   │   ├── predictions.ts      # TypeScript interfaces
+│   │   └── subscription.ts     # Subscription types (dormant)
 │   └── middleware.ts           # Auth redirect middleware
 ├── public/                     # Static assets
 ├── .env.local                  # Environment variables (not committed)
@@ -397,18 +418,17 @@ Uses Supabase Auth with email/password.
 
 ### Middleware Protection
 
-All routes except `/login` and static files are protected:
+Routes are organized into three groups:
+- **Public:** `/`, `/picks`, `/pricing`, `/terms`, `/privacy` — no auth required
+- **Auth:** `/login`, `/signup` — redirects to `/dashboard` if already logged in
+- **Protected:** Everything else — redirects to `/login` if not authenticated
+
+No subscription/paywall check (free beta). All authenticated users have full access.
 
 ```typescript
-// middleware.ts
-export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
-  ],
-}
+const PUBLIC_ROUTES = ['/', '/picks', '/pricing', '/terms', '/privacy']
+const AUTH_ROUTES = ['/login', '/signup']
 ```
-
-Unauthenticated users are redirected to `/login`.
 
 ### Login Flow
 
@@ -905,6 +925,30 @@ Then authenticate with `/mcp` in Claude Code.
 2. Vercel automatically builds and deploys
 3. Preview deployments created for PRs
 4. Production deployment on merge to main
+
+## Public Picks Page (Session 35)
+
+The `/picks` page is a public, shareable teaser designed to drive signups from social media.
+
+**Route:** `dashboard/src/app/(public)/picks/page.tsx` (Server Component, SSR)
+
+**Data Source:** Calls `get_public_picks(3)` RPC function which returns top 3 recommended picks for the current date, ordered by highest BL edge. Accessible by anon users (no auth required).
+
+**Layout:**
+- 3 real pick cards showing player name, stat, line, edge, and team matchup
+- 6 blurred skeleton cards with overlay containing "Sign Up Free" and "Join Discord" CTAs
+- Fallback message when no picks are available (e.g., before games are scheduled)
+
+**Usage:** Share `/picks` link on Twitter/X, Discord, etc. to drive traffic.
+
+## Shared Constants (Session 35)
+
+**File:** `dashboard/src/lib/constants.ts`
+
+- `DISCORD_URL` — Placeholder Discord invite link (update when server is live)
+- `TEAM_ABBREV` — NBA team ID to abbreviation map, used by dashboard page and picks page
+
+Imported by: HeroSection, PublicNavbar, Footer, landing page, pricing page, account page, picks page, dashboard page.
 
 ## Future Enhancements
 
