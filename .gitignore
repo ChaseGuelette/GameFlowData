@@ -63,6 +63,9 @@ tmpclaude-*
 #Gemini Files
 .gemini/
 
+# Social media generated images
+output/social/
+
 #testing outputs
 .pytest_cache/
 .ruff_cache/

@@ -25,7 +25,7 @@ import logging
 import sys
 import unicodedata
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -844,7 +844,7 @@ def upload_results():
 # ============================================================================
 
 
-def _fetch_upcoming_games_from_nba_api(target_date: datetime.date | None = None) -> list[dict]:
+def _fetch_upcoming_games_from_nba_api(target_date: date | None = None) -> list[dict]:
     """
     Fetch upcoming/today's games from NBA API ScoreboardV2.
 
