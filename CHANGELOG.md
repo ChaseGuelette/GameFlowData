@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-19 Session 42] — Combined Conformal Recalibration (Built, Tested, Not Deployed)
+
+### Added
+
+- **`monte_carlo.py`:** `combined_calibration_offsets` parameter on `MonteCarloPredictor.__init__()`, `_apply_combined_calibration()` method (piecewise-linear sample warping through quantile anchor points), `load_combined_calibration_offsets()` module-level helper
+- **`train_pipeline.py`:** `--calibrate-only` CLI mode — loads existing model, computes combined calibration offsets from MC predictions on calibration data, saves `combined_calibration_offsets.json` without retraining
+- **`train_pipeline.py`:** `_evaluate_combined_calibration()` now computes per-stat per-quantile conformal offsets (`residuals = actuals - predicted_q_values`, `offset = np.quantile(residuals, q)`) and saves as artifact
+
+### Changed
+
+- **`inference_job.py`:** Loads `combined_calibration_offsets.json` alongside copula params, passes to `MonteCarloPredictor` (backward-compatible no-op when absent)
+- **`run_backtest.py`:** Same integration pattern as inference_job
+
+### Evaluated (Not Deployed)
+
+- **A/B backtest (Jan 15 – Feb 14, 2026):** Offsets improved calibration metrics (overall gap 0.019 vs 0.032) but degraded betting performance — ROI 6.01% vs 7.44%, Sharpe 0.742 vs 0.891, max drawdown 29.2% vs 26.5%. PTS ROI dropped from 13.7% to 9.0%
+- **AST Q10 offset was -0.001** — conformal recalibration cannot fix zero-inflated distributions where the quantile is already at the floor (~18% of games have 0 assists)
+- **Decision:** Offsets file removed from production. Code infrastructure retained as backward-compatible no-op
+- **AST Q10 investigation closed (Sessions 40-42):** Surgical retrains, feature reselection, per-quantile tuning, and conformal recalibration all tested. Gap is structural, minimal betting impact
+
+### Verified
+
+- 608 Python tests pass, ruff clean
+
+---
+
 ## [2026-02-19 Session 41] — CI Pipeline Fix: Lazy Module Initialization
 
 ### Fixed

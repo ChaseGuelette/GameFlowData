@@ -18,6 +18,8 @@ function formatValue(v: number | string | null | undefined, format: ColumnDef['f
       return n.toFixed(2)
     case 'pct1':
       return (n * 100).toFixed(1) + '%'
+    case 'rawPct1':
+      return n.toFixed(1) + '%'
     case 'plusMinus1':
       return (n >= 0 ? '+' : '') + n.toFixed(1)
   }
@@ -217,6 +219,31 @@ export function HeatmapTable({
           )}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// ─── Heatmap Color Legend ──────────────────────────────────────────
+const legendTiers = [
+  { label: '90th+', className: 'bg-blue-600/60 text-white' },
+  { label: '75th+', className: 'bg-blue-700/50 text-blue-100' },
+  { label: '50th+', className: 'bg-blue-800/40 text-slate-200' },
+  { label: '25th+', className: 'bg-blue-900/20 text-slate-300' },
+  { label: '<25th', className: 'bg-transparent text-slate-400' },
+]
+
+export function HeatmapLegend() {
+  return (
+    <div className="flex items-center gap-2 text-xs text-slate-400">
+      <span>Percentile:</span>
+      {legendTiers.map((tier) => (
+        <span
+          key={tier.label}
+          className={cn('px-2 py-0.5 rounded', tier.className)}
+        >
+          {tier.label}
+        </span>
+      ))}
     </div>
   )
 }

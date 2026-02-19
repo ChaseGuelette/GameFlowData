@@ -1,5 +1,63 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-19 — Session 42)
+
+### What We Did
+
+**Built combined conformal recalibration infrastructure, tested via A/B backtest, concluded offsets hurt betting performance. AST Q10 gap confirmed structural.**
+
+**Code changes (4 files):**
+- `src/models/monte_carlo.py` — Added `combined_calibration_offsets` param, `_apply_combined_calibration()` sample warping method (piecewise-linear interpolation through quantile anchor points), `load_combined_calibration_offsets()` helper. Applied in all 3 prediction paths (legacy, copula, batch).
+- `src/models/train_pipeline.py` — Modified `_evaluate_combined_calibration()` to compute per-stat per-quantile conformal offsets (`residuals = actuals - predicted_q_values`, `offset = np.quantile(residuals, q)`). Saves `combined_calibration_offsets.json` artifact. Added `--calibrate-only` CLI mode that loads an existing model, computes offsets, and saves without retraining.
+- `src/orchestration/inference_job.py` — Loads offsets alongside copula params, passes to MonteCarloPredictor.
+- `src/backtesting/run_backtest.py` — Same integration pattern.
+
+**Backtest A/B comparison** (Jan 15 – Feb 14, 2026, offsets computed on cal data through Jan 14):
+
+| Metric | WITH offsets | WITHOUT offsets |
+|--------|-------------|-----------------|
+| Total bets | 455 | 409 |
+| ROI | 6.01% | **7.44%** |
+| Return on capital | 82.2% | **88.2%** |
+| Sharpe | 0.742 | **0.891** |
+| Max drawdown | 29.2% | **26.5%** |
+| Calibration gap | **0.019** | 0.032 |
+| PTS ROI | 9.0% | **13.7%** |
+| REB ROI | -0.37% | **0.41%** |
+| AST ROI | **10.1%** | 7.0% |
+
+**Findings:**
+1. **Offsets improved calibration metrics but degraded betting performance.** Better calibration numbers ≠ better edges.
+2. **PTS/REB offsets were harmful.** The largest offsets (PTS Q50 +0.83, REB Q25 +0.30) shifted predictions away from where they were already performing well.
+3. **AST Q10 offset was near-zero (-0.001)** — conformal recalibration can't fix zero-inflated distributions where the quantile is already at the floor (can't predict Q10 < 0 for a non-negative stat).
+4. **AST Q10 gap is structural.** ~17-18% of player-games result in 0 assists, setting a floor on Q10 coverage. No amount of post-hoc adjustment can push coverage below the natural zero-rate.
+5. **Differences between runs are NOT MC variance** — both use `random_state=42`. All differences are deterministic consequences of the offsets changing predicted distributions.
+
+**Decision:** No offsets deployed to production. Code infrastructure retained (backward-compatible no-op when offsets file is absent). Offsets file removed from production artifacts.
+
+### Closing the AST Q10 Investigation
+
+This session concludes the multi-session AST Q10 calibration investigation (Sessions 40–42). Approaches tried:
+
+| Approach | Result |
+|----------|--------|
+| Surgical retrain (no tuning) | Q10 +10.25% → +8.10%, Q50 regressed -0.30% → -3.50% |
+| Surgical retrain (per-quantile Optuna) | Q10 → +7.60%, Q50 regressed further to -4.45% |
+| Feature reselection | Identical features selected, no effect |
+| Combined conformal recalibration | Better calibration numbers, worse betting ROI |
+
+**Root cause:** The AST Q10 combined gap is the natural zero-rate of assists (~17-18%). For any model predicting Q10 ≥ 0, coverage must be ≥ P(actual = 0) ≈ 18%. This is a property of the data, not a model deficiency. Individual AST model calibration is excellent (all quantiles within 2%).
+
+**Impact on betting:** Minimal. The Q10 gap affects the extreme lower tail. Bets are placed around the median where AST combined calibration is good (Q50 gap < 3%).
+
+### Next Steps
+
+1. **Stripe integration** — No longer deferred by calibration work
+2. **Full retrain with extended calibration window** — When needed for seasonal drift, not for calibration fixes
+3. **Monitor live betting performance** — The model is performing well as-is
+
+---
+
 ## Session Summary (2026-02-19 — Session 41)
 
 ### What We Did
@@ -18,9 +76,9 @@ All 608 tests pass. Ruff clean.
 
 ### Next Steps
 
-1. **Investigate AST zero-inflation** — The combined Q10 gap is structural (many zero-assist games even at high minutes). Consider truncated/zero-inflated mixture models or per-quantile conformal recalibration improvements
-2. **Full retrain with extended calibration window** — PTS and REB combined Q25 drift may be a calibration window artifact
-3. **Stripe integration** — Deferred; model calibration takes priority
+1. ~~**Investigate AST zero-inflation**~~ **Closed** — See Session 42. Structural, not fixable, minimal betting impact.
+2. ~~**Full retrain with extended calibration window**~~ — PTS/REB combined Q25 drift not hurting betting performance per A/B backtest
+3. **Stripe integration** — No longer deferred
 
 ---
 

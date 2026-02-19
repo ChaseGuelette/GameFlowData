@@ -82,7 +82,8 @@ def fetch_recent_games_for_players(engine, player_ids: list[int], target_date: d
     """
     Fetch recent games for specific players.
 
-    Gets last LOOKBACK_GAMES games up to and including target_date.
+    Gets last LOOKBACK_GAMES games up to and including target_date,
+    plus the actual total season game count per player.
     """
     if not player_ids:
         return pd.DataFrame()
@@ -115,6 +116,29 @@ def fetch_recent_games_for_players(engine, player_ids: list[int], target_date: d
     df = pd.read_sql(text(query), engine, params={"target_date": target_date})
     logger.info(f"Fetched {len(df):,} game rows")
 
+    # Get the actual total season game count per player
+    count_query = text(f"""
+        SELECT player_id, COUNT(*) as total_season_games
+        FROM player_game_stats
+        WHERE player_id IN {player_tuple}
+          AND season_id = (
+              SELECT season_id FROM player_game_stats
+              WHERE player_id IN {player_tuple}
+              ORDER BY game_date DESC LIMIT 1
+          )
+          AND game_date::date <= :target_date
+          AND (did_not_play = false OR did_not_play IS NULL)
+        GROUP BY player_id
+    """)
+
+    with engine.connect() as conn:
+        count_df = pd.read_sql(count_query, conn, params={"target_date": target_date})
+
+    if not count_df.empty:
+        df = df.merge(count_df, on="player_id", how="left")
+    else:
+        df["total_season_games"] = df.groupby("player_id")["player_id"].transform("count")
+
     return df
 
 
@@ -126,8 +150,12 @@ def calculate_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFrame:
     """Calculate all rolling averages for a single player's games."""
     player_df = player_df.sort_values("game_date").copy()
 
-    # Game number within data (for window sizing)
-    player_df["game_number"] = range(1, len(player_df) + 1)
+    # Game number within season (offset by games not in the lookback window)
+    total = int(player_df["total_season_games"].iloc[0]) if "total_season_games" in player_df.columns else len(player_df)
+    fetched = len(player_df)
+    offset = total - fetched
+
+    player_df["game_number"] = range(offset + 1, offset + fetched + 1)
     player_df["games_l5"] = (player_df["game_number"] - 1).clip(upper=5)
     player_df["games_l15"] = (player_df["game_number"] - 1).clip(upper=15)
     player_df["games_szn"] = player_df["game_number"] - 1

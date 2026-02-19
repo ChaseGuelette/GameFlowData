@@ -257,6 +257,7 @@ The modeling engine predicts the probability distribution of player stats.
     - Copula parameters (Spearman ρ) are computed at training time and saved as `copula_params.json` artifact
     - Falls back to legacy post-hoc adjustment when copula params unavailable (backward compat)
 - **Zero-Inflation Handling:** `_build_extended_quantile_fn()` snaps quantile values below `ZERO_SNAP_THRESHOLD` (1e-3) to exactly 0. Ensures MC samples in the zero-mass region of discrete distributions (e.g., threes_per_min) map to 0 instead of tiny positive interpolated values. Works in both copula and non-copula paths.
+- **Combined Calibration Offsets (infrastructure, not deployed):** `_apply_combined_calibration()` applies per-stat per-quantile conformal offsets via piecewise-linear sample warping on the combined (minutes x rate) distribution. Loaded from `combined_calibration_offsets.json` via `load_combined_calibration_offsets()`. Backward-compatible no-op when file is absent. A/B backtest (Session 42) showed offsets improved calibration metrics but degraded betting ROI — offsets are NOT deployed to production. Code retained for future use if genuine calibration drift emerges.
 - **Output:** Exact probabilities for any line (e.g., "Probability of 20+ points").
 - **Betting utilities:** `prob_over(line)`, `prob_under(line)`, `expected_value_over/under(line, odds)`.
 
@@ -297,6 +298,8 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 - Calibration validation (individual + combined minutes×rate).
 - Minutes-rate correlation analysis with Spearman rank correlations.
 - Computes and saves Gaussian copula parameters (`copula_params.json`) for MC inference.
+- Computes per-stat per-quantile conformal offsets during combined calibration and saves as `combined_calibration_offsets.json`.
+- **`--calibrate-only` mode:** Loads an existing model, runs MC predictions on calibration data, computes combined offsets, and saves them to the model directory without retraining. Useful for post-hoc recalibration experiments.
 - Model persistence via `joblib`.
 - **Atomic rename pattern (added 2026-02-09):** Training creates `run_YYYYMMDD_HHMMSS_incomplete` directory initially, renamed to `run_YYYYMMDD_HHMMSS` only after all artifacts are saved. Prevents inference job from selecting incomplete models during training. Inference job filters out `_incomplete` directories when auto-selecting latest model.
 
@@ -977,7 +980,7 @@ See `ACTIONITEMS.md` for full details.
 **Active tracks:**
 - **Track A** (Critical): Probability recalibration — A1–A4 all implemented. A3b (BL confidence fix) completed. A5 (residual classifier) pending evaluation. A6 (conditional rate modeling) added as future option.
 - **Track B** (Complete): New signal sources — B1 (injury context, 10 features), B2 (rest/schedule), B3 (short-window trends), B4 (minutes stability) all implemented and included in latest training run.
-- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) partially addressed by conformal recalibration. C2 (per-stat calibration diagnostic) implemented 2026-02-18 — `src/diagnostics/calibration_per_stat.py`. C3-C5 (THREES model experiments) archived 2026-02-10 due to poor market coverage.
+- **Track C**: Calibration refinement — C0 (Gaussian copula) implemented and active. C1 (Q10 over-coverage) investigated through Sessions 40-42: surgical retrains, feature reselection, per-quantile tuning, and combined conformal recalibration all tested. **Conclusion:** AST Q10 combined gap is structural (~18% zero-assist rate sets coverage floor). A/B backtest confirmed offsets hurt betting ROI despite improving calibration metrics. C1 closed — not fixable without negative stat predictions. C2 (per-stat calibration diagnostic) implemented 2026-02-18 — `src/diagnostics/calibration_per_stat.py`. C3-C5 (THREES model experiments) archived 2026-02-10 due to poor market coverage.
 - **Track D**: Deprioritized model items (pending recalibration).
 - **Track E**: Go-live pipeline — no-BL path shows positive ROI (+3%). E4 (daily injury pipeline) and E5 (paper trading infra) complete. E6 (scheduling) pending.
 

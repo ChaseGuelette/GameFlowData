@@ -104,13 +104,35 @@ python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 220
        ├─ selected_features.json
        ├─ run_config.json
        ├─ calibration_report.json
-       └─ copula_params.json          # Gaussian copula Spearman ρ per stat
+       ├─ copula_params.json                        # Gaussian copula Spearman ρ per stat
+       └─ combined_calibration_offsets.json (opt)    # Per-stat conformal offsets (if generated)
 
 8. Finalize (Atomic Rename)
    └─ Directory is created as run_YYYYMMDD_HHMMSS_incomplete during training
    └─ Renamed to run_YYYYMMDD_HHMMSS after all artifacts saved
    └─ Prevents inference job from selecting incomplete models
 ```
+
+### Calibrate-Only Mode (No Retraining)
+
+Recompute combined calibration offsets on an existing model without retraining:
+
+```bash
+python src/models/train_pipeline.py \
+  --calibrate-only \
+  --base-model-dir src/models/artifacts/production \
+  --cal-season 22025 \
+  --cal-end-date 2026-01-15
+```
+
+| Arg | Description |
+|-----|-------------|
+| `--calibrate-only` | Run offset computation only, no training |
+| `--base-model-dir` | Path to existing model directory |
+| `--cal-season` | Season ID for calibration data |
+| `--cal-end-date` | Optional cutoff date within the calibration season |
+
+Outputs `combined_calibration_offsets.json` to the base model directory. See [Monte Carlo Tuning — Combined Calibration Offsets](monte_carlo_tuning.md#combined-calibration-offsets-experimental--not-deployed) for details on this mechanism.
 
 ### What Good Calibration Looks Like
 

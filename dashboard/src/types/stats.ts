@@ -11,7 +11,7 @@ export interface ColumnDef {
   tooltip?: string
   /** Template: "avg_pts_{window}" — {window} replaced at render */
   dbColumn: string
-  format: 'int' | 'dec1' | 'dec2' | 'pct1' | 'plusMinus1'
+  format: 'int' | 'dec1' | 'dec2' | 'pct1' | 'rawPct1' | 'plusMinus1'
   /** true for TOV, DRtg, PF (higher = worse) */
   invertHeatmap?: boolean
   /** true for columns that don't vary by window */

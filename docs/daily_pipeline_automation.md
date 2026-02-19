@@ -179,7 +179,8 @@ python src/orchestration/inference_job.py --stats pts reb
 1. Load model artifacts (auto-detects latest `run_*` directory)
 2. Initialize FeatureStore and MonteCarloPredictor (10,000 samples)
 3. Load Gaussian copula params for correlated sampling
-4. Run `DailyPredictionRunner.run_for_date()`
+4. Load combined calibration offsets (if `combined_calibration_offsets.json` exists — currently not deployed)
+5. Run `DailyPredictionRunner.run_for_date()`
    - **Parallel feature building** (8 workers, ~5s) — queries feature store concurrently
    - **Optimized prop lines query** (~0.2s) — searches both 8/10-digit game_id formats
 5. Store predictions to `daily_predictions` table

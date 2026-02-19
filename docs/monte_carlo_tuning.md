@@ -478,6 +478,50 @@ The blowout factor primarily affects:
 
 ---
 
+## Combined Calibration Offsets (Experimental — Not Deployed)
+
+### What it does
+
+Combined calibration offsets apply **conformal recalibration** to the combined (minutes x rate) distribution. After computing `stat_samples = minutes_samples * rate_samples`, the predictor warps the samples through piecewise-linear quantile corrections so that empirical coverage matches target coverage.
+
+**How it works:**
+1. During training/calibration, compute residuals: `actuals - predicted_quantile_values`
+2. For each stat and quantile q: `offset = np.quantile(residuals, q)`
+3. Save as `combined_calibration_offsets.json`
+4. At inference, warp MC samples through corrected quantile anchor points using `np.interp`
+
+### Status: Investigated and Archived (Session 42)
+
+This mechanism was fully implemented and tested via A/B backtest (Jan 15 – Feb 14, 2026):
+
+| Metric | Without Offsets | With Offsets |
+|--------|----------------|--------------|
+| ROI | 7.44% | 6.01% |
+| Sharpe | 0.891 | 0.742 |
+| PTS ROI | 13.7% | 9.0% |
+
+**Conclusion:** Offsets improved calibration metrics but hurt betting performance. The AST Q10 gap (+10.25%) is structural — ~18% of player-games have 0 assists, creating an irreducible floor. PTS/REB models were already well-calibrated, and offsets pushed them away from profitable territory.
+
+The code remains in place for future use if needed, but `combined_calibration_offsets.json` is **not** present in the production model directory, so no offsets are applied.
+
+### How to generate offsets (if revisiting)
+
+```bash
+python src/models/train_pipeline.py \
+  --calibrate-only \
+  --base-model-dir src/models/artifacts/production \
+  --cal-season 22025 \
+  --cal-end-date 2026-01-15
+```
+
+This loads the existing model, runs MC predictions on calibration data, computes per-stat per-quantile offsets, and saves `combined_calibration_offsets.json` without retraining.
+
+### Loading
+
+Offsets are auto-loaded when `combined_calibration_offsets.json` exists in the model directory. Both `inference_job.py` and `run_backtest.py` call `load_combined_calibration_offsets()` and pass the result to `MonteCarloPredictor`. When the file is absent, `None` is returned and no warping occurs.
+
+---
+
 ## Quick Reference
 
 ```python

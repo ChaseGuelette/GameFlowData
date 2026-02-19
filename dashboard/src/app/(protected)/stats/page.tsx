@@ -7,7 +7,7 @@ import { StatTabs } from '@/components/stats/StatTabs'
 import { CategoryTabs } from '@/components/stats/CategoryTabs'
 import { WindowToggle } from '@/components/stats/WindowToggle'
 import { PositionFilter, type PositionOption } from '@/components/stats/PositionFilter'
-import { HeatmapTable } from '@/components/stats/HeatmapTable'
+import { HeatmapTable, HeatmapLegend } from '@/components/stats/HeatmapTable'
 import {
   playerColumnMap,
   teamColumnMap,
@@ -269,6 +269,11 @@ export default function StatsPage() {
           </span>
         </div>
       )}
+
+      {/* Heatmap legend */}
+      <div className="mb-3">
+        <HeatmapLegend />
+      </div>
 
       {/* Loading state */}
       {loading ? (
