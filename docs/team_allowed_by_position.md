@@ -58,11 +58,17 @@ ON team_allowed_by_position(team_id, position_group, game_date DESC);
 
 ## Backfill Procedure
 
-File: backfill_opponent_allowed.py Usage: Run once to populate history. Requires TRUNCATE if re-running.
+**Full backfill:** `python src/processing/backfill_opponent_allowed.py` — Processes all seasons. Rolling windows use `.mean()` (per-game averages, fixed in Session 43). Requires TRUNCATE if re-running.
 
-## Matinence Script 
+**Incremental backfill:** `python src/processing/backfill_opponent_allowed_incremental.py --days-back 30` — Lightweight daily version, processes last 30 days with 15-day lookback buffer for L15 window calculations. Runs automatically as Step 7 in `daily_stats_job.py`. Uses UPSERT to avoid duplicates.
 
-File: update_opponent_allowed.py Schedule: Run daily after new games are ingested. Logic: Finds the last date in the table, re-calculates the last 60 days (to get valid L15 windows), and inserts only the new rows.
+## Maintenance Script
+
+File: `backfill_opponent_allowed_incremental.py` — Schedule: Runs daily at 9 AM ET via `daily_stats_job.py`. Logic: Fetches games from the last 30+15 days, computes rolling metrics, filters to target date range, upserts into `team_allowed_by_position`.
+
+### Legacy Maintenance Script (Superseded)
+
+File: update_opponent_allowed.py — Original maintenance approach. Superseded by the incremental backfill script above.
 
 ```python
 import pandas as pd

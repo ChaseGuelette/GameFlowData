@@ -114,6 +114,7 @@ The system ingests data from two distinct worlds that don't natively share ident
 | `player_prop_scraper.py` | Alternate player props source |
 | `game_lines_scraper.py` | Historical game lines |
 | `rapidapi_injury_backfill.py` | Injury data from RapidAPI — historical backfill (2021-present, 88K+ rows) and daily collection via `run_daily.py --scrape-injuries` |
+| `play_type_scraper.py` | Team-level Synergy play type data (offensive/defensive frequency + efficiency) |
 
 #### The NBA Linker (`src/processing/nba_linker_local.py`)
 
@@ -135,8 +136,9 @@ Serves as the bridge between NBA and sportsbook data:
 | Module | Purpose |
 |--------|---------|
 | `populate_average_stats.py` | Computes L5, L15, season-to-date rolling averages for players and teams. Full recalculation for historical backfills. |
-| `populate_average_stats_incremental.py` | Lightweight daily version — only processes players who played on target date. Uses UPSERT. Runtime: ~1s vs ~28min for full script. |
-| `backfill_opponent_allowed.py` | Computes opponent defensive metrics by position → `team_allowed_by_position` table. |
+| `populate_average_stats_incremental.py` | Lightweight daily version — only processes players who played on target date. Uses batch UPSERT. Queries actual season game count for correct `games_szn`. Runtime: ~1s vs ~28min for full script. |
+| `backfill_opponent_allowed.py` | Computes opponent defensive metrics by position → `team_allowed_by_position` table. Rolling windows use `.mean()` (per-game averages). |
+| `backfill_opponent_allowed_incremental.py` | Lightweight daily version — only processes last 30 days with 15-day lookback buffer. Runs as Step 7 in `daily_stats_job.py`. |
 | `backfill_league_priors.py` | Computes league-wide Bayesian priors → `league_priors_history` table. |
 | `backfill_team_ids.py` | Validates and links team IDs across data sources. |
 | `feature_selection.py` | `ImprovedFeatureSelector` — per-quantile feature selection with time-series aware 3-split CV and permutation importance. |
@@ -379,11 +381,11 @@ A simulation environment to validate betting strategies.
 | `lines_job.py` | 12 PM, 4 PM, 6 PM ET | Player props + injuries + incremental linking |
 | `inference_job.py` | 6:30 PM ET (once) | Generate predictions with latest lines |
 
-**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~5-10 minutes (optimized from ~30 minutes via incremental scripts).
+**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → `play_type_scraper.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~5-10 minutes (optimized from ~30 minutes via incremental scripts).
 
 **`lines_job.py`** — Multiple-times-daily props and injuries scraping. Steps: `daily_game_lines_scraper.py` → `daily_player_props_scraper.py` → `rapidapi_injury_backfill.py` (optional) → `link_injury_data.py` (optional) → `nba_linker_local.py incremental` (optional). Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`. Runtime: ~30-90 seconds.
 
-**`inference_job.py`** — Pre-game prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, exports CSV backup. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`. Runtime: ~1-3 minutes.
+**`inference_job.py`** — Pre-game prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, checks upstream data freshness (warns if rolling averages >2 days stale), generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, exports CSV backup. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`. Runtime: ~1-3 minutes.
 
 **Cron Configuration:** See `cron/gameflow_crontab.txt` for Linux server deployment template with UTC times and environment setup instructions.
 
@@ -454,7 +456,7 @@ dashboard/
 │   │   ├── landing/            # HeroSection, FeatureGrid
 │   │   ├── layout/             # Navbar, PublicNavbar, Footer
 │   │   ├── predictions/        # PropCard, PropGrid, FilterTabs, PlayOfTheDay
-│   │   ├── stats/              # HeatmapTable, StatTabs, CategoryTabs, WindowToggle, PositionFilter
+│   │   ├── stats/              # HeatmapTable, StatTabs, CategoryTabs, WindowToggle, PositionFilter, OffDefToggle
 │   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
 │   │   ├── history/            # BetCard, BetList, HistoryFilters, HistorySummary
 │   │   ├── performance/        # KPICard, BankrollChart, StatBreakdown
@@ -465,6 +467,7 @@ dashboard/
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
 │   │   ├── insights.ts         # Template-based insight generator
 │   │   ├── stats/columns.ts    # Column definitions for Data Vault heatmap tables
+│   │   ├── stats/pivotPlayTypes.ts # Client-side pivot for play type long→wide format
 │   │   ├── subscription.ts     # Subscription types/utils (dormant)
 │   │   └── utils.ts            # Formatting, edge tiers, headshot URLs
 │   ├── types/
@@ -496,7 +499,7 @@ dashboard/
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
 - **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
 - **Free Beta Model:** No paywall — all authenticated users have full access. Public `/picks` page shows 3 real picks via `get_public_picks()` RPC to drive signups. All CTAs point to sign-up and Discord. Stripe infrastructure preserved (dormant) for future activation at ~200 Discord members.
-- **Data Vault (`/stats`):** Dense heatmap stat table with player, team, and defense-vs-position breakdowns. Features percentile-based blue heatmap coloring (5-step gradient), sortable columns, sticky name/position/team columns, window toggles (L5/L15/SZN), category tabs (Box Score/Shooting/Advanced/Consistency for players), position and team filters, and player search. Reads from 3 database views (`player_stats_latest`, `team_stats_latest`, `defense_by_position_latest`) that join rolling average tables with player/team reference data. All filtering and sorting is client-side after initial parallel fetch.
+- **Data Vault (`/stats`):** Dense heatmap stat table with player, team, defense-vs-position, and play type breakdowns. Features percentile-based blue heatmap coloring (5-step gradient with inline legend), sortable columns, sticky name/position/team columns, window toggles (L5/L15/SZN), category tabs (Box Score/Shooting/Advanced/Consistency for players), position and team filters with info button explaining G/W/B groups, stat header tooltips, and player search. Reads from 3 database views (`player_stats_latest`, `team_stats_latest`, `defense_by_position_latest`) plus the `team_play_types` table (Synergy play type data) that join rolling average tables with player/team reference data. All filtering and sorting is client-side after initial parallel fetch.
 - **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account/stats (requires auth).
 
 **Data Sources:**
@@ -509,6 +512,8 @@ dashboard/
 - `player_stats_latest` view — Data Vault player tab (rolling averages + advanced stats)
 - `team_stats_latest` view — Data Vault team tab (rolling team averages)
 - `defense_by_position_latest` view — Data Vault defense tab (defense-vs-position stats)
+- `team_play_types` table — Season-level Synergy play type data (30 teams x 11 play types x 2 groupings)
+- SQL view definitions version-controlled in `sql/views/` (player_stats_latest.sql, team_stats_latest.sql, defense_by_position_latest.sql). All views use deterministic `DISTINCT ON` with `game_id DESC` tiebreaker.
 
 **Run Commands:**
 ```bash
@@ -700,6 +705,7 @@ DISCORD_CHANNEL_PERFORMANCE=...
 - `player_stats_latest`: Latest per-player rolling stats — joins `player_average_game_stats` + `player_average_advanced_stats` + `players` + `player_position_history`. ~529 rows.
 - `team_stats_latest`: Latest per-team rolling stats — joins `team_average_game_stats` + `teams`. 30 rows.
 - `defense_by_position_latest`: Latest defense-vs-position — joins `team_allowed_by_position` + `teams`, filtered to G/W/B positions. 90 rows.
+- `team_play_types`: Season-level Synergy play type frequency and efficiency. 660 rows (30 teams x 11 play types x offensive/defensive). Public read RLS.
 
 ### Reference
 - `players`: Player reference data.
@@ -968,7 +974,7 @@ See `ACTIONITEMS.md` for full details.
 
 **Black-Litterman blending (A3) — Implemented (2026-01-28):** The BL blending layer is complete and integrated into the backtesting pipeline. Anchors model probabilities to the devigged market prior using log-odds space blending with per-prediction z-score confidence. Activated via `--bl-tau` flag (default: disabled). Needs validation backtest via `run_sweep.py` to find optimal tau, edge, and Kelly parameters.
 
-**Bug fix sweep (2026-01-30):** 12 issues fixed from comprehensive pipeline audit — see `ISSUES.md`. Key fixes: minutes model hyperparameters (ISS-001), early stopping (ISS-006), devigged edge calculation (ISS-003), injury query cross-product (ISS-004), train/serve threshold alignment (ISS-005), team-directional spread (ISS-008), league-average defaults (ISS-009), independent over/under line shopping (ISS-015). 16 issues remain open (mostly low-priority).
+**Bug fix sweep (2026-01-30 + 2026-02-19):** 30 of 43 total issues fixed from two comprehensive pipeline audits — see `ISSUES.md`. Session 43 added fixes for opponent-allowed rolling windows (.sum() → .mean()), backtesting odds timestamp cutoff, batch upserts, view tiebreakers, inference freshness checks, and Data Vault display bugs. 13 issues remain open (mostly low-priority/cosmetic).
 
 **Calibration fixes (2026-01-31):** Applied conformal recalibration (quantile_trainer.py) — post-training offset from validation residuals closes coverage gaps > 3%. Zero-snap handling (monte_carlo.py) snaps values below 1e-3 in inverse CDF to exactly 0.
 

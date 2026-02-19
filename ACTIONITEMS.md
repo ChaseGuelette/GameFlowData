@@ -1,5 +1,75 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-19 — Session 44)
+
+### What We Did
+
+**Implemented NBA Play Types feature — Monster.bet-style team play type analysis on the Data Vault page.**
+
+Added a new "Play Types" tab to the existing Data Vault (`/stats`) page showing Synergy play type data for all 30 NBA teams. Features:
+- **11 play types:** Isolation, Transition, PnR Ball Handler, PnR Roll Man, Post Up, Spot Up, Handoff, Cut, Off Screen, Off Rebound, Misc
+- **Offense/Defense toggle:** View offensive play type usage or defensive play type matchup data
+- **Frequency sub-tab:** Shows what % of possessions each team uses for each play type (POSS_PCT)
+- **Efficiency sub-tab:** Shows points per possession (PPP) for each play type
+- **Full heatmap integration:** Percentile-based blue gradient coloring, sortable columns
+
+**Backend:**
+- Database table `team_play_types` (660 rows) with public read RLS — already existed from prior work
+- Python scraper `play_type_scraper.py` using NBA Synergy API — already existed from prior work
+- Added scraper as Step 8 in `daily_stats_job.py` pipeline
+
+**Dashboard (7 files):**
+- New types: `PlayTypeCategory`, `PlayTypeGrouping` added to `stats.ts`
+- 22 new column definitions (11 frequency + 11 efficiency) in `columns.ts`
+- New `pivotPlayTypes.ts` utility — transforms long-format DB rows to wide-format team rows
+- New `OffDefToggle.tsx` component matching existing WindowToggle pattern
+- Updated `StatTabs.tsx` with Play Types tab
+- Full integration in `stats/page.tsx` — state, data fetch, pivot memo, controls, sorting
+
+### Remaining Action Items
+
+1. **Full opponent-allowed re-backfill** — `python src/processing/backfill_opponent_allowed.py` — existing DB data has old cumulative sums
+2. **Rerun backtests** after re-backfill to establish new baseline with corrected features
+3. **Stripe integration** — subscribe page, customer portal, webhook
+4. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
+## Session Summary (2026-02-19 — Session 43)
+
+### What We Did
+
+**Data Vault bug fixes + comprehensive pipeline audit. Fixed 12 issues across dashboard, processing scripts, backtesting, and database views.**
+
+This session had two phases:
+
+**Phase 1 — Data Vault fixes (6 issues):**
+- ISS-029: `games_szn` in incremental averages showed max 19 instead of actual season count (LeBron had 36 games). Fixed by querying real season game count per player.
+- ISS-030: TOV% displayed as 1029% — added `rawPct1` format type that skips the `*100` multiplication.
+- ISS-033: Opponent-allowed rolling windows used `.sum()` instead of `.mean()` — totals columns showed cumulative sums, not per-game averages. Fixed in both full and incremental backfill scripts.
+- ISS-034: Added hover tooltips to all stat column headers in Data Vault.
+- ISS-035: Added heatmap color legend component above the table.
+- ISS-036: Saved 3 Supabase view definitions to `sql/views/` for version control.
+
+**Phase 2 — Deep pipeline audit + fixes (6 issues):**
+- ISS-038: Backtesting odds query used date-level filter that could theoretically include post-inference lines. Changed to timestamp-level cutoff matching 6:30 PM ET production schedule. Functionally equivalent given scrape times (12/4/6 PM ET).
+- ISS-039: Added data freshness check to inference_job.py — warns if rolling averages are >2 days stale.
+- ISS-041: Converted row-by-row upserts to batch execution in incremental averages script (~30x faster for large batches).
+- ISS-042: Added `game_id DESC` deterministic tiebreaker to all 3 DISTINCT ON views.
+- ISS-043: Removed `created_at = NOW()` overwrite from opponent-allowed UPSERT statements.
+- ISS-040: Skipped (combined calibration offsets in run_daily/run_sweep — not used in production).
+
+**Audit methodology:** 4 parallel Explore agents scanned all processing, model, backtesting, and scraper code. 5 most critical findings validated with dedicated agents — caught 3 false positives before filing issues.
+
+### Remaining Action Items
+
+1. **Full opponent-allowed re-backfill** — `python src/processing/backfill_opponent_allowed.py` — existing DB data has old cumulative sums
+2. **Rerun backtests** after re-backfill to establish new baseline with corrected features
+3. **Stripe integration** — subscribe page, customer portal, webhook
+4. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-02-19 — Session 42)
 
 ### What We Did

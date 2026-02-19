@@ -5,6 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-19 Session 44] — NBA Play Types Feature
+
+### Added
+
+- **Play Types tab on Data Vault:** New "Play Types" tab alongside Players, Teams, and Defense. Shows Synergy play type data for all 30 NBA teams across 11 play types (Isolation, Transition, PnR BH, PnR RM, Post Up, Spot Up, Handoff, Cut, Off Screen, Off Rebound, Misc).
+- **Offense/Defense toggle:** `OffDefToggle` component for switching between offensive and defensive play type breakdowns.
+- **Frequency/Efficiency sub-tabs:** Frequency shows possession percentage (POSS_PCT) per play type; Efficiency shows points per possession (PPP).
+- **Client-side pivot utility:** `pivotPlayTypes.ts` transforms 330 long-format DB rows into 30 wide-format team rows with synthetic columns.
+- **Database table:** `team_play_types` with public read RLS and season index (already existed from prior session).
+- **Python scraper:** `play_type_scraper.py` — fetches 22 API calls (11 play types x 2 groupings) from NBA Synergy endpoint (already existed from prior session).
+- **Pipeline integration:** Added play type scraper as Step 8 in `daily_stats_job.py`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/daily_stats_job.py` | Modified — added Step 8 play type scraper |
+| `dashboard/src/types/stats.ts` | Modified — added `playTypes` to `StatsMainTab`, `PlayTypeCategory`, `PlayTypeGrouping` types |
+| `dashboard/src/lib/stats/columns.ts` | Modified — added 22 column definitions (11 frequency + 11 efficiency) and `playTypeColumnMap` |
+| `dashboard/src/lib/stats/pivotPlayTypes.ts` | Created — long-to-wide pivot utility |
+| `dashboard/src/components/stats/OffDefToggle.tsx` | Created — offense/defense toggle |
+| `dashboard/src/components/stats/StatTabs.tsx` | Modified — added Play Types tab |
+| `dashboard/src/app/(protected)/stats/page.tsx` | Modified — full tab integration with state, data fetch, pivot, controls |
+
+### Verified
+
+- 575 Python tests pass, ruff clean
+- Dashboard build succeeds (`next build` clean)
+- Database has 660 rows (30 teams x 11 play types x 2 groupings)
+
+---
+
+## [2026-02-19 Session 43] — Data Vault Fixes + Pipeline Audit
+
+### Fixed
+
+- **Data Vault — `games_szn` count (ISS-029):** `populate_average_stats_incremental.py` now queries actual season game count per player instead of deriving from fetched window size. LeBron shows 36 games instead of 19.
+- **Data Vault — TOV% display (ISS-030):** Added `rawPct1` format type that displays `avg_tov_ratio` as-is (10.3%) instead of multiplying by 100 (1029%).
+- **Opponent-allowed rolling windows (ISS-033):** Changed `.sum()` to `.mean()` in both `backfill_opponent_allowed.py` and `backfill_opponent_allowed_incremental.py`. Rolling windows now compute per-game averages, not cumulative sums.
+- **Backtesting odds cutoff (ISS-038):** Changed `snapshot_time::date <= :game_date` to timestamp-level cutoff (`interval '23 hours 30 minutes'`) in `backtest_harness.py` to match 6:30 PM ET production inference window. Functionally equivalent given scrape schedule (12/4/6 PM ET).
+- **Inference data freshness check (ISS-039):** `inference_job.py` now warns if `player_average_game_stats` data is >2 days stale before generating predictions.
+- **Batch upserts (ISS-041):** Converted 3 row-by-row `iterrows()` upsert loops in `populate_average_stats_incremental.py` to batch `conn.execute(text(sql), records)`.
+- **View tiebreakers (ISS-042):** Added `game_id DESC` as deterministic tiebreaker to all 3 `DISTINCT ON` views (`player_stats_latest`, `team_stats_latest`, `defense_by_position_latest`). Applied via Supabase migration.
+- **`created_at` overwrite (ISS-043):** Removed `created_at = NOW()` from UPSERT `DO UPDATE` in both opponent-allowed backfill scripts.
+
+### Added
+
+- **Data Vault — stat tooltips (ISS-034):** All column headers in HeatmapTable now have hover tooltips explaining each stat abbreviation.
+- **Data Vault — heatmap legend (ISS-035):** Color legend component showing 5-step percentile gradient above the table.
+- **Data Vault — position info button:** Info button next to position filter explaining G/W/B position groups.
+- **SQL view definitions (ISS-036):** Saved all 3 Supabase view definitions to `sql/views/` for version control.
+- **ISSUES.md:** Comprehensive pipeline audit — 43 total issues tracked, 30 fixed.
+
+### Verified
+
+- 575 Python tests pass, ruff clean
+- Dashboard build succeeds
+- Supabase migration applied for view tiebreakers
+
+### Note
+
+- **Full opponent-allowed re-backfill needed:** Existing DB data still has old cumulative-sum values. Run `python src/processing/backfill_opponent_allowed.py` to update.
+
+---
+
 ## [2026-02-19 Session 42] — Combined Conformal Recalibration (Built, Tested, Not Deployed)
 
 ### Added

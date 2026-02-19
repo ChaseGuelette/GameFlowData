@@ -89,7 +89,7 @@ dashboard/
 │   │   └── utils.ts            # Utility functions
 │   ├── types/
 │   │   ├── predictions.ts      # TypeScript interfaces
-│   │   ├── stats.ts            # Data Vault types (ColumnDef, StatRow, SortState)
+│   │   ├── stats.ts            # Data Vault types (ColumnDef, StatRow, SortState, PlayTypeCategory, PlayTypeGrouping)
 │   │   └── subscription.ts     # Subscription types (dormant)
 │   └── middleware.ts           # Auth redirect middleware
 ├── public/                     # Static assets
@@ -987,6 +987,7 @@ All views use `DISTINCT ON` to get the latest row per entity, filtered to curren
 | Players | Box Score, Shooting, Advanced, Consistency | Position, Team, Search, Min GP |
 | Teams | Offense, Defense, Overall | — |
 | Defense vs Position | Totals, Per 100 Poss | Position (G/W/B) |
+| Play Types | Frequency, Efficiency | Offense/Defense toggle |
 
 ### HeatmapTable Component
 
@@ -1008,6 +1009,7 @@ For `invertHeatmap: true` columns (TOV, DRtg, PF), the scale is flipped.
 | `dec1` | `24.3` | `v.toFixed(1)` |
 | `dec2` | `1.85` | `v.toFixed(2)` |
 | `pct1` | `45.6%` | `(v * 100).toFixed(1) + "%"` — DB stores decimals |
+| `rawPct1` | `5.9%` | `v.toFixed(1) + "%"` — DB stores pre-multiplied values |
 | `plusMinus1` | `+3.2` | Sign prefix + `v.toFixed(1)` |
 
 **Table features:**
@@ -1025,6 +1027,8 @@ For `invertHeatmap: true` columns (TOV, DRtg, PF), the scale is flipped.
 | `WindowToggle` | `components/stats/WindowToggle.tsx` | L5 / L15 / SZN toggle |
 | `PositionFilter` | `components/stats/PositionFilter.tsx` | All / G / W / B position filter |
 | `HeatmapTable` | `components/stats/HeatmapTable.tsx` | Core table with sorting + percentile coloring |
+| `OffDefToggle` | `components/stats/OffDefToggle.tsx` | Offense / Defense toggle for play types |
+| `HeatmapLegend` | `components/stats/HeatmapTable.tsx` | Percentile color legend (5-step gradient) |
 
 ### Column Definitions
 

@@ -63,7 +63,8 @@ For daily cron jobs, use `populate_average_stats_incremental.py` instead of the 
 **Key optimizations:**
 - Only processes players who played on the target date (vs all ~4000 players)
 - Fetches last 20 games per player (vs full history)
-- Uses UPSERT instead of TRUNCATE + reload
+- Uses batch UPSERT (`conn.execute(text(sql), records)`) instead of TRUNCATE + reload (Session 43: converted from row-by-row `iterrows()`)
+- Queries actual season game count per player for correct `games_szn` (Session 43: fixed off-by-one where `games_szn` was capped at 19 due to `LOOKBACK_GAMES = 20`)
 - **Performance: ~1 second vs ~28 minutes (1700x speedup)**
 
 The incremental version computes the same rolling averages (L5, L15, season-to-date) and B2/B3/B4 features, but only for players who had games on the target date. Results are upserted into `player_average_game_stats` using `ON CONFLICT (player_id, game_id) DO UPDATE`.

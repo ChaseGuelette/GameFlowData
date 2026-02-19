@@ -24,7 +24,8 @@ The daily pipeline is split into three jobs based on execution frequency:
           ├─ update_player_position_history.py
           ├─ update_league_position_averages.py
           ├─ populate_average_stats_incremental.py (lightweight, ~1s)
-          └─ backfill_opponent_allowed.py
+          ├─ backfill_opponent_allowed_incremental.py --days-back 30
+          └─ resolve ALL pending paper bets
 
 12:00 PM  lines_job.py (first run)
           ├─ daily_game_lines_scraper.py
@@ -39,9 +40,11 @@ The daily pipeline is split into three jobs based on execution frequency:
 
 6:30 PM   inference_job.py
           ├─ Load model artifacts
+          ├─ Check upstream data freshness (warns if >2 days stale)
           ├─ DailyPredictionRunner.run_for_date()
           ├─ Store to daily_predictions table
-          └─ Export predictions CSV
+          ├─ Export predictions CSV
+          └─ Send Discord alert (optional)
 
 7:00 PM   Games typically start
 ```
@@ -81,6 +84,7 @@ python src/orchestration/daily_stats_job.py --dry-run
 5. `update_league_position_averages.py` - Update league averages by position
 6. `populate_average_stats_incremental.py` - Compute rolling averages for today's players only (~1s vs ~28min for full)
 7. `backfill_opponent_allowed.py` - Update opponent-adjusted defensive stats
+8. `play_type_scraper.py` - Refresh Synergy play type data (offensive + defensive, 11 play types)
 
 ### Logs
 
