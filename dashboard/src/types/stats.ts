@@ -1,8 +1,10 @@
 export type WindowSuffix = 'l5' | 'l15' | 'szn'
-export type StatsMainTab = 'players' | 'teams' | 'defense'
+export type StatsMainTab = 'players' | 'teams' | 'defense' | 'playTypes'
 export type PlayerCategory = 'box' | 'shooting' | 'advanced' | 'consistency'
 export type TeamCategory = 'offense' | 'defense' | 'overall'
 export type DefenseCategory = 'totals' | 'per100'
+export type PlayTypeCategory = 'frequency' | 'efficiency'
+export type PlayTypeGrouping = 'Offensive' | 'Defensive'
 export type PositionGroup = 'G' | 'W' | 'B'
 
 export interface ColumnDef {

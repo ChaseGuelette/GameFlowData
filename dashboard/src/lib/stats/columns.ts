@@ -132,7 +132,42 @@ export const defensePer100Columns: ColumnDef[] = [
   { key: 'ortg_p100', label: 'ORtg Allowed', tooltip: 'Offensive Rating Allowed Per 100 Possessions', dbColumn: 'off_rtg_allowed_{window}', format: 'dec1', invertHeatmap: true },
 ]
 
+// ─── Play Types — Frequency (POSS_PCT per play type) ────────────────
+export const playTypeFrequencyColumns: ColumnDef[] = [
+  { key: 'isolation_poss_pct', label: 'ISO', tooltip: 'Isolation — % of possessions', dbColumn: 'isolation_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'transition_poss_pct', label: 'TRANS', tooltip: 'Transition — % of possessions', dbColumn: 'transition_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'prballhandler_poss_pct', label: 'PnR BH', tooltip: 'Pick & Roll Ball Handler — % of possessions', dbColumn: 'prballhandler_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'prrollman_poss_pct', label: 'PnR RM', tooltip: 'Pick & Roll Roll Man — % of possessions', dbColumn: 'prrollman_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'postup_poss_pct', label: 'POST', tooltip: 'Post Up — % of possessions', dbColumn: 'postup_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'spotup_poss_pct', label: 'SPOT', tooltip: 'Spot Up — % of possessions', dbColumn: 'spotup_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'handoff_poss_pct', label: 'HAND', tooltip: 'Handoff — % of possessions', dbColumn: 'handoff_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'cut_poss_pct', label: 'CUT', tooltip: 'Cut — % of possessions', dbColumn: 'cut_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'offscreen_poss_pct', label: 'OSCREEN', tooltip: 'Off Screen — % of possessions', dbColumn: 'offscreen_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'offrebound_poss_pct', label: 'OREB', tooltip: 'Off Rebound (Putbacks) — % of possessions', dbColumn: 'offrebound_poss_pct', format: 'rawPct1', windowless: true },
+  { key: 'misc_poss_pct', label: 'MISC', tooltip: 'Miscellaneous — % of possessions', dbColumn: 'misc_poss_pct', format: 'rawPct1', windowless: true },
+]
+
+// ─── Play Types — Efficiency (PPP per play type) ────────────────────
+export const playTypeEfficiencyColumns: ColumnDef[] = [
+  { key: 'isolation_ppp', label: 'ISO', tooltip: 'Isolation — Points Per Possession', dbColumn: 'isolation_ppp', format: 'dec2', windowless: true },
+  { key: 'transition_ppp', label: 'TRANS', tooltip: 'Transition — Points Per Possession', dbColumn: 'transition_ppp', format: 'dec2', windowless: true },
+  { key: 'prballhandler_ppp', label: 'PnR BH', tooltip: 'Pick & Roll Ball Handler — Points Per Possession', dbColumn: 'prballhandler_ppp', format: 'dec2', windowless: true },
+  { key: 'prrollman_ppp', label: 'PnR RM', tooltip: 'Pick & Roll Roll Man — Points Per Possession', dbColumn: 'prrollman_ppp', format: 'dec2', windowless: true },
+  { key: 'postup_ppp', label: 'POST', tooltip: 'Post Up — Points Per Possession', dbColumn: 'postup_ppp', format: 'dec2', windowless: true },
+  { key: 'spotup_ppp', label: 'SPOT', tooltip: 'Spot Up — Points Per Possession', dbColumn: 'spotup_ppp', format: 'dec2', windowless: true },
+  { key: 'handoff_ppp', label: 'HAND', tooltip: 'Handoff — Points Per Possession', dbColumn: 'handoff_ppp', format: 'dec2', windowless: true },
+  { key: 'cut_ppp', label: 'CUT', tooltip: 'Cut — Points Per Possession', dbColumn: 'cut_ppp', format: 'dec2', windowless: true },
+  { key: 'offscreen_ppp', label: 'OSCREEN', tooltip: 'Off Screen — Points Per Possession', dbColumn: 'offscreen_ppp', format: 'dec2', windowless: true },
+  { key: 'offrebound_ppp', label: 'OREB', tooltip: 'Off Rebound (Putbacks) — Points Per Possession', dbColumn: 'offrebound_ppp', format: 'dec2', windowless: true },
+  { key: 'misc_ppp', label: 'MISC', tooltip: 'Miscellaneous — Points Per Possession', dbColumn: 'misc_ppp', format: 'dec2', windowless: true },
+]
+
 // ─── Lookup helpers ─────────────────────────────────────────────────
+export const playTypeColumnMap = {
+  frequency: playTypeFrequencyColumns,
+  efficiency: playTypeEfficiencyColumns,
+} as const
+
 export const playerColumnMap = {
   box: playerBoxColumns,
   shooting: playerShootingColumns,

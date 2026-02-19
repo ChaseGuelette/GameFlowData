@@ -236,6 +236,11 @@ def main():
             f"{sys.executable} src/processing/backfill_opponent_allowed_incremental.py --days-back 30",
             "Updating Opponent Allowed Stats (Incremental)",
         ),
+        # Step 8: Refresh play type data (Synergy)
+        (
+            f"{sys.executable} src/scrapers/play_type_scraper.py",
+            "Refreshing Play Type Data",
+        ),
     ]
 
     for command, description in steps:

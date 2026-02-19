@@ -7,6 +7,7 @@ const tabs: { value: StatsMainTab; label: string }[] = [
   { value: 'players', label: 'Players' },
   { value: 'teams', label: 'Teams' },
   { value: 'defense', label: 'Defense vs Position' },
+  { value: 'playTypes', label: 'Play Types' },
 ]
 
 interface StatTabsProps {

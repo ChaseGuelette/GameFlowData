@@ -6,18 +6,23 @@ import { TEAM_ABBREV } from '@/lib/constants'
 import { StatTabs } from '@/components/stats/StatTabs'
 import { CategoryTabs } from '@/components/stats/CategoryTabs'
 import { WindowToggle } from '@/components/stats/WindowToggle'
+import { OffDefToggle } from '@/components/stats/OffDefToggle'
 import { PositionFilter, type PositionOption } from '@/components/stats/PositionFilter'
 import { HeatmapTable, HeatmapLegend } from '@/components/stats/HeatmapTable'
 import {
   playerColumnMap,
   teamColumnMap,
   defenseColumnMap,
+  playTypeColumnMap,
 } from '@/lib/stats/columns'
+import { pivotPlayTypes } from '@/lib/stats/pivotPlayTypes'
 import type {
   StatsMainTab,
   PlayerCategory,
   TeamCategory,
   DefenseCategory,
+  PlayTypeCategory,
+  PlayTypeGrouping,
   WindowSuffix,
   StatRow,
   SortState,
@@ -42,6 +47,11 @@ const defenseCategories: { value: DefenseCategory; label: string }[] = [
   { value: 'per100', label: 'Per 100 Poss' },
 ]
 
+const playTypeCategories: { value: PlayTypeCategory; label: string }[] = [
+  { value: 'frequency', label: 'Frequency' },
+  { value: 'efficiency', label: 'Efficiency' },
+]
+
 // ─── Build team abbreviation options ────────────────────────────────
 const teamOptions = Object.entries(TEAM_ABBREV)
   .map(([, abbrev]) => abbrev)
@@ -55,6 +65,8 @@ export default function StatsPage() {
   const [playerCategory, setPlayerCategory] = useState<PlayerCategory>('box')
   const [teamCategory, setTeamCategory] = useState<TeamCategory>('offense')
   const [defenseCategory, setDefenseCategory] = useState<DefenseCategory>('totals')
+  const [playTypeCategory, setPlayTypeCategory] = useState<PlayTypeCategory>('frequency')
+  const [playTypeGrouping, setPlayTypeGrouping] = useState<PlayTypeGrouping>('Offensive')
 
   // ─── Window state (per tab) ─────────────────────────────────────
   const [playerWindow, setPlayerWindow] = useState<WindowSuffix>('l5')
@@ -72,11 +84,14 @@ export default function StatsPage() {
   const [playerSort, setPlayerSort] = useState<SortState>({ column: 'pts', direction: 'desc' })
   const [teamSort, setTeamSort] = useState<SortState>({ column: 'pts', direction: 'desc' })
   const [defenseSort, setDefenseSort] = useState<SortState>({ column: 'pts', direction: 'desc' })
+  const [playTypeSort, setPlayTypeSort] = useState<SortState>({ column: 'isolation_poss_pct', direction: 'desc' })
 
   // ─── Data state ─────────────────────────────────────────────────
   const [playerData, setPlayerData] = useState<StatRow[]>([])
   const [teamData, setTeamData] = useState<StatRow[]>([])
   const [defenseData, setDefenseData] = useState<StatRow[]>([])
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [playTypeRawData, setPlayTypeRawData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   // ─── Data fetching ──────────────────────────────────────────────
@@ -84,10 +99,11 @@ export default function StatsPage() {
     async function fetchAll() {
       setLoading(true)
 
-      const [playerRes, teamRes, defenseRes] = await Promise.all([
+      const [playerRes, teamRes, defenseRes, playTypeRes] = await Promise.all([
         supabase.from('player_stats_latest').select('*'),
         supabase.from('team_stats_latest').select('*'),
         supabase.from('defense_by_position_latest').select('*'),
+        supabase.from('team_play_types').select('team_id,team_name,team_abbreviation,play_type,type_grouping,poss_pct,ppp,percentile'),
       ])
 
       if (playerRes.data) {
@@ -125,6 +141,10 @@ export default function StatsPage() {
         )
       }
 
+      if (playTypeRes.data) {
+        setPlayTypeRawData(playTypeRes.data)
+      }
+
       setLoading(false)
     }
 
@@ -151,15 +171,22 @@ export default function StatsPage() {
     return defenseData.filter((row) => row.position === defensePosition)
   }, [defenseData, defensePosition])
 
+  // ─── Pivoted play type rows ──────────────────────────────────────
+  const playTypeData = useMemo(
+    () => pivotPlayTypes(playTypeRawData, playTypeGrouping),
+    [playTypeRawData, playTypeGrouping]
+  )
+
   // ─── Current columns/window/sort based on active tab ───────────
   const activeColumns = useMemo(() => {
     if (mainTab === 'players') return playerColumnMap[playerCategory]
     if (mainTab === 'teams') return teamColumnMap[teamCategory]
+    if (mainTab === 'playTypes') return playTypeColumnMap[playTypeCategory]
     return defenseColumnMap[defenseCategory]
-  }, [mainTab, playerCategory, teamCategory, defenseCategory])
+  }, [mainTab, playerCategory, teamCategory, defenseCategory, playTypeCategory])
 
   const activeWindow = mainTab === 'players' ? playerWindow : mainTab === 'teams' ? teamWindow : defenseWindow
-  const activeSort = mainTab === 'players' ? playerSort : mainTab === 'teams' ? teamSort : defenseSort
+  const activeSort = mainTab === 'players' ? playerSort : mainTab === 'teams' ? teamSort : mainTab === 'playTypes' ? playTypeSort : defenseSort
 
   const handleWindowChange = useCallback(
     (w: WindowSuffix) => {
@@ -174,12 +201,13 @@ export default function StatsPage() {
     (s: SortState) => {
       if (mainTab === 'players') setPlayerSort(s)
       else if (mainTab === 'teams') setTeamSort(s)
+      else if (mainTab === 'playTypes') setPlayTypeSort(s)
       else setDefenseSort(s)
     },
     [mainTab]
   )
 
-  const activeRows = mainTab === 'players' ? filteredPlayers : mainTab === 'teams' ? teamData : filteredDefense
+  const activeRows = mainTab === 'players' ? filteredPlayers : mainTab === 'teams' ? teamData : mainTab === 'playTypes' ? playTypeData : filteredDefense
 
   return (
     <main className="flex-1 max-w-[1400px] mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
@@ -198,8 +226,8 @@ export default function StatsPage() {
 
       {/* Controls row */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        {/* Window toggle (hidden for Consistency which is windowless) */}
-        {!(mainTab === 'players' && playerCategory === 'consistency') && (
+        {/* Window toggle (hidden for Consistency and Play Types which are windowless) */}
+        {!(mainTab === 'players' && playerCategory === 'consistency') && mainTab !== 'playTypes' && (
           <WindowToggle active={activeWindow} onChange={handleWindowChange} />
         )}
 
@@ -212,6 +240,12 @@ export default function StatsPage() {
         )}
         {mainTab === 'defense' && (
           <CategoryTabs categories={defenseCategories} active={defenseCategory} onChange={setDefenseCategory} />
+        )}
+        {mainTab === 'playTypes' && (
+          <>
+            <OffDefToggle active={playTypeGrouping} onChange={setPlayTypeGrouping} />
+            <CategoryTabs categories={playTypeCategories} active={playTypeCategory} onChange={setPlayTypeCategory} />
+          </>
         )}
 
         {/* Position filter (Players tab) */}
