@@ -442,6 +442,7 @@ dashboard/
 │   │   │   ├── history/page.tsx    # Bet history with filters
 │   │   │   ├── performance/page.tsx # Performance metrics
 │   │   │   ├── account/page.tsx    # Profile + community card
+│   │   │   ├── stats/page.tsx        # Data Vault — heatmap stat tables
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
 │   │   ├── auth/callback/route.ts  # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
@@ -449,6 +450,7 @@ dashboard/
 │   │   ├── landing/            # HeroSection, FeatureGrid
 │   │   ├── layout/             # Navbar, PublicNavbar, Footer
 │   │   ├── predictions/        # PropCard, PropGrid, FilterTabs, PlayOfTheDay
+│   │   ├── stats/              # HeatmapTable, StatTabs, CategoryTabs, WindowToggle, PositionFilter
 │   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
 │   │   ├── history/            # BetCard, BetList, HistoryFilters, HistorySummary
 │   │   ├── performance/        # KPICard, BankrollChart, StatBreakdown
@@ -458,10 +460,12 @@ dashboard/
 │   │   ├── supabase/           # Client, server, and middleware helpers
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
 │   │   ├── insights.ts         # Template-based insight generator
+│   │   ├── stats/columns.ts    # Column definitions for Data Vault heatmap tables
 │   │   ├── subscription.ts     # Subscription types/utils (dormant)
 │   │   └── utils.ts            # Formatting, edge tiers, headshot URLs
 │   ├── types/
 │   │   ├── predictions.ts      # TypeScript interfaces for predictions, bets, performance
+│   │   ├── stats.ts            # Types for Data Vault (ColumnDef, StatRow, SortState)
 │   │   └── subscription.ts     # Subscription type definitions (dormant)
 │   └── middleware.ts           # Auth redirect for protected routes
 ├── .env.local                  # Supabase credentials (not committed)
@@ -488,7 +492,8 @@ dashboard/
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
 - **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
 - **Free Beta Model:** No paywall — all authenticated users have full access. Public `/picks` page shows 3 real picks via `get_public_picks()` RPC to drive signups. All CTAs point to sign-up and Discord. Stripe infrastructure preserved (dormant) for future activation at ~200 Discord members.
-- **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account (requires auth).
+- **Data Vault (`/stats`):** Dense heatmap stat table with player, team, and defense-vs-position breakdowns. Features percentile-based blue heatmap coloring (5-step gradient), sortable columns, sticky name/position/team columns, window toggles (L5/L15/SZN), category tabs (Box Score/Shooting/Advanced/Consistency for players), position and team filters, and player search. Reads from 3 database views (`player_stats_latest`, `team_stats_latest`, `defense_by_position_latest`) that join rolling average tables with player/team reference data. All filtering and sorting is client-side after initial parallel fetch.
+- **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account/stats (requires auth).
 
 **Data Sources:**
 - `daily_predictions` table — prediction quantiles, edges, implied probabilities, bookmaker (sharpest line source)
@@ -497,6 +502,9 @@ dashboard/
 - `raw_player_props_combined` table — bookmaker lines for line shopping
 - `paper_bets` table — individual bet records with status and P&L
 - `paper_trading_daily_log` table — daily aggregated stats, bankroll tracking
+- `player_stats_latest` view — Data Vault player tab (rolling averages + advanced stats)
+- `team_stats_latest` view — Data Vault team tab (rolling team averages)
+- `defense_by_position_latest` view — Data Vault defense tab (defense-vs-position stats)
 
 **Run Commands:**
 ```bash
@@ -683,6 +691,11 @@ DISCORD_CHANNEL_PERFORMANCE=...
 ### Paper Trading
 - `paper_bets`: Individual paper bet records with full context (odds, edge, stake, status, P&L). Unique on `(game_date, player_id, stat_type, bet_direction)`.
 - `paper_trading_daily_log`: Daily aggregated P&L tracking. Unique on `game_date`. Tracks wins/losses, total staked, ROI, cumulative P&L, and running bankroll.
+
+### Dashboard Views (Pre-Computed Joins)
+- `player_stats_latest`: Latest per-player rolling stats — joins `player_average_game_stats` + `player_average_advanced_stats` + `players` + `player_position_history`. ~529 rows.
+- `team_stats_latest`: Latest per-team rolling stats — joins `team_average_game_stats` + `teams`. 30 rows.
+- `defense_by_position_latest`: Latest defense-vs-position — joins `team_allowed_by_position` + `teams`, filtered to G/W/B positions. 90 rows.
 
 ### Reference
 - `players`: Player reference data.

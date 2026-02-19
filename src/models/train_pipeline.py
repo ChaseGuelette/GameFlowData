@@ -220,14 +220,21 @@ class TrainingOrchestrator:
                     if key in new_features:
                         pipeline.rate_features[stat] = new_features[key]
 
+        # 3b. Hyperparameter tuning for retrained components
+        hyperparams = self._resolve_hyperparams_partial(
+            train_df, pipeline, retrain_stats, retrain_minutes, base_model_dir
+        )
+
         # 4. Retrain specified components
         if retrain_minutes:
             logger.info("Retraining minutes model...")
-            pipeline.train_minutes_model(train_df)
+            minutes_hp = hyperparams.get("minutes")
+            pipeline.train_minutes_model(train_df, hyperparams=minutes_hp)
 
         if retrain_stats:
             logger.info(f"Retraining rate models: {[s.upper() for s in retrain_stats]}")
-            pipeline.train_rate_models(train_df, stats=retrain_stats)
+            rate_hp = {s: hyperparams.get(s) for s in retrain_stats}
+            pipeline.train_rate_models(train_df, stats=retrain_stats, hyperparams=rate_hp)
 
         # 5. Evaluate calibration (all models, not just retrained)
         self._evaluate_calibration(pipeline, cal_df)
@@ -259,6 +266,100 @@ class TrainingOrchestrator:
         self.run_dir.rename(final_run_dir)
         self.run_dir = final_run_dir
         logger.info(f"Surgical retrain complete. Artifacts in {self.run_dir}")
+
+    def _resolve_hyperparams_partial(
+        self,
+        train_df: pd.DataFrame,
+        pipeline: PlayerPropsModelPipeline,
+        retrain_stats: list[str] | None,
+        retrain_minutes: bool,
+        base_model_dir: str,
+    ) -> dict:
+        """
+        Resolve hyperparameters for surgical retrain.
+
+        Priority:
+        1. If --hyperparams-path provided, load from that file
+        2. If --tune enabled, run tuning for retrained components only
+        3. Otherwise, load from base model's best_hyperparams.json
+        4. If no hyperparams found anywhere, return empty (use XGBoost defaults)
+        """
+        # Option 1: Explicit hyperparams file
+        if self.hyperparams_path:
+            logger.info(f"Loading hyperparameters from {self.hyperparams_path}")
+            with open(self.hyperparams_path) as f:
+                hyperparams = json.load(f)
+            with open(self.hyperparams_config_path, "w") as f:
+                json.dump(hyperparams, f, indent=4)
+            return hyperparams
+
+        # Option 2: Run fresh tuning for retrained components only
+        if self.tune_hyperparams:
+            logger.info("Running hyperparameter tuning for retrained components...")
+            tuner = QuantileHyperparameterTuner(
+                n_trials=self.tuning_trials,
+                timeout=self.tuning_timeout,
+                per_quantile=self.tuning_per_quantile,
+                pruning=True,
+                val_fraction=0.15,
+            )
+
+            hyperparams = {}
+
+            if retrain_minutes:
+                logger.info("Tuning Minutes Model...")
+                minutes_df = train_df[train_df["actual_minutes"] > 0].copy()
+                minutes_features = pipeline.minutes_features
+                if isinstance(minutes_features, dict):
+                    all_features = list(set(f for feats in minutes_features.values() for f in feats))
+                else:
+                    all_features = minutes_features
+                X = minutes_df[all_features].fillna(0)
+                y = minutes_df["actual_minutes"]
+                if self.tuning_per_quantile:
+                    configs = tuner.tune_per_quantile(X, y)
+                    hyperparams["minutes"] = {str(q): cfg.to_dict() for q, cfg in configs.items()}
+                else:
+                    config = tuner.tune(X, y)
+                    hyperparams["minutes"] = config.to_dict()
+
+            if retrain_stats:
+                for stat in retrain_stats:
+                    logger.info(f"Tuning {stat.upper()} Rate Model...")
+                    target = f"{stat}_per_min"
+                    rate_df = train_df[(train_df["actual_minutes"] >= 10) & (train_df[target].notna())].copy()
+                    rate_features = pipeline.rate_features.get(stat, {})
+                    if isinstance(rate_features, dict):
+                        all_features = list(set(f for feats in rate_features.values() for f in feats))
+                    else:
+                        all_features = rate_features
+                    X = rate_df[all_features].fillna(0)
+                    y = rate_df[target]
+                    if self.tuning_per_quantile:
+                        configs = tuner.tune_per_quantile(X, y)
+                        hyperparams[stat] = {str(q): cfg.to_dict() for q, cfg in configs.items()}
+                    else:
+                        config = tuner.tune(X, y)
+                        hyperparams[stat] = config.to_dict()
+
+            with open(self.hyperparams_config_path, "w") as f:
+                json.dump(hyperparams, f, indent=4)
+            logger.info(f"Saved tuned hyperparameters to {self.hyperparams_config_path}")
+            return hyperparams
+
+        # Option 3: Load from base model directory
+        base_hp_path = Path(base_model_dir) / "best_hyperparams.json"
+        if base_hp_path.exists():
+            logger.info(f"Loading existing hyperparameters from {base_hp_path}")
+            with open(base_hp_path) as f:
+                hyperparams = json.load(f)
+            with open(self.hyperparams_config_path, "w") as f:
+                json.dump(hyperparams, f, indent=4)
+            return hyperparams
+
+        # Option 4: No hyperparams found
+        logger.info("No hyperparameters found, using XGBoost defaults")
+        return {}
 
     def _save_run_config(self, train_seasons, calibration_season, cal_end_date=None):
         """Save run configuration for reproducibility."""

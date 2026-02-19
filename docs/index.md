@@ -41,7 +41,7 @@
 - [Query Player](query_player_documentation.md) - CLI tool for querying stored predictions.
 
 ## Dashboard
-- [Dashboard](dashboard_documentation.md) - Next.js web application for viewing predictions.
+- [Dashboard](dashboard_documentation.md) - Next.js web application for viewing predictions, stats, and paper trading performance.
 
 ## Database and Tables
 - [DB Client](db_client_documentation.md) - Database engine access and connectivity checks.

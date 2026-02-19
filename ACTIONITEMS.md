@@ -1,5 +1,47 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-18 — Session 39)
+
+### What We Did
+
+**Built Data Vault page (`/stats`) — dense heatmap stat table for exploring player, team, and defensive stats.**
+
+A Monster.bet-style data table that surfaces pre-computed rolling averages already in the database. No new pipeline work needed — all data comes from existing `player_average_game_stats`, `player_average_advanced_stats`, `team_average_game_stats`, and `team_allowed_by_position` tables.
+
+**Database:**
+- Created 3 Supabase views via migration: `player_stats_latest` (529 rows), `team_stats_latest` (30 rows), `defense_by_position_latest` (90 rows)
+- Views use `DISTINCT ON` for efficient "latest row per entity" queries with JOINs to lookup tables
+
+**Dashboard (8 new files):**
+- `types/stats.ts` — TypeScript types (ColumnDef, StatRow, SortState, WindowSuffix, etc.)
+- `lib/stats/columns.ts` — Column definitions for all categories with `{window}` template pattern
+- `components/stats/StatTabs.tsx` — Players / Teams / Defense vs Position tab bar
+- `components/stats/CategoryTabs.tsx` — Generic sub-category pill tabs
+- `components/stats/WindowToggle.tsx` — L5 / L15 / SZN toggle
+- `components/stats/PositionFilter.tsx` — All / Guards / Wings / Bigs position filter
+- `components/stats/HeatmapTable.tsx` — Core table with sorting, sticky columns, 5-step percentile heatmap coloring
+- `app/(protected)/stats/page.tsx` — Main Data Vault page wiring all components
+
+**Modified:** Navbar.tsx — Added "Data Vault" link
+
+**Key features:**
+- 5-step blue heatmap gradient based on percentile rank (with `invertHeatmap` for negative stats like TOV, DRtg)
+- All 3 data sources fetched in parallel on mount; filtering/sorting client-side
+- Player tab: Box Score / Shooting / Advanced / Consistency categories + search + team dropdown + min GP + position filter
+- Team tab: Offense / Defense / Overall categories
+- Defense tab: Totals / Per 100 Poss categories with position selector
+- Sticky name column + optional sticky position/team columns + sticky header
+- Window toggle hidden on Consistency tab (all windowless columns)
+
+**Tests:** 608 passed, 0 failures. Build succeeds.
+
+### Next Step
+
+1. **Stripe integration** — Subscribe page needs Stripe Checkout, account page needs Customer Portal link
+2. **Monitor Railway jobs** — Continuing from Session 38
+
+---
+
 ## Session Summary (2026-02-18 — Session 38)
 
 ### What We Did

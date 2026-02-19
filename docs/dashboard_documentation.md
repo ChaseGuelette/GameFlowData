@@ -65,6 +65,12 @@ dashboard/
 │   │   │   ├── KPICard.tsx     # Single metric display
 │   │   │   ├── BankrollChart.tsx   # Bankroll over time chart
 │   │   │   └── StatBreakdown.tsx   # Per-stat performance table
+│   │   ├── stats/              # Data Vault heatmap stat table components
+│   │   │   ├── HeatmapTable.tsx     # Core table with sorting, percentile coloring
+│   │   │   ├── StatTabs.tsx         # Players / Teams / Defense tab bar
+│   │   │   ├── CategoryTabs.tsx     # Sub-category pill tabs
+│   │   │   ├── WindowToggle.tsx     # L5 / L15 / SZN toggle
+│   │   │   └── PositionFilter.tsx   # All / G / W / B position filter
 │   │   ├── subscription/       # Subscription components (dormant)
 │   │   │   └── PricingCard.tsx # Reusable pricing card for future Stripe
 │   │   └── shared/             # Shared components
@@ -78,10 +84,12 @@ dashboard/
 │   │   │   └── middleware.ts   # Session + auth handling (no paywall)
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
 │   │   ├── insights.ts         # Template-based insight generator
+│   │   ├── stats/columns.ts    # Column definitions for Data Vault tables
 │   │   ├── subscription.ts     # Subscription utils (dormant)
 │   │   └── utils.ts            # Utility functions
 │   ├── types/
 │   │   ├── predictions.ts      # TypeScript interfaces
+│   │   ├── stats.ts            # Data Vault types (ColumnDef, StatRow, SortState)
 │   │   └── subscription.ts     # Subscription types (dormant)
 │   └── middleware.ts           # Auth redirect middleware
 ├── public/                     # Static assets
@@ -949,6 +957,84 @@ The `/picks` page is a public, shareable teaser designed to drive signups from s
 - `TEAM_ABBREV` — NBA team ID to abbreviation map, used by dashboard page and picks page
 
 Imported by: HeroSection, PublicNavbar, Footer, landing page, pricing page, account page, picks page, dashboard page.
+
+## Data Vault Page (`/stats`) — Session 39
+
+Dense heatmap stat table for exploring player, team, and defense-vs-position rolling averages.
+
+### Data Sources (Database Views)
+
+Three Supabase views provide pre-joined, latest-row data:
+
+| View | Rows | Source Tables |
+|------|------|---------------|
+| `player_stats_latest` | ~529 | `player_average_game_stats` + `player_average_advanced_stats` + `players` + `player_position_history` |
+| `team_stats_latest` | 30 | `team_average_game_stats` + `teams` |
+| `defense_by_position_latest` | 90 | `team_allowed_by_position` + `teams` (G/W/B positions only) |
+
+All views use `DISTINCT ON` to get the latest row per entity, filtered to current season.
+
+### Architecture
+
+- All 3 views fetched in parallel on mount via `Promise.all`
+- Data cached in React state — all filtering/sorting is client-side
+- Column definitions use `{window}` placeholder (e.g., `avg_pts_{window}`) replaced at render time with `l5`/`l15`/`szn`
+
+### Tabs & Categories
+
+| Main Tab | Sub-categories | Filters |
+|----------|---------------|---------|
+| Players | Box Score, Shooting, Advanced, Consistency | Position, Team, Search, Min GP |
+| Teams | Offense, Defense, Overall | — |
+| Defense vs Position | Totals, Per 100 Poss | Position (G/W/B) |
+
+### HeatmapTable Component
+
+**Percentile coloring** (5-step gradient):
+| Percentile | Style |
+|-----------|-------|
+| < 0.25 | No highlight (slate-800 base) |
+| 0.25–0.50 | `bg-blue-900/20` (subtle) |
+| 0.50–0.75 | `bg-blue-800/40` (moderate) |
+| 0.75–0.90 | `bg-blue-700/50 text-blue-100` (strong) |
+| 0.90–1.00 | `bg-blue-600/60 text-white font-medium` (elite) |
+
+For `invertHeatmap: true` columns (TOV, DRtg, PF), the scale is flipped.
+
+**Value formatting:**
+| Format | Example | Notes |
+|--------|---------|-------|
+| `int` | `5` | `Math.round(v)` |
+| `dec1` | `24.3` | `v.toFixed(1)` |
+| `dec2` | `1.85` | `v.toFixed(2)` |
+| `pct1` | `45.6%` | `(v * 100).toFixed(1) + "%"` — DB stores decimals |
+| `plusMinus1` | `+3.2` | Sign prefix + `v.toFixed(1)` |
+
+**Table features:**
+- Sticky name column (`sticky left-0 z-10`)
+- Sticky header row (`sticky top-0 z-20`)
+- Sortable column headers (click to toggle asc/desc)
+- `max-h-[calc(100vh-280px)] overflow-auto` for scroll
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `StatTabs` | `components/stats/StatTabs.tsx` | Players / Teams / Defense tab bar |
+| `CategoryTabs` | `components/stats/CategoryTabs.tsx` | Generic sub-category pill tabs |
+| `WindowToggle` | `components/stats/WindowToggle.tsx` | L5 / L15 / SZN toggle |
+| `PositionFilter` | `components/stats/PositionFilter.tsx` | All / G / W / B position filter |
+| `HeatmapTable` | `components/stats/HeatmapTable.tsx` | Core table with sorting + percentile coloring |
+
+### Column Definitions
+
+Defined in `lib/stats/columns.ts`. Each `ColumnDef` has:
+- `key` — Unique identifier
+- `label` — Display header
+- `dbColumn` — Template like `avg_pts_{window}` (resolved per window)
+- `format` — Value display format
+- `invertHeatmap` — Flip percentile scale (for negative stats)
+- `windowless` — Don't swap window (for Consistency tab columns)
 
 ## Future Enhancements
 

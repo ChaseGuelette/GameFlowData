@@ -85,7 +85,7 @@ DEFAULT_VARIANCE_INFLATION = {
 # upper_tail_multiplier > 1.0 extends the upper tail further (fixes Q90 under-coverage)
 # NOTE: Start conservative - these interact with variance_inflation
 DEFAULT_TAIL_ADJUSTMENT = {
-    "lower_tail_multiplier": 1.0,  # Neutral — discretization handles left tail
+    "lower_tail_multiplier": 1.15,  # Extend lower tail 15% more
     "upper_tail_multiplier": 1.0,  # Keep upper tail as-is
 }
 
@@ -243,10 +243,7 @@ class MonteCarloPredictor:
             # 5. Apply variance inflation if configured
             stat_samples = self._apply_variance_inflation(stat_samples, stat)
 
-            # 6. Discretize integer-valued stats (stochastic rounding)
-            stat_samples = self._discretize_samples(stat_samples, stat)
-
-            # 7. Build prediction object
+            # 6. Build prediction object
             predictions[stat] = PropPrediction(
                 player_id=player_id,
                 game_id=game_id,
@@ -313,7 +310,7 @@ class MonteCarloPredictor:
             z_indep = self.rng.standard_normal(self.n_samples)
             z_rate = rho_p * z_minutes + np.sqrt(max(0, 1 - rho_p ** 2)) * z_indep
 
-            # Transform to uniform via Gaussian CDF
+            # Transform to uniform via CDF
             u_minutes = sp_norm.cdf(z_minutes)
             u_rate = sp_norm.cdf(z_rate)
 
@@ -338,9 +335,6 @@ class MonteCarloPredictor:
 
             # Apply variance inflation if configured
             stat_samples = self._apply_variance_inflation(stat_samples, stat)
-
-            # Discretize integer-valued stats (stochastic rounding)
-            stat_samples = self._discretize_samples(stat_samples, stat)
 
             predictions[stat] = PropPrediction(
                 player_id=player_id,
@@ -466,9 +460,6 @@ class MonteCarloPredictor:
                 # Apply variance inflation
                 stat_samples = self._apply_variance_inflation(stat_samples, stat)
 
-                # Discretize integer-valued stats (stochastic rounding)
-                stat_samples = self._discretize_samples(stat_samples, stat)
-
                 predictions_list.append(
                     {
                         "player_id": player_ids[i],
@@ -538,30 +529,6 @@ class MonteCarloPredictor:
 
         # Ensure non-negative (can't have negative stats)
         return np.maximum(inflated, 0)
-
-    def _discretize_samples(self, samples: np.ndarray, stat: str) -> np.ndarray:
-        """
-        Apply stochastic rounding to preserve integer-valued stat distributions.
-
-        For low-count stats (AST, REB), the continuous minutes * rate product
-        creates artificial probability mass at non-integer values. This is
-        especially problematic at the left tail where the true distribution
-        has a spike at zero.
-
-        Uses stochastic rounding to avoid bias: sample 2.3 rounds to 2 with
-        prob 0.7 and to 3 with prob 0.3, preserving E[rounded] = E[original].
-        """
-        if stat not in self.DISCRETE_STATS:
-            return samples
-
-        floors = np.floor(samples)
-        remainders = samples - floors
-
-        # Stochastic rounding: round up with probability equal to the remainder
-        round_up = self.rng.uniform(size=len(samples)) < remainders
-        rounded = floors + round_up.astype(float)
-
-        return np.maximum(rounded, 0)
 
     def _apply_correlation_adjustment(
         self,
@@ -657,13 +624,6 @@ class MonteCarloPredictor:
     # produces tiny positive values.
     # 1e-3 per minute × 30 min = 0.03 combined — negligible for integer-valued stats.
     ZERO_SNAP_THRESHOLD = 1e-3
-
-    # Stats where stochastic rounding is applied after minutes × rate combination.
-    # These are integer-valued stats where the continuous product creates artificial
-    # probability mass at non-integer values, especially problematic at the left tail
-    # where the true distribution has a spike at zero.
-    # PTS granularity is large enough that continuous treatment works fine.
-    DISCRETE_STATS = {"ast", "reb"}
 
     def _build_extended_quantile_fn(
         self, quantile_probs: np.ndarray, quantile_values: np.ndarray

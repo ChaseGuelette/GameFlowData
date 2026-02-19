@@ -67,6 +67,9 @@ export function Navbar() {
               <Link href="/performance" className={navLinkClasses('/performance')}>
                 Performance
               </Link>
+              <Link href="/stats" className={navLinkClasses('/stats')}>
+                Data Vault
+              </Link>
             </div>
           </div>
 

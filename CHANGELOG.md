@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-18 Session 39] — Data Vault Heatmap Stat Tables
+
+### Added
+
+- **Data Vault page (`/stats`):** Dense heatmap stat table for exploring player, team, and defense-vs-position stats
+  - 5-step percentile-based blue heatmap coloring with `invertHeatmap` support for negative stats
+  - Players tab: Box Score, Shooting, Advanced, Consistency categories with search, team, position, and min GP filters
+  - Teams tab: Offense, Defense, Overall categories
+  - Defense vs Position tab: Totals and Per 100 Possessions with G/W/B position selector
+  - Window toggle (L5/L15/SZN), sortable columns, sticky name/position/team columns
+
+- **Database views (Supabase migration):**
+  - `player_stats_latest` — Latest per-player rolling stats (game stats + advanced stats + position), ~529 rows
+  - `team_stats_latest` — Latest per-team rolling stats, 30 rows
+  - `defense_by_position_latest` — Latest defense-vs-position per team+position, 90 rows (30 teams x 3 positions)
+
+- **New dashboard files:**
+  - `types/stats.ts` — TypeScript types for Data Vault feature
+  - `lib/stats/columns.ts` — Column definitions for all stat categories
+  - `components/stats/HeatmapTable.tsx` — Core heatmap table component
+  - `components/stats/StatTabs.tsx` — Main tab bar
+  - `components/stats/CategoryTabs.tsx` — Sub-category pill tabs
+  - `components/stats/WindowToggle.tsx` — Rolling window toggle
+  - `components/stats/PositionFilter.tsx` — Position filter
+
+### Changed
+
+- `components/layout/Navbar.tsx` — Added "Data Vault" link to `/stats`
+
+### Verified
+
+- Build succeeds with zero errors
+- 608 Python tests pass, no regressions
+- All 3 database views return expected row counts
+
+---
+
 ## [2026-02-18 Session 38] — Railway Deployment Fixes
 
 ### Fixed
