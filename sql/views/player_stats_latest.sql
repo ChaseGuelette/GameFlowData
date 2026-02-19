@@ -66,7 +66,7 @@ FROM (
         *
     FROM player_average_game_stats
     WHERE season_id = '22025'
-    ORDER BY player_id, game_date DESC
+    ORDER BY player_id, game_date DESC, game_id DESC
 ) g
 JOIN players p ON p.player_id = g.player_id
 LEFT JOIN (
@@ -81,5 +81,5 @@ LEFT JOIN (
         *
     FROM player_average_advanced_stats
     WHERE season_id = '22025'
-    ORDER BY player_id, game_date DESC
+    ORDER BY player_id, game_date DESC, game_id DESC
 ) a ON a.player_id = g.player_id;

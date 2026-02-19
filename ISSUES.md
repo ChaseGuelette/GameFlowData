@@ -508,24 +508,156 @@ The full script groups by `["player_id", "season_id"]`, ensuring season-to-date 
 
 ---
 
+---
+
+## BACKTESTING / INFERENCE — CRITICAL
+
+### ISS-038: Backtesting uses game-day odds (lookahead bias)
+
+- **File:** `src/backtesting/backtest_harness.py:499, 591`
+- **Status:** Fixed
+- **Impact:** Backtesting edges are systematically inflated because the backtest uses odds that were NOT available at prediction time
+
+Both lines queries in the backtest harness use:
+```sql
+AND snapshot_time::date <= :game_date
+```
+
+This includes odds snapshots from **game day itself** (e.g., 10 AM, 2 PM, or even 6 PM ET on game day). But in production, `inference_job.py` runs at **6:30 PM ET** using only odds scraped by the 6:00 PM ET `lines_job`. The backtest selects the **latest** snapshot (`ORDER BY snapshot_time DESC`, `rn = 1`), so it preferentially picks the most recent game-day snapshot — exactly the one most likely to reflect late-breaking info (injury announcements, sharp money, etc.) that the live system never sees.
+
+**Why this matters:**
+- Late-breaking injury news at 6:45 PM ET causes significant line movement
+- Sharp bettors moving lines at 7 PM ET adjust odds the model never saw
+- The backtest captures these post-decision lines, making edges appear larger than reality
+
+**Fix:** Use a timestamp-level cutoff matching production:
+```sql
+AND rp.snapshot_time < (:game_date::timestamp + interval '18 hours 30 minutes')
+```
+Or conservatively use `< :game_date` (only pre-game-day snapshots). The right choice depends on whether sufficient line data exists from the day before.
+
+---
+
+## BACKTESTING / INFERENCE — HIGH
+
+### ISS-039: Scheduler has no job dependency enforcement
+
+- **File:** `src/orchestration/scheduler.py`
+- **Status:** Fixed
+- **Impact:** If `daily_stats_job` fails at 9 AM, `inference_job` still runs at 6:30 PM with stale rolling averages
+
+Each cron job runs independently with no awareness of whether upstream jobs succeeded:
+- 9:00 AM: `daily_stats_job` — scrape results, update rolling averages
+- 6:30 PM: `inference_job` — generate predictions using rolling averages
+
+If the 9 AM job fails (DB timeout, API outage, Railway restart), the 6:30 PM job runs anyway using **yesterday's** rolling averages. Predictions use stale features with no warning. Similarly, if `lines_job` fails at all 3 scheduled times (12 PM, 4 PM, 6 PM), `inference_job` uses stale odds.
+
+**Fix:** Add dependency checking — either:
+- (A) Have `inference_job` check for a "daily_stats completed" marker before proceeding
+- (B) Have the scheduler skip downstream jobs if upstream failed
+- (C) At minimum, log a WARNING in `inference_job` if rolling averages haven't been updated today
+
+---
+
+### ISS-040: `run_daily.py` and `run_sweep.py` missing combined calibration offsets wiring
+
+- **Files:** `src/orchestration/run_daily.py:151`, `src/backtesting/run_sweep.py:742`
+- **Status:** Open (dormant — offsets file not deployed to production)
+- **Impact:** If combined calibration offsets are ever re-enabled, these two paths would silently skip recalibration
+
+The primary production path (`inference_job.py:155-161`) and the main backtest path (`run_backtest.py:183-193`) correctly load and pass `combined_calibration_offsets` to `MonteCarloPredictor`. However, two secondary paths do not:
+
+1. `run_daily.py:151` — legacy orchestrator, missing import and parameter
+2. `run_sweep.py:742` — sweep runner, missing import and parameter
+
+Currently a no-op because `combined_calibration_offsets.json` was intentionally removed from production (hurt betting ROI). But if offsets are re-enabled, these paths would produce different predictions.
+
+**Fix:** Add `load_combined_calibration_offsets` import and pass to both `MonteCarloPredictor()` calls.
+
+---
+
+### ISS-041: Incremental player stats upsert uses row-by-row loop instead of batch
+
+- **File:** `src/processing/populate_average_stats_incremental.py:450-452`
+- **Status:** Fixed
+- **Impact:** Performance — incremental job takes 10-50x longer than necessary
+
+```python
+with engine.begin() as conn:
+    for _, row in insert_df.iterrows():
+        params = {c: (None if pd.isna(row[c]) else row[c]) for c in cols}
+        conn.execute(text(upsert_sql), params)
+```
+
+This loops row-by-row using `iterrows()` (notoriously slow in pandas). The full backfill version uses batch operations. For a typical day with ~150 players × 3 tables = ~450 upserts, this adds unnecessary latency to the daily cron.
+
+**Fix:** Use `executemany()` or convert to a batch VALUES clause.
+
+---
+
+## BACKTESTING / INFERENCE — MEDIUM
+
+### ISS-042: View `DISTINCT ON` missing deterministic tiebreaker
+
+- **Files:** `sql/views/player_stats_latest.sql`, `sql/views/team_stats_latest.sql`, `sql/views/defense_by_position_latest.sql`
+- **Status:** Fixed
+- **Impact:** If duplicate rows exist for the same (player, date), view returns a non-deterministic result
+
+All three views use:
+```sql
+SELECT DISTINCT ON (player_id) *
+FROM player_average_game_stats
+WHERE season_id = '22025'
+ORDER BY player_id, game_date DESC
+```
+
+If two rows have the same `game_date` for the same `player_id` (e.g., from a re-backfill), PostgreSQL picks one arbitrarily. Adding `game_id DESC` as a tiebreaker ensures deterministic results:
+```sql
+ORDER BY player_id, game_date DESC, game_id DESC
+```
+
+**Impact is low** since duplicate same-date rows shouldn't exist, but it's a correctness guard.
+
+---
+
+### ISS-043: `created_at` column overwritten on every UPSERT
+
+- **Files:** `src/processing/backfill_opponent_allowed.py:234`, `src/processing/backfill_opponent_allowed_incremental.py:286`
+- **Status:** Fixed
+- **Impact:** Audit trail lost — `created_at` reflects last upsert, not original insertion
+
+```sql
+ON CONFLICT ... DO UPDATE SET ..., created_at = NOW();
+```
+
+Every re-upsert resets `created_at` to the current timestamp. If you need to track when a row was **first** inserted vs. last updated, this destroys that information.
+
+**Fix:** Either remove `created_at = NOW()` from the UPDATE clause (keep original), or add a separate `updated_at` column.
+
+---
+
 ## Remaining Open Issues
 
-25 of 37 total issues have been fixed. 12 remain open:
+30 of 43 total issues have been fixed. 13 remain open:
 
-### Original — Medium-term (require more design)
+### High — Dormant Code
 
-1. **ISS-012** — Move blowout factor outside per-stat loop (dormant — `enabled=False`)
-2. **ISS-014** — Extend MC quantile function beyond [0.01, 0.99] for extreme lines
-3. **ISS-023** — Split Stage 2 dedup to allow uncorrelated multi-stat bets per player
+1. **ISS-040** — `run_daily.py` and `run_sweep.py` missing combined offsets wiring (dormant — not used in production)
 
-### Original — Low priority / cosmetic
+### Medium-term (require more design)
 
-4. **ISS-017** — Fix misleading ratio column names (`l3_l15_ratio` computes L3/L5)
-5. **ISS-018** — Pre-game inference requires game row to exist in `player_game_stats`
-6. **ISS-019** — Dead `team_ids` parameter in `_load_injury_features_bulk`
-7. **ISS-020** — `validate_features=False` disables XGBoost feature-order safety
-8. **ISS-021** — Vectorize slow row-by-row monotonicity enforcement loop
-9. **ISS-022** — `prob_over + prob_under != 1.0` strict inequality
-10. **ISS-024** — `reset()` doesn't reset `current_bankroll` (dormant)
-11. **ISS-025** — Dead `side` parameter in `should_bet()`
-12. **ISS-026** — `--workers` CLI arg accepted but parallelism never used
+2. **ISS-012** — Move blowout factor outside per-stat loop (dormant — `enabled=False`)
+3. **ISS-014** — Extend MC quantile function beyond [0.01, 0.99] for extreme lines
+4. **ISS-023** — Split Stage 2 dedup to allow uncorrelated multi-stat bets per player
+
+### Low priority / cosmetic
+
+5. **ISS-017** — Fix misleading ratio column names (`l3_l15_ratio` computes L3/L5)
+6. **ISS-018** — Pre-game inference requires game row to exist in `player_game_stats`
+7. **ISS-019** — Dead `team_ids` parameter in `_load_injury_features_bulk`
+8. **ISS-020** — `validate_features=False` disables XGBoost feature-order safety
+9. **ISS-021** — Vectorize slow row-by-row monotonicity enforcement loop
+10. **ISS-022** — `prob_over + prob_under != 1.0` strict inequality
+11. **ISS-024** — `reset()` doesn't reset `current_bankroll` (dormant)
+12. **ISS-025** — Dead `side` parameter in `should_bet()`
+13. **ISS-026** — `--workers` CLI arg accepted but parallelism never used

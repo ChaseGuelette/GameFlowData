@@ -38,6 +38,6 @@ FROM (
     FROM team_allowed_by_position
     WHERE game_date >= '2025-10-01'::date
       AND position_group IN ('G', 'W', 'B')
-    ORDER BY team_id, position_group, game_date DESC
+    ORDER BY team_id, position_group, game_date DESC, game_id DESC
 ) d
 JOIN teams t ON t.team_id = d.team_id;

@@ -475,8 +475,9 @@ class BacktestHarness:
         }
         markets = [stat_to_market[s] for s in self.stats if s in stat_to_market]
 
-        # Get lines from snapshot closest to but before game time
-        # For simplicity, use latest snapshot on or before game date
+        # Get lines from snapshot closest to but before inference cutoff
+        # Production inference runs at 6:30 PM ET (~23:30 UTC EST / 22:30 UTC EDT)
+        # Use 23:30 UTC as cutoff to match production behavior
         query = text("""
             WITH ranked_lines AS (
                 SELECT
@@ -496,7 +497,7 @@ class BacktestHarness:
                 WHERE game_id IN :game_ids
                   AND market_key IN :markets
                   AND bookmaker IN :bookmakers
-                  AND snapshot_time::date <= :game_date
+                  AND snapshot_time < :game_date::timestamp + interval '23 hours 30 minutes'
             )
             SELECT
                 player_id,
@@ -588,7 +589,7 @@ class BacktestHarness:
                 JOIN game_dates gd ON LPAD(rp.game_id, 10, '0') = gd.game_id
                 WHERE rp.market_key IN :markets
                   AND rp.bookmaker IN :bookmakers
-                  AND rp.snapshot_time::date <= gd.game_date
+                  AND rp.snapshot_time < gd.game_date::timestamp + interval '23 hours 30 minutes'
             )
             SELECT
                 player_id,

@@ -446,10 +446,10 @@ def upsert_player_basic_averages(engine, df: pd.DataFrame):
     cols = list(insert_df.columns)
     upsert_sql = _build_upsert_sql("player_average_game_stats", cols, ["player_id", "game_id"])
 
+    records = insert_df.where(insert_df.notna(), None).to_dict(orient="records")
     with engine.begin() as conn:
-        for _, row in insert_df.iterrows():
-            params = {c: (None if pd.isna(row[c]) else row[c]) for c in cols}
-            conn.execute(text(upsert_sql), params)
+        if records:
+            conn.execute(text(upsert_sql), records)
     logger.info(f"Upserted {len(insert_df)} player basic rows")
 
 
@@ -473,10 +473,10 @@ def upsert_player_advanced_averages(engine, df: pd.DataFrame):
     cols = list(insert_df.columns)
     upsert_sql = _build_upsert_sql("player_average_advanced_stats", cols, ["player_id", "game_id"])
 
+    records = insert_df.where(insert_df.notna(), None).to_dict(orient="records")
     with engine.begin() as conn:
-        for _, row in insert_df.iterrows():
-            params = {c: (None if pd.isna(row[c]) else row[c]) for c in cols}
-            conn.execute(text(upsert_sql), params)
+        if records:
+            conn.execute(text(upsert_sql), records)
     logger.info(f"Upserted {len(insert_df)} player advanced rows")
 
 
@@ -500,10 +500,10 @@ def upsert_team_averages(engine, df: pd.DataFrame):
     cols = list(insert_df.columns)
     upsert_sql = _build_upsert_sql("team_average_game_stats", cols, ["team_id", "game_id"])
 
+    records = insert_df.where(insert_df.notna(), None).to_dict(orient="records")
     with engine.begin() as conn:
-        for _, row in insert_df.iterrows():
-            params = {c: (None if pd.isna(row[c]) else row[c]) for c in cols}
-            conn.execute(text(upsert_sql), params)
+        if records:
+            conn.execute(text(upsert_sql), records)
     logger.info(f"Upserted {len(insert_df)} team rows")
 
 

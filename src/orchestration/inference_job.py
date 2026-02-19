@@ -100,6 +100,8 @@ def main():
 
     try:
         # Import here to avoid slow imports when just checking --help
+        from sqlalchemy import text
+
         from src.db.client import get_engine
         from src.models.daily_runner import DailyPredictionRunner
         from src.models.feature_store import FeatureStore
@@ -159,6 +161,29 @@ def main():
             pipeline, n_samples=10000, copula_params=copula_params,
             combined_calibration_offsets=combined_cal_offsets,
         )
+
+        # Check upstream data freshness — warn if rolling averages are stale
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT MAX(game_date)::date FROM player_average_game_stats WHERE season_id = ("
+                    "  SELECT MAX(season_id) FROM player_average_game_stats"
+                    ")"
+                )).scalar()
+                if result:
+                    days_stale = (target_date - result).days
+                    if days_stale > 2:
+                        logger.warning(
+                            f"Rolling averages may be stale! Latest game_date in "
+                            f"player_average_game_stats: {result} ({days_stale} days ago). "
+                            f"Check if daily_stats_job ran successfully."
+                        )
+                    else:
+                        logger.info(f"Rolling averages up to date (latest: {result})")
+                else:
+                    logger.warning("No data found in player_average_game_stats — daily_stats_job may not have run")
+        except Exception as e:
+            logger.warning(f"Could not check data freshness: {e}")
 
         # Create runner and generate predictions
         runner = DailyPredictionRunner(engine, feature_store, pipeline, predictor)

@@ -48,6 +48,6 @@ FROM (
         *
     FROM team_average_game_stats
     WHERE season_id = '22025'
-    ORDER BY team_id, game_date DESC
+    ORDER BY team_id, game_date DESC, game_id DESC
 ) g
 JOIN teams t ON t.team_id = g.team_id;
