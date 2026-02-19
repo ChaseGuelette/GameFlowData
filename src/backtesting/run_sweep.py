@@ -24,17 +24,16 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from src.backtesting.backtest_harness import BacktestHarness, BacktestResult
+from src.backtesting.backtest_harness import BacktestHarness
 from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
 from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
-from src.models.black_litterman import BLConfig, BlackLittermanBlender
+from src.models.black_litterman import BlackLittermanBlender, BLConfig
 from src.models.feature_store import FeatureStore
 from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
 from src.models.quantile_trainer import PlayerPropsModelPipeline
@@ -386,7 +385,6 @@ def print_comparison_table(
     print(f"\n{'─' * 100}")
     print("PER-STAT BREAKDOWN")
     print(f"{'─' * 100}")
-    stat_fmt = "{:>3}  {:<40} {:>12} {:>12} {:>12}"
     stat_labels = []
     for r in results:
         if r.metrics.by_stat:
@@ -562,8 +560,8 @@ def save_results(
     for dir_name in config_dirs:
         logger.info(f"  Config dir: {output_dir / dir_name}")
     logger.info(
-        f"Per-config dashboards: run  "
-        f"python src/backtesting/visualize_results.py --results-dir <config_dir>"
+        "Per-config dashboards: run  "
+        "python src/backtesting/visualize_results.py --results-dir <config_dir>"
     )
 
 

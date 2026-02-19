@@ -18,7 +18,6 @@ import json
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any
 
 from sqlalchemy import text
 
@@ -211,7 +210,7 @@ class DatabaseHealthChecker:
 
                 has_warning = pct_linked < 90
 
-                print(f"  Recent props (last ~500k rows):")
+                print("  Recent props (last ~500k rows):")
                 print(f"    Total: {total:,}")
                 print(f"    {'✓' if pct_game >= 90 else '⚠️'} Has game_id: {has_game:,} ({pct_game:.1f}%)")
                 print(f"    {'✓' if pct_player >= 90 else '⚠️'} Has player_id: {has_player:,} ({pct_player:.1f}%)")
@@ -420,7 +419,6 @@ class DatabaseHealthChecker:
 
             for row in rows:
                 game_date, games, with_preds = row
-                pct = (with_preds / games * 100) if games > 0 else 0
                 status = "✓" if with_preds > 0 else "⚠️"
                 if with_preds == 0:
                     has_warning = True

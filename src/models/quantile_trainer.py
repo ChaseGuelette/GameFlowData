@@ -44,7 +44,7 @@ class QuantileModelConfig:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "QuantileModelConfig":
+    def from_dict(cls, data: dict) -> QuantileModelConfig:
         """Create config from dictionary."""
         # Filter out unknown keys
         valid_keys = cls.__annotations__.keys()
@@ -330,7 +330,7 @@ class QuantileModelSuite:
         print(f"Saved quantile model suite to {path}")
 
     @classmethod
-    def load(cls, path: str) -> "QuantileModelSuite":
+    def load(cls, path: str) -> QuantileModelSuite:
         """Load models from disk."""
         save_dict = joblib.load(path)
 
@@ -506,7 +506,7 @@ class PlayerPropsModelPipeline:
         print(f"\nAll models saved to {directory}")
 
     @classmethod
-    def load_all(cls, directory: str, feature_store) -> "PlayerPropsModelPipeline":
+    def load_all(cls, directory: str, feature_store) -> PlayerPropsModelPipeline:
         """Load all models."""
         path = Path(directory)
 

@@ -9,14 +9,15 @@ Tests cover:
 - Edge case handling
 """
 
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
-from pathlib import Path
 from scipy.stats import nbinom
-import tempfile
 
-from src.models.truncated_negbin import TruncatedNegBinModel, TruncatedNegBinConfig
+from src.models.truncated_negbin import TruncatedNegBinConfig, TruncatedNegBinModel
 
 
 class TestTruncatedNegBinConfig:

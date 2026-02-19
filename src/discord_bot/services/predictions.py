@@ -2,9 +2,8 @@
 
 import asyncio
 import logging
-from datetime import date, datetime
+from datetime import date
 
-import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine

@@ -9,6 +9,7 @@ Run pytest in order to ensure all things function properly. Update ARCHITECTURE.
 ## Step 1: Run Pytest
 
 Run pytest in order to confirm new features didn't break old features. If pytest fails, prompt user to switch to /bash mode for further debugging
+Run ruff check --fix. If there are remaining issues, like  unused variables or import issues, fix them. If it is a significant change, notify me
 
 ## Step 2: Update Architecture.md
 

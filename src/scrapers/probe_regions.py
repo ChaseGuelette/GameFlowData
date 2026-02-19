@@ -92,7 +92,6 @@ def analyze_response(data):
     for bk in data["bookmakers"]:
         bk_key = bk["key"]
         markets_found = set()
-        player_count = 0
         players_seen = set()
 
         for market in bk.get("markets", []):
@@ -151,7 +150,7 @@ def main():
 
                 bk_results = analyze_response(data)
                 if not bk_results:
-                    print(f"    -> Empty response (no bookmakers)")
+                    print("    -> Empty response (no bookmakers)")
                     continue
 
                 for bk_key, info in bk_results.items():

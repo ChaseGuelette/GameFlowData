@@ -672,7 +672,7 @@ def _render_bet_table(bets_df: pd.DataFrame, other_lines: dict) -> str:
     html.append('<table class="bet-table" id="betTable"><thead><tr>')
     for i, (label, key, dtype) in enumerate(headers):
         if key is None:
-            html.append(f"<th></th>")
+            html.append("<th></th>")
         else:
             html.append(f'<th onclick="sortTable({i}, \'{dtype}\')">{label}<span class="sort-arrow">\u2195</span></th>')
     html.append("</tr></thead><tbody>")

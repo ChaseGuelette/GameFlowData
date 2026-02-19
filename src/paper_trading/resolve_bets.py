@@ -156,7 +156,7 @@ def run_single_date_resolution(trader: PaperTrader, game_date: date, dry_run: bo
     results = trader.resolve_bets(game_date)
 
     # Display results
-    print(f"\nResolution Complete:")
+    print("\nResolution Complete:")
     print(f"  - Won:       {results['won']}")
     print(f"  - Lost:      {results['lost']}")
     print(f"  - Push:      {results['push']}")

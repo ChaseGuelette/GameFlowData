@@ -14,17 +14,16 @@ Replaces the broken C4 truncated NegBin architecture which had multiple
 implementation issues causing poor calibration.
 """
 
-from dataclasses import dataclass, asdict
-from pathlib import Path
-from typing import Optional
 import json
 import logging
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 import xgboost as xgb
+from sklearn.model_selection import train_test_split
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +65,9 @@ class ThreesMulticlassModel:
     - Well-established technique for ordinal/count outcomes
     """
 
-    def __init__(self, config: Optional[ThreesMulticlassConfig] = None):
+    def __init__(self, config: ThreesMulticlassConfig | None = None):
         self.config = config or ThreesMulticlassConfig()
-        self.model: Optional[xgb.XGBClassifier] = None
+        self.model: xgb.XGBClassifier | None = None
         self.feature_names: list[str] = []
 
         # Store class distribution from training for diagnostics
@@ -78,7 +77,7 @@ class ThreesMulticlassModel:
         self,
         X: pd.DataFrame,
         y: np.ndarray,
-        sample_weight: Optional[np.ndarray] = None,
+        sample_weight: np.ndarray | None = None,
     ) -> dict:
         """
         Train multiclass classifier on threes counts.
@@ -192,7 +191,7 @@ class ThreesMulticlassModel:
         self,
         X: pd.DataFrame,
         n_samples: int = 10000,
-        rng: Optional[np.random.Generator] = None,
+        rng: np.random.Generator | None = None,
     ) -> np.ndarray:
         """
         Sample threes counts from predicted categorical distribution.
@@ -228,7 +227,7 @@ class ThreesMulticlassModel:
         self,
         features: dict,
         n_samples: int = 10000,
-        rng: Optional[np.random.Generator] = None,
+        rng: np.random.Generator | None = None,
     ) -> np.ndarray:
         """
         Sample for a single player given feature dict.

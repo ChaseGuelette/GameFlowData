@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
 
-from src.models.black_litterman import BLConfig, BlackLittermanBlender
+from src.models.black_litterman import BlackLittermanBlender, BLConfig
 
 logger = logging.getLogger(__name__)
 

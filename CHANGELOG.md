@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-19 Session 40] — AST Surgical Retrain Evaluation
+
+### Added
+
+- **`_resolve_hyperparams_partial()` in `train_pipeline.py`:** Enables per-quantile hyperparameter tuning for surgical retrains via `run_partial()`. Supports priority chain: explicit file > Optuna tuning > base model params > XGBoost defaults (+105 lines)
+
+### Changed
+
+- **`monte_carlo.py`:** Cleanup, removed unused code (-46 lines)
+
+### Evaluated (Not Promoted)
+
+- **AST-only surgical retrain — Run 1 (`run_20260218_175622`):** No tuning, no feature reselection. AST Q10 combined gap: +8.10% (prod was +10.25%)
+- **AST-only surgical retrain — Run 2 (`run_20260218_180752`):** Per-quantile Optuna tuning + feature reselection. AST Q10 combined gap: +7.60%
+- Neither run promoted — combined Q10 gap still exceeds 5% tolerance (zero-inflation issue)
+- Individual AST calibration good on both runs (all quantiles within 2%)
+- PTS and REB combined Q25 gaps also exceed 5% on the new calibration window
+
+### Verified
+
+- 608 Python tests pass, no regressions
+- All code changes committed in `c8a9eba`
+
+---
+
 ## [2026-02-18 Session 39] — Data Vault Heatmap Stat Tables
 
 ### Added

@@ -3,23 +3,19 @@
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.social.theme import (
+    GREEN,
+    SLATE,
+    YELLOW,
+    create_placeholder_headshot,
     get_best_side,
     get_confidence_label,
     get_edge_color,
     get_edge_tier,
     get_star_count,
-    GREEN,
-    YELLOW,
-    SLATE,
-    create_placeholder_headshot,
 )
-
 
 # ---------------------------------------------------------------------------
 # Theme utility tests
@@ -292,11 +288,12 @@ class TestHeadshotCache:
         assert img.size == (200, 200)
 
     def test_caches_to_disk(self, tmp_path):
-        from src.social.card_renderer import HeadshotCache
+        import io
 
         # Create a fake PNG in memory
         from PIL import Image
-        import io
+
+        from src.social.card_renderer import HeadshotCache
 
         fake = Image.new("RGBA", (100, 100), (255, 0, 0, 255))
         buf = io.BytesIO()
@@ -318,5 +315,5 @@ class TestHeadshotCache:
 
         # Second call should use cache (no HTTP)
         with patch("src.social.card_renderer.requests.get") as mock_get2:
-            img2 = cache.get(12345)
+            cache.get(12345)
             mock_get2.assert_not_called()

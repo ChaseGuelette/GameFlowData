@@ -29,7 +29,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
-from src.models.black_litterman import BLConfig, BlackLittermanBlender
+from src.models.black_litterman import BlackLittermanBlender, BLConfig
 
 if TYPE_CHECKING:
     from src.config.stat_config import StatConfigSet

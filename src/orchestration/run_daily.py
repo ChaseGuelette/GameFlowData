@@ -147,7 +147,7 @@ def main():
             logger.info("Initializing Predictor...")
             copula_params = load_copula_params(str(model_path))
             if copula_params:
-                logger.info(f"Loaded Gaussian copula params from model artifacts")
+                logger.info("Loaded Gaussian copula params from model artifacts")
             predictor = MonteCarloPredictor(pipeline, n_samples=10000, copula_params=copula_params)
 
             runner = DailyPredictionRunner(engine, feature_store, pipeline, predictor)

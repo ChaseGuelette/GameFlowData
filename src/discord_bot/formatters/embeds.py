@@ -4,7 +4,6 @@ from datetime import date, datetime
 
 import discord
 
-
 # Color scheme
 COLORS = {
     "success": discord.Color.green(),

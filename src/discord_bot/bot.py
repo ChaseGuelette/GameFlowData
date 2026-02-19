@@ -2,8 +2,6 @@
 
 import logging
 import os
-import signal
-import sys
 from datetime import date
 
 import discord
@@ -267,7 +265,7 @@ class GameFlowBot(commands.Bot):
             await channel.send(embed=embed)
             logger.info(f"Sent daily alert with {len(picks)} picks")
 
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to send daily alert")
 
 

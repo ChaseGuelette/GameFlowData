@@ -2,9 +2,10 @@
 Compare actual threes distribution vs NegBin model prediction.
 """
 
+from collections import Counter
+
 import numpy as np
 from scipy.stats import nbinom
-from collections import Counter
 from sqlalchemy import text
 
 from src.db.client import get_engine

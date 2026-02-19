@@ -10,12 +10,13 @@ This script:
 Exit criteria: chi-squared p-value > 0.05 to proceed with implementation
 """
 
-import numpy as np
-import pandas as pd
-from scipy.stats import nbinom, chisquare
-from scipy.optimize import minimize, minimize_scalar
 import sys
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import minimize
+from scipy.stats import chisquare, nbinom
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -151,9 +152,6 @@ def chi_squared_test(data: np.ndarray, mu: float, alpha: float) -> dict:
         expected[k - 1] = truncated_negbin_pmf(k, mu, alpha) * n_samples
 
     # Tail probability
-    n = 1.0 / alpha
-    p = 1.0 / (1.0 + alpha * mu)
-    p_zero = nbinom.pmf(0, n, p)
     tail_prob = 1 - sum(truncated_negbin_pmf(k, mu, alpha) for k in range(1, max_k + 1))
     expected_tail = tail_prob * n_samples
     expected = np.append(expected, expected_tail)
@@ -210,7 +208,7 @@ def validate_segment(df: pd.DataFrame, segment_name: str) -> dict:
     # Chi-squared test
     chi2 = chi_squared_test(data, fit['mu'], fit['alpha'])
 
-    print(f"\nChi-squared test:")
+    print("\nChi-squared test:")
     print(f"  Statistic: {chi2['statistic']:.2f}")
     print(f"  p-value: {chi2['p_value']:.4f}")
     print(f"  Degrees of freedom: {chi2['df']}")

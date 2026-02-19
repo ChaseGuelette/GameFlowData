@@ -2,24 +2,22 @@
 
 import json
 from datetime import date
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
-import pytest
 
+from src.backtesting.performance_metrics import PerformanceMetrics
 from src.backtesting.run_sweep import (
     SweepConfig,
     SweepResult,
+    _config_dir_name,
     build_sweep_grid,
     print_comparison_table,
     run_shared_phases,
     run_single_config,
     save_results,
-    _config_dir_name,
 )
-from src.backtesting.performance_metrics import PerformanceMetrics, CalibrationResult
-
 
 # ---------------------------------------------------------------------------
 # SweepConfig tests

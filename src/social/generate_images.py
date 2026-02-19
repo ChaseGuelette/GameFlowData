@@ -106,7 +106,7 @@ def main() -> int:
     results_date = args.date - timedelta(days=1) if args.type == "both" else args.date
 
     if args.dry_run:
-        print(f"[DRY RUN] Would generate images:")
+        print("[DRY RUN] Would generate images:")
         if generate_picks:
             print(f"  - Slate card: top {args.top} picks for {picks_date} ({args.format})")
             if args.individual:

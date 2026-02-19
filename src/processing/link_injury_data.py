@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 from src.db.client import get_engine
-from src.processing.nba_linker_local import TEAM_NAME_ALIASES, normalize_team
+from src.processing.nba_linker_local import normalize_team
 
 load_dotenv()
 
@@ -96,7 +96,7 @@ def load_manual_mappings(path: Path) -> dict[str, int]:
         return {}
 
     mappings = {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             api_name = row.get("api_name", "").strip()

@@ -393,7 +393,7 @@ Examples:
             print(f"Start from: {args.start_date}")
         if end_at:
             print(f"End at: {args.end_date}")
-        print(f"\nNote: Actual cost may be lower — API only charges for markets with data in the response.")
+        print("\nNote: Actual cost may be lower — API only charges for markets with data in the response.")
         exit(0)
 
     # Handle --no-resume: delete progress file before loading

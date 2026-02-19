@@ -7,7 +7,6 @@ Montserrat static files in assets/fonts/.
 from __future__ import annotations
 
 import math
-import os
 from functools import lru_cache
 from pathlib import Path
 

@@ -91,7 +91,7 @@ def promote(run_name: str | None = None):
 
     # Clear existing production folder
     if PRODUCTION_DIR.exists():
-        print(f"Removing existing production model...")
+        print("Removing existing production model...")
         shutil.rmtree(PRODUCTION_DIR)
 
     # Copy to production
@@ -102,11 +102,11 @@ def promote(run_name: str | None = None):
     marker = PRODUCTION_DIR / ".source"
     marker.write_text(source.name)
 
-    print(f"\n✓ Model promoted to production!")
+    print("\n✓ Model promoted to production!")
     print(f"  Source: {source.name}")
     print(f"  Target: {PRODUCTION_DIR.relative_to(ARTIFACTS_DIR.parent.parent.parent)}")
-    print(f"\nNext steps:")
-    print(f"  git add src/models/artifacts/production/")
+    print("\nNext steps:")
+    print("  git add src/models/artifacts/production/")
     print(f"  git commit -m 'Promote {source.name} to production'")
 
 

@@ -29,7 +29,7 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 import pandas as pd
-from sqlalchemy import text, bindparam
+from sqlalchemy import bindparam, text
 
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore

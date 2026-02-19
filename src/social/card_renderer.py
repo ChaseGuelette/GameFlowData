@@ -9,7 +9,6 @@ Three renderer classes:
 from __future__ import annotations
 
 import logging
-import os
 from datetime import date, datetime
 from pathlib import Path
 
@@ -21,7 +20,6 @@ from src.social.theme import (
     BG_CARD,
     BG_PRIMARY,
     BG_ROW_ALT,
-    GOLD,
     LOST_RED,
     PUSH_GRAY,
     TEXT_MUTED,

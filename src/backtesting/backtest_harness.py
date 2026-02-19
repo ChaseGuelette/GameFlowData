@@ -18,7 +18,7 @@ from sqlalchemy import bindparam, text
 
 from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
-from src.models.black_litterman import BLConfig, BlackLittermanBlender
+from src.models.black_litterman import BlackLittermanBlender, BLConfig
 
 if TYPE_CHECKING:
     from src.config.stat_config import StatConfigSet

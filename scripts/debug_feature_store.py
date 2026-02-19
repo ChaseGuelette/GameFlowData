@@ -1,7 +1,9 @@
 """Debug feature store - check what data is available."""
-from src.db.client import get_engine
-from sqlalchemy import text
 from datetime import date
+
+from sqlalchemy import text
+
+from src.db.client import get_engine
 
 engine = get_engine()
 target_date = date(2026, 2, 9)
@@ -63,6 +65,6 @@ with engine.connect() as conn:
         LIMIT 5
     """), {"target_date": target_date})
     rows = result.fetchall()
-    print(f"\nUpcoming games in team_game_stats:")
+    print("\nUpcoming games in team_game_stats:")
     for r in rows:
         print(f"  {r}")

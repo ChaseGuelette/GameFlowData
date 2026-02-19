@@ -16,7 +16,7 @@ Usage:
 
 import argparse
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import pandas as pd
 from sqlalchemy import text

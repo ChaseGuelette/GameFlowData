@@ -1,5 +1,54 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-19 — Session 40)
+
+### What We Did
+
+**Evaluated two AST-only surgical retrains using `run_partial()` with per-quantile hyperparameter tuning. Documented findings; no model promoted.**
+
+Two runs were evaluated against the production model (`run_20260210_095220`):
+
+| Run | ID | Features | Tuning |
+|-----|----|----------|--------|
+| Run 1 | `run_20260218_175622` | Inherited from base | None (base hyperparams) |
+| Run 2 | `run_20260218_180752` | Reselected via Optuna | Per-quantile Optuna tuning |
+
+**Code change:** Added `_resolve_hyperparams_partial()` to `train_pipeline.py` (+105 lines), enabling hyperparameter tuning for individual surgical retrains via `run_partial()`. Priority chain: explicit file > fresh Optuna tuning > base model's `best_hyperparams.json` > XGBoost defaults.
+
+**Individual AST calibration** — All three models (production + both retrains) show good individual calibration, every quantile within 2%:
+
+| Quantile | Production | Run 1 (no tune) | Run 2 (tuned) |
+|----------|------------|------------------|---------------|
+| Q10 | -0.59% | +1.44% | +1.44% |
+| Q25 | +0.52% | +0.38% | +0.39% |
+| Q50 | -0.96% | -1.42% | -1.40% |
+| Q75 | -1.26% | -1.83% | -1.82% |
+| Q90 | -0.70% | -1.64% | -1.64% |
+
+**Combined AST calibration (minutes x rate)** — Q10 gap improved but still exceeds 5% tolerance:
+
+| Quantile | Production | Run 1 (no tune) | Run 2 (tuned) |
+|----------|------------|------------------|---------------|
+| Q10 | **+10.25%** | **+8.10%** | **+7.60%** |
+| Q25 | -1.15% | +0.05% | -1.15% |
+| Q50 | -0.30% | -3.50% | -4.45% |
+| Q75 | +1.60% | -0.85% | -1.80% |
+| Q90 | +1.40% | +0.40% | +0.20% |
+
+**Other stats (frozen, same across all runs) also show combined Q25 drift on the new calibration window:**
+- PTS Q25 combined: -3.4% (prod) → -4.6% (Run 1) → -5.2% (Run 2)
+- REB Q25 combined: -4.9% (prod) → -6.0% (Run 1) → -6.75% (Run 2)
+
+**Decision:** No model promoted. The AST Q10 combined gap (zero-inflation issue) needs deeper investigation beyond surgical retrains. PTS and REB combined Q25 gaps also warrant attention on the next full retrain.
+
+### Next Steps
+
+1. **Investigate AST zero-inflation** — The combined Q10 gap is structural (many zero-assist games even at high minutes). Consider truncated/zero-inflated mixture models or per-quantile conformal recalibration improvements
+2. **Full retrain with extended calibration window** — PTS and REB combined Q25 drift may be a calibration window artifact
+3. **Stripe integration** — Deferred; model calibration takes priority
+
+---
+
 ## Session Summary (2026-02-18 — Session 39)
 
 ### What We Did
@@ -37,8 +86,8 @@ A Monster.bet-style data table that surfaces pre-computed rolling averages alrea
 
 ### Next Step
 
-1. **Stripe integration** — Subscribe page needs Stripe Checkout, account page needs Customer Portal link
-2. **Monitor Railway jobs** — Continuing from Session 38
+1. ~~**Monitor Railway jobs** — Continuing from Session 38~~ **Done** — Jobs confirmed stable
+2. **Stripe integration** — Deferred; lower priority than model calibration work
 
 ---
 

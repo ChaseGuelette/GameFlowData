@@ -11,6 +11,7 @@ Run: python src/processing/backfill_team_ids_incremental.py [--days-back 7]
 """
 
 import argparse
+
 from sqlalchemy import text
 from tqdm import tqdm
 

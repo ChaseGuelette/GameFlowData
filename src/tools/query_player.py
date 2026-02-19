@@ -75,7 +75,7 @@ def print_line_query(store: PredictionStore, prediction_date: date,
     # Load MC samples
     samples = store.get_samples(prediction_date, player_id, row["game_id"], stat)
     if samples is None:
-        print(f"No MC samples found. Falling back to quantile interpolation.")
+        print("No MC samples found. Falling back to quantile interpolation.")
         # Could add quantile interpolation fallback here
         return
 

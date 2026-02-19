@@ -178,7 +178,6 @@ def send_predictions_alert_sync(
         try:
             loop = asyncio.get_running_loop()
             # We're in an async context, need to use run_coroutine_threadsafe
-            import concurrent.futures
             future = asyncio.run_coroutine_threadsafe(
                 send_predictions_alert(predictions_df, prediction_date, channel_id),
                 loop,

@@ -1,8 +1,9 @@
 """Quick test of feature store for a specific date."""
+import traceback
+from datetime import date
+
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
-from datetime import date
-import traceback
 
 engine = get_engine()
 fs = FeatureStore(engine)

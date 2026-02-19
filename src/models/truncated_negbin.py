@@ -14,19 +14,18 @@ Part of C4 implementation to fix the 25.6% Q10 calibration gap in the
 hurdle quantile model.
 """
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional, Tuple
 import json
 import logging
+from dataclasses import dataclass
+from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
-from scipy.stats import nbinom
-from scipy.optimize import minimize
-from sklearn.model_selection import train_test_split
 import xgboost as xgb
+from scipy.optimize import minimize
+from scipy.stats import nbinom
+from sklearn.model_selection import train_test_split
 
 logger = logging.getLogger(__name__)
 
@@ -81,17 +80,17 @@ class TruncatedNegBinModel:
     Sampling uses inverse CDF of truncated distribution.
     """
 
-    def __init__(self, config: Optional[TruncatedNegBinConfig] = None):
+    def __init__(self, config: TruncatedNegBinConfig | None = None):
         self.config = config or TruncatedNegBinConfig()
-        self.mu_model: Optional[xgb.XGBRegressor] = None
-        self.alpha_model: Optional[xgb.XGBRegressor] = None
+        self.mu_model: xgb.XGBRegressor | None = None
+        self.alpha_model: xgb.XGBRegressor | None = None
         self.feature_names: list[str] = []
 
         # Store MLE-fitted global alpha as fallback/regularization
         self._global_alpha: float = 1.0
         self._global_mu: float = 2.0
 
-    def _fit_global_params(self, y: np.ndarray) -> Tuple[float, float]:
+    def _fit_global_params(self, y: np.ndarray) -> tuple[float, float]:
         """
         Fit truncated NegBin parameters via MLE to get robust global estimates.
 
@@ -156,7 +155,7 @@ class TruncatedNegBinModel:
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        sample_weight: Optional[np.ndarray] = None,
+        sample_weight: np.ndarray | None = None,
     ) -> dict:
         """
         Fit the truncated NegBin model.
@@ -218,7 +217,6 @@ class TruncatedNegBinModel:
         # Use squared residuals relative to mean squared as a ratio
         mu_baseline = y_np.mean()
         residuals_sq = (y_np - mu_baseline) ** 2
-        var_expected_poisson = mu_baseline  # Poisson would have var = mu
         overdispersion_ratio = residuals_sq / (mu_baseline ** 2 + 1e-6)
 
         # Clamp and log-transform
@@ -240,7 +238,7 @@ class TruncatedNegBinModel:
                 shuffle=False,
             )
         else:
-            sw_train = sw_val = None
+            sw_train = None
 
         # Stage 3: Train mu model
         logger.info("Training mu model...")
@@ -302,7 +300,7 @@ class TruncatedNegBinModel:
             'n_features': len(self.feature_names),
         }
 
-    def predict_params(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    def predict_params(self, X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
         """
         Predict (mu, alpha) for each row.
 
@@ -393,7 +391,7 @@ class TruncatedNegBinModel:
         self,
         X: pd.DataFrame,
         n_samples: int = 10000,
-        rng: Optional[np.random.RandomState] = None,
+        rng: np.random.RandomState | None = None,
     ) -> np.ndarray:
         """
         Draw samples from the truncated NegBin for each row.
@@ -437,7 +435,7 @@ class TruncatedNegBinModel:
         self,
         features: dict,
         n_samples: int = 10000,
-        rng: Optional[np.random.RandomState] = None,
+        rng: np.random.RandomState | None = None,
     ) -> np.ndarray:
         """
         Sample for a single player given feature dict.

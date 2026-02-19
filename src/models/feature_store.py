@@ -885,7 +885,6 @@ class FeatureStore:
                 continue
 
         # Log summary of chunk processing results
-        successful_chunks = len(chunks) - len(failed_chunks)
         if failed_chunks:
             failed_date_count = sum(len(c["dates"]) for c in failed_chunks)
             logger.warning(

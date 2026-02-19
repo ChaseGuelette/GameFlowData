@@ -61,9 +61,10 @@ def _send_pnl_summary(result: dict) -> None:
     Non-fatal: failures are logged but don't affect job status.
     """
     try:
+        import asyncio
+
         from src.discord_bot.alerts import send_pnl_summary_sync
         from src.discord_bot.services.paper_trading import get_bankroll_summary
-        import asyncio
 
         # Get current bankroll data
         bankroll_data = asyncio.run(get_bankroll_summary())

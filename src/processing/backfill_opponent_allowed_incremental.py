@@ -39,7 +39,7 @@ def backfill_opponent_allowed_incremental(
     target_cutoff = date.today() - timedelta(days=days_back)
     fetch_cutoff = date.today() - timedelta(days=days_back + lookback_buffer)
 
-    print(f"--- Incremental Opponent Allowed Stats ---")
+    print("--- Incremental Opponent Allowed Stats ---")
     print(f"  Target date range: {target_cutoff} to {date.today()}")
     print(f"  Fetch date range: {fetch_cutoff} to {date.today()} (includes lookback buffer)")
 
