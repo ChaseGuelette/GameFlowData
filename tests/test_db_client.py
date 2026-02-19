@@ -39,9 +39,10 @@ def import_client(monkeypatch, database_url):
     return module, engine
 
 
-def test_import_raises_without_database_url(monkeypatch):
+def test_get_engine_raises_without_database_url(monkeypatch):
+    module, _ = import_client(monkeypatch, None)
     with pytest.raises(ValueError, match="DATABASE_URL not found"):
-        import_client(monkeypatch, None)
+        module.get_engine()
 
 
 def test_get_engine_returns_singleton(monkeypatch):

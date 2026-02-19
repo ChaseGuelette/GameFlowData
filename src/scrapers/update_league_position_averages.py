@@ -13,6 +13,10 @@ Usage:
 
 import argparse
 import logging
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from sqlalchemy import text
 

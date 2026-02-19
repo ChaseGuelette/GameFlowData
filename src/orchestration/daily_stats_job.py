@@ -30,7 +30,7 @@ import shlex
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Add project root to path
@@ -225,9 +225,10 @@ def main():
             f"{sys.executable} src/scrapers/update_league_position_averages.py",
             "Updating League Position Averages",
         ),
-        # Step 6: Populate rolling averages (incremental - only today's games)
+        # Step 6: Populate rolling averages (incremental - only yesterday's games)
         (
-            f"{sys.executable} src/processing/populate_average_stats_incremental.py",
+            f"{sys.executable} src/processing/populate_average_stats_incremental.py"
+            f" --date {(datetime.now().date() - timedelta(days=1)).isoformat()}",
             "Populating Rolling Average Stats (Incremental)",
         ),
         # Step 7: Update opponent allowed stats (incremental - last 30 days)

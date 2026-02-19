@@ -21,10 +21,6 @@ logger = logging.getLogger("DailyGameLines")
 load_dotenv()
 API_KEY = os.getenv("ODDS_API_KEY")
 
-if not API_KEY:
-    logger.error("ODDS_API_KEY not found in environment.")
-    sys.exit(1)
-
 
 def scrape_odds_for_date(target_date_str: str):
     """
@@ -86,6 +82,10 @@ def scrape_odds_for_date(target_date_str: str):
 
 
 if __name__ == "__main__":
+    if not API_KEY:
+        logger.error("ODDS_API_KEY not found in environment.")
+        sys.exit(1)
+
     parser = argparse.ArgumentParser(description="Daily Game Lines Scraper")
     parser.add_argument(
         "--date",

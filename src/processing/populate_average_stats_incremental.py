@@ -16,7 +16,11 @@ Usage:
 
 import argparse
 import logging
+import sys
 from datetime import date, datetime
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 import pandas as pd
 from sqlalchemy import text

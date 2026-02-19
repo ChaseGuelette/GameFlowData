@@ -13,11 +13,8 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 API_KEY = os.getenv("ODDS_API_KEY")
 
-if not DATABASE_URL or not API_KEY:
-    raise ValueError("Missing credentials in .env file")
-
-# Initialize Engine
-engine = create_engine(DATABASE_URL)
+# Initialize Engine (deferred to avoid crash during import in CI/test)
+engine = create_engine(DATABASE_URL) if DATABASE_URL else None
 
 
 class GameLineScraper:
@@ -165,6 +162,9 @@ def generate_historical_schedule():
 
 # --- Execution ---
 if __name__ == "__main__":
+    if not DATABASE_URL or not API_KEY:
+        raise ValueError("Missing DATABASE_URL or ODDS_API_KEY in .env file")
+    engine = create_engine(DATABASE_URL)
     bot = GameLineScraper(API_KEY, engine)
     timestamps = generate_historical_schedule()
 

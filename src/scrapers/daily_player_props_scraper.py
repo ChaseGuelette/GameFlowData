@@ -24,11 +24,8 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 API_KEY = os.getenv("ODDS_API_KEY")
 
-if not DATABASE_URL or not API_KEY:
-    logger.error("Missing DATABASE_URL or ODDS_API_KEY.")
-    sys.exit(1)
-
-engine = create_engine(DATABASE_URL)
+# Initialize Engine (deferred to avoid crash during import in CI/test)
+engine = create_engine(DATABASE_URL) if DATABASE_URL else None
 
 # Market presets (shared with player_prop_scraper.py)
 CORE_MARKETS = [
@@ -252,6 +249,11 @@ def run_historical_scrape(scraper, date_str):
 
 
 if __name__ == "__main__":
+    if not DATABASE_URL or not API_KEY:
+        logger.error("Missing DATABASE_URL or ODDS_API_KEY.")
+        sys.exit(1)
+    engine = create_engine(DATABASE_URL)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="Scrape live props to raw_player_props_live")
     parser.add_argument("--date", type=str, help="Scrape historical props (12pm/6pm) to raw_player_props_combined")

@@ -11,6 +11,10 @@ Run: python src/processing/backfill_team_ids_incremental.py [--days-back 7]
 """
 
 import argparse
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from sqlalchemy import text
 from tqdm import tqdm
