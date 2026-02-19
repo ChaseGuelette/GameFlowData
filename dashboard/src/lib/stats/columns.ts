@@ -99,7 +99,7 @@ export const teamOverallColumns: ColumnDef[] = [
   { key: 'poss', label: 'Poss', tooltip: 'Possessions Per Game', dbColumn: 'avg_poss_{window}', format: 'dec1' },
   { key: 'rebpct', label: 'REB%', tooltip: 'Rebound Percentage', dbColumn: 'avg_reb_pct_{window}', format: 'pct1' },
   { key: 'ast_ratio', label: 'AST Ratio', tooltip: 'Assist Ratio — assists per 100 possessions', dbColumn: 'avg_ast_ratio_{window}', format: 'dec1' },
-  { key: 'tov_ratio', label: 'TOV Ratio', tooltip: 'Turnover Ratio — turnovers per 100 possessions', dbColumn: 'avg_tov_ratio_{window}', format: 'dec1', invertHeatmap: true },
+  { key: 'tov_ratio', label: 'TOV%', tooltip: 'Turnover Rate — turnovers per 100 possessions', dbColumn: 'avg_tov_ratio_{window}', format: 'rawPct1', invertHeatmap: true },
 ]
 
 // ─── Defense vs Position — Totals ───────────────────────────────────

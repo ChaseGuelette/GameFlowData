@@ -361,17 +361,164 @@ The `BLConfig` dataclass has no validation. A negative tau produces a negative w
 
 ---
 
+---
+
+## DATA VAULT — CRITICAL
+
+### ISS-029: Incremental script does NOT update player advanced stats
+
+- **File:** `src/processing/populate_average_stats_incremental.py`
+- **Status:** Fixed
+- **Impact:** The entire Advanced tab in the Data Vault (ORtg, DRtg, USG%, TS%, eFG%, AST%, AST/TO, TOV%, REB%, OREB%, DREB%, Pace, PIE) shows stale data
+
+The daily cron job (Step 6 in `daily_stats_job.py`) only runs `populate_average_stats_incremental.py`, which upserts to `player_average_game_stats` only. The `player_average_advanced_stats` table is never updated incrementally — it was last populated whenever the full `populate_average_stats.py --table player_advanced` was manually run. Since `player_stats_latest` view JOINs both tables, advanced columns are stuck at their last full-backfill values.
+
+**Fix:** Either:
+- (A) Add incremental advanced stats processing to `populate_average_stats_incremental.py` (fetch from `player_game_advanced_stats`, compute rolling averages, upsert to `player_average_advanced_stats`), or
+- (B) Add a separate `populate_average_advanced_stats_incremental.py` script and wire it into `daily_stats_job.py` as a new step after Step 6.
+
+---
+
+### ISS-030: Incremental script does NOT update team stats
+
+- **File:** `src/processing/populate_average_stats_incremental.py`, `src/orchestration/daily_stats_job.py`
+- **Status:** Fixed
+- **Impact:** The entire Teams tab in the Data Vault (all 3 sub-tabs: Offense, Defense, Overall) shows stale data
+
+Same issue as ISS-029 but for team stats. `team_average_game_stats` is only populated by the full `populate_average_stats.py --table team`. There is no incremental team stats step in the daily cron pipeline. The `team_stats_latest` view shows values frozen at the last full backfill.
+
+**Fix:** Create a `populate_team_stats_incremental.py` (or extend the existing incremental script) and add it as a new step in `daily_stats_job.py`.
+
+---
+
+### ISS-031: SZN expanding averages are wrong in incremental script
+
+- **File:** `src/processing/populate_average_stats_incremental.py:172-175`
+- **Status:** Fixed
+- **Impact:** `avg_*_szn` values are inaccurate for any player with >20 games this season — shows ~20-game average instead of true season average
+
+The incremental script fetches only the last `LOOKBACK_GAMES=20` games per player. The SZN columns use `shifted.expanding(min_periods=1).mean()` over those 20 games. For a player 50+ games into the season, this computes the expanding average over the last ~19 prior games, NOT the true full-season average. The L5 and L15 windows are correct (they only need 5/15 games of lookback), but the SZN window is fundamentally broken.
+
+Example: LeBron with 36 season games. The script fetches games 17-36. `avg_pts_szn` = expanding mean of games 17-35 (shifted) = ~20-game average, NOT the 35-game season average.
+
+**Fix:** Either:
+- (A) Increase `LOOKBACK_GAMES` to cover the full season (~82, but defeats the "lightweight" purpose), or
+- (B) Fetch the true season-to-date average from the full backfill table and only compute L5/L15 incrementally, or
+- (C) Compute SZN from two components: the existing full-backfill SZN average (weighted by prior game count) and the new games (weighted by new game count) — a running average update formula: `new_szn_avg = (old_szn_avg * old_count + sum_new_games) / new_count`
+
+---
+
+## DATA VAULT — HIGH
+
+### ISS-032: `games_szn` count query uses wrong season_id for cross-season lookback
+
+- **File:** `src/processing/populate_average_stats_incremental.py:120-132`
+- **Status:** Fixed
+- **Impact:** Early in the season (first ~20 games, Oct-Nov), `games_szn` and `game_number` could go negative
+
+The count query added in the games_szn fix uses a single subquery to determine the current season:
+```sql
+AND season_id = (
+    SELECT season_id FROM player_game_stats
+    WHERE player_id IN {player_tuple}
+    ORDER BY game_date DESC LIMIT 1
+)
+```
+
+Two problems:
+1. **Cross-season lookback:** The main ranked_games CTE does not filter by season_id — it takes the last 20 games regardless of season. Early in the season (e.g., 5 games played), the lookback includes 15 games from last season. But `total_season_games` only counts current-season games (5). Offset = 5 - 20 = -15, making `game_number` start at -14 and `games_szn` negative.
+2. **Single season for all players:** The subquery picks one season from any player in the tuple. While all players played on the same date and should share the same season, this is fragile.
+
+**Fix:** Either filter the main CTE by season_id too, or handle the case where offset < 0 by clamping to 0. Also change the subquery to be per-player rather than global.
+
+---
+
+### ISS-033: Defense "Totals" tab values are cumulative sums, not per-game averages
+
+- **Files:** `src/processing/backfill_opponent_allowed.py:100`, `dashboard/src/lib/stats/columns.ts:107-119`
+- **Status:** Fixed
+- **Impact:** Defense Totals tab shows raw cumulative sums (e.g., ~200 total guard PTS over L5) — harder to interpret and misleading for heatmap comparison when games_count varies
+
+Both the full and incremental opponent-allowed scripts use `.rolling(...).sum()` (not `.mean()`) for all stat columns. This means `pts_allowed_l5` = total points allowed to that position group over the last 5 games, not a per-game average.
+
+Issues:
+- The heatmap percentile comparison is biased when teams have different `games_{window}` counts (e.g., 3 vs 5 games early season)
+- Raw sums (100-200 range) are harder for users to interpret than per-game averages (20-40 range)
+- The tooltips added in the recent UI update say "Per Game" which is factually wrong
+
+**Fix options:**
+- (A) Change rolling from `.sum()` to `.mean()` in both backfill scripts (breaking change — requires full re-backfill and may affect per-100 rate calculations)
+- (B) Divide by games count in the frontend: `value / games_{window}` for display
+- (C) Keep sums but fix tooltips to say "Total" and add a note to the UI
+
+---
+
+### ISS-034: Defense tooltips say "Per Game" but data is cumulative sums
+
+- **File:** `dashboard/src/lib/stats/columns.ts:107-119`
+- **Status:** Fixed
+- **Impact:** Tooltips mislead users about what the numbers represent
+
+All defense totals column tooltips added in the recent UI update use "Per Game" language (e.g., `tooltip: 'Points Allowed Per Game'`) but the underlying data from `team_allowed_by_position` uses rolling sums, not rolling means. The values represent totals over the window, not per-game averages.
+
+**Fix:** Update tooltips to say "Total ... Allowed (L5/L15/SZN)" or divide by games count. Dependent on ISS-033 resolution.
+
+---
+
+## DATA VAULT — MEDIUM
+
+### ISS-035: Team TOV Ratio displayed without % sign, inconsistent with Player TOV%
+
+- **File:** `dashboard/src/lib/stats/columns.ts:102`
+- **Status:** Fixed
+- **Impact:** User confusion — same underlying metric displayed differently across tabs
+
+Player Advanced tab: `TOV%` uses `rawPct1` format → displays "10.3%"
+Team Overall tab: `TOV Ratio` uses `dec1` format → displays "10.3"
+
+Both reference `avg_tov_ratio_{window}` which stores the NBA API's `turnover_ratio` as a raw percentage (10.29 = 10.29%). While team tab labels it "TOV Ratio" (technically a ratio), the value IS a percentage and should display with a % sign for clarity.
+
+**Fix:** Change team `tov_ratio` format from `'dec1'` to `'rawPct1'`. Consider also renaming label to "TOV%" for consistency.
+
+---
+
+### ISS-036: Supabase view definitions not in version control
+
+- **Files:** `sql/views/player_stats_latest.sql`, `sql/views/team_stats_latest.sql`, `sql/views/defense_by_position_latest.sql`
+- **Status:** Fixed
+- **Impact:** No source of truth for view logic; hard to audit, debug, or reproduce
+
+The three Data Vault views (`player_stats_latest`, `team_stats_latest`, `defense_by_position_latest`) are documented in ARCHITECTURE.md but their actual SQL definitions are not tracked in the repository. If a view has incorrect JOIN logic, wrong DISTINCT ON ordering, or missing columns, there's no way to verify without logging into Supabase dashboard.
+
+**Fix:** Export view definitions to a `sql/views/` directory and track them in git. Add a migration or setup script that can recreate them.
+
+---
+
+### ISS-037: Incremental SZN rolling window doesn't match full backfill behavior
+
+- **File:** `src/processing/populate_average_stats_incremental.py:172-175` vs `src/processing/populate_average_stats.py:78-85`
+- **Status:** Fixed (related to ISS-031, different angle)
+- **Impact:** After incremental update, a player's SZN averages differ from what a full backfill would produce
+
+Beyond the accuracy issue (ISS-031), the incremental script uses a different code path for expanding windows. The full script uses `rolling_with_groupby()` with proper group boundaries via `groupby(group_cols)`. The incremental script processes one player at a time with bare `shifted.expanding().mean()` — no season boundary enforcement. If the 20-game lookback spans two seasons, the expanding average bleeds across season boundaries.
+
+The full script groups by `["player_id", "season_id"]`, ensuring season-to-date is truly within-season. The incremental script has no such guard.
+
+**Fix:** Add season_id filtering to the incremental script's main query, or detect season boundaries in the fetched data and reset the expanding window at season transitions.
+
+---
+
 ## Remaining Open Issues
 
-16 of 28 issues have been fixed. The following 12 remain open:
+25 of 37 total issues have been fixed. 12 remain open:
 
-### Medium-term (require more design)
+### Original — Medium-term (require more design)
 
 1. **ISS-012** — Move blowout factor outside per-stat loop (dormant — `enabled=False`)
 2. **ISS-014** — Extend MC quantile function beyond [0.01, 0.99] for extreme lines
 3. **ISS-023** — Split Stage 2 dedup to allow uncorrelated multi-stat bets per player
 
-### Low priority / cosmetic
+### Original — Low priority / cosmetic
 
 4. **ISS-017** — Fix misleading ratio column names (`l3_l15_ratio` computes L3/L5)
 5. **ISS-018** — Pre-game inference requires game row to exist in `player_game_stats`

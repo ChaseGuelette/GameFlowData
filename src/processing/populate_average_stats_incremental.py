@@ -2,11 +2,17 @@
 Incremental Rolling Average Stats Update
 
 Lightweight version of populate_average_stats.py for daily cron jobs.
-Only updates rows for games that occurred on the specified date.
+Updates all three rolling-average tables:
+  - player_average_game_stats (basic box score + B2/B3/B4 features)
+  - player_average_advanced_stats (advanced metrics)
+  - team_average_game_stats (team basic + advanced)
 
-Key optimizations:
-  - Only fetches recent games (last 20 per player) instead of full history
-  - Only calculates averages for players who played on target date
+Only updates rows for games that occurred on the specified date.
+Fetches all games within the current season for correct SZN expanding averages.
+
+Key optimizations vs full backfill:
+  - Only processes entities (players/teams) with games on target date
+  - Only keeps target-date rows for UPSERT
   - Uses UPSERT instead of TRUNCATE + reload
 
 Usage:
@@ -40,10 +46,7 @@ WINDOWS = {
 # B3 uses L3 for specific stats only
 L3_STATS = ["min", "pts", "reb", "ast", "fg3m"]
 
-# How many prior games to fetch per player (must be > max window size)
-LOOKBACK_GAMES = 20
-
-# Stats to compute
+# Stats to compute for player basic averages
 PLAYER_BASIC_STATS = [
     "min", "fgm", "fga", "fg_pct", "fg3m", "fg3a", "fg3_pct",
     "ftm", "fta", "ft_pct", "oreb", "dreb", "reb", "ast",
@@ -53,6 +56,53 @@ PLAYER_BASIC_STATS = [
 B3_B4_STATS = ["min", "pts", "reb", "ast", "fg3m"]
 STARTER_MINUTES_THRESHOLD = 20
 
+# Player advanced stat mapping: source column → target name
+PLAYER_ADVANCED_MAPPING = {
+    "offensive_rating": "off_rtg",
+    "defensive_rating": "def_rtg",
+    "net_rating": "net_rtg",
+    "true_shooting_percentage": "ts_pct",
+    "effective_field_goal_percentage": "efg_pct",
+    "usage_percentage": "usg_pct",
+    "assist_ratio": "ast_ratio",
+    "assist_percentage": "ast_pct",
+    "assist_to_turnover": "ast_tov",
+    "turnover_ratio": "tov_ratio",
+    "rebound_percentage": "reb_pct",
+    "offensive_rebound_percentage": "oreb_pct",
+    "defensive_rebound_percentage": "dreb_pct",
+    "pace": "pace",
+    "possessions": "poss",
+    "pie": "pie",
+}
+
+# Team stat lists
+TEAM_BASIC_STATS = [
+    "team_pts", "team_fgm", "team_fga", "team_fg_pct",
+    "team_fg3m", "team_fg3a", "team_fg3_pct",
+    "team_ftm", "team_fta", "team_ft_pct",
+    "team_oreb", "team_dreb", "team_reb",
+    "team_ast", "team_stl", "team_blk", "team_tov", "team_pf",
+    "team_plus_minus",
+]
+TEAM_BASIC_MAPPING = {stat: stat.replace("team_", "") for stat in TEAM_BASIC_STATS}
+
+TEAM_ADVANCED_MAPPING = {
+    "offensive_rating": "off_rtg",
+    "defensive_rating": "def_rtg",
+    "net_rating": "net_rtg",
+    "true_shooting_percentage": "ts_pct",
+    "effective_field_goal_percentage": "efg_pct",
+    "pace": "pace",
+    "possessions": "poss",
+    "assist_ratio": "ast_ratio",
+    "turnover_ratio": "tov_ratio",
+    "rebound_percentage": "reb_pct",
+    "offensive_rebound_percentage": "oreb_pct",
+    "defensive_rebound_percentage": "dreb_pct",
+    "pie": "pie",
+}
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -60,6 +110,20 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # DATA FETCHING
 # ============================================================================
+
+def get_season_id(engine, target_date: date) -> str | None:
+    """Get the season_id for the target date."""
+    query = text("""
+        SELECT DISTINCT season_id
+        FROM player_game_stats
+        WHERE game_date::date = :target_date
+        LIMIT 1
+    """)
+    with engine.connect() as conn:
+        result = conn.execute(query, {"target_date": target_date})
+        row = result.fetchone()
+    return row[0] if row else None
+
 
 def get_players_with_games_on_date(engine, target_date: date) -> list[int]:
     """Get list of player IDs who played on the target date."""
@@ -69,93 +133,119 @@ def get_players_with_games_on_date(engine, target_date: date) -> list[int]:
         WHERE game_date::date = :target_date
           AND (did_not_play = false OR did_not_play IS NULL)
     """)
-
     with engine.connect() as conn:
         result = conn.execute(query, {"target_date": target_date})
         player_ids = [row[0] for row in result]
-
     logger.info(f"Found {len(player_ids)} players with games on {target_date}")
     return player_ids
 
 
-def fetch_recent_games_for_players(engine, player_ids: list[int], target_date: date) -> pd.DataFrame:
-    """
-    Fetch recent games for specific players.
+def get_teams_with_games_on_date(engine, target_date: date) -> list[int]:
+    """Get list of team IDs that played on the target date."""
+    query = text("""
+        SELECT DISTINCT team_id
+        FROM team_game_stats
+        WHERE game_date::date = :target_date
+    """)
+    with engine.connect() as conn:
+        result = conn.execute(query, {"target_date": target_date})
+        team_ids = [row[0] for row in result]
+    logger.info(f"Found {len(team_ids)} teams with games on {target_date}")
+    return team_ids
 
-    Gets last LOOKBACK_GAMES games up to and including target_date,
-    plus the actual total season game count per player.
-    """
+
+def fetch_player_basic_season_games(
+    engine, player_ids: list[int], season_id: str, target_date: date
+) -> pd.DataFrame:
+    """Fetch all season games for specific players (basic stats)."""
     if not player_ids:
         return pd.DataFrame()
 
-    # Convert to tuple for SQL IN clause
     player_tuple = tuple(player_ids)
-
     query = f"""
-        WITH ranked_games AS (
-            SELECT
-                player_id, game_id, season_id, game_date::date as game_date, team_id,
-                min, fgm, fga, fg_pct, fg3m, fg3a, fg3_pct,
-                ftm, fta, ft_pct, oreb, dreb, reb, ast,
-                stl, blk, tov, pf, pts, plus_minus,
-                ROW_NUMBER() OVER (
-                    PARTITION BY player_id
-                    ORDER BY game_date DESC
-                ) as rn
-            FROM player_game_stats
-            WHERE player_id IN {player_tuple}
-              AND game_date::date <= :target_date
-              AND (did_not_play = false OR did_not_play IS NULL)
-        )
-        SELECT * FROM ranked_games
-        WHERE rn <= {LOOKBACK_GAMES}
-        ORDER BY player_id, game_date
-    """
-
-    logger.info(f"Fetching last {LOOKBACK_GAMES} games for {len(player_ids)} players...")
-    df = pd.read_sql(text(query), engine, params={"target_date": target_date})
-    logger.info(f"Fetched {len(df):,} game rows")
-
-    # Get the actual total season game count per player
-    count_query = text(f"""
-        SELECT player_id, COUNT(*) as total_season_games
+        SELECT
+            player_id, game_id, season_id, game_date::date as game_date, team_id,
+            min, fgm, fga, fg_pct, fg3m, fg3a, fg3_pct,
+            ftm, fta, ft_pct, oreb, dreb, reb, ast,
+            stl, blk, tov, pf, pts, plus_minus
         FROM player_game_stats
         WHERE player_id IN {player_tuple}
-          AND season_id = (
-              SELECT season_id FROM player_game_stats
-              WHERE player_id IN {player_tuple}
-              ORDER BY game_date DESC LIMIT 1
-          )
+          AND season_id = :season_id
           AND game_date::date <= :target_date
           AND (did_not_play = false OR did_not_play IS NULL)
-        GROUP BY player_id
-    """)
+        ORDER BY player_id, game_date
+    """
+    logger.info(f"Fetching season {season_id} basic games for {len(player_ids)} players...")
+    df = pd.read_sql(text(query), engine, params={"season_id": season_id, "target_date": target_date})
+    logger.info(f"Fetched {len(df):,} player basic game rows")
+    return df
 
-    with engine.connect() as conn:
-        count_df = pd.read_sql(count_query, conn, params={"target_date": target_date})
 
-    if not count_df.empty:
-        df = df.merge(count_df, on="player_id", how="left")
-    else:
-        df["total_season_games"] = df.groupby("player_id")["player_id"].transform("count")
+def fetch_player_advanced_season_games(
+    engine, player_ids: list[int], season_id: str, target_date: date
+) -> pd.DataFrame:
+    """Fetch all season games for specific players (advanced stats via join)."""
+    if not player_ids:
+        return pd.DataFrame()
 
+    player_tuple = tuple(player_ids)
+    adv_cols = ", ".join([f"adv.{col}" for col in PLAYER_ADVANCED_MAPPING.keys()])
+    query = f"""
+        SELECT
+            pgs.player_id, pgs.game_id, pgs.season_id,
+            pgs.game_date::date as game_date, pgs.team_id,
+            {adv_cols}
+        FROM player_game_stats pgs
+        LEFT JOIN player_game_advanced_stats adv
+            ON pgs.player_id = adv.player_id AND pgs.game_id = adv.game_id
+        WHERE pgs.player_id IN {player_tuple}
+          AND pgs.season_id = :season_id
+          AND pgs.game_date::date <= :target_date
+          AND (pgs.did_not_play = false OR pgs.did_not_play IS NULL)
+        ORDER BY pgs.player_id, pgs.game_date
+    """
+    logger.info(f"Fetching season {season_id} advanced games for {len(player_ids)} players...")
+    df = pd.read_sql(text(query), engine, params={"season_id": season_id, "target_date": target_date})
+    logger.info(f"Fetched {len(df):,} player advanced game rows")
+    return df
+
+
+def fetch_team_season_games(
+    engine, team_ids: list[int], season_id: str, target_date: date
+) -> pd.DataFrame:
+    """Fetch all season games for specific teams."""
+    if not team_ids:
+        return pd.DataFrame()
+
+    team_tuple = tuple(team_ids)
+    basic_cols = ", ".join(TEAM_BASIC_STATS)
+    adv_cols = ", ".join(TEAM_ADVANCED_MAPPING.keys())
+    query = f"""
+        SELECT
+            team_id, game_id, season_id, game_date::date as game_date,
+            {basic_cols}, {adv_cols}
+        FROM team_game_stats
+        WHERE team_id IN {team_tuple}
+          AND season_id = :season_id
+          AND game_date::date <= :target_date
+        ORDER BY team_id, game_date
+    """
+    logger.info(f"Fetching season {season_id} games for {len(team_ids)} teams...")
+    df = pd.read_sql(text(query), engine, params={"season_id": season_id, "target_date": target_date})
+    logger.info(f"Fetched {len(df):,} team game rows")
     return df
 
 
 # ============================================================================
-# ROLLING CALCULATIONS
+# ROLLING CALCULATIONS — PLAYER BASIC
 # ============================================================================
 
-def calculate_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate all rolling averages for a single player's games."""
+def calculate_basic_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate all rolling averages for a single player's basic stats."""
     player_df = player_df.sort_values("game_date").copy()
 
-    # Game number within season (offset by games not in the lookback window)
-    total = int(player_df["total_season_games"].iloc[0]) if "total_season_games" in player_df.columns else len(player_df)
-    fetched = len(player_df)
-    offset = total - fetched
-
-    player_df["game_number"] = range(offset + 1, offset + fetched + 1)
+    # Game number within season (1-indexed)
+    player_df["game_number"] = range(1, len(player_df) + 1)
     player_df["games_l5"] = (player_df["game_number"] - 1).clip(upper=5)
     player_df["games_l15"] = (player_df["game_number"] - 1).clip(upper=15)
     player_df["games_szn"] = player_df["game_number"] - 1
@@ -164,19 +254,15 @@ def calculate_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFrame:
     for stat in PLAYER_BASIC_STATS:
         if stat not in player_df.columns:
             continue
-
-        shifted = player_df[stat].shift(1)  # Only prior games
-
+        shifted = player_df[stat].shift(1)
         for window_name, window_size in WINDOWS.items():
             col_name = f"avg_{stat}_{window_name}"
-
             if window_size is None:
-                # Expanding (season-to-date)
                 player_df[col_name] = shifted.expanding(min_periods=1).mean()
             else:
                 player_df[col_name] = shifted.rolling(window=window_size, min_periods=1).mean()
 
-    # B3: L3 averages (only for specific stats)
+    # B3: L3 averages
     for stat in L3_STATS:
         if stat not in player_df.columns:
             continue
@@ -222,83 +308,203 @@ def calculate_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFrame:
     return player_df
 
 
-def calculate_incremental_averages(df: pd.DataFrame, target_date: date) -> pd.DataFrame:
-    """Calculate rolling averages for all players, return only target date rows."""
-    logger.info("Calculating rolling averages...")
+# ============================================================================
+# ROLLING CALCULATIONS — PLAYER ADVANCED
+# ============================================================================
 
+def calculate_advanced_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate rolling averages for a single player's advanced stats."""
+    player_df = player_df.sort_values("game_date").copy()
+
+    # Game number within season
+    player_df["game_number"] = range(1, len(player_df) + 1)
+    player_df["games_l5"] = (player_df["game_number"] - 1).clip(upper=5)
+    player_df["games_l15"] = (player_df["game_number"] - 1).clip(upper=15)
+    player_df["games_szn"] = player_df["game_number"] - 1
+
+    for source_col, target_name in PLAYER_ADVANCED_MAPPING.items():
+        if source_col not in player_df.columns:
+            continue
+        shifted = player_df[source_col].shift(1)
+        for window_name, window_size in WINDOWS.items():
+            col_name = f"avg_{target_name}_{window_name}"
+            if window_size is None:
+                player_df[col_name] = shifted.expanding(min_periods=1).mean()
+            else:
+                player_df[col_name] = shifted.rolling(window=window_size, min_periods=1).mean()
+
+    return player_df
+
+
+# ============================================================================
+# ROLLING CALCULATIONS — TEAM
+# ============================================================================
+
+def calculate_team_rolling(team_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate rolling averages for a single team's basic + advanced stats."""
+    team_df = team_df.sort_values("game_date").copy()
+
+    # Game number within season
+    team_df["game_number"] = range(1, len(team_df) + 1)
+    team_df["games_l5"] = (team_df["game_number"] - 1).clip(upper=5)
+    team_df["games_l15"] = (team_df["game_number"] - 1).clip(upper=15)
+    team_df["games_szn"] = team_df["game_number"] - 1
+
+    # Basic stats
+    for source_col, target_name in TEAM_BASIC_MAPPING.items():
+        if source_col not in team_df.columns:
+            continue
+        shifted = team_df[source_col].shift(1)
+        for window_name, window_size in WINDOWS.items():
+            col_name = f"avg_{target_name}_{window_name}"
+            if window_size is None:
+                team_df[col_name] = shifted.expanding(min_periods=1).mean()
+            else:
+                team_df[col_name] = shifted.rolling(window=window_size, min_periods=1).mean()
+
+    # Advanced stats
+    for source_col, target_name in TEAM_ADVANCED_MAPPING.items():
+        if source_col not in team_df.columns:
+            continue
+        shifted = team_df[source_col].shift(1)
+        for window_name, window_size in WINDOWS.items():
+            col_name = f"avg_{target_name}_{window_name}"
+            if window_size is None:
+                team_df[col_name] = shifted.expanding(min_periods=1).mean()
+            else:
+                team_df[col_name] = shifted.rolling(window=window_size, min_periods=1).mean()
+
+    return team_df
+
+
+# ============================================================================
+# INCREMENTAL PIPELINE
+# ============================================================================
+
+def calculate_incremental(df: pd.DataFrame, target_date: date, id_col: str, calc_fn) -> pd.DataFrame:
+    """Calculate rolling averages for all entities, return only target date rows."""
     results = []
-    player_ids = df["player_id"].unique()
+    entity_ids = df[id_col].unique()
 
-    for i, player_id in enumerate(player_ids):
-        player_df = df[df["player_id"] == player_id].copy()
-        player_df = calculate_rolling_for_player(player_df)
+    for i, entity_id in enumerate(entity_ids):
+        entity_df = df[df[id_col] == entity_id].copy()
+        entity_df = calc_fn(entity_df)
 
-        # Only keep the target date row
-        target_row = player_df[player_df["game_date"] == target_date]
+        target_row = entity_df[entity_df["game_date"] == target_date]
         if not target_row.empty:
             results.append(target_row)
 
         if (i + 1) % 50 == 0:
-            logger.info(f"Processed {i + 1}/{len(player_ids)} players")
+            logger.info(f"Processed {i + 1}/{len(entity_ids)} entities")
 
     if results:
         result_df = pd.concat(results, ignore_index=True)
         logger.info(f"Generated {len(result_df)} rows for {target_date}")
         return result_df
-    else:
-        return pd.DataFrame()
+    return pd.DataFrame()
 
 
 # ============================================================================
-# DATABASE UPDATE
+# DATABASE UPSERT
 # ============================================================================
 
-def upsert_player_averages(engine, df: pd.DataFrame):
-    """Upsert player average rows into database."""
+def _build_upsert_sql(table: str, cols: list[str], conflict_cols: list[str]) -> str:
+    """Build a parameterized UPSERT query."""
+    col_list = ", ".join(cols)
+    placeholder_list = ", ".join([f":{c}" for c in cols])
+    update_cols = [c for c in cols if c not in conflict_cols]
+    update_list = ", ".join([f"{c} = EXCLUDED.{c}" for c in update_cols])
+    return f"""
+        INSERT INTO {table} ({col_list})
+        VALUES ({placeholder_list})
+        ON CONFLICT ({', '.join(conflict_cols)})
+        DO UPDATE SET {update_list}
+    """
+
+
+def upsert_player_basic_averages(engine, df: pd.DataFrame):
+    """Upsert player basic average rows."""
     if df.empty:
-        logger.info("No rows to upsert")
         return
+    logger.info(f"Upserting {len(df)} player basic rows...")
 
-    logger.info(f"Upserting {len(df)} rows...")
-
-    # Build column list
     base_cols = ["player_id", "game_id", "season_id", "game_date", "team_id",
                  "game_number", "games_l5", "games_l15", "games_szn"]
-
     avg_cols = [c for c in df.columns if c.startswith("avg_")]
     std_cols = [c for c in df.columns if c.startswith("std_")]
-    extra_cols = ["min_floor_l5", "games_started_l5", "rest_days", "games_last_7d"]
-    extra_cols = [c for c in extra_cols if c in df.columns]
+    extra_cols = [c for c in ["min_floor_l5", "games_started_l5", "rest_days", "games_last_7d"] if c in df.columns]
 
     all_cols = base_cols + avg_cols + std_cols + extra_cols
     insert_df = df[[c for c in all_cols if c in df.columns]].copy()
 
-    # Round numeric columns
     for col in insert_df.columns:
         if col.startswith("avg_") or col.startswith("std_"):
             insert_df[col] = insert_df[col].round(4)
         elif col == "min_floor_l5":
             insert_df[col] = insert_df[col].round(2)
 
-    # Build upsert query
     cols = list(insert_df.columns)
-    col_list = ", ".join(cols)
-    placeholder_list = ", ".join([f":{c}" for c in cols])
-    update_list = ", ".join([f"{c} = EXCLUDED.{c}" for c in cols if c not in ["player_id", "game_id"]])
-
-    upsert_sql = f"""
-        INSERT INTO player_average_game_stats ({col_list})
-        VALUES ({placeholder_list})
-        ON CONFLICT (player_id, game_id)
-        DO UPDATE SET {update_list}
-    """
+    upsert_sql = _build_upsert_sql("player_average_game_stats", cols, ["player_id", "game_id"])
 
     with engine.begin() as conn:
         for _, row in insert_df.iterrows():
             params = {c: (None if pd.isna(row[c]) else row[c]) for c in cols}
             conn.execute(text(upsert_sql), params)
+    logger.info(f"Upserted {len(insert_df)} player basic rows")
 
-    logger.info(f"Upserted {len(insert_df)} rows successfully")
+
+def upsert_player_advanced_averages(engine, df: pd.DataFrame):
+    """Upsert player advanced average rows."""
+    if df.empty:
+        return
+    logger.info(f"Upserting {len(df)} player advanced rows...")
+
+    base_cols = ["player_id", "game_id", "season_id", "game_date", "team_id",
+                 "game_number", "games_l5", "games_l15", "games_szn"]
+    avg_cols = [c for c in df.columns if c.startswith("avg_")]
+
+    all_cols = base_cols + avg_cols
+    insert_df = df[[c for c in all_cols if c in df.columns]].copy()
+
+    for col in insert_df.columns:
+        if col.startswith("avg_"):
+            insert_df[col] = insert_df[col].round(4)
+
+    cols = list(insert_df.columns)
+    upsert_sql = _build_upsert_sql("player_average_advanced_stats", cols, ["player_id", "game_id"])
+
+    with engine.begin() as conn:
+        for _, row in insert_df.iterrows():
+            params = {c: (None if pd.isna(row[c]) else row[c]) for c in cols}
+            conn.execute(text(upsert_sql), params)
+    logger.info(f"Upserted {len(insert_df)} player advanced rows")
+
+
+def upsert_team_averages(engine, df: pd.DataFrame):
+    """Upsert team average rows."""
+    if df.empty:
+        return
+    logger.info(f"Upserting {len(df)} team rows...")
+
+    base_cols = ["team_id", "game_id", "season_id", "game_date",
+                 "game_number", "games_l5", "games_l15", "games_szn"]
+    avg_cols = [c for c in df.columns if c.startswith("avg_")]
+
+    all_cols = base_cols + avg_cols
+    insert_df = df[[c for c in all_cols if c in df.columns]].copy()
+
+    for col in insert_df.columns:
+        if col.startswith("avg_"):
+            insert_df[col] = insert_df[col].round(4)
+
+    cols = list(insert_df.columns)
+    upsert_sql = _build_upsert_sql("team_average_game_stats", cols, ["team_id", "game_id"])
+
+    with engine.begin() as conn:
+        for _, row in insert_df.iterrows():
+            params = {c: (None if pd.isna(row[c]) else row[c]) for c in cols}
+            conn.execute(text(upsert_sql), params)
+    logger.info(f"Upserted {len(insert_df)} team rows")
 
 
 # ============================================================================
@@ -324,25 +530,44 @@ def main():
     start_time = datetime.now()
 
     try:
-        # Step 1: Find players who played on target date
+        # Determine current season
+        season_id = get_season_id(engine, target_date)
+        if not season_id:
+            logger.info("No season data found for target date. Nothing to update.")
+            return
+        logger.info(f"Season: {season_id}")
+
+        # ── Player Basic Stats ──────────────────────────────────────
         player_ids = get_players_with_games_on_date(engine, target_date)
+        if player_ids:
+            df = fetch_player_basic_season_games(engine, player_ids, season_id, target_date)
+            if not df.empty:
+                result_df = calculate_incremental(
+                    df, target_date, "player_id", calculate_basic_rolling_for_player
+                )
+                upsert_player_basic_averages(engine, result_df)
 
-        if not player_ids:
-            logger.info("No players found for target date. Nothing to update.")
-            return
+            # ── Player Advanced Stats ───────────────────────────────
+            adv_df = fetch_player_advanced_season_games(engine, player_ids, season_id, target_date)
+            if not adv_df.empty:
+                adv_result = calculate_incremental(
+                    adv_df, target_date, "player_id", calculate_advanced_rolling_for_player
+                )
+                upsert_player_advanced_averages(engine, adv_result)
+        else:
+            logger.info("No players found for target date.")
 
-        # Step 2: Fetch recent games for those players
-        df = fetch_recent_games_for_players(engine, player_ids, target_date)
-
-        if df.empty:
-            logger.info("No game data found. Nothing to update.")
-            return
-
-        # Step 3: Calculate rolling averages
-        result_df = calculate_incremental_averages(df, target_date)
-
-        # Step 4: Upsert to database
-        upsert_player_averages(engine, result_df)
+        # ── Team Stats ──────────────────────────────────────────────
+        team_ids = get_teams_with_games_on_date(engine, target_date)
+        if team_ids:
+            team_df = fetch_team_season_games(engine, team_ids, season_id, target_date)
+            if not team_df.empty:
+                team_result = calculate_incremental(
+                    team_df, target_date, "team_id", calculate_team_rolling
+                )
+                upsert_team_averages(engine, team_result)
+        else:
+            logger.info("No teams found for target date.")
 
         elapsed = datetime.now() - start_time
         logger.info("=" * 60)

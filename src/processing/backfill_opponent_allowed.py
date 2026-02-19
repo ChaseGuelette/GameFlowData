@@ -97,7 +97,7 @@ def compute_rolling_metrics(df):
     result_dfs = []
     # Rolling Windows (L5, L15)
     for w_name, w_size in [("l5", 5), ("l15", 15)]:
-        rolled = grouper[metrics].apply(lambda x: x.shift(1).rolling(w_size, min_periods=1).sum())
+        rolled = grouper[metrics].apply(lambda x: x.shift(1).rolling(w_size, min_periods=1).mean())
         if isinstance(rolled.index, pd.MultiIndex):
             rolled = rolled.reset_index(drop=True)
         rolled.columns = [
@@ -110,7 +110,7 @@ def compute_rolling_metrics(df):
         result_dfs.extend([rolled, counts.rename(f"games_{w_name}")])
 
     # Season Window
-    szn = grouper[metrics].apply(lambda x: x.shift(1).expanding().sum())
+    szn = grouper[metrics].apply(lambda x: x.shift(1).expanding().mean())
     if isinstance(szn.index, pd.MultiIndex):
         szn = szn.reset_index(drop=True)
     szn.columns = [f"{c}_allowed_szn" if c != "poss_faced" else "poss_faced_szn" for c in szn.columns]
