@@ -103,7 +103,7 @@ def main():
         from src.db.client import get_engine
         from src.models.daily_runner import DailyPredictionRunner
         from src.models.feature_store import FeatureStore
-        from src.models.monte_carlo import MonteCarloPredictor, load_copula_params, load_combined_calibration_offsets
+        from src.models.monte_carlo import MonteCarloPredictor, load_combined_calibration_offsets, load_copula_params
         from src.models.prediction_store import PredictionStore
         from src.models.quantile_trainer import PlayerPropsModelPipeline
 

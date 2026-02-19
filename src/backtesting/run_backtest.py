@@ -24,7 +24,7 @@ from src.backtesting.backtest_harness import BacktestHarness
 from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
-from src.models.monte_carlo import MonteCarloPredictor, load_copula_params, load_combined_calibration_offsets
+from src.models.monte_carlo import MonteCarloPredictor, load_combined_calibration_offsets, load_copula_params
 from src.models.quantile_trainer import PlayerPropsModelPipeline
 
 logging.basicConfig(
