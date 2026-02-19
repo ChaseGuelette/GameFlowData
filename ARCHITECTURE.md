@@ -322,7 +322,7 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 - `PredictionStore` class — stores and retrieves daily predictions and MC samples.
 - **Predictions:** Upserted to `daily_predictions` table via `psycopg2.extras.execute_values` with `ON CONFLICT DO UPDATE`. Stores quantiles, edges, implied probabilities, and prop line info.
 - **MC Samples:** Gzip-compressed `float64` numpy arrays stored as PostgreSQL `BYTEA` in `daily_prediction_samples` table (~20-40KB per prediction for 10K samples).
-- **Retrieval:** `get_predictions()` for filtered queries, `get_samples()` for decompressing arrays, `get_player_id_by_name()` for fuzzy name lookup.
+- **Retrieval:** `get_predictions()` for filtered queries, `get_samples()` for decompressing single arrays, `get_all_samples_for_date()` for bulk retrieval (returns `dict[(player_id, game_id, stat) -> np.ndarray]` used by edge refresh), `get_player_id_by_name()` for fuzzy name lookup.
 
 #### Query Tool (`src/tools/query_player.py`)
 
@@ -373,19 +373,26 @@ A simulation environment to validate betting strategies.
 
 **`run_daily.py`** — Full pipeline orchestrator (legacy). Triggers complete workflow: data scraping → linking → feature store → predictions → storage → CSV export. Supports `--skip-storage` to skip DB persistence. The `--scrape-injuries` flag fetches current injuries from RapidAPI into `rapidapi_injuries` and runs `link_injury_data.py` to populate `player_id` for feature generation and filtering.
 
-**Frequency-Separated Job Scripts (E6 — added 2026-02-05):**
+**Frequency-Separated Job Scripts (E6 — added 2026-02-05, expanded 2026-02-19):**
 
 | Script | Schedule | Purpose |
 |--------|----------|---------|
-| `daily_stats_job.py` | 6:00 AM ET (once) | NBA game results + full processing pipeline |
-| `lines_job.py` | 12 PM, 4 PM, 6 PM ET | Player props + injuries + incremental linking |
-| `inference_job.py` | 6:30 PM ET (once) | Generate predictions with latest lines |
+| `daily_stats_job.py` | 9:00 AM ET (once) | NBA game results + full processing pipeline |
+| `lines_job.py --live` | 12 PM, 4 PM ET | Full lines scrape (game lines + live props + injuries + linker) |
+| `inference_job.py` | 12:15 PM, 4:15 PM ET | Full inference (MC predictions + edges + BL) |
+| `lines_job.py --live --props-only` | 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET | Props-only scrape (live props + linker) |
+| `edge_refresh_job.py` | 2 min after each props-only | Recalculate edges from stored MC samples + fresh lines |
 
 **`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → `play_type_scraper.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~5-10 minutes (optimized from ~30 minutes via incremental scripts).
 
-**`lines_job.py`** — Multiple-times-daily props and injuries scraping. Steps: `daily_game_lines_scraper.py` → `daily_player_props_scraper.py` → `rapidapi_injury_backfill.py` (optional) → `link_injury_data.py` (optional) → `nba_linker_local.py incremental` (optional). Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`. Runtime: ~30-90 seconds.
+**`lines_job.py`** — Multiple-times-daily props and injuries scraping. Two modes:
+- **Full mode (`--live`):** `daily_game_lines_scraper.py` → `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `rapidapi_injury_backfill.py` → `link_injury_data.py` → `nba_linker_local.py incremental`. Used at 12 PM and 4 PM ET.
+- **Props-only mode (`--live --props-only`):** `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `nba_linker_local.py incremental`. Skips game lines and injuries for fast intra-day refreshes. Used hourly/half-hourly between inference windows.
+- Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`, `--live`, `--props-only`. Runtime: ~30-90 seconds (full), ~15-30 seconds (props-only).
 
-**`inference_job.py`** — Pre-game prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, checks upstream data freshness (warns if rolling averages >2 days stale), generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, exports CSV backup. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`. Runtime: ~1-3 minutes.
+**`inference_job.py`** — Full prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, checks upstream data freshness (warns if rolling averages >2 days stale), generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, exports CSV backup. Runs twice daily (12:15 PM, 4:15 PM ET) to catch new player props. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`. Runtime: ~1-3 minutes.
+
+**`edge_refresh_job.py`** — Lightweight edge recalculation (~2-3 seconds). Loads stored predictions from `daily_predictions` and MC samples from `daily_prediction_samples` via `PredictionStore.get_all_samples_for_date()`, fetches fresh prop lines from `raw_player_props_combined`, recalculates edges (empirical CDF) and Black-Litterman recommendations, upserts updated predictions. Self-contained — does NOT instantiate model pipeline or feature store. Exits gracefully if no samples exist (inference hasn't run yet). Supports `--date`, `--dry-run`, `--stats`, `--skip-discord`. Runs after each intra-day props scrape.
 
 **Cron Configuration:** See `cron/gameflow_crontab.txt` for Linux server deployment template with UTC times and environment setup instructions.
 
@@ -399,10 +406,12 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 **Railway Cloud Deployment (2026-02-14):** Production deployment uses Railway with APScheduler for job orchestration:
 - `nixpacks.toml` — Nixpacks build config: Python venv with system-site-packages, explicit `LD_LIBRARY_PATH` for Nix-installed shared libraries (libz, libstdc++), zlib and stdenv.cc.cc.lib nixPkgs for numpy/scipy/xgboost C extensions
 - `railway.toml` — Railway-specific build and deploy settings (nixpacks builder, restart policy)
-- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs all jobs on cron schedule (UTC times):
+- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 21 jobs on cron schedule (UTC times):
   - `daily_stats_job.py` — 9 AM ET (scrapes NBA game results)
-  - `lines_job.py` — 12 PM, 4 PM, 6 PM ET (scrapes props and injuries)
-  - `inference_job.py` — 6:30 PM ET (generates predictions)
+  - `lines_job.py --live` — 12 PM, 4 PM ET (full live scrape: game lines + props + injuries + linker)
+  - `inference_job.py` — 12:15 PM, 4:15 PM ET (full MC inference)
+  - `lines_job.py --live --props-only` — 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET (props-only scrape + linker)
+  - `edge_refresh_job.py` — 2 min after each props-only run (recalculates edges from stored samples + fresh lines)
 - **Discord job status alerts (2026-02-15):** Scheduler sends success/failure notifications to `#alerts` channel after each job completes. Includes job name, duration, metrics (when available), and error details for failures. Non-fatal — alert failures don't affect job execution.
 - **Subprocess Python path (2026-02-18):** All orchestration job scripts use `sys.executable` instead of hardcoded `python` when spawning subprocesses, ensuring the venv Python (with all installed packages) is used consistently.
 - Single always-on worker process handles all scheduled jobs
@@ -851,9 +860,12 @@ python src/backtesting/run_sweep.py \
 python src/orchestration/run_daily.py [--date YYYY-MM-DD] [--skip-scraping] [--skip-processing] [--skip-inference] [--skip-storage] [--scrape-injuries]
 
 # Frequency-separated jobs (E6)
-python src/orchestration/daily_stats_job.py [--dry-run]           # 6 AM ET - Stats + processing
-python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker]  # 12/4/6 PM ET - Props + injuries
-python src/orchestration/inference_job.py [--date YYYY-MM-DD] [--dry-run] [--model-dir PATH] [--stats pts reb ast]  # 6:30 PM ET - Predictions
+python src/orchestration/daily_stats_job.py [--dry-run]                           # 9 AM ET - Stats + processing
+python src/orchestration/lines_job.py --live [--dry-run]                          # 12/4 PM ET - Full live scrape
+python src/orchestration/lines_job.py --live --props-only [--dry-run]             # Hourly/half-hourly - Props only
+python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker]  # Historical mode
+python src/orchestration/inference_job.py [--date YYYY-MM-DD] [--dry-run] [--model-dir PATH] [--stats pts reb ast]  # 12:15/4:15 PM ET
+python src/orchestration/edge_refresh_job.py [--date YYYY-MM-DD] [--dry-run] [--stats pts reb ast] [--skip-discord]  # After each props scrape
 ```
 
 The `--scrape-injuries` flag:

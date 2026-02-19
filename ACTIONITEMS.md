@@ -1,5 +1,28 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-19 — Session 45)
+
+### What We Did
+
+**Implemented frequent line scraping + edge refresh pipeline.** Lines now scraped hourly/half-hourly using live API (not historical snapshots). New lightweight `edge_refresh_job.py` recalculates edges from stored MC samples + fresh lines without re-running inference. Full schedule expanded from 5 jobs to 21 jobs.
+
+**Key changes:**
+- `daily_player_props_scraper.py` — Added `--target-table` arg so live scraping can write to `raw_player_props_combined`
+- `lines_job.py` — Added `--live` (uses live API) and `--props-only` (skips game lines/injuries) flags
+- `game_lines_scraper.py` + `live_odds_scraper.py` — Region coverage expanded from `us` to `us,us2,us_ex`
+- `prediction_store.py` — Added `get_all_samples_for_date()` bulk sample retrieval method
+- `edge_refresh_job.py` — **New file.** Self-contained job that loads stored predictions + MC samples, fetches fresh lines, recalculates edges + BL recommendations, upserts back to DB
+- `scheduler.py` — Updated `run_job()` to accept `extra_args`, new schedule: 2 full inference windows (12:15 PM, 4:15 PM) + hourly/half-hourly edge refreshes (1-3 PM hourly, 4:30-6:30 PM every 30 min)
+
+### Remaining Action Items
+
+1. **Full opponent-allowed re-backfill** — `python src/processing/backfill_opponent_allowed.py` — existing DB data has old cumulative sums
+2. **Rerun backtests** after re-backfill to establish new baseline with corrected features
+3. **Stripe integration** — subscribe page, customer portal, webhook
+4. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-02-19 — Session 44)
 
 ### What We Did

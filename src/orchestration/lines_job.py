@@ -2,29 +2,30 @@
 """
 Lines Job - Player Props & Injuries Scraping
 =============================================
-Run multiple times daily (recommended: 12 PM, 4 PM, 6 PM ET) before games start.
+Run multiple times daily before games start.
 
 This job:
-1. Scrapes player prop lines from Odds API
+1. Scrapes player prop lines from Odds API (historical or live)
 2. Scrapes injury updates from RapidAPI
 3. Runs incremental linker to match new props
 4. Links injury data to player IDs
 
 Usage:
     python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries]
+    python src/orchestration/lines_job.py --live [--props-only] [--dry-run]
 
 Examples:
-    # Normal run for today
+    # Historical scrape for today (default)
     python src/orchestration/lines_job.py
 
-    # Run for specific date
-    python src/orchestration/lines_job.py --date 2026-02-05
+    # Live scrape — full (game lines + props + injuries + linker)
+    python src/orchestration/lines_job.py --live
 
-    # Skip injury scraping (faster)
-    python src/orchestration/lines_job.py --skip-injuries
+    # Live scrape — props only (props + linker, skip game lines/injuries)
+    python src/orchestration/lines_job.py --live --props-only
 
     # Dry run
-    python src/orchestration/lines_job.py --dry-run
+    python src/orchestration/lines_job.py --live --props-only --dry-run
 """
 
 import argparse
@@ -129,44 +130,64 @@ def main():
         action="store_true",
         help="Skip incremental linker (if already run today)",
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Use live API endpoints (writes props to raw_player_props_combined)",
+    )
+    parser.add_argument(
+        "--props-only",
+        action="store_true",
+        help="Only scrape props + run linker (skip game lines and injuries)",
+    )
     args = parser.parse_args()
 
     start_time = time.time()
+    mode_label = "LIVE" if args.live else "HISTORICAL"
+    scope_label = "PROPS-ONLY" if args.props_only else "FULL"
     logger.info("=" * 60)
     logger.info(f"LINES JOB START: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"Target Date: {args.date}")
+    logger.info(f"Mode: {mode_label} | Scope: {scope_label} | Date: {args.date}")
     logger.info("=" * 60)
 
     success = True
     steps = []
+    exe = sys.executable
 
-    # Step 1: Scrape daily game lines
-    steps.append((
-        f"{sys.executable} src/scrapers/daily_game_lines_scraper.py --date {args.date}",
-        "Scraping Daily Game Lines (Odds)",
-    ))
+    # Step 1: Scrape daily game lines (skip if --props-only)
+    if not args.props_only:
+        steps.append((
+            f"{exe} src/scrapers/daily_game_lines_scraper.py --date {args.date}",
+            "Scraping Daily Game Lines (Odds)",
+        ))
 
     # Step 2: Scrape player props
-    steps.append((
-        f"{sys.executable} src/scrapers/daily_player_props_scraper.py --date {args.date}",
-        "Scraping Player Props",
-    ))
-
-    # Step 3: Scrape injuries (optional)
-    if not args.skip_injuries:
+    if args.live:
         steps.append((
-            f"{sys.executable} src/scrapers/rapidapi_injury_backfill.py --start {args.date} --end {args.date}",
+            f"{exe} src/scrapers/daily_player_props_scraper.py --live --target-table raw_player_props_combined",
+            "Scraping Player Props (Live)",
+        ))
+    else:
+        steps.append((
+            f"{exe} src/scrapers/daily_player_props_scraper.py --date {args.date}",
+            "Scraping Player Props (Historical)",
+        ))
+
+    # Step 3: Scrape injuries (skip if --props-only or --skip-injuries)
+    if not args.props_only and not args.skip_injuries:
+        steps.append((
+            f"{exe} src/scrapers/rapidapi_injury_backfill.py --start {args.date} --end {args.date}",
             "Scraping Injuries (RapidAPI)",
         ))
         steps.append((
-            f"{sys.executable} src/processing/link_injury_data.py",
+            f"{exe} src/processing/link_injury_data.py",
             "Linking Injury Player IDs",
         ))
 
     # Step 4: Run incremental linker (optional)
     if not args.skip_linker:
         steps.append((
-            f"{sys.executable} src/processing/nba_linker_local.py incremental",
+            f"{exe} src/processing/nba_linker_local.py incremental",
             "Linking Props (Incremental)",
         ))
 

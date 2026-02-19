@@ -60,7 +60,7 @@ class LiveOddsScraper:
         url = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds"
         params = {
             "apiKey": self.api_key,
-            "regions": "us",
+            "regions": "us,us2,us_ex",
             "markets": "h2h,spreads,totals",
             "oddsFormat": "american",
             "dateFormat": "iso",

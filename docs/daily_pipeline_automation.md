@@ -4,49 +4,64 @@ Documentation for the frequency-separated job scripts that automate the GameFlow
 
 ## Overview
 
-The daily pipeline is split into three jobs based on execution frequency:
+The daily pipeline is split into four jobs based on execution frequency:
 
 | Job | Schedule (ET) | Purpose | Runtime |
 |-----|---------------|---------|---------|
 | `daily_stats_job.py` | 9:00 AM | NBA game results + processing | ~5-10 min |
-| `lines_job.py` | 12 PM, 4 PM, 6 PM | Props + injuries + linking | ~30-90 sec |
-| `inference_job.py` | 6:30 PM | Generate predictions | ~16 sec |
+| `lines_job.py --live` | 12 PM, 4 PM | Full live scrape (game lines + props + injuries + linker) | ~30-90 sec |
+| `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation | ~16 sec |
+| `lines_job.py --live --props-only` | 1-3 PM hourly, 4:30-6:30 PM half-hourly | Props-only live scrape + linker | ~15-30 sec |
+| `edge_refresh_job.py` | 2 min after each props-only | Recalculate edges from stored samples + fresh lines | ~2-3 sec |
 
 **Note:** Inference job optimized from ~3 min to ~16 sec in Session 27 via parallel feature building and prop lines query optimization.
+
+**API Budget:** 5M credits/month. New schedule uses ~3,250/month (previously ~750/month) — negligible impact.
 
 ## Pipeline Timeline
 
 ```
-9:00 AM   daily_stats_job.py
-          ├─ nba_unified_scraper.py (NBA game results)
-          ├─ nba_linker_local.py incremental
-          ├─ backfill_team_ids.py
-          ├─ update_player_position_history.py
-          ├─ update_league_position_averages.py
-          ├─ populate_average_stats_incremental.py (lightweight, ~1s)
-          ├─ backfill_opponent_allowed_incremental.py --days-back 30
-          └─ resolve ALL pending paper bets
+9:00 AM    daily_stats_job.py
+           ├─ nba_unified_scraper.py (NBA game results)
+           ├─ nba_linker_local.py incremental
+           ├─ backfill_team_ids.py
+           ├─ update_player_position_history.py
+           ├─ update_league_position_averages.py
+           ├─ populate_average_stats_incremental.py (lightweight, ~1s)
+           ├─ backfill_opponent_allowed_incremental.py --days-back 30
+           ├─ play_type_scraper.py
+           └─ resolve ALL pending paper bets
 
-12:00 PM  lines_job.py (first run)
-          ├─ daily_game_lines_scraper.py
-          ├─ daily_player_props_scraper.py
-          ├─ rapidapi_injury_backfill.py
-          ├─ link_injury_data.py
-          └─ nba_linker_local.py incremental
+12:00 PM   lines_job.py --live (full scrape)
+           ├─ daily_game_lines_scraper.py
+           ├─ daily_player_props_scraper.py --live --target-table raw_player_props_combined
+           ├─ rapidapi_injury_backfill.py
+           ├─ link_injury_data.py
+           └─ nba_linker_local.py incremental
 
-4:00 PM   lines_job.py (second run)
+12:15 PM   inference_job.py (FULL MC inference)
+           ├─ Load model artifacts
+           ├─ Check upstream data freshness
+           ├─ DailyPredictionRunner.run_for_date()
+           ├─ Store predictions + MC samples to DB
+           ├─ Export predictions CSV
+           └─ Send Discord alert
 
-6:00 PM   lines_job.py (final run)
+1:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (1:02 PM)
+2:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (2:02 PM)
+3:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (3:02 PM)
 
-6:30 PM   inference_job.py
-          ├─ Load model artifacts
-          ├─ Check upstream data freshness (warns if >2 days stale)
-          ├─ DailyPredictionRunner.run_for_date()
-          ├─ Store to daily_predictions table
-          ├─ Export predictions CSV
-          └─ Send Discord alert (optional)
+4:00 PM    lines_job.py --live (full scrape — catches new player props)
 
-7:00 PM   Games typically start
+4:15 PM    inference_job.py (FULL MC inference — second window)
+
+4:30 PM    lines_job.py --live --props-only → edge_refresh_job.py (4:32 PM)
+5:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (5:02 PM)
+5:30 PM    lines_job.py --live --props-only → edge_refresh_job.py (5:32 PM)
+6:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (6:02 PM)
+6:30 PM    lines_job.py --live --props-only → edge_refresh_job.py (6:32 PM, final)
+
+7:00 PM    Games typically start
 ```
 
 ---
@@ -96,27 +111,30 @@ Output is written to `logs/daily_stats.log`.
 
 **Location:** `src/orchestration/lines_job.py`
 
-**Purpose:** Scrape latest player prop lines and injury updates. Run multiple times daily to capture line movement.
+**Purpose:** Scrape latest player prop lines and injury updates. Supports full scrapes and lightweight props-only refreshes.
 
-**Schedule:** Multiple times daily (12 PM, 4 PM, 6 PM ET)
+**Schedule:**
+- **Full scrape (`--live`):** 12 PM, 4 PM ET
+- **Props-only (`--live --props-only`):** 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET
+- **Historical mode (no `--live`):** For backfills (uses historical API snapshots)
 
 ### Usage
 
 ```bash
-# Normal run for today
-python src/orchestration/lines_job.py
+# Live full scrape (game lines + props + injuries + linker)
+python src/orchestration/lines_job.py --live
 
-# Specific date
+# Live props-only (fast — props + linker only)
+python src/orchestration/lines_job.py --live --props-only
+
+# Historical scrape for specific date
 python src/orchestration/lines_job.py --date 2026-02-05
 
 # Skip injuries (faster)
-python src/orchestration/lines_job.py --skip-injuries
-
-# Skip linker (if already run)
-python src/orchestration/lines_job.py --skip-linker
+python src/orchestration/lines_job.py --live --skip-injuries
 
 # Dry run
-python src/orchestration/lines_job.py --dry-run
+python src/orchestration/lines_job.py --live --props-only --dry-run
 ```
 
 ### CLI Arguments
@@ -124,21 +142,81 @@ python src/orchestration/lines_job.py --dry-run
 | Argument | Description |
 |----------|-------------|
 | `--date YYYY-MM-DD` | Target date (defaults to today) |
+| `--live` | Use live API endpoints; writes props to `raw_player_props_combined` |
+| `--props-only` | Skip game lines and injuries (only props + linker) |
 | `--dry-run` | Show what would be executed without running |
 | `--skip-injuries` | Skip injury scraping (faster execution) |
 | `--skip-linker` | Skip incremental linker (if already run today) |
 
-### Pipeline Steps
+### Pipeline Steps (Full Mode)
 
-1. `daily_game_lines_scraper.py` - Fetch game lines (spreads, totals) from Odds API
-2. `daily_player_props_scraper.py` - Fetch player props from Odds API
-3. `rapidapi_injury_backfill.py` - Fetch injury updates from RapidAPI (optional)
-4. `link_injury_data.py` - Link injury player names to IDs (optional)
-5. `nba_linker_local.py incremental` - Link new props to player/game IDs (optional)
+1. `daily_game_lines_scraper.py` - Fetch game lines from Odds API (skipped in `--props-only`)
+2. `daily_player_props_scraper.py --live --target-table raw_player_props_combined` - Fetch live player props
+3. `rapidapi_injury_backfill.py` - Fetch injury updates (skipped in `--props-only`)
+4. `link_injury_data.py` - Link injury player names to IDs (skipped in `--props-only`)
+5. `nba_linker_local.py incremental` - Link new props to player/game IDs
 
 ### Logs
 
 Output is written to `logs/lines.log`.
+
+---
+
+## edge_refresh_job.py
+
+**Location:** `src/orchestration/edge_refresh_job.py`
+
+**Purpose:** Lightweight edge recalculation using stored MC samples and fresh prop lines. Does NOT re-run inference — no model loading, no feature engineering, no MC sampling.
+
+**Schedule:** 2 minutes after each props-only scrape (8 times daily)
+
+### Usage
+
+```bash
+# Normal run
+python src/orchestration/edge_refresh_job.py
+
+# Dry run (compute but don't upsert)
+python src/orchestration/edge_refresh_job.py --dry-run
+
+# Specific date
+python src/orchestration/edge_refresh_job.py --date 2026-02-05
+
+# Specific stats
+python src/orchestration/edge_refresh_job.py --stats pts reb
+```
+
+### CLI Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `--date YYYY-MM-DD` | Target date (defaults to today) |
+| `--dry-run` | Compute edges but don't upsert to database |
+| `--stats STAT [STAT ...]` | Stats to refresh (defaults to `pts reb ast`) |
+| `--skip-discord` | Skip Discord alert |
+
+### Pipeline Steps
+
+1. Load stored MC samples via `PredictionStore.get_all_samples_for_date()` — returns `dict[(player_id, game_id, stat) -> np.ndarray]`
+2. Load stored predictions from `daily_predictions` for target date
+3. Get unique game_ids from predictions
+4. Fetch fresh prop lines from `raw_player_props_combined` (sharpest book per player/game/market)
+5. Recalculate over/under probabilities from MC samples (empirical CDF)
+6. Compute implied probabilities from odds (multiplicative devigging)
+7. Recalculate raw edges (model prob - implied prob)
+8. Recalculate Black-Litterman blended probabilities and recommendations
+9. Upsert updated predictions to `daily_predictions`
+10. Export CSV backup
+
+### Key Design Decisions
+
+- **Self-contained:** Does NOT instantiate `DailyPredictionRunner` or load model/feature pipeline. Only uses `PredictionStore`, `BlackLittermanBlender`, and raw SQL queries.
+- **Graceful exit:** If no MC samples exist for the target date (inference hasn't run yet), exits with a warning and code 0.
+- **Feature preservation:** Loads existing predictions and only updates line/edge/BL columns. All `feat_*` columns and quantile predictions are preserved.
+
+### Logs
+
+Output is written to `logs/edge_refresh.log`.
 
 ---
 

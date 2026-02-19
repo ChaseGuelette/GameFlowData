@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-19 Session 45] — Frequent Line Scraping + Edge Refresh Pipeline
+
+### Added
+
+- **`edge_refresh_job.py`:** New lightweight job (~2-3 sec) that recalculates edges and BL recommendations using stored MC samples + fresh prop lines. Runs after each intra-day props scrape without re-running inference. Self-contained — no model pipeline dependencies.
+- **`PredictionStore.get_all_samples_for_date()`:** Bulk retrieval method that loads all MC sample arrays for a date into `dict[(player_id, game_id, stat) -> np.ndarray]`.
+- **`--target-table` arg on `daily_player_props_scraper.py`:** Allows live scraping to write directly to `raw_player_props_combined` instead of `raw_player_props_live`.
+- **`--live` flag on `lines_job.py`:** Uses live Odds API endpoints with `--target-table raw_player_props_combined`.
+- **`--props-only` flag on `lines_job.py`:** Skips game lines and injury scraping — runs only props scraper + linker for fast intra-day refreshes.
+- **21-job scheduler schedule:** Two full inference windows (12:15 PM, 4:15 PM ET), hourly props+edge refresh (1-3 PM ET), half-hourly props+edge refresh (4:30-6:30 PM ET).
+- **Edge refresh metrics parsing** in scheduler Discord alerts (`predictions_updated`, `recommended`).
+
+### Changed
+
+- **`game_lines_scraper.py`:** Region parameter from `"us"` to `"us,us2,us_ex"` for full US sportsbook coverage.
+- **`live_odds_scraper.py`:** Same region expansion.
+- **`scheduler.py`:** `run_job()` now accepts `extra_args` string parameter. Added `run_lines_full()`, `run_lines_props_only()`, `run_edge_refresh()` wrappers.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/scrapers/daily_player_props_scraper.py` | Modified — `--target-table` CLI arg, `target_table` param on `run_live_scrape()` |
+| `src/orchestration/lines_job.py` | Modified — `--live`, `--props-only` flags |
+| `src/scrapers/game_lines_scraper.py` | Modified — region us → us,us2,us_ex |
+| `src/scrapers/live_odds_scraper.py` | Modified — region us → us,us2,us_ex |
+| `src/models/prediction_store.py` | Modified — `get_all_samples_for_date()` method |
+| `src/orchestration/edge_refresh_job.py` | Created — lightweight edge recalculation job |
+| `src/orchestration/scheduler.py` | Modified — new schedule, `extra_args`, new wrappers |
+
+### Verified
+
+- 608 Python tests pass, ruff clean
+- `lines_job --live --props-only --dry-run` confirmed correct commands
+- `edge_refresh_job --dry-run` exits gracefully when no samples exist
+- Scheduler lists all 21 jobs with correct UTC cron triggers
+
+---
+
 ## [2026-02-19 Session 44] — NBA Play Types Feature
 
 ### Added

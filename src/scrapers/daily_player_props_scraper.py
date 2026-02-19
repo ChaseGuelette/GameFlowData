@@ -185,9 +185,9 @@ class DailyPlayerPropsScraper:
             conn.close()
 
 
-def run_live_scrape(scraper):
-    """Run scrape for current time -> raw_player_props_live"""
-    logger.info("Running LIVE Player Props Scrape...")
+def run_live_scrape(scraper, target_table="raw_player_props_live"):
+    """Run scrape for current time -> target_table."""
+    logger.info(f"Running LIVE Player Props Scrape -> {target_table}...")
     events = scraper.get_live_events()
     logger.info(f"Found {len(events)} live/upcoming events.")
 
@@ -203,7 +203,7 @@ def run_live_scrape(scraper):
         total_creds += cost
 
         if data:
-            rows = scraper.parse_and_store(data, snapshot_ts, "raw_player_props_live")
+            rows = scraper.parse_and_store(data, snapshot_ts, target_table)
             total_rows += rows
             logger.info(f"  Saved {rows} props.")
 
@@ -273,6 +273,11 @@ if __name__ == "__main__":
         help="Explicit list of market keys to scrape",
     )
 
+    parser.add_argument(
+        "--target-table", type=str, default=None,
+        help="Override target table (default: raw_player_props_live for --live, raw_player_props_combined for --date)",
+    )
+
     args = parser.parse_args()
 
     # Resolve markets
@@ -289,7 +294,8 @@ if __name__ == "__main__":
     logger.info(f"Markets ({len(markets)}): {', '.join(markets)}")
 
     if args.live:
-        run_live_scrape(scraper)
+        table = args.target_table or "raw_player_props_live"
+        run_live_scrape(scraper, target_table=table)
 
     if args.date:
         run_historical_scrape(scraper, args.date)

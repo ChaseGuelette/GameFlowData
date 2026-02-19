@@ -33,7 +33,7 @@ class GameLineScraper:
         params = {
             "apiKey": self.api_key,
             "date": date_str,
-            "regions": "us",  # 'us' covers major US books
+            "regions": "us,us2,us_ex",
             "markets": "h2h,spreads,totals",
             "oddsFormat": "american",
             "dateFormat": "iso",

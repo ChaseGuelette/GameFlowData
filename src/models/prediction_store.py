@@ -189,6 +189,35 @@ class PredictionStore:
 
         return np.frombuffer(gzip.decompress(blob), dtype=np.float64, count=n_samples)
 
+    def get_all_samples_for_date(self, prediction_date: date) -> dict[tuple, np.ndarray]:
+        """Retrieve all MC samples for a date as a samples_dict.
+
+        Returns:
+            dict[(player_id, game_id, stat) -> np.ndarray] matching the format
+            expected by _calculate_edges() and _compute_bl_recommendations().
+        """
+        query = """
+            SELECT player_id, game_id, stat, n_samples, samples_gz
+            FROM daily_prediction_samples
+            WHERE prediction_date = :prediction_date
+        """
+        from sqlalchemy import text
+
+        samples_dict: dict[tuple, np.ndarray] = {}
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(query), {"prediction_date": prediction_date}).fetchall()
+
+        for row in rows:
+            player_id, game_id, stat, n_samples, blob = row
+            if isinstance(blob, memoryview):
+                blob = bytes(blob)
+            samples = np.frombuffer(gzip.decompress(blob), dtype=np.float64, count=n_samples)
+            samples_dict[(int(player_id), str(game_id), stat)] = samples
+
+        logger.info(f"Loaded {len(samples_dict)} sample arrays for {prediction_date}")
+        return samples_dict
+
     def get_player_id_by_name(self, name: str) -> int | None:
         """Fuzzy lookup: find player_id by name (case-insensitive LIKE)."""
         query = """

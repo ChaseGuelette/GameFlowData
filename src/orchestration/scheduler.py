@@ -6,10 +6,27 @@ Runs all daily jobs on schedule using APScheduler.
 
 Schedule (ET → UTC for EST):
     9:00 AM ET  (14:00 UTC) - daily_stats_job
-    12:00 PM ET (17:00 UTC) - lines_job
-    4:00 PM ET  (21:00 UTC) - lines_job
-    6:00 PM ET  (23:00 UTC) - lines_job
-    6:30 PM ET  (23:30 UTC) - inference_job
+
+    12:00 PM ET (17:00 UTC) - lines_job --live (full)
+    12:15 PM ET (17:15 UTC) - inference_job (full MC)
+
+    1:00 PM ET  (18:00 UTC) - lines_job --live --props-only
+    1:02 PM ET  (18:02 UTC) - edge_refresh_job
+
+    2:00 PM ET  (19:00 UTC) - lines_job --live --props-only
+    2:02 PM ET  (19:02 UTC) - edge_refresh_job
+
+    3:00 PM ET  (20:00 UTC) - lines_job --live --props-only
+    3:02 PM ET  (20:02 UTC) - edge_refresh_job
+
+    4:00 PM ET  (21:00 UTC) - lines_job --live (full)
+    4:15 PM ET  (21:15 UTC) - inference_job (full MC)
+
+    4:30 PM ET  (21:30 UTC) - lines_job --live --props-only + edge_refresh
+    5:00 PM ET  (22:00 UTC) - lines_job --live --props-only + edge_refresh
+    5:30 PM ET  (22:30 UTC) - lines_job --live --props-only + edge_refresh
+    6:00 PM ET  (23:00 UTC) - lines_job --live --props-only + edge_refresh
+    6:30 PM ET  (23:30 UTC) - lines_job --live --props-only + edge_refresh (final)
 
 Usage:
     python src/orchestration/scheduler.py              # Start scheduler loop
@@ -20,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -50,6 +68,7 @@ JOB_NAMES = {
     "daily_stats_job.py": "Daily Stats",
     "lines_job.py": "Lines Scraper",
     "inference_job.py": "Inference",
+    "edge_refresh_job.py": "Edge Refresh",
     "test_job.py": "System Test",
 }
 
@@ -101,6 +120,16 @@ def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> di
         if edge_match:
             metrics["high_edge"] = edge_match.group(1)
 
+    elif script_name == "edge_refresh_job.py":
+        # Look for updated predictions count
+        updated_match = re.search(r"Predictions updated: (\d+)", output)
+        if updated_match:
+            metrics["predictions_updated"] = updated_match.group(1)
+
+        rec_match = re.search(r"Recommended picks: (\d+)", output)
+        if rec_match:
+            metrics["recommended"] = rec_match.group(1)
+
     elif script_name == "test_job.py":
         # Look for checks passed
         checks_match = re.search(r"(\d+)/(\d+) checks passed", output)
@@ -150,10 +179,11 @@ def _send_job_alert(
         logger.warning(f"Failed to send Discord alert for {script_name}: {e}")
 
 
-def run_job(script_name: str):
+def run_job(script_name: str, extra_args: str = ""):
     """Run a job script as a subprocess and send alert on completion."""
     script_path = PROJECT_ROOT / "src" / "orchestration" / script_name
-    logger.info(f"Starting job: {script_name}")
+    cmd = [sys.executable, str(script_path)] + (shlex.split(extra_args) if extra_args else [])
+    logger.info(f"Starting job: {script_name}{' ' + extra_args if extra_args else ''}")
 
     start_time = time.time()
     success = False
@@ -162,7 +192,7 @@ def run_job(script_name: str):
 
     try:
         result = subprocess.run(
-            [sys.executable, str(script_path)],
+            cmd,
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
@@ -250,12 +280,23 @@ def run_daily_stats():
     run_job("daily_stats_job.py")
 
 
-def run_lines():
-    run_job("lines_job.py")
+def run_lines_full():
+    """Full lines scrape: game lines + props (live) + injuries + linker."""
+    run_job("lines_job.py", extra_args="--live")
+
+
+def run_lines_props_only():
+    """Props-only scrape: live props + linker (no game lines or injuries)."""
+    run_job("lines_job.py", extra_args="--live --props-only")
 
 
 def run_inference():
     run_job("inference_job.py")
+
+
+def run_edge_refresh():
+    """Lightweight edge recalculation using stored samples + fresh lines."""
+    run_job("edge_refresh_job.py")
 
 
 def main():
@@ -284,48 +325,88 @@ def main():
 
     scheduler = BlockingScheduler(timezone="UTC")
 
-    # Schedule jobs (all times in UTC)
-    # EST: UTC-5, so 9 AM ET = 14:00 UTC
+    # Schedule jobs (all times in UTC; EST = UTC-5)
+    # ==============================================================
 
-    # Daily Stats - 9:00 AM ET = 14:00 UTC
+    # 9:00 AM ET (14:00 UTC) - Daily stats
     scheduler.add_job(
         run_daily_stats,
         CronTrigger(hour=14, minute=0),
         id="daily_stats",
-        name="Daily Stats Job (9 AM ET)",
+        name="Daily Stats (9 AM ET)",
     )
 
-    # Lines - 12:00 PM ET = 17:00 UTC
+    # --- First window: noon full scrape + inference ---
+
+    # 12:00 PM ET (17:00 UTC) - Full lines scrape (live)
     scheduler.add_job(
-        run_lines,
+        run_lines_full,
         CronTrigger(hour=17, minute=0),
-        id="lines_noon",
-        name="Lines Job - Noon (12 PM ET)",
+        id="lines_noon_full",
+        name="Lines Full (12 PM ET)",
     )
 
-    # Lines - 4:00 PM ET = 21:00 UTC
-    scheduler.add_job(
-        run_lines,
-        CronTrigger(hour=21, minute=0),
-        id="lines_4pm",
-        name="Lines Job - 4 PM (4 PM ET)",
-    )
-
-    # Lines - 6:00 PM ET = 23:00 UTC
-    scheduler.add_job(
-        run_lines,
-        CronTrigger(hour=23, minute=0),
-        id="lines_6pm",
-        name="Lines Job - 6 PM (6 PM ET)",
-    )
-
-    # Inference - 6:30 PM ET = 23:30 UTC
+    # 12:15 PM ET (17:15 UTC) - Full inference
     scheduler.add_job(
         run_inference,
-        CronTrigger(hour=23, minute=30),
-        id="inference",
-        name="Inference Job (6:30 PM ET)",
+        CronTrigger(hour=17, minute=15),
+        id="inference_noon",
+        name="Inference (12:15 PM ET)",
     )
+
+    # --- Hourly props-only + edge refresh: 1-3 PM ET ---
+
+    for utc_hour, et_label in [(18, "1 PM"), (19, "2 PM"), (20, "3 PM")]:
+        scheduler.add_job(
+            run_lines_props_only,
+            CronTrigger(hour=utc_hour, minute=0),
+            id=f"props_{utc_hour}",
+            name=f"Props Only ({et_label} ET)",
+        )
+        scheduler.add_job(
+            run_edge_refresh,
+            CronTrigger(hour=utc_hour, minute=2),
+            id=f"edge_refresh_{utc_hour}",
+            name=f"Edge Refresh ({et_label}:02 ET)",
+        )
+
+    # --- Second window: 4 PM full scrape + inference ---
+
+    # 4:00 PM ET (21:00 UTC) - Full lines scrape (live)
+    scheduler.add_job(
+        run_lines_full,
+        CronTrigger(hour=21, minute=0),
+        id="lines_4pm_full",
+        name="Lines Full (4 PM ET)",
+    )
+
+    # 4:15 PM ET (21:15 UTC) - Full inference
+    scheduler.add_job(
+        run_inference,
+        CronTrigger(hour=21, minute=15),
+        id="inference_4pm",
+        name="Inference (4:15 PM ET)",
+    )
+
+    # --- Half-hourly props-only + edge refresh: 4:30-6:30 PM ET ---
+
+    half_hourly = [
+        (21, 30, "4:30 PM"), (22, 0, "5 PM"), (22, 30, "5:30 PM"),
+        (23, 0, "6 PM"), (23, 30, "6:30 PM"),
+    ]
+    for utc_h, utc_m, et_label in half_hourly:
+        scheduler.add_job(
+            run_lines_props_only,
+            CronTrigger(hour=utc_h, minute=utc_m),
+            id=f"props_{utc_h}_{utc_m:02d}",
+            name=f"Props Only ({et_label} ET)",
+        )
+        scheduler.add_job(
+            run_edge_refresh,
+            CronTrigger(hour=utc_h, minute=utc_m + 2),
+            id=f"edge_refresh_{utc_h}_{utc_m:02d}",
+            name=f"Edge Refresh ({et_label}:02 ET)",
+        )
 
     # Log scheduled jobs
     logger.info("Scheduled jobs:")
