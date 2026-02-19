@@ -4,7 +4,8 @@ description: Complete steps to safely end development of new features.
 
 # Ending new feature development
 
-Run pytest in order to ensure all things function properly. Update ARCHITECTURE.md, CHANGELOG.md, and ACTIONITEMS.md to maintain project context.
+Check docs/development_docs folder to see if new sessions have run since starting development. 
+Run pytest in order to ensure all things function properly. Update ARCHITECTURE.md, CHANGELOG.md, and ACTIONITEMS.md to maintain project context. 
 
 ## Step 1: Run Pytest
 

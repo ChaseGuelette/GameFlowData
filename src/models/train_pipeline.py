@@ -770,8 +770,9 @@ class TrainingOrchestrator:
                 f"{failure_count} of {len(eval_df)} predictions failed during combined calibration"
             )
 
-        # Calculate calibration for each stat
+        # Calculate calibration for each stat + compute conformal offsets
         reports = {}
+        combined_offsets = {}
 
         for stat in eval_stats:
             if not results[stat]["predictions"]:
@@ -782,15 +783,25 @@ class TrainingOrchestrator:
             preds_df = pd.DataFrame(results[stat]["predictions"])
 
             stat_reports = []
+            stat_offsets = {}
             logger.info(f"\n  {stat.upper()} (Combined):")
 
             for q in [0.10, 0.25, 0.50, 0.75, 0.90]:
                 pred_col = f"q{int(q * 100):02d}"
-                coverage = (actuals <= preds_df[pred_col].values).mean()
+                pred_qvals = preds_df[pred_col].values
+
+                coverage = (actuals <= pred_qvals).mean()
                 gap = coverage - q
 
+                # Compute conformal offset: residuals = actuals - predicted_q_values
+                # offset = np.quantile(residuals, q)
+                # When added to predicted quantile values, this corrects coverage
+                residuals = actuals - pred_qvals
+                offset = float(np.quantile(residuals, q))
+                stat_offsets[str(q)] = round(offset, 4)
+
                 status = "OK" if abs(gap) <= self.CALIBRATION_TOLERANCE else f"GAP {gap:+.3f}"
-                logger.info(f"    Q{q:.2f}: Act={coverage:.3f} Target={q:.2f} [{status}]")
+                logger.info(f"    Q{q:.2f}: Act={coverage:.3f} Target={q:.2f} [{status}] offset={offset:+.3f}")
 
                 stat_reports.append(
                     {
@@ -798,13 +809,25 @@ class TrainingOrchestrator:
                         "coverage": float(coverage),
                         "target": q,
                         "gap": float(gap),
+                        "conformal_offset": offset,
                     }
                 )
 
             reports[stat] = stat_reports
+            combined_offsets[stat] = stat_offsets
 
         # Save combined calibration report
         self._save_calibration_report(reports, suffix="_combined")
+
+        # Save combined calibration offsets artifact
+        offsets_path = self.run_dir / "combined_calibration_offsets.json"
+        with open(offsets_path, "w") as f:
+            json.dump(combined_offsets, f, indent=4)
+        logger.info(f"Saved combined calibration offsets to {offsets_path}")
+
+        # Log offset summary
+        for stat, offsets in combined_offsets.items():
+            logger.info(f"  {stat.upper()} offsets: {offsets}")
 
         # Summary
         all_gaps = [r["gap"] for stat_reports in reports.values() for r in stat_reports]
@@ -1003,6 +1026,14 @@ if __name__ == "__main__":
         "--hyperparams-path", type=str, default=None, help="Path to existing hyperparams JSON to load (skips tuning)"
     )
 
+    # Calibrate-only mode
+    parser.add_argument(
+        "--calibrate-only",
+        action="store_true",
+        help="Compute combined calibration offsets on an existing model without retraining. "
+             "Requires --base-model-dir. Saves combined_calibration_offsets.json to the model directory.",
+    )
+
     # Surgical retrain options
     parser.add_argument(
         "--retrain-stats",
@@ -1029,35 +1060,99 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Determine mode: surgical retrain vs full retrain
+    # Determine mode: calibrate-only vs surgical retrain vs full retrain
     is_partial = args.retrain_stats is not None or args.retrain_minutes
-    if is_partial and not args.base_model_dir:
-        parser.error("--base-model-dir is required when using --retrain-stats or --retrain-minutes")
-    if args.base_model_dir and not is_partial:
-        parser.error("--base-model-dir requires --retrain-stats and/or --retrain-minutes")
+    is_calibrate_only = args.calibrate_only
 
-    orchestrator = TrainingOrchestrator(
-        tune_hyperparams=args.tune,
-        tuning_trials=args.tuning_trials,
-        tuning_timeout=args.tuning_timeout,
-        tuning_per_quantile=args.tuning_per_quantile,
-        hyperparams_path=args.hyperparams_path,
-    )
+    if is_calibrate_only:
+        if not args.base_model_dir:
+            parser.error("--base-model-dir is required when using --calibrate-only")
+        if is_partial:
+            parser.error("--calibrate-only cannot be combined with --retrain-stats or --retrain-minutes")
+    elif is_partial and not args.base_model_dir:
+        parser.error("--base-model-dir is required when using --retrain-stats or --retrain-minutes")
+    elif args.base_model_dir and not is_partial and not is_calibrate_only:
+        parser.error("--base-model-dir requires --retrain-stats, --retrain-minutes, or --calibrate-only")
+
     cal_end = datetime.strptime(args.cal_end_date, "%Y-%m-%d").date() if args.cal_end_date else None
 
-    if is_partial:
-        orchestrator.run_partial(
-            train_seasons=args.train_seasons,
-            calibration_season=args.cal_season,
-            cal_end_date=cal_end,
-            base_model_dir=args.base_model_dir,
-            retrain_stats=args.retrain_stats,
-            retrain_minutes=args.retrain_minutes,
-            reselect_features=args.reselect_features,
+    if is_calibrate_only:
+        # Calibrate-only mode: load existing model, compute combined calibration offsets, save, exit
+        from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
+
+        logger.info("=== Calibrate-Only Mode ===")
+        logger.info(f"Base model: {args.base_model_dir}")
+        logger.info(f"Calibration Season: {args.cal_season}")
+        if cal_end:
+            logger.info(f"Calibration End Date: {cal_end} (exclusive)")
+
+        engine = get_engine()
+        feature_store = FeatureStore(engine)
+
+        # Load existing pipeline
+        logger.info(f"Loading existing pipeline from {args.base_model_dir}...")
+        pipeline = PlayerPropsModelPipeline.load_all(args.base_model_dir, feature_store)
+
+        # Load calibration data
+        cal_df = feature_store.get_training_dataset([args.cal_season])
+        if cal_end:
+            pre_filter = len(cal_df)
+            cal_df = cal_df[cal_df["game_date"] < cal_end].reset_index(drop=True)
+            logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows (filtered from {pre_filter:,})")
+        else:
+            logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows")
+
+        # Load copula params from the model directory
+        copula_params = load_copula_params(args.base_model_dir)
+        if copula_params:
+            logger.info(f"Loaded copula params: { {k: f'{v:.4f}' for k, v in copula_params.items()} }")
+
+        # Create a temporary orchestrator just for the evaluation method
+        # We need its run_dir to point to the base model directory for saving offsets
+        class _CalOnlyOrchestrator:
+            """Minimal wrapper to reuse _evaluate_combined_calibration."""
+            CALIBRATION_TOLERANCE = TrainingOrchestrator.CALIBRATION_TOLERANCE
+            CALIBRATION_HARD_FAIL = TrainingOrchestrator.CALIBRATION_HARD_FAIL
+
+            def __init__(self, run_dir):
+                self.run_dir = Path(run_dir)
+
+            def _save_calibration_report(self, reports, suffix=""):
+                filename = f"calibration_report{suffix}.json" if suffix else "calibration_report.json"
+                with open(self.run_dir / filename, "w") as f:
+                    json.dump(reports, f, indent=4)
+
+        cal_orch = _CalOnlyOrchestrator(args.base_model_dir)
+
+        # Run combined calibration evaluation (this saves offsets to model dir)
+        TrainingOrchestrator._evaluate_combined_calibration(
+            cal_orch, pipeline, cal_df, copula_params=copula_params
         )
+
+        logger.info(f"Calibrate-only complete. Offsets saved to {args.base_model_dir}/combined_calibration_offsets.json")
+
     else:
-        orchestrator.run(
-            train_seasons=args.train_seasons,
-            calibration_season=args.cal_season,
-            cal_end_date=cal_end,
+        orchestrator = TrainingOrchestrator(
+            tune_hyperparams=args.tune,
+            tuning_trials=args.tuning_trials,
+            tuning_timeout=args.tuning_timeout,
+            tuning_per_quantile=args.tuning_per_quantile,
+            hyperparams_path=args.hyperparams_path,
         )
+
+        if is_partial:
+            orchestrator.run_partial(
+                train_seasons=args.train_seasons,
+                calibration_season=args.cal_season,
+                cal_end_date=cal_end,
+                base_model_dir=args.base_model_dir,
+                retrain_stats=args.retrain_stats,
+                retrain_minutes=args.retrain_minutes,
+                reselect_features=args.reselect_features,
+            )
+        else:
+            orchestrator.run(
+                train_seasons=args.train_seasons,
+                calibration_season=args.cal_season,
+                cal_end_date=cal_end,
+            )

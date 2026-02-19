@@ -88,6 +88,7 @@ GameFlowData/
 - Pool size 10, max overflow 6, 5-minute connection recycle (optimized for parallel feature building).
 - 5-minute statement timeout.
 - pgBouncer compatible.
+- **Lazy initialization:** Engine creation is deferred — module is safely importable without `DATABASE_URL` (e.g., in CI/test environments). `get_engine()` raises `ValueError` at call time if `DATABASE_URL` is missing.
 
 ### 2. Data Collection & "The Linker"
 
@@ -914,7 +915,7 @@ python src/paper_trading/resolve_bets.py --date 2026-02-04 --dry-run
 
 **Framework:** Pytest with pytest-cov (60% coverage target).
 
-**Test Organization:** 33 test modules in `tests/` mirroring `src/` structure. Each source module has a corresponding `test_*.py`.
+**Test Organization:** 34 test modules in `tests/` mirroring `src/` structure. Each source module has a corresponding `test_*.py`.
 
 **Test Categories (markers):**
 - `unit` — Isolated logic tests with mocks.
@@ -925,6 +926,7 @@ python src/paper_trading/resolve_bets.py --date 2026-02-04 --dry-run
 - Mock-based unit tests with proper fixtures for database interactions.
 - Time-series aware validation (chronological ordering enforced).
 - All scrapers tested with mocked HTTP responses.
+- **CI-safe imports:** All source modules with env-var dependencies use lazy initialization — `sys.exit()`/`raise` deferred from module-level to `if __name__ == "__main__"` or function calls. Enables pytest collection without credentials.
 
 **Configuration:** `pyproject.toml` contains pytest, coverage, and ruff settings. Line length 120, Python 3.11 target.
 

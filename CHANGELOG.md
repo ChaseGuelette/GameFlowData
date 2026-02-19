@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-19 Session 41] — CI Pipeline Fix: Lazy Module Initialization
+
+### Fixed
+
+- **`src/db/client.py`:** Deferred engine creation so module is importable without `DATABASE_URL`. `get_engine()` now raises `ValueError` at call time instead of import time
+- **`src/scrapers/daily_player_props_scraper.py`:** Removed module-level `sys.exit(1)` when `DATABASE_URL`/`ODDS_API_KEY` missing. Validation moved to `if __name__ == "__main__"`
+- **`src/scrapers/daily_game_lines_scraper.py`:** Same pattern — removed module-level `sys.exit(1)`
+- **`src/scrapers/game_lines_scraper.py`:** Removed module-level `raise ValueError`. Engine creation deferred with `if DATABASE_URL else None`
+- **`src/scrapers/live_odds_scraper.py`:** Same pattern — removed module-level `raise ValueError`
+- **`tests/test_db_client.py`:** Updated `test_import_raises_without_database_url` → `test_get_engine_raises_without_database_url` to match new lazy init behavior
+
+### Verified
+
+- 608 Python tests pass with empty env vars (CI simulation), 0 collection errors
+- Ruff lint clean
+- Scripts still fail fast when run directly without credentials (validation in `__main__`)
+
+---
+
 ## [2026-02-19 Session 40] — AST Surgical Retrain Evaluation
 
 ### Added

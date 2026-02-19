@@ -153,6 +153,7 @@ class MonteCarloPredictor:
         tail_adjustment: dict | None = None,
         blowout_config: dict | None = None,
         copula_params: dict | None = None,
+        combined_calibration_offsets: dict | None = None,
     ):
         """
         Initialize the Monte Carlo predictor.
@@ -176,6 +177,11 @@ class MonteCarloPredictor:
                           and that stat's per-minute rate. When provided, uses Gaussian copula
                           sampling instead of the legacy post-hoc correlation adjustment.
                           Example: {"pts": 0.314, "reb": -0.046, "ast": 0.176}
+            combined_calibration_offsets: Dict mapping stat -> {quantile_str -> offset}.
+                          Per-quantile conformal offsets computed on the combined (minutes x rate)
+                          distribution. Applied via piecewise-linear sample warping after
+                          combining minutes * rate samples.
+                          Example: {"ast": {"0.1": -1.23, "0.25": -0.5, ...}}
         """
         self.pipeline = model_pipeline
         self.n_samples = n_samples
@@ -200,6 +206,9 @@ class MonteCarloPredictor:
 
         # Gaussian copula parameters (replaces legacy correlation adjustment when set)
         self.copula_params = copula_params
+
+        # Combined calibration offsets (conformal recalibration on minutes*rate)
+        self.combined_calibration_offsets = combined_calibration_offsets
 
     def predict(
         self, player_id: int, game_id: str, features: dict, stats: list[str] = None
@@ -240,10 +249,13 @@ class MonteCarloPredictor:
             # 4. Combine: stat = minutes × rate
             stat_samples = minutes_samples * rate_samples
 
-            # 5. Apply variance inflation if configured
+            # 5. Apply combined calibration offsets (before variance inflation)
+            stat_samples = self._apply_combined_calibration(stat_samples, stat)
+
+            # 6. Apply variance inflation if configured
             stat_samples = self._apply_variance_inflation(stat_samples, stat)
 
-            # 6. Build prediction object
+            # 7. Build prediction object
             predictions[stat] = PropPrediction(
                 player_id=player_id,
                 game_id=game_id,
@@ -332,6 +344,9 @@ class MonteCarloPredictor:
 
             # Combine: stat = minutes × rate
             stat_samples = minutes_samples * rate_samples
+
+            # Apply combined calibration offsets (before variance inflation)
+            stat_samples = self._apply_combined_calibration(stat_samples, stat)
 
             # Apply variance inflation if configured
             stat_samples = self._apply_variance_inflation(stat_samples, stat)
@@ -457,6 +472,9 @@ class MonteCarloPredictor:
                 # Combine: stat = minutes * rate
                 stat_samples = minutes_samples * rate_samples
 
+                # Apply combined calibration offsets (before variance inflation)
+                stat_samples = self._apply_combined_calibration(stat_samples, stat)
+
                 # Apply variance inflation
                 stat_samples = self._apply_variance_inflation(stat_samples, stat)
 
@@ -529,6 +547,76 @@ class MonteCarloPredictor:
 
         # Ensure non-negative (can't have negative stats)
         return np.maximum(inflated, 0)
+
+    def _apply_combined_calibration(self, samples: np.ndarray, stat: str) -> np.ndarray:
+        """
+        Apply combined conformal calibration offsets via piecewise-linear sample warping.
+
+        This corrects the combined (minutes x rate) distribution at specific quantile
+        anchor points, fixing calibration gaps (e.g., AST Q10 over-coverage) without
+        affecting other quantiles.
+
+        Algorithm:
+          1. Compute empirical quantiles from the raw samples
+          2. Compute corrected quantile values = empirical + offset
+          3. Build piecewise-linear mapping from old quantiles to new quantiles
+          4. Warp all samples through this mapping using np.interp
+          5. Floor at 0
+
+        Args:
+            samples: Combined stat samples (minutes x rate), pre-variance-inflation
+            stat: The stat being predicted (e.g., "ast")
+
+        Returns:
+            Warped samples with corrected calibration
+        """
+        if not self.combined_calibration_offsets:
+            return samples
+
+        stat_offsets = self.combined_calibration_offsets.get(stat)
+        if not stat_offsets:
+            return samples
+
+        # Quantile levels we calibrate at
+        q_levels = [0.10, 0.25, 0.50, 0.75, 0.90]
+
+        # Compute empirical quantile values from raw samples
+        old_qvals = np.percentile(samples, [q * 100 for q in q_levels])
+
+        # Apply offsets to get corrected quantile values
+        new_qvals = np.array([
+            old_qvals[i] + stat_offsets.get(str(q), 0.0)
+            for i, q in enumerate(q_levels)
+        ])
+
+        # Ensure monotonicity in the corrected quantile values
+        for i in range(1, len(new_qvals)):
+            if new_qvals[i] < new_qvals[i - 1]:
+                new_qvals[i] = new_qvals[i - 1]
+
+        # Floor corrected values at 0
+        new_qvals = np.maximum(new_qvals, 0.0)
+
+        # Build piecewise-linear mapping: old quantile values -> new quantile values
+        # Add boundary anchors at min and max of samples to avoid extrapolation issues
+        s_min = samples.min()
+        s_max = samples.max()
+
+        # Anchor points: map min->min (unchanged) and max->max (unchanged)
+        # plus the quantile corrections in between
+        old_anchors = np.concatenate([[s_min], old_qvals, [s_max]])
+        new_anchors = np.concatenate([[s_min], new_qvals, [s_max]])
+
+        # Ensure strictly increasing old_anchors for np.interp (deduplicate if needed)
+        # np.interp requires xp to be increasing
+        mask = np.diff(old_anchors, prepend=-np.inf) > 0
+        old_anchors = old_anchors[mask]
+        new_anchors = new_anchors[mask]
+
+        # Warp all samples through the piecewise-linear mapping
+        warped = np.interp(samples, old_anchors, new_anchors)
+
+        return np.maximum(warped, 0.0)
 
     def _apply_correlation_adjustment(
         self,
@@ -816,6 +904,23 @@ def load_copula_params(model_dir: str) -> dict | None:
     from pathlib import Path
 
     path = Path(model_dir) / "copula_params.json"
+    if not path.exists():
+        return None
+
+    with open(path) as f:
+        return json.load(f)
+
+
+def load_combined_calibration_offsets(model_dir: str) -> dict | None:
+    """
+    Load combined calibration offsets from a model artifacts directory.
+
+    Returns None if no combined_calibration_offsets.json exists (backward compatible).
+    """
+    import json
+    from pathlib import Path
+
+    path = Path(model_dir) / "combined_calibration_offsets.json"
     if not path.exists():
         return None
 

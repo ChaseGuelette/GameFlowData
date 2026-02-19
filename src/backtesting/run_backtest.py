@@ -24,7 +24,7 @@ from src.backtesting.backtest_harness import BacktestHarness
 from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
-from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
+from src.models.monte_carlo import MonteCarloPredictor, load_copula_params, load_combined_calibration_offsets
 from src.models.quantile_trainer import PlayerPropsModelPipeline
 
 logging.basicConfig(
@@ -180,8 +180,17 @@ def main():
     else:
         logger.info("No copula_params.json found, using legacy correlation adjustment")
 
+    combined_cal_offsets = load_combined_calibration_offsets(str(model_path))
+    if combined_cal_offsets:
+        logger.info(f"Loaded combined calibration offsets for: {list(combined_cal_offsets.keys())}")
+    else:
+        logger.info("No combined_calibration_offsets.json found, skipping combined recalibration")
+
     logger.info(f"Initializing Monte Carlo predictor (n_samples={args.n_samples})...")
-    predictor = MonteCarloPredictor(pipeline, n_samples=args.n_samples, copula_params=copula_params)
+    predictor = MonteCarloPredictor(
+        pipeline, n_samples=args.n_samples, copula_params=copula_params,
+        combined_calibration_offsets=combined_cal_offsets,
+    )
 
     # Log per-stat configuration
     logger.info(f"Stat config: global_edge={stat_config.global_edge_threshold}")

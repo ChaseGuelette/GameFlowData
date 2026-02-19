@@ -1,5 +1,29 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-19 — Session 41)
+
+### What We Did
+
+**Fixed CI pipeline — module-level `sys.exit()`/`raise ValueError` in 5 source files crashed pytest collection when env vars are missing.**
+
+Six files fixed to use lazy initialization:
+- `src/db/client.py` — Engine creation deferred; `get_engine()` raises at call time instead of import time
+- `src/scrapers/daily_player_props_scraper.py` — Removed module-level `sys.exit`, moved to `if __name__ == "__main__"`
+- `src/scrapers/daily_game_lines_scraper.py` — Same pattern
+- `src/scrapers/game_lines_scraper.py` — Removed module-level `raise ValueError`, moved to `if __name__ == "__main__"`
+- `src/scrapers/live_odds_scraper.py` — Same pattern
+- `tests/test_db_client.py` — Updated test to check `get_engine()` raises instead of import crash
+
+All 608 tests pass. Ruff clean.
+
+### Next Steps
+
+1. **Investigate AST zero-inflation** — The combined Q10 gap is structural (many zero-assist games even at high minutes). Consider truncated/zero-inflated mixture models or per-quantile conformal recalibration improvements
+2. **Full retrain with extended calibration window** — PTS and REB combined Q25 drift may be a calibration window artifact
+3. **Stripe integration** — Deferred; model calibration takes priority
+
+---
+
 ## Session Summary (2026-02-19 — Session 40)
 
 ### What We Did

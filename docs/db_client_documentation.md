@@ -35,7 +35,9 @@ verify_connection()
 ```
 
 ## Notes
-- Importing the module raises `ValueError` if `DATABASE_URL` is missing.
+- The module uses **lazy initialization** — it is safely importable without `DATABASE_URL` (e.g., in CI/test environments where env vars are empty). The engine is only created if `DATABASE_URL` is set.
+- `get_engine()` raises `ValueError` at call time if `DATABASE_URL` is missing, providing a clear error message with setup instructions.
+- Module-level `engine` variable is `None` when `DATABASE_URL` is not set. Code that imports `engine` directly should use `get_engine()` instead for proper error handling.
 
 ## Related Documentation
 - [Documentation Index](index.md)
