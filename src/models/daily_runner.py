@@ -276,8 +276,15 @@ class DailyPredictionRunner:
             games = self._enrich_game_times(games, target_date)
             return games
 
-        # Fallback: DB query (only works for past dates with box score data)
-        logger.warning("NBA API unavailable, falling back to team_game_stats query")
+        # Fallback 1: CDN schedule (works for scheduled/future games)
+        logger.warning("NBA API unavailable, trying CDN schedule...")
+        games = self._get_games_from_cdn(target_date)
+        if games:
+            games = self._enrich_game_times(games, target_date)
+            return games
+
+        # Fallback 2: DB query (only works for past dates with box score data)
+        logger.warning("CDN schedule also failed, falling back to team_game_stats query")
         return self._get_games_from_db(target_date)
 
     def _get_games_from_nba_api(self, target_date: date) -> list[dict]:
@@ -312,6 +319,53 @@ class DailyPredictionRunner:
 
         except Exception as e:
             logger.warning(f"NBA API ScoreboardV2 failed: {e}")
+            return []
+
+    def _get_games_from_cdn(self, target_date: date) -> list[dict]:
+        """Fallback: get games from cdn.nba.com schedule (works when stats.nba.com is blocked)."""
+        try:
+            import requests
+
+            # NBA team ID mapping (abbreviation -> nba team_id)
+            TEAM_ABBREV_TO_ID = {
+                "ATL": 1610612737, "BOS": 1610612738, "BKN": 1610612751, "CHA": 1610612766,
+                "CHI": 1610612741, "CLE": 1610612739, "DAL": 1610612742, "DEN": 1610612743,
+                "DET": 1610612765, "GSW": 1610612744, "HOU": 1610612745, "IND": 1610612754,
+                "LAC": 1610612746, "LAL": 1610612747, "MEM": 1610612763, "MIA": 1610612748,
+                "MIL": 1610612749, "MIN": 1610612750, "NOP": 1610612740, "NYK": 1610612752,
+                "OKC": 1610612760, "ORL": 1610612753, "PHI": 1610612755, "PHX": 1610612756,
+                "POR": 1610612757, "SAC": 1610612758, "SAS": 1610612759, "TOR": 1610612761,
+                "UTA": 1610612762, "WAS": 1610612764,
+            }
+
+            season = "2025-26"
+            url = f"https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_{season}.json"
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+
+            target_str = target_date.strftime("%m/%d/%Y 00:00:00")
+            games = []
+            for game_date_entry in data.get("leagueSchedule", {}).get("gameDates", []):
+                if game_date_entry.get("gameDate") == target_str:
+                    for game in game_date_entry.get("games", []):
+                        if game.get("weekNumber", 0) > 0:  # Regular season only
+                            home_abbrev = game["homeTeam"]["teamTricode"]
+                            away_abbrev = game["awayTeam"]["teamTricode"]
+                            games.append({
+                                "game_id": game["gameId"],
+                                "home_team_id": TEAM_ABBREV_TO_ID.get(home_abbrev),
+                                "away_team_id": TEAM_ABBREV_TO_ID.get(away_abbrev),
+                                "game_time": None,
+                            })
+                    break
+
+            if games:
+                logger.info(f"Found {len(games)} games via CDN schedule")
+            return games
+
+        except Exception as e:
+            logger.warning(f"CDN schedule failed: {e}")
             return []
 
     def _get_games_from_db(self, target_date: date) -> list[dict]:

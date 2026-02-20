@@ -93,7 +93,7 @@ class TestMainArgParsing:
             max_bet_pct=None,
             bookmakers=["draftkings"],
             allowed_bets=None,
-            workers=1,
+
             bl_tau=None,
             bl_sizing_tau=None,
         )
@@ -113,7 +113,7 @@ class TestMainArgParsing:
         main()
 
         mock_harness_cls.return_value.run.assert_called_once_with(
-            start_date="2024-01-01", end_date="2024-01-31", max_workers=1
+            start_date="2024-01-01", end_date="2024-01-31"
         )
         mock_result.to_csv.assert_called_once_with(str(output_dir))
 
@@ -151,7 +151,7 @@ class TestMainArgParsing:
             max_bet_pct=None,
             bookmakers=["draftkings"],
             allowed_bets=["pts:under", "reb:over"],
-            workers=1,
+
             bl_tau=None,
             bl_sizing_tau=None,
         )
@@ -209,7 +209,7 @@ class TestMainArgParsing:
             max_bet_pct=None,
             bookmakers=["draftkings"],
             allowed_bets=None,
-            workers=1,
+
             bl_tau=None,
             bl_sizing_tau=None,
         )

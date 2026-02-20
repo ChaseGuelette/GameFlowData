@@ -443,6 +443,11 @@ def upsert_player_basic_averages(engine, df: pd.DataFrame):
         elif col == "min_floor_l5":
             insert_df[col] = insert_df[col].round(2)
 
+    # Cast smallint-destined columns to nullable int to avoid psycopg2 type issues
+    for col in ["games_l5", "games_l15", "games_szn", "games_started_l5", "rest_days", "games_last_7d"]:
+        if col in insert_df.columns:
+            insert_df[col] = insert_df[col].astype("Int64")
+
     cols = list(insert_df.columns)
     upsert_sql = _build_upsert_sql("player_average_game_stats", cols, ["player_id", "game_id"])
 

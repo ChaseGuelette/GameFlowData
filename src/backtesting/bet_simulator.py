@@ -167,7 +167,6 @@ class BetSimulator:
         model_prob: float,
         implied_prob: float,
         odds: int,
-        side: BetSide,
         stat: str | None = None,
     ) -> bool:
         """Determine if a bet should be placed based on edge and filters.
@@ -276,7 +275,6 @@ class BetSimulator:
                     model_prob=row.get("over_prob"),
                     implied_prob=row.get("implied_over"),
                     odds=row.get("over_odds"),
-                    side=BetSide.OVER,
                     stat=stat,
                 ):
                     # Get sizing prob for Kelly when BL sizing is enabled
@@ -315,7 +313,6 @@ class BetSimulator:
                     model_prob=row.get("under_prob"),
                     implied_prob=row.get("implied_under"),
                     odds=row.get("under_odds"),
-                    side=BetSide.UNDER,
                     stat=stat,
                 ):
                     # Get sizing prob for Kelly when BL sizing is enabled
@@ -479,5 +476,6 @@ class BetSimulator:
         }
 
     def reset(self) -> None:
-        """Clear all bets."""
+        """Clear all bets and reset bankroll to starting value."""
         self.bets = []
+        self.current_bankroll = self.starting_bankroll

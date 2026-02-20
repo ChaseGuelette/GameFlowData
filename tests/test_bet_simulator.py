@@ -156,7 +156,6 @@ class TestBetSimulator:
             model_prob=0.60,
             implied_prob=0.52,
             odds=-110,
-            side=BetSide.OVER,
         )
 
         assert result is True
@@ -169,7 +168,6 @@ class TestBetSimulator:
             model_prob=0.53,
             implied_prob=0.52,
             odds=-110,
-            side=BetSide.OVER,
         )
 
         assert result is False
@@ -183,7 +181,6 @@ class TestBetSimulator:
             model_prob=0.85,
             implied_prob=0.75,
             odds=-250,
-            side=BetSide.OVER,
         )
         assert result is False
 
@@ -192,7 +189,6 @@ class TestBetSimulator:
             model_prob=0.45,
             implied_prob=0.30,
             odds=250,
-            side=BetSide.OVER,
         )
         assert result is False
 
@@ -200,9 +196,9 @@ class TestBetSimulator:
         """Test should_bet handles None values."""
         simulator = BetSimulator()
 
-        assert simulator.should_bet(None, 0.52, -110, BetSide.OVER) is False
-        assert simulator.should_bet(0.60, None, -110, BetSide.OVER) is False
-        assert simulator.should_bet(0.60, 0.52, None, BetSide.OVER) is False
+        assert simulator.should_bet(None, 0.52, -110) is False
+        assert simulator.should_bet(0.60, None, -110) is False
+        assert simulator.should_bet(0.60, 0.52, None) is False
 
     def test_place_bet(self):
         """Test placing a bet."""
@@ -351,8 +347,8 @@ class TestBetSimulator:
         assert summary["hit_rate"] == 0.5
 
     def test_reset(self):
-        """Test resetting the simulator."""
-        simulator = BetSimulator()
+        """Test resetting the simulator clears bets and restores bankroll."""
+        simulator = BetSimulator(starting_bankroll=5000.0)
 
         simulator.place_bet(
             player_id=1,
@@ -367,7 +363,9 @@ class TestBetSimulator:
         )
 
         assert len(simulator.bets) == 1
+        assert simulator.current_bankroll < 5000.0  # stake deducted
 
         simulator.reset()
 
         assert len(simulator.bets) == 0
+        assert simulator.current_bankroll == 5000.0

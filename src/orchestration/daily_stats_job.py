@@ -231,9 +231,9 @@ def main():
             f" --date {(datetime.now().date() - timedelta(days=1)).isoformat()}",
             "Populating Rolling Average Stats (Incremental)",
         ),
-        # Step 7: Update opponent allowed stats (incremental - last 30 days)
+        # Step 7: Update opponent allowed stats (incremental - last 2 days)
         (
-            f"{sys.executable} src/processing/backfill_opponent_allowed_incremental.py --days-back 30",
+            f"{sys.executable} src/processing/backfill_opponent_allowed_incremental.py --days-back 2",
             "Updating Opponent Allowed Stats (Incremental)",
         ),
         # Step 8: Refresh play type data (Synergy)

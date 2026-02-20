@@ -164,12 +164,14 @@ The single-player inference path joins `player_average_advanced_stats` by exact 
 ### ISS-012: Blowout factor applied per-stat inside the loop (when enabled)
 
 - **File:** `src/models/monte_carlo.py:311-312, 427-428`
-- **Status:** Open (dormant — `enabled=False` by default)
+- **Status:** Fixed
 - **Impact:** When enabled, creates physically impossible per-stat differences in minutes
 
 When blowout simulation is enabled, `_apply_blowout_factor` generates a different random blowout mask for each stat. This means a player could be "blown out" for their points prediction but not rebounds — which is physically impossible since minutes are shared.
 
 **Fix:** Move blowout application outside the stat loop. Compute `minutes_samples` (with blowout) once before the stat loop and reuse it.
+
+**Resolution:** Moved blowout factor outside the per-stat loop in all three paths: `_predict_copula()`, `predict_batch_for_date()` copula path, and `predict_batch_for_date()` legacy path. Minutes samples are now computed once with blowout applied, then shared across all stats.
 
 ---
 
@@ -194,12 +196,14 @@ This assigns a reference to the module-level dict, not a copy. No current code m
 ### ISS-014: MC probability hard-capped at [0.01, 0.99] due to uniform clipping
 
 - **File:** `src/models/monte_carlo.py:653, 705`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** For extreme lines, `prob_over` or `prob_under` returns exactly 0.0 even when the true probability is nonzero
 
 Uniform samples are clipped to [0.01, 0.99], meaning no sample can exceed the extrapolated 99th percentile. This creates a hard floor/ceiling on probabilities, which could cause missed edge detection on extreme lines.
 
 **Fix:** Extend the quantile function to p=0.001 and p=0.999, or use an analytic tail distribution beyond the extrapolated range.
+
+**Resolution:** Extended all three touch points to [0.001, 0.999]: `_build_extended_quantile_fn` tail extrapolation, `_map_uniforms_to_samples` clip range, and `_inverse_transform_sample` uniform sampling range.
 
 ---
 
@@ -232,17 +236,19 @@ Prediction failures during combined calibration are logged at `DEBUG`, which is 
 ### ISS-017: Ratio column names say "l15" but compute L3/L5
 
 - **File:** `src/models/feature_store.py:325-333, 627-635, 1026-1034, 1342-1352`
-- **Status:** Open
+- **Status:** Deferred — rename would break saved model artifacts; clarifying comments added
 - **Impact:** Naming inconsistency; could mislead future developers (consistent across all paths so no functional bug)
 
 Columns like `player_reb_l3_l15_ratio` actually compute `avg_reb_l3 / avg_reb_l5`, not L3/L15. Only `player_pts_l3_l15_ratio` actually uses L15 in the denominator. The code comment acknowledges this intentional design but the column names remain misleading.
+
+**Partial Resolution:** Added clarifying comments at all 4 SQL query locations, the Python inference path, and the `RATE_FEATURES_*` constants explaining that only PTS uses L15 denominator. Full rename deferred to next model retrain cycle to avoid breaking saved model artifacts.
 
 ---
 
 ### ISS-018: Pre-game inference requires game to already exist in `player_game_stats`
 
 - **File:** `src/models/feature_store.py:1247-1260`
-- **Status:** Open
+- **Status:** Deferred — requires new pre-game metadata source (schedule API or pre-populated game rows)
 - **Impact:** Live inference before a game is played silently returns None unless game rows are pre-populated
 
 `_get_context_snapshots` queries `player_game_stats` for the target game. For true pre-game inference, the game hasn't been played yet, so there is no row. The function returns `None`, and `get_player_game_features` returns `None`.
@@ -252,17 +258,19 @@ Columns like `player_reb_l3_l15_ratio` actually compute `avg_reb_l3 / avg_reb_l5
 ### ISS-019: `team_ids` parameter in `_load_injury_features_bulk` is dead code
 
 - **File:** `src/models/feature_store.py:1166`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** Dead code; minor unnecessary data loading
 
 The method signature accepts `team_ids` but the SQL query never uses it, and the caller always passes `[]`.
+
+**Resolution:** Removed `team_ids: list` parameter from `_load_injury_features_bulk()` signature and updated the call site to remove the empty `[]` argument.
 
 ---
 
 ### ISS-020: `validate_features=False` disables XGBoost feature-order safety check
 
 - **File:** `src/models/quantile_trainer.py:256`
-- **Status:** Open
+- **Status:** Deferred — blocked on XGBoost pandas 3.0 compatibility fix upstream
 - **Impact:** If a feature ordering mismatch occurs between training and inference, there is no safety net
 
 This works around a pandas 3.0 compatibility issue. The comment states "Feature order is guaranteed correct by the caller," but this is an implicit contract with no enforcement.
@@ -272,29 +280,33 @@ This works around a pandas 3.0 compatibility issue. The comment states "Feature 
 ### ISS-021: Monotonicity enforcement is a slow row-by-row Python loop
 
 - **File:** `src/models/quantile_trainer.py:265-287`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** Performance degradation for batch predictions (~300+ players × 5 models)
 
 Each non-monotonic row instantiates a new `IsotonicRegression` object and fits/transforms 5 data points. With hundreds of players, this is extremely slow due to the classic "slow pandas iterrows" anti-pattern.
 
 **Fix:** Vectorize using numpy operations.
 
+**Resolution:** Replaced row-by-row `IsotonicRegression` loop with `np.maximum.accumulate(values, axis=1)` — enforces Q10 ≤ Q25 ≤ ... ≤ Q90 in one vectorized numpy op (~100x faster for 300 players).
+
 ---
 
 ### ISS-022: `prob_over + prob_under != 1.0` (strict inequality)
 
 - **File:** `src/models/monte_carlo.py:33-37`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** Negligible in practice (continuous samples + half-integer lines), but API contract is inconsistent
 
 `prob_over` uses strict `>` and `prob_under` uses strict `<`. Samples exactly equal to the line are counted in neither. The backtest harness uses `1 - over_prob` instead, which is inconsistent with calling `prob_under()` directly.
+
+**Resolution:** Changed `prob_under` from strict `<` to `<=`. Convention: `prob_over` = P(X > line), `prob_under` = P(X ≤ line), so they sum to 1.0.
 
 ---
 
 ### ISS-023: Stage 2 dedup keeps only one stat per player per game
 
 - **File:** `src/backtesting/backtest_harness.py:352-355`
-- **Status:** Open
+- **Status:** Deferred — requires correlation-aware Kelly sizing redesign
 - **Impact:** Discards potentially valid uncorrelated stat bets (e.g., both pts-over and ast-under)
 
 The filter drops duplicates on `["player_id", "game_id"]`, keeping only the highest-edge stat. Pts and ast may not be highly correlated, and the code doesn't account for side direction.
@@ -304,7 +316,7 @@ The filter drops duplicates on `["player_id", "game_id"]`, keeping only the high
 ### ISS-024: `reset()` clears bets but doesn't reset `current_bankroll`
 
 - **File:** `src/backtesting/bet_simulator.py:420-423`
-- **Status:** Open (dormant — `reset()` is not called anywhere in production code)
+- **Status:** Fixed
 - **Impact:** If `reset()` is ever used, the bankroll carries over from the previous run
 
 ```python
@@ -313,23 +325,29 @@ def reset(self) -> None:
     self.bets = []  # does not reset self.current_bankroll
 ```
 
+**Resolution:** Added `self.current_bankroll = self.starting_bankroll` to `reset()`. Updated test to assert bankroll is restored.
+
 ---
 
 ### ISS-025: `side` parameter in `should_bet()` is accepted but never used
 
 - **File:** `src/backtesting/bet_simulator.py:148`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** Dead parameter; no functional bug
+
+**Resolution:** Removed `side: BetSide` parameter from `should_bet()` signature. Updated both call sites in `evaluate_predictions()` and all test calls.
 
 ---
 
 ### ISS-026: `--workers` CLI arg is accepted but parallelism is never used
 
 - **File:** `src/backtesting/run_backtest.py:76`
-- **Status:** Open
+- **Status:** Fixed
 - **Impact:** Misleading to users; the harness always runs sequentially
 
 The `args.workers` value is passed to `harness.run(max_workers=args.workers)`, but the harness `run()` method never uses the `max_workers` parameter.
+
+**Resolution:** Removed `--workers` argument from argparse and removed `max_workers=args.workers` from the `harness.run()` call.
 
 ---
 
@@ -562,7 +580,7 @@ If the 9 AM job fails (DB timeout, API outage, Railway restart), the 6:30 PM job
 ### ISS-040: `run_daily.py` and `run_sweep.py` missing combined calibration offsets wiring
 
 - **Files:** `src/orchestration/run_daily.py:151`, `src/backtesting/run_sweep.py:742`
-- **Status:** Open (dormant — offsets file not deployed to production)
+- **Status:** Fixed
 - **Impact:** If combined calibration offsets are ever re-enabled, these two paths would silently skip recalibration
 
 The primary production path (`inference_job.py:155-161`) and the main backtest path (`run_backtest.py:183-193`) correctly load and pass `combined_calibration_offsets` to `MonteCarloPredictor`. However, two secondary paths do not:
@@ -573,6 +591,8 @@ The primary production path (`inference_job.py:155-161`) and the main backtest p
 Currently a no-op because `combined_calibration_offsets.json` was intentionally removed from production (hurt betting ROI). But if offsets are re-enabled, these paths would produce different predictions.
 
 **Fix:** Add `load_combined_calibration_offsets` import and pass to both `MonteCarloPredictor()` calls.
+
+**Resolution:** Added `load_combined_calibration_offsets` import and wired it into `MonteCarloPredictor()` calls in both `run_daily.py` and `run_sweep.py`. All 4 inference paths now have parity.
 
 ---
 
@@ -638,26 +658,11 @@ Every re-upsert resets `created_at` to the current timestamp. If you need to tra
 
 ## Remaining Open Issues
 
-30 of 43 total issues have been fixed. 13 remain open:
+39 of 43 total issues have been fixed. 4 remain deferred:
 
-### High — Dormant Code
+### Deferred
 
-1. **ISS-040** — `run_daily.py` and `run_sweep.py` missing combined offsets wiring (dormant — not used in production)
-
-### Medium-term (require more design)
-
-2. **ISS-012** — Move blowout factor outside per-stat loop (dormant — `enabled=False`)
-3. **ISS-014** — Extend MC quantile function beyond [0.01, 0.99] for extreme lines
-4. **ISS-023** — Split Stage 2 dedup to allow uncorrelated multi-stat bets per player
-
-### Low priority / cosmetic
-
-5. **ISS-017** — Fix misleading ratio column names (`l3_l15_ratio` computes L3/L5)
-6. **ISS-018** — Pre-game inference requires game row to exist in `player_game_stats`
-7. **ISS-019** — Dead `team_ids` parameter in `_load_injury_features_bulk`
-8. **ISS-020** — `validate_features=False` disables XGBoost feature-order safety
-9. **ISS-021** — Vectorize slow row-by-row monotonicity enforcement loop
-10. **ISS-022** — `prob_over + prob_under != 1.0` strict inequality
-11. **ISS-024** — `reset()` doesn't reset `current_bankroll` (dormant)
-12. **ISS-025** — Dead `side` parameter in `should_bet()`
-13. **ISS-026** — `--workers` CLI arg accepted but parallelism never used
+1. **ISS-017** — Ratio column names say "l15" but compute L3/L5 (comments added; full rename deferred to next model retrain to avoid breaking saved artifacts)
+2. **ISS-018** — Pre-game inference requires game row to exist in `player_game_stats` (requires new pre-game metadata source)
+3. **ISS-020** — `validate_features=False` disables XGBoost feature-order safety (blocked on XGBoost pandas 3.0 compat fix)
+4. **ISS-023** — Stage 2 dedup keeps only one stat per player per game (requires correlation-aware Kelly sizing redesign)

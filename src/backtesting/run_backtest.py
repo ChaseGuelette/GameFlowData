@@ -104,7 +104,7 @@ def main():
         ],
         help="List of bookmakers to shop lines from (default: all available)",
     )
-    parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers")
+    # --workers removed (ISS-026): harness always runs sequentially
     parser.add_argument(
         "--allowed-bets",
         nargs="+",
@@ -234,7 +234,7 @@ def main():
     if allowed_bets:
         logger.info(f"Allowed bets filter: {[f'{s}:{side}' for s, side in allowed_bets]}")
     logger.info(f"Running backtest from {args.start} to {args.end}...")
-    result = harness.run(start_date=args.start, end_date=args.end, max_workers=args.workers)
+    result = harness.run(start_date=args.start, end_date=args.end)
 
     # Save results
     result.to_csv(str(output_dir))

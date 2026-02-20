@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og'
 import { NextRequest } from 'next/server'
-import { readFile } from 'fs/promises'
-import { join } from 'path'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 interface SlatePickData {
   player_id: number
@@ -59,22 +59,16 @@ export async function POST(request: NextRequest) {
   // Limit to 5 picks
   const slatePicks = picks.slice(0, 5)
 
-  // Load Montserrat Bold font
+  // Load Montserrat Bold font — fs for local dev, fetch fallback for Vercel
   let fontData: ArrayBuffer
   try {
-    const fontPath = join(process.cwd(), '..', 'assets', 'fonts', 'Montserrat-Bold.ttf')
+    const fontPath = fileURLToPath(new URL('./Montserrat-Bold.ttf', import.meta.url))
     const buffer = await readFile(fontPath)
     fontData = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
   } catch {
-    // Fallback: try from project root directly
-    try {
-      const fontPath = join(process.cwd(), 'assets', 'fonts', 'Montserrat-Bold.ttf')
-      const buffer = await readFile(fontPath)
-      fontData = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-    } catch {
-      // If font not found, proceed without custom font
-      fontData = null as unknown as ArrayBuffer
-    }
+    fontData = await fetch(
+      new URL('./Montserrat-Bold.ttf', import.meta.url)
+    ).then((res) => res.arrayBuffer())
   }
 
   // Format date for display
@@ -86,14 +80,9 @@ export async function POST(request: NextRequest) {
     year: 'numeric',
   })
 
-  const rowHeight = 140
-  const headerHeight = 160
-  const footerHeight = 80
-  const imageHeight = headerHeight + slatePicks.length * rowHeight + footerHeight
+  const imageHeight = 1080 // fixed height — picks space evenly
 
-  const fonts = fontData
-    ? [{ name: 'Montserrat', data: fontData, style: 'normal' as const, weight: 700 as const }]
-    : []
+  const fonts = [{ name: 'Montserrat', data: fontData, style: 'normal' as const, weight: 700 as const }]
 
   return new ImageResponse(
     (
@@ -104,7 +93,7 @@ export async function POST(request: NextRequest) {
           width: '100%',
           height: '100%',
           backgroundColor: '#020617',
-          fontFamily: fontData ? 'Montserrat' : 'sans-serif',
+          fontFamily: 'Montserrat',
           color: '#F8FAFC',
         }}
       >
@@ -157,7 +146,8 @@ export async function POST(request: NextRequest) {
             display: 'flex',
             flexDirection: 'column',
             padding: '0 40px',
-            gap: '8px',
+            justifyContent: 'center',
+            gap: '12px',
             flex: 1,
           }}
         >
@@ -176,8 +166,7 @@ export async function POST(request: NextRequest) {
                   alignItems: 'center',
                   backgroundColor: bgColor,
                   borderRadius: '16px',
-                  padding: '16px 24px',
-                  height: `${rowHeight - 8}px`,
+                  padding: '20px 24px',
                   borderLeft: `4px solid ${edgeColor}`,
                 }}
               >
@@ -288,24 +277,21 @@ export async function POST(request: NextRequest) {
                   </div>
                 </div>
 
-                {/* Stars */}
+                {/* Star rating */}
                 <div
                   style={{
                     display: 'flex',
-                    gap: '2px',
+                    gap: '4px',
                     flexShrink: 0,
                   }}
                 >
                   {Array.from({ length: 5 }).map((_, si) => (
-                    <span
-                      key={si}
-                      style={{
-                        fontSize: 24,
-                        color: si < stars ? '#FACC15' : '#475569',
-                      }}
-                    >
-                      {'\u2605'}
-                    </span>
+                    <svg key={si} width="22" height="22" viewBox="0 0 24 24">
+                      <path
+                        d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+                        fill={si < stars ? '#FACC15' : '#334155'}
+                      />
+                    </svg>
                   ))}
                 </div>
               </div>

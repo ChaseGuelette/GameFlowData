@@ -16,10 +16,8 @@
 
 ### Remaining Action Items
 
-1. **Full opponent-allowed re-backfill** — `python src/processing/backfill_opponent_allowed.py` — existing DB data has old cumulative sums
-2. **Rerun backtests** after re-backfill to establish new baseline with corrected features
-3. **Stripe integration** — subscribe page, customer portal, webhook
-4. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+1. **Stripe integration** — subscribe page, customer portal, webhook
+2. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
 
 ---
 
@@ -51,10 +49,8 @@ Added a new "Play Types" tab to the existing Data Vault (`/stats`) page showing 
 
 ### Remaining Action Items
 
-1. **Full opponent-allowed re-backfill** — `python src/processing/backfill_opponent_allowed.py` — existing DB data has old cumulative sums
-2. **Rerun backtests** after re-backfill to establish new baseline with corrected features
-3. **Stripe integration** — subscribe page, customer portal, webhook
-4. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+1. **Stripe integration** — subscribe page, customer portal, webhook
+2. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
 
 ---
 
@@ -86,10 +82,8 @@ This session had two phases:
 
 ### Remaining Action Items
 
-1. **Full opponent-allowed re-backfill** — `python src/processing/backfill_opponent_allowed.py` — existing DB data has old cumulative sums
-2. **Rerun backtests** after re-backfill to establish new baseline with corrected features
-3. **Stripe integration** — subscribe page, customer portal, webhook
-4. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+1. **Stripe integration** — subscribe page, customer portal, webhook
+2. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
 
 ---
 

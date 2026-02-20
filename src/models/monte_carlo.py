@@ -43,7 +43,7 @@ class PropPrediction:
         return (self.samples > line).mean()
 
     def prob_under(self, line: float) -> float:
-        return (self.samples < line).mean()
+        return (self.samples <= line).mean()
 
     def expected_value_over(self, line: float, odds: int) -> float:
         """Calculate EV of betting over at given American odds."""
@@ -307,6 +307,16 @@ class MonteCarloPredictor:
         # Generate shared latent normal for minutes (same across all stats)
         z_minutes = self.rng.standard_normal(self.n_samples)
 
+        # Pre-compute shared minutes uniform samples (same for all stats)
+        u_minutes = sp_norm.cdf(z_minutes)
+
+        # Pre-compute shared minutes samples with blowout applied once (physically correct:
+        # all stats share the same minutes, so blowout must be applied outside the stat loop)
+        base_minutes_samples = self._map_uniforms_to_samples(u_minutes, min_ext_probs, min_ext_vals)
+        base_minutes_samples = np.maximum(base_minutes_samples, 0)
+        if self.blowout_config.get("enabled", False):
+            base_minutes_samples = self._apply_blowout_factor(base_minutes_samples)
+
         for stat in stats:
             if stat not in self.pipeline.rate_models:
                 continue
@@ -322,15 +332,9 @@ class MonteCarloPredictor:
             z_indep = self.rng.standard_normal(self.n_samples)
             z_rate = rho_p * z_minutes + np.sqrt(max(0, 1 - rho_p ** 2)) * z_indep
 
-            # Transform to uniform via CDF
-            u_minutes = sp_norm.cdf(z_minutes)
+            # Map rate through inverse CDF (minutes already computed above)
             u_rate = sp_norm.cdf(z_rate)
-
-            # Map minutes through inverse CDF
-            minutes_samples = self._map_uniforms_to_samples(u_minutes, min_ext_probs, min_ext_vals)
-            minutes_samples = np.maximum(minutes_samples, 0)
-            if self.blowout_config.get("enabled", False):
-                minutes_samples = self._apply_blowout_factor(minutes_samples)
+            minutes_samples = base_minutes_samples
 
             # Get rate quantile predictions and map through inverse CDF
             rate_model = self.pipeline.rate_models[stat]
@@ -426,6 +430,14 @@ class MonteCarloPredictor:
                     self.quantile_probs, minutes_qvals
                 )
                 z_minutes = self.rng.standard_normal(self.n_samples)
+
+                # Pre-compute shared minutes samples with blowout applied once
+                # (all stats share the same minutes)
+                u_minutes = sp_norm.cdf(z_minutes)
+                base_minutes_samples = self._map_uniforms_to_samples(u_minutes, min_ext_probs, min_ext_vals)
+                base_minutes_samples = np.maximum(base_minutes_samples, 0)
+                if self.blowout_config.get("enabled", False):
+                    base_minutes_samples = self._apply_blowout_factor(base_minutes_samples)
             else:
                 # Legacy path: sample minutes independently
                 minutes_samples = self._inverse_transform_sample(self.quantile_probs, minutes_qvals)
@@ -438,7 +450,7 @@ class MonteCarloPredictor:
                     continue
 
                 if use_copula:
-                    # Generate correlated (minutes, rate) via Gaussian copula
+                    # Generate correlated rate via Gaussian copula
                     rho_s = self.copula_params.get(stat, 0.0)
                     rho_p = 2 * np.sin(np.pi * rho_s / 6)
                     rho_p = np.clip(rho_p, -0.999, 0.999)
@@ -446,13 +458,8 @@ class MonteCarloPredictor:
                     z_indep = self.rng.standard_normal(self.n_samples)
                     z_rate = rho_p * z_minutes + np.sqrt(max(0, 1 - rho_p ** 2)) * z_indep
 
-                    u_minutes = sp_norm.cdf(z_minutes)
                     u_rate = sp_norm.cdf(z_rate)
-
-                    minutes_samples = self._map_uniforms_to_samples(u_minutes, min_ext_probs, min_ext_vals)
-                    minutes_samples = np.maximum(minutes_samples, 0)
-                    if self.blowout_config.get("enabled", False):
-                        minutes_samples = self._apply_blowout_factor(minutes_samples)
+                    minutes_samples = base_minutes_samples
 
                     # Rate model sampling
                     rate_qvals = rate_quantiles[stat].iloc[i].values
@@ -732,13 +739,13 @@ class MonteCarloPredictor:
         lower_mult = self.tail_adjustment.get("lower_tail_multiplier", 1.0)
         upper_mult = self.tail_adjustment.get("upper_tail_multiplier", 1.0)
 
-        extended_probs = np.concatenate([[0.01], quantile_probs, [0.99]])
+        extended_probs = np.concatenate([[0.001], quantile_probs, [0.999]])
 
         lower_slope = (quantile_values[1] - quantile_values[0]) / (quantile_probs[1] - quantile_probs[0])
         upper_slope = (quantile_values[-1] - quantile_values[-2]) / (quantile_probs[-1] - quantile_probs[-2])
 
-        lower_value = quantile_values[0] - (lower_slope * (quantile_probs[0] - 0.01) * lower_mult)
-        upper_value = quantile_values[-1] + (upper_slope * (0.99 - quantile_probs[-1]) * upper_mult)
+        lower_value = quantile_values[0] - (lower_slope * (quantile_probs[0] - 0.001) * lower_mult)
+        upper_value = quantile_values[-1] + (upper_slope * (0.999 - quantile_probs[-1]) * upper_mult)
 
         extended_values = np.concatenate(
             [
@@ -773,7 +780,7 @@ class MonteCarloPredictor:
         Returns:
             Samples in the original stat/minutes space
         """
-        clipped = np.clip(uniforms, 0.01, 0.99)
+        clipped = np.clip(uniforms, 0.001, 0.999)
         return np.interp(clipped, extended_probs, extended_values)
 
     def _sample_rate(self, features: dict, stat: str) -> np.ndarray:
@@ -803,7 +810,7 @@ class MonteCarloPredictor:
         extended_probs, extended_values = self._build_extended_quantile_fn(quantile_probs, quantile_values)
 
         # Sample uniform and interpolate
-        u = self.rng.uniform(0.01, 0.99, self.n_samples)
+        u = self.rng.uniform(0.001, 0.999, self.n_samples)
         samples = np.interp(u, extended_probs, extended_values)
 
         return samples

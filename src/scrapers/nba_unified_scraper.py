@@ -44,6 +44,7 @@ from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeo
 from sqlalchemy import inspect, text
 
 from src.db.client import get_engine
+from src.scrapers.nba_cdn_scraper import scrape_games_cdn
 
 # =============================================================================
 # Configuration
@@ -265,6 +266,10 @@ def scrape_team_game_stats(engine, seasons: list[str], season_type: str = "Regul
                 print(f"- No new games found for {season}")
 
             time.sleep(round(random.uniform(1, 3), 1))  # nosec
+
+        except (ReadTimeout, ConnectionError, ConnectionResetError) as e:
+            print(f"✗ Connection error for {season}: {e}")
+            raise  # Let caller handle CDN fallback
 
         except Exception as e:
             print(f"✗ Error for {season}: {e}")
@@ -945,28 +950,48 @@ def main():
         sys.exit(1)
 
     seasons = [args.season]
+    cdn_fallback_used = False
 
     # Step 1: Team Game Stats
     new_games = 0
     if not args.skip_team:
-        new_games = scrape_team_game_stats(engine, seasons, args.season_type)
+        try:
+            new_games = scrape_team_game_stats(engine, seasons, args.season_type)
+        except (ReadTimeout, ConnectionError, ConnectionResetError) as e:
+            print(f"\n⚠️  stats.nba.com blocked: {e}")
+            print("Falling back to CDN scraper...")
+            cdn_scraped, cdn_failed = scrape_games_cdn(engine, scrape_all_missing=True)
+            new_games = cdn_scraped
+            cdn_fallback_used = True
     else:
         print("\n⏭️  Skipping team game stats (--skip-team)")
 
-    # Step 2: Traditional Player Stats (NEW STEP)
+    # Step 2: Traditional Player Stats
+    # CDN fallback already populates player_game_stats, so skip if CDN was used
     trad_processed = 0
     trad_failed = 0
-    if not args.skip_traditional:
-        # Re-using --advanced-limit for testing limits here too, or pass None
-        trad_processed, trad_failed = scrape_traditional_stats(engine, args.advanced_limit)
+    if not args.skip_traditional and not cdn_fallback_used:
+        try:
+            trad_processed, trad_failed = scrape_traditional_stats(engine, args.advanced_limit)
+        except (ReadTimeout, ConnectionError, ConnectionResetError) as e:
+            print(f"\n⚠️  stats.nba.com blocked: {e}")
+            if not cdn_fallback_used:
+                print("Falling back to CDN scraper...")
+                cdn_scraped, cdn_failed = scrape_games_cdn(engine, scrape_all_missing=True)
+                trad_processed = cdn_scraped
+                cdn_fallback_used = True
+    elif cdn_fallback_used:
+        print("\n⏭️  Skipping traditional stats (already fetched via CDN fallback)")
     else:
         print("\n⏭️  Skipping traditional player stats (--skip-traditional)")
 
-    # Step 3: Advanced Stats
+    # Step 3: Advanced Stats (requires stats.nba.com - skip silently on CDN fallback)
     adv_processed = 0
     adv_failed = 0
-    if not args.skip_advanced:
+    if not args.skip_advanced and not cdn_fallback_used:
         adv_processed, adv_failed = scrape_advanced_stats(engine, args.advanced_limit)
+    elif cdn_fallback_used:
+        print("\n⏭️  Skipping advanced stats (not available via CDN)")
     else:
         print("\n⏭️  Skipping advanced stats (--skip-advanced)")
 
@@ -974,8 +999,10 @@ def main():
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
+    if cdn_fallback_used:
+        print("⚠️  CDN FALLBACK MODE (stats.nba.com was unreachable)")
     print(f"New team game records added:      {new_games}")
-    print(f"Traditional stats updated:        {trad_processed} (Failed: {trad_failed})")  # Diag
+    print(f"Traditional stats updated:        {trad_processed} (Failed: {trad_failed})")
     print(f"Advanced stats updated:           {adv_processed} (Failed: {adv_failed})")
     print(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)

@@ -67,7 +67,7 @@ RATE_FEATURES_PTS = [
     "games_in_last_7_days",
     # B3: Trend + variability
     "player_avg_pts_l3",
-    "player_pts_l3_l15_ratio",
+    "player_pts_l3_l15_ratio",  # PTS uses L3/L15; REB/AST/THREES use L3/L5 (column name kept for model compat)
     "player_std_pts_l5",
     # Injury context
     "team_out_count",
@@ -96,7 +96,7 @@ RATE_FEATURES_REB = [
     "games_in_last_7_days",
     # B3: Trend + variability
     "player_avg_reb_l3",
-    "player_reb_l3_l15_ratio",
+    "player_reb_l3_l15_ratio",  # Actually L3/L5 — name kept for model artifact compat (ISS-017)
     "player_std_reb_l5",
     # Injury context
     "team_out_count",
@@ -125,7 +125,7 @@ RATE_FEATURES_AST = [
     "games_in_last_7_days",
     # B3: Trend + variability
     "player_avg_ast_l3",
-    "player_ast_l3_l15_ratio",
+    "player_ast_l3_l15_ratio",  # Actually L3/L5 — name kept for model artifact compat (ISS-017)
     "player_std_ast_l5",
     # Injury context
     "team_out_count",
@@ -157,7 +157,7 @@ RATE_FEATURES_THREES = [
     "games_in_last_7_days",
     # B3: Trend + variability
     "player_avg_fg3m_l3",
-    "player_fg3m_l3_l15_ratio",
+    "player_fg3m_l3_l15_ratio",  # Actually L3/L5 — name kept for model artifact compat (ISS-017)
     "player_std_fg3m_l5",
     # Injury context
     "team_out_count",
@@ -349,7 +349,9 @@ class FeatureStore:
                 COALESCE(p_avg.avg_ast_l3, 0) as player_avg_ast_l3,
                 COALESCE(p_avg.avg_fg3m_l3, 0) as player_avg_fg3m_l3,
 
-                -- B3: Momentum ratios (L3/L15 for PTS, L3/L5 for others)
+                -- B3: Momentum ratios — NOTE (ISS-017): *_l3_l15_ratio names are
+                -- misleading: only PTS uses L15 denominator. REB/AST/THREES use
+                -- L3/L5. Names kept for saved model artifact compatibility.
                 CASE WHEN COALESCE(p_avg.avg_pts_l15, 0) > 0
                      THEN COALESCE(p_avg.avg_pts_l3, 0) / p_avg.avg_pts_l15
                      ELSE 1.0 END as player_pts_l3_l15_ratio,
@@ -668,7 +670,8 @@ class FeatureStore:
                     COALESCE(p_avg.avg_reb_l3, 0) as player_avg_reb_l3,
                     COALESCE(p_avg.avg_ast_l3, 0) as player_avg_ast_l3,
                     COALESCE(p_avg.avg_fg3m_l3, 0) as player_avg_fg3m_l3,
-                    -- B3: Momentum ratios
+                    -- B3: Momentum ratios — NOTE (ISS-017): *_l3_l15_ratio names
+                    -- only accurate for PTS; REB/AST/THREES use L3/L5 denominator.
                     CASE WHEN COALESCE(p_avg.avg_pts_l15, 0) > 0
                          THEN COALESCE(p_avg.avg_pts_l3, 0) / p_avg.avg_pts_l15
                          ELSE 1.0 END as player_pts_l3_l15_ratio,
@@ -942,7 +945,7 @@ class FeatureStore:
         game_dates = df["game_date"].tolist()
 
         # Team/opponent injury aggregations
-        team_inj = self._load_injury_features_bulk(game_dates, [])
+        team_inj = self._load_injury_features_bulk(game_dates)
         if not team_inj.empty:
             # Merge for teammate injuries (team_id -> team_out_*)
             team_inj_renamed = team_inj.rename(columns={
@@ -1104,7 +1107,9 @@ class FeatureStore:
                 COALESCE(p_avg.avg_ast_l3, 0) as player_avg_ast_l3,
                 COALESCE(p_avg.avg_fg3m_l3, 0) as player_avg_fg3m_l3,
 
-                -- B3: Momentum ratios (L3/L15 for PTS, L3/L5 for others)
+                -- B3: Momentum ratios — NOTE (ISS-017): *_l3_l15_ratio names are
+                -- misleading: only PTS uses L15 denominator. REB/AST/THREES use
+                -- L3/L5. Names kept for saved model artifact compatibility.
                 CASE WHEN COALESCE(p_avg.avg_pts_l15, 0) > 0
                      THEN COALESCE(p_avg.avg_pts_l3, 0) / p_avg.avg_pts_l15
                      ELSE 1.0 END as player_pts_l3_l15_ratio,
@@ -1250,7 +1255,7 @@ class FeatureStore:
 
         return df
 
-    def _load_injury_features_bulk(self, game_dates: list, team_ids: list) -> pd.DataFrame:
+    def _load_injury_features_bulk(self, game_dates: list) -> pd.DataFrame:
         """
         Pre-aggregate injury features for all (team, date) pairs in one pass.
         Returns DataFrame keyed by (nba_team_id, report_date) with team injury aggregations.
@@ -1437,6 +1442,8 @@ class FeatureStore:
         stats["player_games_started_l5"] = row.get("games_started_l5") or 0
 
         # B3: Momentum ratios (computed in Python — safe division, default 1.0)
+        # NOTE (ISS-017): *_l3_l15_ratio names misleading — only PTS uses L15;
+        # REB/AST/THREES use L3/L5. Names kept for model artifact compatibility.
         pts_l3 = row.get("avg_pts_l3") or 0
         pts_l15 = row.get("avg_pts_l15") or 0
         stats["player_pts_l3_l15_ratio"] = (pts_l3 / pts_l15) if pts_l15 > 0 else 1.0

@@ -35,7 +35,7 @@ from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
 from src.models.feature_store import FeatureStore
-from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
+from src.models.monte_carlo import MonteCarloPredictor, load_combined_calibration_offsets, load_copula_params
 from src.models.quantile_trainer import PlayerPropsModelPipeline
 
 logging.basicConfig(
@@ -739,7 +739,14 @@ Examples:
     else:
         logger.info("No copula_params.json found, using legacy correlation adjustment")
 
-    predictor = MonteCarloPredictor(pipeline, n_samples=args.n_samples, copula_params=copula_params)
+    combined_cal_offsets = load_combined_calibration_offsets(str(model_path))
+    if combined_cal_offsets:
+        logger.info(f"Loaded combined calibration offsets for: {list(combined_cal_offsets.keys())}")
+
+    predictor = MonteCarloPredictor(
+        pipeline, n_samples=args.n_samples, copula_params=copula_params,
+        combined_calibration_offsets=combined_cal_offsets,
+    )
 
     # Create a loader harness for shared data fetching
     loader_harness = BacktestHarness(

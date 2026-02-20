@@ -28,6 +28,7 @@ export default function DashboardPage() {
   const [selectedPicks, setSelectedPicks] = useState<Set<string>>(new Set())
   const [slateImageUrl, setSlateImageUrl] = useState<string | null>(null)
   const [slateLoading, setSlateLoading] = useState<boolean>(false)
+  const [slateError, setSlateError] = useState<string | null>(null)
 
   const MAX_SLATE_PICKS = 5
 
@@ -89,18 +90,20 @@ export default function DashboardPage() {
         }
       })
 
+    setSlateError(null)
     try {
       const res = await fetch('/api/slate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ picks, date: selectedDate }),
       })
-      if (!res.ok) throw new Error('Failed to generate slate')
+      if (!res.ok) throw new Error(`Failed to generate slate (${res.status})`)
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       setSlateImageUrl(url)
     } catch (err) {
       console.error('Slate generation error:', err)
+      setSlateError(err instanceof Error ? err.message : 'Failed to generate slate')
     } finally {
       setSlateLoading(false)
     }
@@ -404,6 +407,9 @@ export default function DashboardPage() {
               {' / '}{MAX_SLATE_PICKS} picks selected
               {selectedPicks.size >= MAX_SLATE_PICKS && (
                 <span className="ml-2 text-yellow-400 text-xs">Max reached</span>
+              )}
+              {slateError && (
+                <span className="ml-2 text-red-400 text-xs">{slateError}</span>
               )}
             </div>
             <div className="flex items-center gap-3">

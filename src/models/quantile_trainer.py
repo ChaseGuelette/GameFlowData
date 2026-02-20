@@ -297,26 +297,15 @@ class QuantileModelSuite:
     def _enforce_monotonicity(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Ensure quantile predictions are monotonically increasing.
-        Uses isotonic regression row-by-row.
+        Uses vectorized numpy cumulative max (Q10 <= Q25 <= ... <= Q90).
         """
         quantile_cols = sorted(df.columns)  # ['q10', 'q25', ...]
-        quantile_values = [int(c[1:]) / 100 for c in quantile_cols]
+        values = df[quantile_cols].values  # (n_players, n_quantiles)
 
-        result = df.copy()
+        # np.maximum.accumulate along axis=1 enforces monotonicity in one op
+        fixed = np.maximum.accumulate(values, axis=1)
 
-        for idx in df.index:
-            values = df.loc[idx, quantile_cols].values
-
-            # Check if already monotonic
-            if np.all(np.diff(values) >= 0):
-                continue
-
-            # Apply isotonic regression
-            ir = IsotonicRegression()
-            fixed = ir.fit_transform(quantile_values, values)
-            result.loc[idx, quantile_cols] = fixed.astype(np.float32)
-
-        return result
+        return pd.DataFrame(fixed, columns=quantile_cols, index=df.index).astype(np.float32)
 
     def save(self, path: str):
         """Save all models to disk."""
