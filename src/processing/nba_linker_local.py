@@ -897,7 +897,63 @@ def _fetch_upcoming_games_from_nba_api(target_date: date | None = None) -> list[
             continue
 
     logging.info(f"Fetched {len(games)} upcoming games from NBA API")
+
+    # CDN fallback if NBA API returned nothing
+    if not games:
+        games = _fetch_upcoming_games_from_cdn(target_date)
+
     return games
+
+
+def _fetch_upcoming_games_from_cdn(target_date: date | None = None) -> list[dict]:
+    """Fallback: fetch games from cdn.nba.com schedule when stats.nba.com is blocked."""
+    try:
+        import requests
+
+        TEAM_ID_TO_ABBREV = {
+            1610612737: "ATL", 1610612738: "BOS", 1610612751: "BKN", 1610612766: "CHA",
+            1610612741: "CHI", 1610612739: "CLE", 1610612742: "DAL", 1610612743: "DEN",
+            1610612765: "DET", 1610612744: "GSW", 1610612745: "HOU", 1610612754: "IND",
+            1610612746: "LAC", 1610612747: "LAL", 1610612763: "MEM", 1610612748: "MIA",
+            1610612749: "MIL", 1610612750: "MIN", 1610612740: "NOP", 1610612752: "NYK",
+            1610612760: "OKC", 1610612753: "ORL", 1610612755: "PHI", 1610612756: "PHX",
+            1610612757: "POR", 1610612758: "SAC", 1610612759: "SAS", 1610612761: "TOR",
+            1610612762: "UTA", 1610612764: "WAS",
+        }
+
+        if target_date is None:
+            target_date = datetime.now(EASTERN).date()
+
+        url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+
+        games = []
+        for days_ahead in range(3):
+            check_date = target_date + timedelta(days=days_ahead)
+            date_str = check_date.strftime("%m/%d/%Y 00:00:00")
+
+            for gd in data.get("leagueSchedule", {}).get("gameDates", []):
+                if gd.get("gameDate") == date_str:
+                    for g in gd.get("games", []):
+                        if g.get("weekNumber", 0) > 0:
+                            home_abbrev = g["homeTeam"]["teamTricode"]
+                            away_abbrev = g["awayTeam"]["teamTricode"]
+                            games.append({
+                                "game_id": str(g["gameId"]).zfill(10),
+                                "home_team": home_abbrev,
+                                "away_team": away_abbrev,
+                                "game_date": check_date.strftime("%Y-%m-%d"),
+                            })
+                    break
+
+        logging.info(f"Fetched {len(games)} upcoming games from CDN fallback")
+        return games
+
+    except Exception as e:
+        logging.warning(f"CDN fallback also failed: {e}")
+        return []
 
 
 def link_incremental(batch_size: int = 50000, limit: int | None = None):
@@ -1159,13 +1215,69 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
     print(f"  Games matched: {total_game_matched:,}")
     print(f"  Players matched: {total_player_matched:,}")
 
-    # Check remaining unlinked
+    # Check remaining unlinked (player_id)
     with engine.connect() as conn:
         remaining = conn.execute(text("""
             SELECT COUNT(*) FROM raw_player_props_combined WHERE player_id IS NULL
         """)).scalar()
 
-    print(f"  Remaining unlinked: {remaining:,}")
+    print(f"  Remaining unlinked (no player_id): {remaining:,}")
+
+    # 5. Link game_id for records that have player_id but missing game_id
+    #    (props scraper sets player_id from odds API, but game_id needs NBA game ID mapping)
+    with engine.connect() as conn:
+        missing_game_id = conn.execute(text("""
+            SELECT COUNT(*) FROM raw_player_props_combined
+            WHERE player_id IS NOT NULL AND game_id IS NULL
+        """)).scalar()
+
+    if missing_game_id > 0:
+        print(f"\n[5/5] Linking game_id for {missing_game_id:,} records (have player_id, missing game_id)...")
+        game_id_matched = 0
+
+        with engine.connect() as conn:
+            batch_df = pd.read_sql(f"""
+                SELECT DISTINCT staging_id, home_team, away_team, commence_time
+                FROM raw_player_props_combined
+                WHERE player_id IS NOT NULL AND game_id IS NULL
+                ORDER BY staging_id
+                LIMIT 100000
+            """, conn)
+
+        if not batch_df.empty:
+            batch_df["commence_time"] = pd.to_datetime(batch_df["commence_time"], utc=True)
+            batch_df["game_date"] = batch_df["commence_time"].dt.tz_convert(EASTERN).dt.strftime("%Y-%m-%d")
+            batch_df["home_team_norm"] = batch_df["home_team"].apply(normalize_team)
+            batch_df["away_team_norm"] = batch_df["away_team"].apply(normalize_team)
+
+            def match_game(row):
+                key = (row["home_team_norm"], row["away_team_norm"])
+                candidates = props_game_lookup.get(key, [])
+                if not candidates:
+                    return None
+                matched_game_id, _ = find_closest_game_date(candidates, row["game_date"])
+                return matched_game_id
+
+            batch_df["matched_game_id"] = batch_df.apply(match_game, axis=1)
+            game_updates = batch_df[batch_df["matched_game_id"].notna()][["staging_id", "matched_game_id"]]
+
+            if not game_updates.empty:
+                with engine.begin() as conn:
+                    game_updates.to_sql("temp_game_id_updates", conn, if_exists="replace", index=False)
+                    conn.execute(text("CREATE INDEX idx_temp_gid_staging ON temp_game_id_updates(staging_id)"))
+                    result = conn.execute(text("""
+                        UPDATE raw_player_props_combined r
+                        SET game_id = t.matched_game_id
+                        FROM temp_game_id_updates t
+                        WHERE r.staging_id = t.staging_id
+                    """))
+                    game_id_matched = result.rowcount
+                    conn.execute(text("DROP TABLE temp_game_id_updates"))
+
+            print(f"  Game IDs linked: {game_id_matched:,}")
+    else:
+        print("\n  No records missing game_id — skipping game_id linking pass.")
+
     print("\n[OK] Incremental linking complete!")
 
 

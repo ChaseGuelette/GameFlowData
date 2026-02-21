@@ -338,8 +338,7 @@ class DailyPredictionRunner:
                 "UTA": 1610612762, "WAS": 1610612764,
             }
 
-            season = "2025-26"
-            url = f"https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_{season}.json"
+            url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
             resp = requests.get(url, timeout=15)
             resp.raise_for_status()
             data = resp.json()
