@@ -200,10 +200,10 @@ def main():
 
     success = True
     steps = [
-        # Step 1: Scrape NBA game results
+        # Step 1: Scrape NBA game results (CDN-only to avoid stats.nba.com IP blocks)
         (
-            f"{sys.executable} src/scrapers/nba_unified_scraper.py",
-            "Scraping NBA Game Results",
+            f"{sys.executable} src/scrapers/nba_unified_scraper.py --cdn-only",
+            "Scraping NBA Game Results (CDN)",
         ),
         # Step 2: Run incremental linker
         (

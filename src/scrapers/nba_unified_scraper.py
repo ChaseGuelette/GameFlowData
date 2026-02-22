@@ -918,9 +918,10 @@ def main():
         help="Season type to scrape (default: Regular Season)",
     )
     parser.add_argument("--skip-team", action="store_true", help="Skip team game stats scraping")
-    # NEW ARGUMENT
     parser.add_argument("--skip-traditional", action="store_true", help="Skip traditional player stats scraping")
     parser.add_argument("--skip-advanced", action="store_true", help="Skip advanced stats scraping")
+    parser.add_argument("--cdn-only", action="store_true",
+                        help="Skip stats.nba.com entirely, use CDN scraper only (no advanced stats)")
     parser.add_argument(
         "--advanced-limit",
         type=int,
@@ -951,10 +952,18 @@ def main():
 
     seasons = [args.season]
     cdn_fallback_used = False
+    new_games = 0
+
+    # CDN-only mode: skip stats.nba.com entirely
+    if args.cdn_only:
+        print("\n📡 CDN-ONLY MODE: Skipping stats.nba.com, using cdn.nba.com directly")
+        cdn_scraped, cdn_failed = scrape_games_cdn(engine, scrape_all_missing=True)
+        new_games = cdn_scraped
+        cdn_fallback_used = True
+        print(f"  CDN scraped: {cdn_scraped} games ({cdn_failed} failed)")
 
     # Step 1: Team Game Stats
-    new_games = 0
-    if not args.skip_team:
+    if not args.skip_team and not cdn_fallback_used:
         try:
             new_games = scrape_team_game_stats(engine, seasons, args.season_type)
         except (ReadTimeout, ConnectionError, ConnectionResetError) as e:

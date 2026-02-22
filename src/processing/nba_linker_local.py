@@ -1236,12 +1236,11 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
         game_id_matched = 0
 
         with engine.connect() as conn:
-            batch_df = pd.read_sql(f"""
+            batch_df = pd.read_sql("""
                 SELECT DISTINCT staging_id, home_team, away_team, commence_time
                 FROM raw_player_props_combined
                 WHERE player_id IS NOT NULL AND game_id IS NULL
                 ORDER BY staging_id
-                LIMIT 100000
             """, conn)
 
         if not batch_df.empty:
@@ -1255,7 +1254,12 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
                 candidates = props_game_lookup.get(key, [])
                 if not candidates:
                     return None
-                matched_game_id, _ = find_closest_game_date(candidates, row["game_date"])
+                # Use max_days=0 for exact date match — props should only link
+                # to games on the same date (prevents linking to wrong historical games)
+                matched_game_id, diff = find_closest_game_date(candidates, row["game_date"], max_days=0)
+                if matched_game_id is None:
+                    # Fallback: allow ±1 day for timezone edge cases
+                    matched_game_id, _ = find_closest_game_date(candidates, row["game_date"], max_days=1)
                 return matched_game_id
 
             batch_df["matched_game_id"] = batch_df.apply(match_game, axis=1)

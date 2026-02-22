@@ -58,9 +58,23 @@ class PredictionStore:
             if col not in df.columns:
                 df[col] = None
 
+        # Replace NaN/inf with None so PostgreSQL stores NULL (not float NaN)
+        edge_and_line_cols = [
+            "line", "over_odds", "under_odds", "over_prob", "under_prob",
+            "implied_over", "implied_under", "over_edge", "under_edge",
+            "bl_over_prob", "bl_under_prob", "bl_over_edge", "bl_under_edge",
+            "bl_confidence",
+        ]
+        for col in edge_and_line_cols:
+            if col in df.columns:
+                df[col] = df[col].where(pd.notna(df[col]) & np.isfinite(df[col]), other=None)
+
         rows = []
         for _, row in df.iterrows():
-            rows.append(tuple(row[col] for col in PREDICTION_COLS))
+            rows.append(tuple(
+                None if isinstance(v, float) and (np.isnan(v) or np.isinf(v)) else v
+                for v in (row[col] for col in PREDICTION_COLS)
+            ))
 
         col_list = ", ".join(PREDICTION_COLS)
         update_cols = [c for c in PREDICTION_COLS if c not in ("prediction_date", "player_id", "game_id", "stat")]
