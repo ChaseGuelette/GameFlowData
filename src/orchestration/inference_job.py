@@ -87,6 +87,11 @@ def main():
         action="store_true",
         help="Skip sending Discord alert after predictions",
     )
+    parser.add_argument(
+        "--skip-bets",
+        action="store_true",
+        help="Skip automatic paper bet placement",
+    )
     args = parser.parse_args()
 
     target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
@@ -220,6 +225,22 @@ def main():
         output_file = output_dir / f"predictions_{target_date}.csv"
         preds.to_csv(output_file, index=False)
         logger.info(f"Exported CSV: {output_file}")
+
+        # Place paper bets on recommended predictions
+        if not args.dry_run and not args.skip_bets:
+            try:
+                from src.paper_trading.paper_trader import PaperTrader
+
+                logger.info("Placing paper bets on recommended predictions...")
+                trader = PaperTrader()
+                bets = trader.select_bets(target_date)
+                if bets:
+                    count = trader.place_bets(bets)
+                    logger.info(f"Placed {count} paper bets for {target_date}")
+                else:
+                    logger.info("No predictions meet edge threshold for paper bets")
+            except Exception as e:
+                logger.warning(f"Paper bet placement failed: {e} (non-fatal)")
 
         # Send Discord alert
         if not args.dry_run and not args.skip_discord:
