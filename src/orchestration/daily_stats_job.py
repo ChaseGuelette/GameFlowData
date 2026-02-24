@@ -199,57 +199,65 @@ def main():
     logger.info("=" * 60)
 
     success = True
+    # Each step is (command, description, critical).
+    # Critical steps break the pipeline on failure; non-critical log a warning and continue.
     steps = [
         # Step 1: Scrape NBA game results (CDN-only to avoid stats.nba.com IP blocks)
         (
             f"{sys.executable} src/scrapers/nba_unified_scraper.py --cdn-only",
             "Scraping NBA Game Results (CDN)",
+            True,
         ),
         # Step 2: Run incremental linker
         (
             f"{sys.executable} src/processing/nba_linker_local.py incremental",
             "Linking Players (Incremental)",
+            True,
         ),
         # Step 3: Backfill team IDs (incremental - only recent data)
         (
             f"{sys.executable} src/processing/backfill_team_ids_incremental.py --days-back 7",
             "Backfilling Team IDs (Incremental)",
+            False,
         ),
         # Step 4: Update player positions
         (
             f"{sys.executable} src/scrapers/update_player_position_history.py",
             "Updating Player Position History",
+            False,
         ),
         # Step 5: Update league averages
         (
             f"{sys.executable} src/scrapers/update_league_position_averages.py",
             "Updating League Position Averages",
+            False,
         ),
         # Step 6: Populate rolling averages (incremental - only yesterday's games)
         (
             f"{sys.executable} src/processing/populate_average_stats_incremental.py"
             f" --date {(datetime.now().date() - timedelta(days=1)).isoformat()}",
             "Populating Rolling Average Stats (Incremental)",
+            True,
         ),
         # Step 7: Update opponent allowed stats (incremental - last 2 days)
         (
             f"{sys.executable} src/processing/backfill_opponent_allowed_incremental.py --days-back 2",
             "Updating Opponent Allowed Stats (Incremental)",
-        ),
-        # Step 8: Refresh play type data (Synergy)
-        (
-            f"{sys.executable} src/scrapers/play_type_scraper.py",
-            "Refreshing Play Type Data",
+            True,
         ),
     ]
 
-    for command, description in steps:
+    for i, (command, description, critical) in enumerate(steps, 1):
+        logger.info(f"Step {i}/{len(steps)}")
         if not run_command(command, description, args.dry_run):
-            success = False
-            logger.error(f"Job failed at step: {description}")
-            break
+            if critical:
+                success = False
+                logger.error(f"Critical step failed: {description}")
+                break
+            else:
+                logger.warning(f"Non-critical step failed: {description} — continuing")
 
-    # Step 8: Resolve pending paper bets (runs even if previous steps failed)
+    # Resolve pending paper bets (runs even if previous steps failed)
     # This is separate from the main loop because:
     # 1. It uses direct Python import, not subprocess
     # 2. It should not fail the job if it fails (stats are more critical)

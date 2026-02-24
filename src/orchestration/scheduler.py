@@ -89,9 +89,9 @@ def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> di
 
     if script_name == "daily_stats_job.py":
         # Look for step completion info
-        steps_match = re.search(r"Step (\d+)/8", output)
+        steps_match = re.search(r"Step (\d+)/(\d+)", output)
         if steps_match:
-            metrics["steps_completed"] = f"{steps_match.group(1)}/8"
+            metrics["steps_completed"] = f"{steps_match.group(1)}/{steps_match.group(2)}"
 
         # Look for bet resolution stats
         resolved_match = re.search(r"Resolved (\d+) bets?", output, re.IGNORECASE)

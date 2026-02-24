@@ -67,6 +67,7 @@ class PredictionStore:
         ]
         for col in edge_and_line_cols:
             if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
                 df[col] = df[col].where(pd.notna(df[col]) & np.isfinite(df[col]), other=None)
 
         rows = []
