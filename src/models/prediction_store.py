@@ -73,7 +73,7 @@ class PredictionStore:
         rows = []
         for _, row in df.iterrows():
             rows.append(tuple(
-                None if isinstance(v, float) and (np.isnan(v) or np.isinf(v)) else v
+                None if (isinstance(v, float) and (np.isnan(v) or np.isinf(v))) or v is pd.NaT else v
                 for v in (row[col] for col in PREDICTION_COLS)
             ))
 
