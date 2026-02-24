@@ -149,6 +149,8 @@ class PredictionStore:
         stat: str | None = None,
     ) -> pd.DataFrame:
         """Retrieve stored predictions with optional filters."""
+        from sqlalchemy import text
+
         conditions = ["prediction_date = :prediction_date"]
         params: dict = {"prediction_date": prediction_date}
 
@@ -163,7 +165,7 @@ class PredictionStore:
         query = f"SELECT * FROM daily_predictions WHERE {where} ORDER BY player_name, stat"
 
         with self.engine.connect() as conn:
-            return pd.read_sql(query, conn, params=params)
+            return pd.read_sql(text(query), conn, params=params)
 
     def get_samples(
         self,
