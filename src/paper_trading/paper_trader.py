@@ -446,6 +446,7 @@ class PaperTrader:
                 pgs.pts,
                 pgs.reb,
                 pgs.ast,
+                pgs.min,
                 pgs.did_not_play
             FROM player_game_stats pgs
             JOIN team_game_stats tgs ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
@@ -458,12 +459,15 @@ class PaperTrader:
             )
 
         # Build actuals lookup: player_id -> {stat -> value}
+        # Void (None) for DNPs and 0-minute players — sportsbooks void these bets
         actuals_lookup: dict[int, dict[str, float | None]] = {}
         for _, row in actuals_df.iterrows():
             player_id = int(row["player_id"])
             did_not_play = row.get("did_not_play", False) or False
+            minutes = row.get("min", None)
+            zero_minutes = minutes is not None and (minutes == 0 or (pd.notna(minutes) and float(minutes) == 0))
 
-            if did_not_play:
+            if did_not_play or zero_minutes:
                 actuals_lookup[player_id] = {"pts": None, "reb": None, "ast": None}
             else:
                 actuals_lookup[player_id] = {
