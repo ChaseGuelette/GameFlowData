@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-24 Session 46] — Pipeline Recovery + Resilience + Auto Paper Bets
+
+### Fixed
+
+- **`prediction_store.py` — `np.isfinite()` TypeError:** Mixed `None`/`float` in `bl_confidence` and other edge columns created `object` dtype that `np.isfinite()` can't handle. Added `pd.to_numeric(errors="coerce")` before the `isfinite` call. Also fixed `NaT` timestamps serializing as string `'NaT'` to PostgreSQL instead of NULL.
+- **`daily_stats_job.py` — 30-minute timeout:** `play_type_scraper.py` (Step 8) called `stats.nba.com` which blocks datacenter IPs, causing the subprocess to hang until the scheduler killed it after 30 minutes. Removed play type scraper from daily pipeline.
+- **`scheduler.py` — Discord "1/7 steps" bug:** `re.search()` returned the first match ("Step 1/7") instead of the last. Switched to `re.findall()` and take `[-1]` for the final step count. Also updated hardcoded `Step (\d+)/8` regex to dynamic `Step (\d+)/(\d+)`.
+
+### Added
+
+- **Critical/non-critical step resilience in `daily_stats_job.py`:** Steps are now 3-tuples `(command, description, critical)`. Critical steps (CDN scrape, linker, rolling averages, opponent allowed) abort on failure. Non-critical steps (team IDs, positions, league averages) log warning and continue. Ensures paper bet resolution always runs.
+- **Auto paper bet placement in `inference_job.py`:** After storing predictions, automatically calls `PaperTrader.select_bets()` + `place_bets()`. Non-fatal — failures don't affect predictions. `--skip-bets` flag available.
+- **DNP/0-minute void in `paper_trader.py`:** `resolve_bets()` now voids bets on players with `did_not_play=True` or `min=0` (status=`cancelled`, pnl=0). Matches sportsbook behavior where DNP bets are refunded.
+- **`--skip-bets` flag on `inference_job.py`:** Skips automatic paper bet placement.
+
+### Recovery
+
+- Ran inference for 5 missed dates (Feb 20-24) using stored feature data and prop lines
+- Backfilled paper bets for Feb 20-23: 18W-1L-1C (+$1,035 on $1,424 staked)
+- Voided 1 bet (Vukcevic, 0 minutes played on Feb 22)
+- Comprehensive audit confirmed no future sight — all feature queries use strict `game_date < :as_of_date`
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/models/prediction_store.py` | Fixed — `pd.to_numeric()` + `pd.NaT` check |
+| `src/orchestration/daily_stats_job.py` | Modified — removed play type scraper, added step resilience |
+| `src/orchestration/scheduler.py` | Fixed — step counter regex, `re.findall()` for last match |
+| `src/orchestration/inference_job.py` | Modified — auto paper bet placement, `--skip-bets` flag |
+| `src/paper_trading/paper_trader.py` | Modified — DNP/0-minute void logic in `resolve_bets()` |
+
+### Verified
+
+- 608 Python tests pass, ruff clean (1 pre-existing unused var in nba_linker_local.py)
+- Recovery predictions stored and verified against game stats
+- Paper bet audit confirmed all actuals match `player_game_stats`
+
+---
+
 ## [2026-02-19 Session 45] — Frequent Line Scraping + Edge Refresh Pipeline
 
 ### Added

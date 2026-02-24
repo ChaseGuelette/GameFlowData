@@ -1,5 +1,33 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-24 — Session 46)
+
+### What We Did
+
+**Fixed 5-day Railway pipeline outage (Feb 19-24) — two independent bugs, recovery of missed predictions + paper bets, and pipeline resilience hardening.**
+
+**Bug fixes:**
+- `prediction_store.py` — Fixed `np.isfinite()` TypeError on mixed `None`/`float` columns (`bl_confidence` etc.) by adding `pd.to_numeric(errors="coerce")` before the `isfinite` check. Also fixed `NaT` timestamps being passed as string `'NaT'` to PostgreSQL.
+- `daily_stats_job.py` — Removed `play_type_scraper.py` (Step 8) that was causing 30-minute timeout because `stats.nba.com` blocks datacenter IPs. Added critical/non-critical step resilience so non-critical failures don't kill the whole pipeline.
+- `scheduler.py` — Fixed Discord step counter showing "1/7" by switching from `re.search()` (first match) to `re.findall()[-1]` (last match).
+
+**Paper trading loop closure:**
+- `inference_job.py` — Now automatically places paper bets after storing predictions (via `PaperTrader.select_bets()` + `place_bets()`). Added `--skip-bets` flag.
+- `paper_trader.py` — Added DNP/0-minute player void logic in `resolve_bets()`. Players with `did_not_play=True` or `min=0` get bets voided (status=`cancelled`, pnl=0), matching sportsbook behavior.
+
+**Recovery:**
+- Ran inference for 5 missed dates (Feb 20-24), backfilled paper bets for Feb 20-23
+- Results: 18W-1L-1C (1 voided DNP), +$1,035 on $1,424 staked
+- Comprehensive audit confirmed data integrity — no future sight, all actuals match game stats
+
+### Remaining Action Items
+
+1. **Stripe integration** — subscribe page, customer portal, webhook
+2. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts (or find alternative data source)
+3. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-02-19 — Session 45)
 
 ### What We Did

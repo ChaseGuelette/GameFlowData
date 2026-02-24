@@ -383,14 +383,16 @@ A simulation environment to validate betting strategies.
 | `lines_job.py --live --props-only` | 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET | Props-only scrape (live props + linker) |
 | `edge_refresh_job.py` | 2 min after each props-only | Recalculate edges from stored MC samples + fresh lines |
 
-**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → `play_type_scraper.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~5-10 minutes (optimized from ~30 minutes via incremental scripts).
+**`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~3-5 minutes (optimized from ~30 minutes via incremental scripts).
+
+**Step resilience (2026-02-24):** Each step is marked critical or non-critical. Critical steps (CDN scrape, linker, rolling averages, opponent allowed) cause the job to abort on failure. Non-critical steps (team IDs backfill, position history, league averages) log a warning and continue to the next step. This ensures paper bet resolution always runs even when a non-critical step fails. Play type scraper (`play_type_scraper.py`) was removed from the daily pipeline because `stats.nba.com` blocks datacenter IPs (Railway, GitHub Actions) — can be re-added when the API becomes accessible.
 
 **`lines_job.py`** — Multiple-times-daily props and injuries scraping. Two modes:
 - **Full mode (`--live`):** `daily_game_lines_scraper.py` → `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `rapidapi_injury_backfill.py` → `link_injury_data.py` → `nba_linker_local.py incremental`. Used at 12 PM and 4 PM ET.
 - **Props-only mode (`--live --props-only`):** `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `nba_linker_local.py incremental`. Skips game lines and injuries for fast intra-day refreshes. Used hourly/half-hourly between inference windows.
 - Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`, `--live`, `--props-only`. Runtime: ~30-90 seconds (full), ~15-30 seconds (props-only).
 
-**`inference_job.py`** — Full prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, checks upstream data freshness (warns if rolling averages >2 days stale), generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, exports CSV backup. Runs twice daily (12:15 PM, 4:15 PM ET) to catch new player props. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`. Runtime: ~1-3 minutes.
+**`inference_job.py`** — Full prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, checks upstream data freshness (warns if rolling averages >2 days stale), generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, **automatically places paper bets** on recommended predictions (via `PaperTrader.select_bets()` + `place_bets()`), sends Discord alert, and exports CSV backup. Runs twice daily (12:15 PM, 4:15 PM ET) to catch new player props. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`, `--skip-bets`, `--skip-discord`. Runtime: ~1-3 minutes.
 
 **`edge_refresh_job.py`** — Lightweight edge recalculation (~2-3 seconds). Loads stored predictions from `daily_predictions` and MC samples from `daily_prediction_samples` via `PredictionStore.get_all_samples_for_date()`, fetches fresh prop lines from `raw_player_props_combined`, recalculates edges (empirical CDF) and Black-Litterman recommendations, upserts updated predictions. Self-contained — does NOT instantiate model pipeline or feature store. Exits gracefully if no samples exist (inference hasn't run yet). Supports `--date`, `--dry-run`, `--stats`, `--skip-discord`. Runs after each intra-day props scrape.
 
@@ -422,7 +424,7 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 
 ### 10. Paper Trading (`src/paper_trading/`)
 
-Standalone CLI scripts to convert stored `daily_predictions` into paper bets with bet selection, outcome resolution, and P&L tracking. Integrated with the Dashboard for visualization.
+Paper bet placement, outcome resolution, and P&L tracking. Bet placement is automated via `inference_job.py` (runs after each prediction generation). Resolution is automated via `daily_stats_job.py` (runs each morning after games finalize). Manual CLI scripts also available for ad-hoc operations. Integrated with the Dashboard for visualization.
 
 ### 11. Dashboard (`dashboard/`)
 
@@ -541,17 +543,22 @@ cd dashboard && npm run lint   # ESLint check
 - `paper_bets` — Individual bet records with odds, edge, stake, status, P&L. Unique on `(game_date, player_id, stat_type, bet_direction)`.
 - `paper_trading_daily_log` — Daily aggregated stats: wins/losses, total staked, P&L, cumulative bankroll. Unique on `game_date`.
 
-**Execution Flow:**
+**Execution Flow (Automated):**
 ```
-After daily_runner.py completes (predictions stored):
+1. Inference Job (12:15 PM, 4:15 PM ET):
+   inference_job.py → predictions stored → PaperTrader.select_bets() → place_bets()
+   └── Reads daily_predictions → Filters by edge/is_recommended → Writes to paper_bets
 
-1. Place Bets:
-   python src/paper_trading/place_bets.py --date 2026-02-04
-   └── Reads daily_predictions → Filters by edge → Writes to paper_bets
-
-2. Next Day (after games complete):
-   python src/paper_trading/resolve_bets.py --date 2026-02-04
+2. Daily Stats Job (9:00 AM ET, next day):
+   daily_stats_job.py → stats scraped → PaperTrader.resolve_all_pending()
    └── Reads player_game_stats → Compares to lines → Updates paper_bets & daily_log
+```
+
+**Manual CLI (ad-hoc operations):**
+```
+python src/paper_trading/place_bets.py --date 2026-02-04      # Place bets manually
+python src/paper_trading/resolve_bets.py --date 2026-02-04    # Resolve bets manually
+python src/paper_trading/backfill_paper_bets.py --start X --end Y  # Backfill + resolve range
 ```
 
 **Bet Selection Logic:**
@@ -563,6 +570,7 @@ After daily_runner.py completes (predictions stored):
 
 **Resolution Logic:**
 - Fetch actual stats from `player_game_stats`
+- **DNP/0-minute void (2026-02-24):** Players with `did_not_play=True` OR `min=0` are voided (status=`cancelled`, pnl=0). Matches sportsbook behavior where bets on DNP players are refunded.
 - Compare actual vs line → won/lost/push/cancelled
 - Calculate P&L: won = stake × (decimal_odds - 1), lost = -stake
 - Update `paper_trading_daily_log` with aggregates
@@ -864,7 +872,7 @@ python src/orchestration/daily_stats_job.py [--dry-run]                         
 python src/orchestration/lines_job.py --live [--dry-run]                          # 12/4 PM ET - Full live scrape
 python src/orchestration/lines_job.py --live --props-only [--dry-run]             # Hourly/half-hourly - Props only
 python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker]  # Historical mode
-python src/orchestration/inference_job.py [--date YYYY-MM-DD] [--dry-run] [--model-dir PATH] [--stats pts reb ast]  # 12:15/4:15 PM ET
+python src/orchestration/inference_job.py [--date YYYY-MM-DD] [--dry-run] [--model-dir PATH] [--stats pts reb ast] [--skip-bets] [--skip-discord]  # 12:15/4:15 PM ET
 python src/orchestration/edge_refresh_job.py [--date YYYY-MM-DD] [--dry-run] [--stats pts reb ast] [--skip-discord]  # After each props scrape
 ```
 

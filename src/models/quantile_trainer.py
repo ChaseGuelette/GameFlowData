@@ -9,7 +9,6 @@ import joblib
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import train_test_split
 
 from .feature_store import (

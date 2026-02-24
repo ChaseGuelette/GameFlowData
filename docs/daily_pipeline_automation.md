@@ -8,7 +8,7 @@ The daily pipeline is split into four jobs based on execution frequency:
 
 | Job | Schedule (ET) | Purpose | Runtime |
 |-----|---------------|---------|---------|
-| `daily_stats_job.py` | 9:00 AM | NBA game results + processing | ~5-10 min |
+| `daily_stats_job.py` | 9:00 AM | NBA game results + processing | ~3-5 min |
 | `lines_job.py --live` | 12 PM, 4 PM | Full live scrape (game lines + props + injuries + linker) | ~30-90 sec |
 | `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation | ~16 sec |
 | `lines_job.py --live --props-only` | 1-3 PM hourly, 4:30-6:30 PM half-hourly | Props-only live scrape + linker | ~15-30 sec |
@@ -28,8 +28,7 @@ The daily pipeline is split into four jobs based on execution frequency:
            ├─ update_player_position_history.py
            ├─ update_league_position_averages.py
            ├─ populate_average_stats_incremental.py (lightweight, ~1s)
-           ├─ backfill_opponent_allowed_incremental.py --days-back 30
-           ├─ play_type_scraper.py
+           ├─ backfill_opponent_allowed_incremental.py --days-back 2
            └─ resolve ALL pending paper bets
 
 12:00 PM   lines_job.py --live (full scrape)
@@ -44,6 +43,7 @@ The daily pipeline is split into four jobs based on execution frequency:
            ├─ Check upstream data freshness
            ├─ DailyPredictionRunner.run_for_date()
            ├─ Store predictions + MC samples to DB
+           ├─ Place paper bets (PaperTrader.select_bets + place_bets)
            ├─ Export predictions CSV
            └─ Send Discord alert
 
@@ -92,14 +92,15 @@ python src/orchestration/daily_stats_job.py --dry-run
 
 ### Pipeline Steps
 
-1. `nba_unified_scraper.py` - Fetch latest game box scores from NBA API
-2. `nba_linker_local.py incremental` - Link unmatched props to player/game IDs
-3. `backfill_team_ids.py` - Fill missing team IDs in staging tables
-4. `update_player_position_history.py` - Update position snapshots
-5. `update_league_position_averages.py` - Update league averages by position
-6. `populate_average_stats_incremental.py` - Compute rolling averages for today's players only (~1s vs ~28min for full)
-7. `backfill_opponent_allowed.py` - Update opponent-adjusted defensive stats
-8. `play_type_scraper.py` - Refresh Synergy play type data (offensive + defensive, 11 play types)
+1. `nba_unified_scraper.py` - Fetch latest game box scores from NBA API **(critical)**
+2. `nba_linker_local.py incremental` - Link unmatched props to player/game IDs **(critical)**
+3. `backfill_team_ids.py` - Fill missing team IDs in staging tables *(non-critical)*
+4. `update_player_position_history.py` - Update position snapshots *(non-critical)*
+5. `update_league_position_averages.py` - Update league averages by position *(non-critical)*
+6. `populate_average_stats_incremental.py` - Compute rolling averages for today's players only (~1s vs ~28min for full) **(critical)**
+7. `backfill_opponent_allowed_incremental.py --days-back 2` - Update opponent-adjusted defensive stats **(critical)**
+
+**Note:** `play_type_scraper.py` was removed (Session 46) because `stats.nba.com` blocks datacenter IPs. Non-critical step failures log a warning and continue; critical step failures abort the pipeline.
 
 ### Logs
 
@@ -226,7 +227,7 @@ Output is written to `logs/edge_refresh.log`.
 
 **Purpose:** Generate predictions for today's games using the latest model artifacts and prop lines.
 
-**Schedule:** Once daily, 6:30 PM ET (after final lines_job, before games start)
+**Schedule:** Twice daily, 12:15 PM and 4:15 PM ET (after full lines scrapes)
 
 ### Usage
 
@@ -255,19 +256,24 @@ python src/orchestration/inference_job.py --stats pts reb
 | `--dry-run` | Generate predictions but don't store to database |
 | `--model-dir PATH` | Path to model artifacts (defaults to `src/models/artifacts`) |
 | `--stats STAT [STAT ...]` | Stats to predict (defaults to `pts reb ast`) |
+| `--skip-bets` | Skip automatic paper bet placement |
+| `--skip-discord` | Skip sending Discord alert |
 
 ### Pipeline Steps
 
-1. Load model artifacts (auto-detects latest `run_*` directory)
+1. Load model artifacts (auto-detects latest `run_*` directory, or `production/` folder)
 2. Initialize FeatureStore and MonteCarloPredictor (10,000 samples)
 3. Load Gaussian copula params for correlated sampling
 4. Load combined calibration offsets (if `combined_calibration_offsets.json` exists — currently not deployed)
-5. Run `DailyPredictionRunner.run_for_date()`
+5. Check upstream data freshness (warns if rolling averages >2 days stale)
+6. Run `DailyPredictionRunner.run_for_date()`
    - **Parallel feature building** (8 workers, ~5s) — queries feature store concurrently
    - **Optimized prop lines query** (~0.2s) — searches both 8/10-digit game_id formats
-5. Store predictions to `daily_predictions` table
-6. Store MC samples to `daily_prediction_samples` table
-7. Export CSV backup to `predictions/predictions_YYYY-MM-DD.csv`
+7. Store predictions to `daily_predictions` table
+8. Store MC samples to `daily_prediction_samples` table
+9. **Place paper bets** on recommended predictions via `PaperTrader.select_bets()` + `place_bets()` (non-fatal)
+10. Send Discord alert (non-fatal)
+11. Export CSV backup to `predictions/predictions_YYYY-MM-DD.csv`
 
 ### Performance
 
