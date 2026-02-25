@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PlayerAvatar } from '@/components/shared/PlayerAvatar'
 import { Badge, EdgeBadge } from '@/components/shared/Badge'
@@ -9,6 +9,8 @@ import { QuantileSummary } from './QuantileSummary'
 import { type Prediction, type PlayerGameStats, type StatType, type BookmakerLine, STAT_LABELS } from '@/types/predictions'
 import { formatProb } from '@/lib/utils'
 import { generateInsights, type Insight } from '@/lib/insights'
+import { getAllowedBookmakers } from '@/lib/sportsbook-availability'
+import { estimateUnderProb } from '@/lib/dfs-utils'
 
 interface AnalysisModalProps {
   prediction: Prediction
@@ -68,57 +70,6 @@ const oddsToImpliedProb = (odds: number): number => {
   }
 }
 
-// Estimate probability of Under X using quantile interpolation
-// P(stat < line) = probability the Under hits
-// Higher line = easier Under = higher probability
-// Lower line = harder Under = lower probability
-const estimateUnderProb = (
-  line: number,
-  q10: number,
-  q25: number,
-  q50: number,
-  q75: number,
-  q90: number
-): number => {
-  // Quantile points: (value, cumulative probability that stat < value)
-  const points = [
-    { val: q10, prob: 0.10 },
-    { val: q25, prob: 0.25 },
-    { val: q50, prob: 0.50 },
-    { val: q75, prob: 0.75 },
-    { val: q90, prob: 0.90 },
-  ]
-
-  // Extrapolate below q10 (Under is hard to hit at low lines)
-  if (line <= q10) {
-    // Linear extrapolation toward 0, but cap at 0.01
-    const slope = (points[1].prob - points[0].prob) / (points[1].val - points[0].val)
-    const extrapolated = points[0].prob + slope * (line - points[0].val)
-    return Math.max(0.01, Math.min(0.10, extrapolated))
-  }
-
-  // Extrapolate above q90 (Under is easy to hit at high lines)
-  if (line >= q90) {
-    // Linear extrapolation toward 1, but cap at 0.99
-    // Use the slope from q75 to q90 for extrapolation
-    const slope = (points[4].prob - points[3].prob) / (points[4].val - points[3].val)
-    const extrapolated = points[4].prob + slope * (line - points[4].val)
-    return Math.max(0.90, Math.min(0.99, extrapolated))
-  }
-
-  // Find the two quantiles that bracket the line and interpolate
-  for (let i = 0; i < points.length - 1; i++) {
-    if (line >= points[i].val && line <= points[i + 1].val) {
-      const range = points[i + 1].val - points[i].val
-      if (range === 0) return points[i].prob
-      const fraction = (line - points[i].val) / range
-      return points[i].prob + fraction * (points[i + 1].prob - points[i].prob)
-    }
-  }
-
-  return 0.5 // Fallback
-}
-
 // Calculate Kelly stake as fraction of bankroll
 const calculateKelly = (modelProb: number, odds: number, kellyFraction: number): number => {
   if (odds === 0 || modelProb <= 0 || modelProb >= 1) return 0
@@ -148,6 +99,12 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
   const [bookmakerLines, setBookmakerLines] = useState<BookmakerLine[]>([])
   const [loading, setLoading] = useState(true)
   const [linesLoading, setLinesLoading] = useState(true)
+
+  // Read user's state filter (set on dashboard page, read-only here)
+  const [userState] = useState<string>(() => {
+    if (typeof window === 'undefined') return ''
+    return localStorage.getItem('user_state') || ''
+  })
 
   // Bankroll and Kelly settings (persisted to localStorage) - use lazy initialization
   const [bankroll, setBankroll] = useState<number>(() => {
@@ -247,7 +204,7 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
       // Both tables use the same NBA game_id format (e.g., "0022500771")
       const { data, error } = await supabase
         .from('raw_player_props_combined')
-        .select('bookmaker, line, outcome_label, odds_american')
+        .select('bookmaker, line, outcome_label, odds_american, snapshot_time')
         .eq('player_id', prediction.player_id)
         .eq('game_id', prediction.game_id)
         .eq('market_key', marketKey)
@@ -259,11 +216,18 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
 
       if (!error && data) {
         console.log('Bookmaker lines fetched:', data.length, 'rows')
-        // Group by bookmaker and line, get over/under odds
-        const lineMap = new Map<string, BookmakerLine>()
+        // Deduplicate: keep only the latest snapshot per bookmaker
+        // Sort by snapshot_time DESC so newest rows come first
+        const sorted = [...data].sort((a, b) =>
+          (b.snapshot_time || '').localeCompare(a.snapshot_time || '')
+        )
 
-        for (const row of data) {
-          const key = `${row.bookmaker}-${row.line}`
+        const lineMap = new Map<string, BookmakerLine>()
+        // Track each bookmaker's latest snapshot_time for staleness filtering
+        const snapshotMap = new Map<string, string>()
+
+        for (const row of sorted) {
+          const key = row.bookmaker
           if (!lineMap.has(key)) {
             lineMap.set(key, {
               bookmaker: row.bookmaker,
@@ -271,18 +235,32 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
               over_odds: 0,
               under_odds: 0,
             })
+            snapshotMap.set(key, row.snapshot_time || '')
           }
           const entry = lineMap.get(key)!
-          if (row.outcome_label === 'Over') {
+          // Only set odds if not already set (first encountered = newest snapshot)
+          if (row.outcome_label === 'Over' && entry.over_odds === 0) {
             entry.over_odds = row.odds_american
-          } else if (row.outcome_label === 'Under') {
+            entry.line = parseFloat(row.line)
+          } else if (row.outcome_label === 'Under' && entry.under_odds === 0) {
             entry.under_odds = row.odds_american
           }
         }
 
-        // Filter to complete lines only
+        // Drop ghost lines: if a bookmaker's latest snapshot is >2 hours
+        // behind the newest snapshot in the dataset, the line was likely pulled
+        const newestSnapshot = sorted.length > 0 ? sorted[0].snapshot_time || '' : ''
+        const staleCutoffMs = 2 * 60 * 60 * 1000 // 2 hours
+
+        // Filter to complete lines that aren't stale
         const allLines = Array.from(lineMap.values())
-          .filter(l => l.over_odds !== 0 && l.under_odds !== 0)
+          .filter(l => {
+            if (l.over_odds === 0 || l.under_odds === 0) return false
+            const bookmakerSnapshot = snapshotMap.get(l.bookmaker) || ''
+            if (!newestSnapshot || !bookmakerSnapshot) return true // no timestamp data, keep it
+            const age = new Date(newestSnapshot).getTime() - new Date(bookmakerSnapshot).getTime()
+            return age <= staleCutoffMs
+          })
 
         // Note: We'll sort by line value in the render based on bet direction
         // For now, just pass all lines - sorting happens in display
@@ -315,6 +293,44 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
   // Calculate L5 average for the relevant stat
   const l5Avg = history.length > 0
     ? history.reduce((sum, g) => sum + (Number(g[statColumn]) || 0), 0) / history.length
+    : null
+
+  // Process bookmaker lines: compute edge per line, sort by best edge
+  const processedLines = useMemo(() => {
+    if (bookmakerLines.length === 0) return []
+    const allowed = getAllowedBookmakers(userState)
+    return [...bookmakerLines]
+      .filter((line) => !allowed || allowed.includes(line.bookmaker))
+      .map((line) => {
+        const underProb = estimateUnderProb(
+          line.line,
+          prediction.q10,
+          prediction.q25,
+          prediction.q50,
+          prediction.q75,
+          prediction.q90
+        )
+        const overProb = 1 - underProb
+        const relevantOdds = isOverBet ? line.over_odds : line.under_odds
+        const modelProb = isOverBet ? overProb : underProb
+        const impliedProb = oddsToImpliedProb(relevantOdds)
+        const lineEdge = modelProb - impliedProb
+        return { ...line, modelProb, impliedProb, lineEdge, relevantOdds }
+      })
+      .sort((a, b) => b.lineEdge - a.lineEdge)
+  }, [bookmakerLines, prediction.q10, prediction.q25, prediction.q50, prediction.q75, prediction.q90, isOverBet, userState])
+
+  // Selected line index for bet sizing (defaults to best edge = index 0)
+  const [selectedLineIndex, setSelectedLineIndex] = useState<number>(0)
+
+  // Reset selection when processedLines changes (new player, state filter, etc.)
+  useEffect(() => {
+    setSelectedLineIndex(0)
+  }, [processedLines])
+
+  // The line used for bet sizing: user-selected or auto-best
+  const selectedLine = processedLines.length > 0 && processedLines[selectedLineIndex]?.lineEdge > 0
+    ? processedLines[selectedLineIndex]
     : null
 
   // Handle escape key
@@ -460,41 +476,18 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
         {/* Sportsbook Lines */}
         <div className="p-6 border-b border-slate-700">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-slate-50">Sportsbook Lines</h3>
+            <h3 className="text-lg font-semibold text-slate-50">
+              Sportsbook Lines {userState && <span className="text-xs text-slate-500">({userState} only)</span>}
+            </h3>
             <div className="text-sm text-slate-400">
               Betting: <span className={isOverBet ? 'text-green-400' : 'text-red-400'}>{direction} {prediction.prop_line}</span>
             </div>
           </div>
           {linesLoading ? (
             <div className="text-slate-400 text-sm">Loading lines...</div>
-          ) : bookmakerLines.length > 0 ? (
+          ) : processedLines.length > 0 ? (
             <div className="space-y-2">
-              {/* Calculate edge for each line and sort by best edge */}
               {(() => {
-                // Process all lines with edge calculations
-                const processedLines = [...bookmakerLines]
-                  .map((line) => {
-                    // Estimate model probability at this line using quantiles
-                    const underProb = estimateUnderProb(
-                      line.line,
-                      prediction.q10,
-                      prediction.q25,
-                      prediction.q50,
-                      prediction.q75,
-                      prediction.q90
-                    )
-                    const overProb = 1 - underProb
-
-                    // Get relevant odds and calculate edge
-                    const relevantOdds = isOverBet ? line.over_odds : line.under_odds
-                    const modelProb = isOverBet ? overProb : underProb
-                    const impliedProb = oddsToImpliedProb(relevantOdds)
-                    const lineEdge = modelProb - impliedProb
-
-                    return { ...line, modelProb, impliedProb, lineEdge, relevantOdds }
-                  })
-                  .sort((a, b) => b.lineEdge - a.lineEdge) // Best edge first
-
                 // Get top 10 lines by edge for display
                 const displayedLines = processedLines.slice(0, 10)
 
@@ -509,16 +502,19 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
                     const hasPositiveEdge = line.lineEdge > 0
                     const isBestEdge = i === 0 && hasPositiveEdge
                     const isEasiestLine = line.line === easiestLineValue
+                    const isSelected = i === selectedLineIndex
 
                     return (
-                    <div
+                    <button
                       key={i}
-                      className={`flex items-center justify-between rounded px-3 py-2 ${
-                        isBestEdge
-                          ? 'bg-green-900/40 border border-green-600/60'
+                      type="button"
+                      onClick={() => setSelectedLineIndex(i)}
+                      className={`w-full flex items-center justify-between rounded px-3 py-2 text-left transition-colors ${
+                        isSelected
+                          ? 'bg-green-900/40 border border-green-500 ring-1 ring-green-500/30'
                           : hasPositiveEdge
-                            ? 'bg-green-900/20 border border-green-700/40'
-                            : 'bg-slate-700/30'
+                            ? 'bg-green-900/20 border border-green-700/40 hover:border-green-600/60'
+                            : 'bg-slate-700/30 border border-transparent hover:border-slate-600'
                       }`}
                     >
                       <div className="flex items-center gap-3">
@@ -537,6 +533,11 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
                             EASIEST
                           </span>
                         )}
+                        {isSelected && (
+                          <span className="text-xs bg-green-500/30 text-green-300 px-1.5 py-0.5 rounded font-medium">
+                            SIZING
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 text-sm">
                         <span className={hasPositiveEdge ? 'text-green-400 font-medium' : 'text-slate-400'}>
@@ -550,13 +551,17 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
                           U {formatOdds(line.under_odds)}
                         </span>
                       </div>
-                    </div>
+                    </button>
                   )
                 })
               })()}
             </div>
           ) : (
-            <div className="text-slate-400 text-sm">No lines available</div>
+            <div className="text-slate-400 text-sm">
+              {bookmakerLines.length > 0 && userState
+                ? `No lines from ${userState}-licensed books`
+                : 'No lines available'}
+            </div>
           )}
         </div>
 
@@ -609,10 +614,19 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
             </div>
           </div>
 
-          {/* Recommended bet size */}
+          {/* Recommended bet size — uses selected sportsbook line when available */}
           {(() => {
-            const bestOdds = isOverBet ? prediction.best_over_odds : prediction.best_under_odds
-            const kellyPct = calculateKelly(probability, bestOdds || -110, kellyFraction)
+            // Use the selected line's odds and model probability, falling back to prediction-level data
+            const sizingOdds = selectedLine
+              ? selectedLine.relevantOdds
+              : (isOverBet ? prediction.best_over_odds : prediction.best_under_odds) || -110
+            const sizingModelProb = selectedLine
+              ? selectedLine.modelProb
+              : probability
+            const sizingBookmaker = selectedLine ? formatBookmaker(selectedLine.bookmaker) : null
+            const sizingLineVal = selectedLine ? selectedLine.line : prediction.prop_line
+
+            const kellyPct = calculateKelly(sizingModelProb, sizingOdds, kellyFraction)
             const recommendedBet = bankroll * kellyPct
 
             return (
@@ -627,7 +641,8 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
                   ${recommendedBet.toFixed(2)}
                 </div>
                 <div className="text-xs text-slate-500 mt-2">
-                  Based on {(probability * 100).toFixed(1)}% model probability at {formatOdds(bestOdds || -110)} odds
+                  Based on {(sizingModelProb * 100).toFixed(1)}% model prob at {formatOdds(sizingOdds)} odds
+                  {sizingBookmaker && ` (${sizingBookmaker} ${direction} ${sizingLineVal})`}
                 </div>
               </div>
             )

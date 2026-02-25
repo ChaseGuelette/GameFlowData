@@ -7,9 +7,11 @@ import { PropGrid } from '@/components/predictions/PropGrid'
 import { PlayOfTheDay } from '@/components/predictions/PlayOfTheDay'
 import { AnalysisModal } from '@/components/analysis/AnalysisModal'
 import { SlateModal } from '@/components/predictions/SlateModal'
+import { TonightsGames, type GameInfo } from '@/components/predictions/TonightsGames'
 import { type Prediction } from '@/types/predictions'
 import { getToday, formatDate, calculateBLConfidence, blendProbability } from '@/lib/utils'
 import { TEAM_ABBREV } from '@/lib/constants'
+import { US_STATES } from '@/lib/sportsbook-availability'
 
 export default function DashboardPage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
@@ -22,6 +24,19 @@ export default function DashboardPage() {
   const [edgeThreshold, setEdgeThreshold] = useState<number>(0.03)  // Default 3%
   const [blTau, setBlTau] = useState<number | null>(null)  // null = no BL blending
   const [showModelPicks, setShowModelPicks] = useState<boolean>(false)  // Model Picks toggle
+  const [userState, setUserState] = useState<string>(() => {
+    if (typeof window === 'undefined') return ''
+    return localStorage.getItem('user_state') || ''
+  })
+
+  // Taken bets state (persisted per date in localStorage)
+  const [takenBets, setTakenBets] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const stored = localStorage.getItem(`taken_bets_${selectedDate}`)
+      return stored ? new Set(JSON.parse(stored)) : new Set()
+    } catch { return new Set() }
+  })
 
   // Slate builder state
   const [slateMode, setSlateMode] = useState<boolean>(false)
@@ -48,6 +63,26 @@ export default function DashboardPage() {
       setEdgeThreshold(0.03)
       setBlTau(null)
     }
+  }
+
+  // Reload taken bets when date changes
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`taken_bets_${selectedDate}`)
+      setTakenBets(stored ? new Set(JSON.parse(stored)) : new Set())
+    } catch { setTakenBets(new Set()) }
+  }, [selectedDate])
+
+  // Toggle taken bet
+  const handleToggleTaken = (prediction: Prediction) => {
+    const key = `${prediction.player_id}-${prediction.stat}`
+    setTakenBets(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      localStorage.setItem(`taken_bets_${selectedDate}`, JSON.stringify([...next]))
+      return next
+    })
   }
 
   // Toggle pick selection for slate
@@ -194,64 +229,74 @@ export default function DashboardPage() {
     return `${teams[0]} vs ${teams[1]}`
   }))].sort()
 
+  // Derive tonight's games from predictions
+  const tonightsGames: GameInfo[] = (() => {
+    const gameMap = new Map<string, GameInfo>()
+    for (const p of predictions) {
+      const teams = [p.team_abbrev || 'UNK', p.opponent_abbrev || 'UNK'].sort() as [string, string]
+      const key = `${teams[0]} vs ${teams[1]}`
+      const existing = gameMap.get(key)
+      if (existing) {
+        existing.predictionCount++
+        if (!existing.gameTime && p.game_time) existing.gameTime = p.game_time
+      } else {
+        gameMap.set(key, { matchupKey: key, teams, gameTime: p.game_time || null, predictionCount: 1 })
+      }
+    }
+    return [...gameMap.values()].sort((a, b) => {
+      if (a.gameTime && b.gameTime) return a.gameTime.localeCompare(b.gameTime)
+      if (a.gameTime) return -1
+      if (b.gameTime) return 1
+      return a.matchupKey.localeCompare(b.matchupKey)
+    })
+  })()
+
+  // Enrich predictions with effective edges (BL blending when active)
+  // This ensures PropCard, PlayOfTheDay, and AnalysisModal all show consistent values
+  const enrichedPredictions = predictions.map(p => {
+    if (showModelPicks && p.bl_over_edge != null && p.bl_under_edge != null) {
+      return {
+        ...p,
+        over_edge: p.bl_over_edge,
+        under_edge: p.bl_under_edge,
+        model_prob_over: p.bl_over_prob ?? p.model_prob_over,
+        model_prob_under: p.bl_under_prob ?? p.model_prob_under,
+      }
+    }
+    if (blTau !== null && p.pred_mean && p.pred_std) {
+      const confidence = calculateBLConfidence(p.pred_mean, p.pred_std, p.prop_line)
+      const blendedOver = blendProbability(p.model_prob_over, p.implied_prob_over, blTau, confidence)
+      const blendedUnder = blendProbability(p.model_prob_under, p.implied_prob_under, blTau, confidence)
+      return {
+        ...p,
+        over_edge: blendedOver - p.implied_prob_over,
+        under_edge: blendedUnder - p.implied_prob_under,
+        model_prob_over: blendedOver,
+        model_prob_under: blendedUnder,
+      }
+    }
+    return p
+  })
+
   // Filter predictions by stat type, matchup, edge threshold, and Model Picks toggle
-  const filteredPredictions = predictions.filter(p => {
-    // Model Picks filter (uses server-computed is_recommended flag)
+  const filteredPredictions = enrichedPredictions.filter(p => {
     if (showModelPicks && !p.is_recommended) return false
-
-    // Stat type filter
     if (filter !== 'all' && p.stat !== filter) return false
-
-    // Team/matchup filter
     if (teamFilter !== 'all') {
       const matchupTeams = teamFilter.split(' vs ')
       if (!matchupTeams.includes(p.team_abbrev || '') && !matchupTeams.includes(p.opponent_abbrev || '')) {
         return false
       }
     }
-
-    // When viewing Model Picks, use BL edge; otherwise use raw edge with optional client-side BL
-    let effectiveOverEdge = p.over_edge
-    let effectiveUnderEdge = p.under_edge
-
-    if (showModelPicks && p.bl_over_edge != null && p.bl_under_edge != null) {
-      // Use server-computed BL edges for Model Picks
-      effectiveOverEdge = p.bl_over_edge
-      effectiveUnderEdge = p.bl_under_edge
-    } else if (blTau !== null && p.pred_mean && p.pred_std) {
-      // Client-side BL blending for custom exploration
-      const confidence = calculateBLConfidence(p.pred_mean, p.pred_std, p.prop_line)
-      const blendedOver = blendProbability(p.model_prob_over, p.implied_prob_over, blTau, confidence)
-      const blendedUnder = blendProbability(p.model_prob_under, p.implied_prob_under, blTau, confidence)
-      effectiveOverEdge = blendedOver - p.implied_prob_over
-      effectiveUnderEdge = blendedUnder - p.implied_prob_under
-    }
-
     // Skip edge threshold for Model Picks (is_recommended already guarantees BL edge >= 9%)
     if (showModelPicks) return true
-
-    // At least one direction must meet edge threshold
-    return Math.max(effectiveOverEdge, effectiveUnderEdge) >= edgeThreshold
+    return Math.max(p.over_edge, p.under_edge) >= edgeThreshold
   })
 
-  // Sort by max edge (use BL edges when viewing Model Picks)
-  const sortedPredictions = [...filteredPredictions].sort((a, b) => {
-    let aEdge: number, bEdge: number
-
-    if (showModelPicks && a.bl_over_edge != null && a.bl_under_edge != null) {
-      aEdge = Math.max(a.bl_over_edge, a.bl_under_edge)
-    } else {
-      aEdge = Math.max(a.over_edge, a.under_edge)
-    }
-
-    if (showModelPicks && b.bl_over_edge != null && b.bl_under_edge != null) {
-      bEdge = Math.max(b.bl_over_edge, b.bl_under_edge)
-    } else {
-      bEdge = Math.max(b.over_edge, b.under_edge)
-    }
-
-    return bEdge - aEdge
-  })
+  // Sort by max edge (effective edges already computed above)
+  const sortedPredictions = [...filteredPredictions].sort((a, b) =>
+    Math.max(b.over_edge, b.under_edge) - Math.max(a.over_edge, a.under_edge)
+  )
 
   return (
     <main className={`flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 ${slateMode ? 'pb-24' : ''}`}>
@@ -272,6 +317,21 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          {/* State Selector */}
+          <select
+            value={userState}
+            onChange={(e) => {
+              setUserState(e.target.value)
+              localStorage.setItem('user_state', e.target.value)
+            }}
+            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+          >
+            {US_STATES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.value ? s.value : 'All States'}
+              </option>
+            ))}
+          </select>
           {/* Model Picks Toggle */}
           <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
             <button
@@ -321,17 +381,6 @@ export default function DashboardPage() {
               </option>
             ))}
           </select>
-          {/* Matchup Filter */}
-          <select
-            value={teamFilter}
-            onChange={(e) => setTeamFilter(e.target.value)}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-          >
-            <option value="all">All Games</option>
-            {availableMatchups.map((matchup) => (
-              <option key={matchup} value={matchup}>{matchup}</option>
-            ))}
-          </select>
           {/* Edge Threshold Filter */}
           <select
             value={edgeThreshold}
@@ -365,6 +414,16 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Tonight's Games Strip */}
+      {!loading && (
+        <TonightsGames
+          games={tonightsGames}
+          activeMatchup={teamFilter}
+          onSelectMatchup={setTeamFilter}
+          isToday={selectedDate === getToday()}
+        />
+      )}
+
       {/* Play of the Day */}
       {!loading && sortedPredictions.length > 0 && (
         <PlayOfTheDay
@@ -395,6 +454,8 @@ export default function DashboardPage() {
           selectable={slateMode}
           selectedIds={selectedPicks}
           onToggleSelect={handleToggleSelect}
+          takenIds={takenBets}
+          onToggleTaken={handleToggleTaken}
         />
       )}
 

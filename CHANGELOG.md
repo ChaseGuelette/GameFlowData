@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-25 Session 48] — DFS Edge Finder Page
+
+### Added
+
+- **DFS scraping (`us_dfs` region):** Added `us_dfs` to Odds API requests in `daily_player_props_scraper.py`. DFS platforms (PrizePicks, Underdog, Pick6, Betr) now stored in `raw_player_props_combined` alongside sportsbook lines.
+- **`get_dfs_lines` RPC function:** Supabase SECURITY DEFINER function that returns latest DFS line per bookmaker/player/stat for a given date's games. Handles game ID format normalization via LPAD.
+- **`idx_props_bookmaker_dfs` partial index:** Partial index on `raw_player_props_combined` for DFS bookmaker queries. Required for acceptable performance on 26M+ row table.
+- **`dashboard/src/types/dfs.ts`:** TypeScript types for DFS lines, comparisons, platform lines. Constants for slip type break-even thresholds (UD 3/5-Pick, PP 5/6-Flex), platform display names, market-to-stat mappings.
+- **`dashboard/src/lib/dfs-utils.ts`:** Extracted `estimateUnderProb`, `estimateOverProb`, `calcDfsEv`, `calcAllSlipEvs` functions. Shared between DFS page and AnalysisModal.
+- **`dashboard/src/components/dfs/DfsFilters.tsx`:** Platform filter tabs (All/PrizePicks/Underdog/Pick6/Betr), slip type dropdown, stat filter tabs, +EV Only toggle.
+- **`dashboard/src/components/dfs/DfsTable.tsx`:** Sortable table with player avatars, stat badges, platform names, sharp vs DFS line comparison, direction recommendation, model probability, break-even threshold, and color-coded edge display.
+- **`dashboard/src/app/(protected)/dfs/page.tsx`:** DFS Edge Finder page. Fetches predictions + DFS lines in parallel, joins client-side, re-estimates model probability at DFS-specific lines via quantile interpolation, computes EV against slip type break-even thresholds. Includes KPI summary cards (count, avg edge, best pick).
+- **Navbar DFS link:** Added "DFS" between Props and History in protected nav.
+
+### Changed
+
+- **`AnalysisModal.tsx`:** Replaced inline `estimateUnderProb` function (50 lines) with import from `@/lib/dfs-utils`. No behavior change.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/scrapers/daily_player_props_scraper.py` | Modified — added `us_dfs` to regions |
+| `dashboard/src/types/dfs.ts` | Created — DFS types, slip types, platform names |
+| `dashboard/src/lib/dfs-utils.ts` | Created — quantile interpolation, EV calc |
+| `dashboard/src/components/dfs/DfsFilters.tsx` | Created — filter controls |
+| `dashboard/src/components/dfs/DfsTable.tsx` | Created — sortable comparison table |
+| `dashboard/src/app/(protected)/dfs/page.tsx` | Created — DFS Edge Finder page |
+| `dashboard/src/components/layout/Navbar.tsx` | Modified — added DFS link |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — import from dfs-utils |
+
+### Database Migrations
+
+| Migration | Description |
+|-----------|-------------|
+| `create_get_dfs_lines_rpc` | Initial RPC function (integer types) |
+| `fix_get_dfs_lines_column_types` | Fixed to use bigint/timestamptz matching actual column types |
+| `add_dfs_bookmaker_index` | Partial index for DFS bookmaker queries |
+
+### Verified
+
+- 575 Python tests pass, ruff clean (pre-existing issues only)
+- `cd dashboard && npm run build` — no TypeScript errors
+- DFS scrape confirmed: 564 lines across 4 platforms (177 PrizePicks, 173 Betr, 134 Pick6, 80 Underdog)
+- `get_dfs_lines('2026-02-25')` returns results in <1s with index
+
+---
+
+## [2026-02-25 Session 47] — US State Sportsbook Filter + Clickable Line Selection
+
+### Added
+
+- **`sportsbook-availability.ts`:** New utility mapping ~26 US legal sports betting states to their licensed bookmaker keys. Offshore books (Pinnacle, Novig, ProphetX, Bovada) excluded from all states. `getAllowedBookmakers(stateCode)` returns allowed list or `null` for "All States".
+- **State selector dropdown on dashboard page:** Persisted to localStorage (`user_state`). Shows abbreviated state codes in filter bar before Model Picks toggle.
+- **AnalysisModal state filtering:** Reads `user_state` from localStorage. Filters `processedLines` to only show lines from bookmakers legal in the selected state. Automatically affects BEST EDGE badge, EASIEST badge, and bet sizing. Shows "(MI only)" label when active. Shows "No lines from MI-licensed books" when all lines are filtered out.
+- **Clickable sportsbook line selection:** Line rows converted from `<div>` to `<button>` elements. Clicking any line selects it for bet sizing calculation (recalculates Kelly stake, recommended bet, and odds display). Defaults to best-edge line (index 0). Resets when `processedLines` changes. Shows "SIZING" badge on selected row with green border/ring highlight.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/lib/sportsbook-availability.ts` | Created — US state → bookmaker mapping |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — state selector dropdown, localStorage persistence |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — state filter on processedLines, clickable line selection, selectedLineIndex state |
+
+### Verified
+
+- 608 Python tests pass, ruff clean (pre-existing issues only)
+- `cd dashboard && npm run build` — no TypeScript errors
+- Build passes cleanly with all new imports and state management
+
+---
+
 ## [2026-02-24 Session 46] — Pipeline Recovery + Resilience + Auto Paper Bets
 
 ### Fixed

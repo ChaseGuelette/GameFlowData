@@ -102,7 +102,7 @@ The system ingests data from two distinct worlds that don't natively share ident
 | Module | Purpose |
 |--------|---------|
 | `nba_unified_scraper.py` | CLI tool for team game stats and player advanced metrics from NBA API |
-| `daily_player_props_scraper.py` | Daily player prop lines from Odds API |
+| `daily_player_props_scraper.py` | Daily player prop lines from Odds API (regions: us, us2, us_ex, us_dfs) |
 | `daily_game_lines_scraper.py` | Daily game spreads and totals |
 | `live_odds_scraper.py` | Real-time odds from multiple sportsbooks |
 | `espn_injury_scraper.py` | ESPN injury reports and player status |
@@ -456,6 +456,7 @@ dashboard/
 │   │   │   └── signup/page.tsx # Sign-up page
 │   │   ├── (protected)/        # Auth-gated routes
 │   │   │   ├── dashboard/page.tsx  # Main predictions dashboard
+│   │   │   ├── dfs/page.tsx          # DFS Edge Finder — DFS vs model comparison
 │   │   │   ├── history/page.tsx    # Bet history with filters
 │   │   │   ├── performance/page.tsx # Performance metrics
 │   │   │   ├── account/page.tsx    # Profile + community card
@@ -467,6 +468,7 @@ dashboard/
 │   │   ├── landing/            # HeroSection, FeatureGrid
 │   │   ├── layout/             # Navbar, PublicNavbar, Footer
 │   │   ├── predictions/        # PropCard, PropGrid, FilterTabs, PlayOfTheDay
+│   │   ├── dfs/                # DfsTable, DfsFilters — DFS edge comparison
 │   │   ├── stats/              # HeatmapTable, StatTabs, CategoryTabs, WindowToggle, PositionFilter, OffDefToggle
 │   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
 │   │   ├── history/            # BetCard, BetList, HistoryFilters, HistorySummary
@@ -476,13 +478,16 @@ dashboard/
 │   ├── lib/
 │   │   ├── supabase/           # Client, server, and middleware helpers
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
+│   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV calculations
 │   │   ├── insights.ts         # Template-based insight generator
+│   │   ├── sportsbook-availability.ts # US state → legal bookmaker mapping for line filtering
 │   │   ├── stats/columns.ts    # Column definitions for Data Vault heatmap tables
 │   │   ├── stats/pivotPlayTypes.ts # Client-side pivot for play type long→wide format
 │   │   ├── subscription.ts     # Subscription types/utils (dormant)
 │   │   └── utils.ts            # Formatting, edge tiers, headshot URLs
 │   ├── types/
 │   │   ├── predictions.ts      # TypeScript interfaces for predictions, bets, performance
+│   │   ├── dfs.ts              # DFS line types, slip types, platform constants
 │   │   ├── stats.ts            # Types for Data Vault (ColumnDef, StatRow, SortState)
 │   │   └── subscription.ts     # Subscription type definitions (dormant)
 │   └── middleware.ts           # Auth redirect for protected routes
@@ -502,8 +507,9 @@ dashboard/
   - Sportsbook line shopping with actual edge calculations
   - Kelly bet sizing calculator with bankroll input and fraction selection
   - Model probabilities, market implied probabilities, and edge breakdown
-- **Line Shopping:** Shows all available bookmaker lines for each prop. For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line.
-- **Kelly Sizing:** Bankroll persisted to localStorage. Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds.
+- **State Selector:** Dropdown filter persisted to localStorage (`user_state`). Filters AnalysisModal sportsbook lines to only show bookmakers legal in the selected state. Offshore books (Pinnacle, Novig, ProphetX, Bovada) excluded from all states. Mapping in `sportsbook-availability.ts` covers ~26 legal sports betting states.
+- **Line Shopping:** Shows all available bookmaker lines for each prop (filtered by state if set). For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line. Lines are clickable — selecting a line recalculates the bet sizing section using that line's odds and model probability. Defaults to the best-edge line.
+- **Kelly Sizing:** Bankroll persisted to localStorage. Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
 - **History View (`/history`):** Shows past betting results with bet source filter (Model Picks/All Bets), status filters (All/Won/Lost/Push), summary stats bar, and individual bet cards with actual vs line comparison. Model Picks filter shows only bets with edge ≥9% (matching production model configuration). Displays bookmaker badge on each bet card showing which sportsbook had the sharpest line.
 - **Performance View (`/performance`):** KPI cards (bankroll, P&L, ROI, win rate), bankroll over time chart (Recharts AreaChart), and performance breakdown by stat type. Includes bet source filter to view Model Picks performance separately from all bets. Model Picks view simulates what bankroll would be if only high-edge bets were taken.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
@@ -511,7 +517,8 @@ dashboard/
 - **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
 - **Free Beta Model:** No paywall — all authenticated users have full access. Public `/picks` page shows 3 real picks via `get_public_picks()` RPC to drive signups. All CTAs point to sign-up and Discord. Stripe infrastructure preserved (dormant) for future activation at ~200 Discord members.
 - **Data Vault (`/stats`):** Dense heatmap stat table with player, team, defense-vs-position, and play type breakdowns. Features percentile-based blue heatmap coloring (5-step gradient with inline legend), sortable columns, sticky name/position/team columns, window toggles (L5/L15/SZN), category tabs (Box Score/Shooting/Advanced/Consistency for players), position and team filters with info button explaining G/W/B groups, stat header tooltips, and player search. Reads from 3 database views (`player_stats_latest`, `team_stats_latest`, `defense_by_position_latest`) plus the `team_play_types` table (Synergy play type data) that join rolling average tables with player/team reference data. All filtering and sorting is client-side after initial parallel fetch.
-- **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account/stats (requires auth).
+- **DFS Edge Finder (`/dfs`):** Compares DFS platform lines (PrizePicks, Underdog, Pick6, Betr) against the model's true probabilities. For each DFS line, re-estimates model probability at the DFS-specific line (which may differ from the sharp sportsbook line) via quantile interpolation using `estimateOverProb`/`estimateUnderProb` from `dfs-utils.ts`. Computes EV against DFS break-even thresholds per slip type (UD 3/5-Pick, PP 5/6-Flex). Platform filter tabs, slip type selector, stat filter, +EV toggle, KPI summary cards, and sortable table. Data fetched via `get_dfs_lines` RPC function with partial index on 26M+ row table.
+- **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account/stats/dfs (requires auth).
 
 **Data Sources:**
 - `daily_predictions` table — prediction quantiles, edges, implied probabilities, bookmaker (sharpest line source)

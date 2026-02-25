@@ -1,5 +1,27 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-25 — Session 48)
+
+### What We Did
+
+**Implemented DFS Edge Finder page — surfaces mispriced DFS props (PrizePicks, Underdog, Pick6, Betr) vs the model's true probabilities.**
+
+**Changes:**
+- **Scraper update:** Added `us_dfs` region to Odds API requests, pulling DFS platform lines into `raw_player_props_combined` alongside sportsbook lines.
+- **Supabase RPC:** Created `get_dfs_lines(target_date)` function to efficiently query latest DFS lines per bookmaker/player/stat. Added partial index `idx_props_bookmaker_dfs` for performance on 26M+ row table.
+- **New types/utils:** `types/dfs.ts` (DFS types, slip type break-even thresholds, platform names), `lib/dfs-utils.ts` (extracted quantile interpolation functions shared with AnalysisModal).
+- **DFS page (`/dfs`):** Platform filter tabs, slip type selector (UD 3/5-Pick, PP 5/6-Flex), stat filter, +EV toggle, KPI summary cards, sortable comparison table. Joins predictions with DFS lines client-side and re-estimates model probability at each DFS-specific line via quantile interpolation.
+- **Navbar:** Added "DFS" link between Props and History.
+- **Refactored AnalysisModal:** Replaced inline `estimateUnderProb` with shared import from `dfs-utils.ts`.
+
+### Remaining Action Items
+
+1. **Stripe integration** — subscribe page, customer portal, webhook
+2. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts (or find alternative data source)
+3. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-02-24 — Session 46)
 
 ### What We Did

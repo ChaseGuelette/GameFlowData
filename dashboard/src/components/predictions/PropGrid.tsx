@@ -9,9 +9,11 @@ interface PropGridProps {
   selectable?: boolean
   selectedIds?: Set<string>
   onToggleSelect?: (prediction: Prediction) => void
+  takenIds?: Set<string>
+  onToggleTaken?: (prediction: Prediction) => void
 }
 
-export function PropGrid({ predictions, onAnalyze, selectable, selectedIds, onToggleSelect }: PropGridProps) {
+export function PropGrid({ predictions, onAnalyze, selectable, selectedIds, onToggleSelect, takenIds, onToggleTaken }: PropGridProps) {
   if (predictions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 px-4">
@@ -37,6 +39,8 @@ export function PropGrid({ predictions, onAnalyze, selectable, selectedIds, onTo
           selectable={selectable}
           selected={selectedIds?.has(`${prediction.player_id}-${prediction.stat}`)}
           onToggleSelect={onToggleSelect}
+          taken={takenIds?.has(`${prediction.player_id}-${prediction.stat}`)}
+          onToggleTaken={onToggleTaken}
         />
       ))}
     </div>

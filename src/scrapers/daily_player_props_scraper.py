@@ -85,7 +85,7 @@ class DailyPlayerPropsScraper:
             url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
             params = {
                 "apiKey": self.api_key,
-                "regions": "us,us2,us_ex",  # All US regions for full coverage
+                "regions": "us,us2,us_ex,us_dfs",  # All US regions + DFS platforms
                 "markets": markets_str,
                 "oddsFormat": "american",
                 "dateFormat": "iso",
@@ -95,7 +95,7 @@ class DailyPlayerPropsScraper:
             params = {
                 "apiKey": self.api_key,
                 "date": date_str,
-                "regions": "us,us2,us_ex",  # All US regions for full coverage
+                "regions": "us,us2,us_ex,us_dfs",  # All US regions + DFS platforms
                 "markets": markets_str,
                 "oddsFormat": "american",
                 "dateFormat": "iso",

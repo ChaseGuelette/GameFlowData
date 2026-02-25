@@ -61,6 +61,9 @@ export function Navbar() {
               <Link href="/dashboard" className={navLinkClasses('/dashboard')}>
                 Props
               </Link>
+              <Link href="/dfs" className={navLinkClasses('/dfs')}>
+                DFS
+              </Link>
               <Link href="/history" className={navLinkClasses('/history')}>
                 History
               </Link>

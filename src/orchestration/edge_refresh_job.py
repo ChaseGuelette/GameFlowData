@@ -21,16 +21,18 @@ Examples:
 import argparse
 import logging
 import os
+import subprocess
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 # Add project root to path
-sys.path.append(str(Path(__file__).resolve().parents[2]))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.append(str(PROJECT_ROOT))
 
 from dotenv import load_dotenv
 from sqlalchemy import bindparam, create_engine, text
@@ -276,6 +278,136 @@ def recalculate_edges(
     return df
 
 
+def refresh_injuries(engine, target_date: date) -> None:
+    """Scrape today's injury data from RapidAPI and link player IDs.
+
+    Fetches the latest injury report, upserts into rapidapi_injuries,
+    and runs the injury linker to ensure new entries get player_id mapped.
+    Non-fatal: errors are logged but don't stop the edge refresh.
+    """
+    try:
+        api_key = os.getenv("RAPIDAPI_KEY")
+        if not api_key:
+            logger.warning("RAPIDAPI_KEY not set — skipping injury refresh")
+            return
+
+        from src.scrapers.rapidapi_injury_backfill import (
+            RapidAPIInjuryClient,
+            store_records,
+        )
+
+        client = RapidAPIInjuryClient(api_key=api_key, delay=0.5)
+        records = client.fetch_date(target_date)
+
+        if records is None:
+            logger.warning(f"Injury fetch failed for {target_date}")
+            return
+
+        if records:
+            inserted = store_records(engine, target_date, records)
+            logger.info(f"Injury refresh: {len(records)} reports, {inserted} new rows")
+        else:
+            logger.info(f"Injury refresh: no reports for {target_date}")
+
+        # Run the linker to map player names → player_id for any new entries
+        linker_cmd = [sys.executable, str(PROJECT_ROOT / "src" / "processing" / "link_injury_data.py")]
+        result = subprocess.run(
+            linker_cmd, cwd=str(PROJECT_ROOT),
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0:
+            logger.info("Injury linker completed successfully")
+        else:
+            logger.warning(f"Injury linker failed (non-fatal): {result.stderr[-300:]}")
+
+    except Exception as e:
+        logger.warning(f"Injury refresh failed (non-fatal): {e}")
+
+
+def get_out_player_ids(engine, target_date: date) -> set[int]:
+    """Get player IDs whose most recent injury status (last 7 days) is 'Out'.
+
+    Replicates the same query used in daily_runner._filter_injured_players().
+    """
+    query = text("""
+        WITH recent_injuries AS (
+            SELECT
+                player_id,
+                status,
+                ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY report_date DESC) as rn
+            FROM rapidapi_injuries
+            WHERE report_date >= :cutoff_date
+              AND report_date <= :target_date
+              AND player_id IS NOT NULL
+        )
+        SELECT DISTINCT player_id
+        FROM recent_injuries
+        WHERE rn = 1 AND status = 'Out'
+    """)
+    cutoff_date = target_date - timedelta(days=7)
+
+    with engine.connect() as conn:
+        result = conn.execute(query, {"target_date": target_date, "cutoff_date": cutoff_date})
+        return {row[0] for row in result}
+
+
+def filter_out_players(
+    engine,
+    predictions: pd.DataFrame,
+    samples_dict: dict,
+    target_date: date,
+) -> tuple[pd.DataFrame, dict]:
+    """Remove predictions for players currently marked as 'Out' and delete them from DB.
+
+    Returns filtered predictions DataFrame and samples dict.
+    """
+    out_ids = get_out_player_ids(engine, target_date)
+    if not out_ids:
+        logger.info("No 'Out' players found in injury reports")
+        return predictions, samples_dict
+
+    # Find predictions to remove
+    out_mask = predictions["player_id"].isin(out_ids)
+    n_removed = out_mask.sum()
+
+    if n_removed == 0:
+        logger.info(f"{len(out_ids)} players marked Out, none had active predictions")
+        return predictions, samples_dict
+
+    # Log which players are being removed
+    removed_players = predictions.loc[out_mask, ["player_id", "player_name", "stat"]].drop_duplicates()
+    for _, row in removed_players.iterrows():
+        logger.info(f"  Removing prediction: {row.get('player_name', row['player_id'])} ({row['stat']})")
+
+    # Filter predictions DataFrame
+    filtered = predictions[~out_mask].reset_index(drop=True)
+
+    # Filter samples dict
+    filtered_samples = {
+        k: v for k, v in samples_dict.items()
+        if k[0] not in out_ids  # key is (player_id, game_id, stat)
+    }
+
+    # Delete from database so dashboard stops showing them
+    delete_query = text("""
+        DELETE FROM daily_predictions
+        WHERE game_date = :game_date
+          AND player_id = ANY(:player_ids)
+    """)
+    player_id_list = list(out_ids)
+    with engine.begin() as conn:
+        result = conn.execute(delete_query, {
+            "game_date": target_date,
+            "player_ids": player_id_list,
+        })
+        logger.info(
+            f"Removed {n_removed} predictions for {len(out_ids)} Out players "
+            f"({result.rowcount} rows deleted from DB)"
+        )
+
+    return filtered, filtered_samples
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Edge Refresh Job - Recalculate edges with fresh lines",
@@ -345,10 +477,24 @@ def main():
 
         logger.info(f"Loaded {len(predictions)} predictions, {len(samples_dict)} sample arrays")
 
-        # 3. Get unique game_ids from predictions
+        # 3. Refresh injury data and filter out players now marked as 'Out'
+        if not args.dry_run:
+            logger.info("Refreshing injury data...")
+            refresh_injuries(engine, target_date)
+
+        logger.info("Checking for Out players...")
+        predictions, samples_dict = filter_out_players(
+            engine, predictions, samples_dict, target_date
+        )
+
+        if predictions.empty:
+            logger.warning("All predictions filtered (all players Out?). Exiting.")
+            sys.exit(0)
+
+        # 4. Get unique game_ids from predictions
         game_ids = predictions["game_id"].astype(str).unique().tolist()
 
-        # 4. Fetch fresh lines
+        # 5. Fetch fresh lines
         logger.info("Fetching fresh prop lines...")
         t0 = time.perf_counter()
         fresh_lines = fetch_fresh_lines(engine, game_ids, args.stats)
@@ -358,7 +504,7 @@ def main():
             logger.warning("No fresh lines found. Exiting gracefully.")
             sys.exit(0)
 
-        # 5. Recalculate edges + BL
+        # 6. Recalculate edges + BL
         logger.info("Recalculating edges and BL recommendations...")
         updated = recalculate_edges(predictions, fresh_lines, samples_dict)
 
@@ -367,21 +513,21 @@ def main():
         has_rec = updated["is_recommended"].sum()
         logger.info(f"Updated: {has_edge} predictions with edges, {has_rec} recommended")
 
-        # 6. Upsert to database
+        # 7. Upsert to database
         if not args.dry_run:
             logger.info("Upserting updated predictions...")
             store.store_predictions(updated, target_date)
         else:
             logger.info("[DRY RUN] Skipping database upsert")
 
-        # 7. Export CSV backup
+        # 8. Export CSV backup
         output_dir = Path("predictions")
         output_dir.mkdir(exist_ok=True)
         output_file = output_dir / f"predictions_{target_date}.csv"
         updated.to_csv(output_file, index=False)
         logger.info(f"Exported CSV: {output_file}")
 
-        # 8. Discord alert (reuse predictions alert)
+        # 9. Discord alert (reuse predictions alert)
         if not args.dry_run and not args.skip_discord:
             try:
                 if os.getenv("DISCORD_BOT_TOKEN"):

@@ -33,6 +33,7 @@ dashboard/
 │   │   │   └── signup/page.tsx # Sign-up page
 │   │   ├── (protected)/        # Auth-gated routes
 │   │   │   ├── dashboard/page.tsx  # Main predictions dashboard
+│   │   │   ├── dfs/page.tsx          # DFS Edge Finder
 │   │   │   ├── history/page.tsx    # Bet history with filters
 │   │   │   ├── performance/page.tsx # Performance metrics
 │   │   │   ├── account/page.tsx    # Profile + community card
@@ -65,6 +66,9 @@ dashboard/
 │   │   │   ├── KPICard.tsx     # Single metric display
 │   │   │   ├── BankrollChart.tsx   # Bankroll over time chart
 │   │   │   └── StatBreakdown.tsx   # Per-stat performance table
+│   │   ├── dfs/                # DFS Edge Finder components
+│   │   │   ├── DfsTable.tsx         # Sortable DFS comparison table
+│   │   │   └── DfsFilters.tsx       # Platform, slip type, stat filters
 │   │   ├── stats/              # Data Vault heatmap stat table components
 │   │   │   ├── HeatmapTable.tsx     # Core table with sorting, percentile coloring
 │   │   │   ├── StatTabs.tsx         # Players / Teams / Defense tab bar
@@ -83,12 +87,14 @@ dashboard/
 │   │   │   ├── server.ts       # Server client
 │   │   │   └── middleware.ts   # Session + auth handling (no paywall)
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
+│   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV calc (shared)
 │   │   ├── insights.ts         # Template-based insight generator
 │   │   ├── stats/columns.ts    # Column definitions for Data Vault tables
 │   │   ├── subscription.ts     # Subscription utils (dormant)
 │   │   └── utils.ts            # Utility functions
 │   ├── types/
 │   │   ├── predictions.ts      # TypeScript interfaces
+│   │   ├── dfs.ts              # DFS line types, slip types, platform constants
 │   │   ├── stats.ts            # Data Vault types (ColumnDef, StatRow, SortState, PlayTypeCategory, PlayTypeGrouping)
 │   │   └── subscription.ts     # Subscription types (dormant)
 │   └── middleware.ts           # Auth redirect middleware
@@ -1039,6 +1045,165 @@ Defined in `lib/stats/columns.ts`. Each `ColumnDef` has:
 - `format` — Value display format
 - `invertHeatmap` — Flip percentile scale (for negative stats)
 - `windowless` — Don't swap window (for Consistency tab columns)
+
+## State Selector (Session 47)
+
+Dropdown filter that restricts AnalysisModal sportsbook lines to only show bookmakers legal in the user's US state.
+
+### Data Model
+
+**File:** `dashboard/src/lib/sportsbook-availability.ts`
+
+- `US_STATES` — Array of `{ value, label }` for ~26 legal sports betting states plus "All States" (empty string)
+- `STATE_SPORTSBOOKS` — Map of state abbreviation → allowed bookmaker key arrays
+- `getAllowedBookmakers(stateCode)` — Returns allowed list or `null` for "All States"
+
+**Key rules:**
+- Offshore books (`pinnacle`, `novig`, `prophetx`, `bovada`) not in any state's list
+- `williamhill_us` included alongside `caesars` (rebranded, old DB records exist)
+- `fliff` excluded (sweepstakes, not regulated)
+- `bet365` and `unibet` only in states where they actually operate (NJ, CO, OH, PA)
+
+### Dashboard Integration
+
+State stored in `localStorage` under key `user_state`. Set on the dashboard page, read in the AnalysisModal.
+
+```typescript
+// Dashboard page — read + write
+const [userState, setUserState] = useState<string>(() => {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem('user_state') || ''
+})
+
+// AnalysisModal — read-only
+const [userState] = useState<string>(() => {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem('user_state') || ''
+})
+```
+
+### AnalysisModal Filtering
+
+The `processedLines` useMemo filters by allowed bookmakers before calculating edges:
+
+```typescript
+const allowed = getAllowedBookmakers(userState)
+return [...bookmakerLines]
+  .filter((line) => !allowed || allowed.includes(line.bookmaker))
+  .map((line) => { /* edge calc */ })
+  .sort(...)
+```
+
+**Automatic effects (no extra code):**
+- `selectedLine` derives from `processedLines` → now state-filtered
+- Bet sizing uses selected line → uses legal books only
+- BEST EDGE / EASIEST badges recompute on filtered set
+- "No lines from MI-licensed books" shown when all bookmakers are filtered out
+
+## Clickable Line Selection (Session 47)
+
+Sportsbook line rows in the AnalysisModal are clickable. Selecting a line recalculates the bet sizing section using that line's odds and model probability.
+
+### Implementation
+
+```typescript
+const [selectedLineIndex, setSelectedLineIndex] = useState<number>(0)
+
+// Reset when processedLines changes (new player, state filter, etc.)
+useEffect(() => {
+  setSelectedLineIndex(0)
+}, [processedLines])
+
+const selectedLine = processedLines.length > 0 && processedLines[selectedLineIndex]?.lineEdge > 0
+  ? processedLines[selectedLineIndex]
+  : null
+```
+
+### Visual Feedback
+
+- Selected line: green border + ring highlight (`ring-1 ring-green-500/30`)
+- "SIZING" badge on selected row
+- Non-selected rows: subtle hover border on hover
+
+### Bet Sizing
+
+The bet sizing section uses `selectedLine` instead of always using the best-edge line:
+
+```typescript
+const sizingOdds = selectedLine ? selectedLine.relevantOdds : fallbackOdds
+const sizingModelProb = selectedLine ? selectedLine.modelProb : probability
+```
+
+## DFS Edge Finder Page (`/dfs`) — Session 48
+
+Compares DFS platform lines (PrizePicks, Underdog, Pick6, Betr) against the model's true probabilities to find +EV DFS picks.
+
+### Data Flow
+
+1. **Scraper** adds `us_dfs` region → DFS lines land in `raw_player_props_combined`
+2. **`get_dfs_lines` RPC** returns latest line per bookmaker/player/stat for today's games
+3. **Page** fetches predictions + DFS lines in parallel, joins client-side
+4. **For each DFS line:** Re-estimates model probability at the DFS-specific line via quantile interpolation (the DFS line may differ from the sharp sportsbook line), then computes EV against DFS break-even thresholds
+
+### Key Insight
+
+DFS platforms often set different lines than sportsbooks (e.g., sharp has 24.5, PrizePicks has 25.5). The page re-estimates model probability at the DFS line using quantile interpolation from `dfs-utils.ts`, not just reusing `model_prob_over` from `daily_predictions`.
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `DfsFilters` | `components/dfs/DfsFilters.tsx` | Platform tabs, slip type dropdown, stat filter, +EV toggle |
+| `DfsTable` | `components/dfs/DfsTable.tsx` | Sortable comparison table with color-coded edges |
+
+### Filter State
+
+| State | Type | Default | Description |
+|-------|------|---------|-------------|
+| `platformFilter` | string | `'all'` | Filter by DFS platform |
+| `slipType` | string | `'pp_6_flex'` | Break-even threshold for EV calc |
+| `statFilter` | string | `'all'` | Filter by stat type |
+| `evOnly` | boolean | `true` | Only show +EV picks |
+
+### Slip Types
+
+| Key | Label | Break-Even | Payout |
+|-----|-------|-----------|--------|
+| `ud_3_standard` | UD 3-Pick | 55.0% | 6x |
+| `ud_5_standard` | UD 5-Pick | 54.9% | 20x |
+| `pp_5_flex` | PP 5-Pick Flex | 54.25% | 10x |
+| `pp_6_flex` | PP 6-Pick Flex | 54.21% | 25x |
+
+### Table Columns
+
+| Column | Description |
+|--------|------------|
+| Player | Avatar + name + matchup |
+| Stat | PTS/REB/AST badge |
+| Platform | DFS platform name |
+| Sharp | Line from sharpest sportsbook |
+| DFS | Line on DFS platform |
+| Diff | DFS line - sharp line (colored) |
+| Pick | Over/Under recommendation |
+| Model % | Model probability at DFS line |
+| B/E | Required probability for selected slip |
+| Edge | Model prob - break-even (colored tiers) |
+
+### Shared Utilities
+
+**File:** `dashboard/src/lib/dfs-utils.ts`
+
+Functions extracted from `AnalysisModal.tsx` and shared:
+- `estimateUnderProb(line, q10, q25, q50, q75, q90)` — Quantile interpolation for P(Under)
+- `estimateOverProb(...)` — `1 - estimateUnderProb(...)`
+- `calcDfsEv(modelProb, breakEven)` — `modelProb - breakEven`
+- `calcAllSlipEvs(modelProb)` — EV for all slip types
+
+### Database
+
+**RPC Function:** `get_dfs_lines(target_date date)` — SECURITY DEFINER function returning latest DFS lines. Uses `ROW_NUMBER()` partitioned by (player_id, game_id, bookmaker, market_key, outcome_label) ordered by snapshot_time DESC. Handles game ID format mismatch via LPAD.
+
+**Index:** `idx_props_bookmaker_dfs` — Partial index on `raw_player_props_combined(bookmaker, player_id, game_id, market_key) WHERE bookmaker IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')`. Required for acceptable query times on 26M+ row table.
 
 ## Future Enhancements
 

@@ -11,9 +11,11 @@ interface PropCardProps {
   selectable?: boolean
   selected?: boolean
   onToggleSelect?: (prediction: Prediction) => void
+  taken?: boolean
+  onToggleTaken?: (prediction: Prediction) => void
 }
 
-export function PropCard({ prediction, onAnalyze, selectable, selected, onToggleSelect }: PropCardProps) {
+export function PropCard({ prediction, onAnalyze, selectable, selected, onToggleSelect, taken, onToggleTaken }: PropCardProps) {
   // Determine which direction has positive edge (with NaN safety)
   const overEdge = Number.isFinite(prediction.over_edge) ? prediction.over_edge : 0
   const underEdge = Number.isFinite(prediction.under_edge) ? prediction.under_edge : 0
@@ -111,13 +113,32 @@ export function PropCard({ prediction, onAnalyze, selectable, selected, onToggle
         </div>
       </div>
 
-      {/* Analyze button */}
-      <button
-        onClick={() => onAnalyze?.(prediction)}
-        className="w-full py-2 px-4 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-md text-sm font-medium transition-colors"
-      >
-        Analyze
-      </button>
+      {/* Analyze button + taken checkbox */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleTaken?.(prediction)
+          }}
+          className={cn(
+            'w-8 h-8 rounded-md border-2 flex items-center justify-center transition-colors shrink-0',
+            taken
+              ? 'bg-green-600 border-green-500 text-white'
+              : 'border-slate-600 hover:border-green-500 text-transparent hover:text-green-500/50'
+          )}
+          title={taken ? 'Mark as not taken' : 'Mark as taken'}
+        >
+          <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
+            <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+        <button
+          onClick={() => onAnalyze?.(prediction)}
+          className="flex-1 py-2 px-4 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-md text-sm font-medium transition-colors"
+        >
+          Analyze
+        </button>
+      </div>
     </div>
   )
 }
