@@ -10,7 +10,7 @@ import { SlateModal } from '@/components/predictions/SlateModal'
 import { TonightsGames, type GameInfo } from '@/components/predictions/TonightsGames'
 import { type Prediction } from '@/types/predictions'
 import { getToday, formatDate, calculateBLConfidence, blendProbability } from '@/lib/utils'
-import { TEAM_ABBREV } from '@/lib/constants'
+import { TEAM_ABBREV, TEAM_NAME_TO_ABBREV } from '@/lib/constants'
 import { US_STATES } from '@/lib/sportsbook-availability'
 
 export default function DashboardPage() {
@@ -44,6 +44,9 @@ export default function DashboardPage() {
   const [slateImageUrl, setSlateImageUrl] = useState<string | null>(null)
   const [slateLoading, setSlateLoading] = useState<boolean>(false)
   const [slateError, setSlateError] = useState<string | null>(null)
+
+  // Fallback games from game lines when predictions haven't been generated yet
+  const [fallbackGames, setFallbackGames] = useState<Array<{home_team: string, away_team: string, commence_time: string}>>([])
 
   const MAX_SLATE_PICKS = 5
 
@@ -185,8 +188,18 @@ export default function DashboardPage() {
         }))
 
       setPredictions(mappedPredictions)
+      if (mappedPredictions.length === 0) {
+        // Fallback: fetch games from game lines staging
+        const { data: gamesData } = await supabase.rpc('get_games_for_date', { target_date: date })
+        setFallbackGames(gamesData && gamesData.length > 0 ? gamesData : [])
+      } else {
+        setFallbackGames([])
+      }
     } else {
       setPredictions([])
+      // Fallback: fetch games from game lines staging
+      const { data: gamesData } = await supabase.rpc('get_games_for_date', { target_date: date })
+      setFallbackGames(gamesData && gamesData.length > 0 ? gamesData : [])
     }
 
     setLoading(false)
@@ -203,13 +216,14 @@ export default function DashboardPage() {
 
       if (!datesError && datesData) {
         const uniqueDates = datesData.map((d: { prediction_date: string }) => d.prediction_date)
-        setAvailableDates(uniqueDates)
 
-        // If today has no predictions, default to most recent date
+        // Always include today so it's selectable even before predictions exist
         const today = getToday()
-        if (uniqueDates.length > 0 && !uniqueDates.includes(today)) {
-          setSelectedDate(uniqueDates[0])
+        if (!uniqueDates.includes(today)) {
+          uniqueDates.unshift(today)
         }
+        setAvailableDates(uniqueDates)
+        // selectedDate is already initialized to getToday(), so don't change it
       }
     }
 
@@ -229,26 +243,47 @@ export default function DashboardPage() {
     return `${teams[0]} vs ${teams[1]}`
   }))].sort()
 
-  // Derive tonight's games from predictions
+  // Derive tonight's games from predictions, or fallback to game lines
   const tonightsGames: GameInfo[] = (() => {
-    const gameMap = new Map<string, GameInfo>()
-    for (const p of predictions) {
-      const teams = [p.team_abbrev || 'UNK', p.opponent_abbrev || 'UNK'].sort() as [string, string]
-      const key = `${teams[0]} vs ${teams[1]}`
-      const existing = gameMap.get(key)
-      if (existing) {
-        existing.predictionCount++
-        if (!existing.gameTime && p.game_time) existing.gameTime = p.game_time
-      } else {
-        gameMap.set(key, { matchupKey: key, teams, gameTime: p.game_time || null, predictionCount: 1 })
+    if (predictions.length > 0) {
+      // Derive from predictions (existing logic)
+      const gameMap = new Map<string, GameInfo>()
+      for (const p of predictions) {
+        const teams = [p.team_abbrev || 'UNK', p.opponent_abbrev || 'UNK'].sort() as [string, string]
+        const key = `${teams[0]} vs ${teams[1]}`
+        const existing = gameMap.get(key)
+        if (existing) {
+          existing.predictionCount++
+          if (!existing.gameTime && p.game_time) existing.gameTime = p.game_time
+        } else {
+          gameMap.set(key, { matchupKey: key, teams, gameTime: p.game_time || null, predictionCount: 1 })
+        }
       }
+      return [...gameMap.values()].sort((a, b) => {
+        if (a.gameTime && b.gameTime) return a.gameTime.localeCompare(b.gameTime)
+        if (a.gameTime) return -1
+        if (b.gameTime) return 1
+        return a.matchupKey.localeCompare(b.matchupKey)
+      })
     }
-    return [...gameMap.values()].sort((a, b) => {
-      if (a.gameTime && b.gameTime) return a.gameTime.localeCompare(b.gameTime)
-      if (a.gameTime) return -1
-      if (b.gameTime) return 1
-      return a.matchupKey.localeCompare(b.matchupKey)
-    })
+
+    if (fallbackGames.length > 0) {
+      // Derive from game lines staging (team full names → abbreviations)
+      return fallbackGames.map(g => {
+        const home = TEAM_NAME_TO_ABBREV[g.home_team] || g.home_team
+        const away = TEAM_NAME_TO_ABBREV[g.away_team] || g.away_team
+        const teams = [home, away].sort() as [string, string]
+        const key = `${teams[0]} vs ${teams[1]}`
+        return { matchupKey: key, teams, gameTime: g.commence_time || null, predictionCount: 0 }
+      }).sort((a, b) => {
+        if (a.gameTime && b.gameTime) return a.gameTime.localeCompare(b.gameTime)
+        if (a.gameTime) return -1
+        if (b.gameTime) return 1
+        return a.matchupKey.localeCompare(b.matchupKey)
+      })
+    }
+
+    return []
   })()
 
   // Enrich predictions with effective edges (BL blending when active)
@@ -443,8 +478,22 @@ export default function DashboardPage() {
       ) : sortedPredictions.length === 0 ? (
         <div className="flex items-center justify-center py-16">
           <div className="text-center">
-            <p className="text-slate-400 text-lg">No predictions available for {formatDate(selectedDate)}</p>
-            <p className="text-slate-500 text-sm mt-2">Try selecting a different date</p>
+            {fallbackGames.length > 0 ? (
+              <>
+                <p className="text-slate-400 text-lg">Predictions are being generated and will appear shortly</p>
+                <p className="text-slate-500 text-sm mt-2">Games are scheduled — check back after the daily pipeline completes</p>
+              </>
+            ) : selectedDate === getToday() ? (
+              <>
+                <p className="text-slate-400 text-lg">No games scheduled for today</p>
+                <p className="text-slate-500 text-sm mt-2">Games and predictions will appear once the daily pipeline runs</p>
+              </>
+            ) : (
+              <>
+                <p className="text-slate-400 text-lg">No predictions available for {formatDate(selectedDate)}</p>
+                <p className="text-slate-500 text-sm mt-2">Try selecting a different date</p>
+              </>
+            )}
           </div>
         </div>
       ) : (

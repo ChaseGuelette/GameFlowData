@@ -32,11 +32,13 @@ export default function DfsPage() {
 
       if (data) {
         const dates = data.map((d: { prediction_date: string }) => d.prediction_date)
-        setAvailableDates(dates)
+        // Always include today so it's selectable even before predictions exist
         const today = getToday()
-        if (dates.length > 0 && !dates.includes(today)) {
-          setSelectedDate(dates[0])
+        if (!dates.includes(today)) {
+          dates.unshift(today)
         }
+        setAvailableDates(dates)
+        // selectedDate is already initialized to getToday(), so don't change it
       }
     }
     fetchDates()

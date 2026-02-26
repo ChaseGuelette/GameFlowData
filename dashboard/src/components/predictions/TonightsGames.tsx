@@ -152,14 +152,16 @@ export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday }
                 )}
               </div>
 
-              {/* Prediction count badge */}
-              <span className={`text-xs rounded-full px-2 py-0.5 font-medium ${
-                isActive
-                  ? 'bg-blue-500/50 text-blue-100'
-                  : 'bg-slate-700 text-slate-400'
-              }`}>
-                {g.predictionCount}
-              </span>
+              {/* Prediction count badge (hidden when no predictions yet) */}
+              {g.predictionCount > 0 && (
+                <span className={`text-xs rounded-full px-2 py-0.5 font-medium ${
+                  isActive
+                    ? 'bg-blue-500/50 text-blue-100'
+                    : 'bg-slate-700 text-slate-400'
+                }`}>
+                  {g.predictionCount}
+                </span>
+              )}
             </button>
           )
         })}
