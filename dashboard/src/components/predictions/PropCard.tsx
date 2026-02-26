@@ -110,6 +110,7 @@ export function PropCard({ prediction, onAnalyze, selectable, selected, onToggle
         <div className="flex items-center space-x-2">
           <span className="text-slate-300 text-sm">{formatProb(probability)}</span>
           <EdgeBadge edge={edge} />
+          <span className="text-slate-500 text-xs">min</span>
         </div>
       </div>
 

@@ -529,6 +529,11 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
                 : 'No lines available'}
             </div>
           )}
+          {userState && (
+            <p className="text-xs text-slate-500 mt-3">
+              Lines are filtered to {userState}-licensed sportsbooks. Sharper books or larger edges may be available in other states.
+            </p>
+          )}
         </div>
 
         {/* Bet Sizing Calculator */}
@@ -628,26 +633,31 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
           />
         </div>
 
-        {/* Edge Summary */}
+        {/* Edge Summary — updates to reflect selected sportsbook line when available */}
         <div className="p-6">
           <div className="flex items-center justify-between">
             <div>
               <div className="text-slate-400 text-sm">Model Probability</div>
               <div className="text-xl font-semibold text-slate-50">
-                {formatProb(probability)}
+                {formatProb(selectedLine ? selectedLine.modelProb : probability)}
               </div>
             </div>
             <div>
               <div className="text-slate-400 text-sm">Market Implied</div>
               <div className="text-xl font-semibold text-slate-50">
-                {formatProb(marketProb)}
+                {formatProb(selectedLine ? selectedLine.impliedProb : marketProb)}
               </div>
             </div>
             <div>
               <div className="text-slate-400 text-sm">Edge</div>
-              <EdgeBadge edge={edge} className="text-lg" />
+              <EdgeBadge edge={selectedLine ? selectedLine.lineEdge : edge} className="text-lg" />
             </div>
           </div>
+          {selectedLine && (
+            <div className="text-xs text-slate-500 mt-2 text-center">
+              Based on {formatBookmaker(selectedLine.bookmaker)} {direction} {selectedLine.line} @ {formatOdds(selectedLine.relevantOdds)}
+            </div>
+          )}
         </div>
 
         {/* Close button */}
