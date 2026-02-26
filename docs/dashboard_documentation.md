@@ -33,11 +33,12 @@ dashboard/
 │   │   │   └── signup/page.tsx # Sign-up page
 │   │   ├── (protected)/        # Auth-gated routes
 │   │   │   ├── dashboard/page.tsx  # Main predictions dashboard
-│   │   │   ├── dfs/page.tsx          # DFS Edge Finder
+│   │   │   ├── dfs/page.tsx          # DFS Edge Finder (model/market/combined)
 │   │   │   ├── history/page.tsx    # Bet history with filters
 │   │   │   ├── performance/page.tsx # Performance metrics
 │   │   │   ├── account/page.tsx    # Profile + community card
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
+│   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback games)
 │   │   ├── auth/callback/route.ts # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
@@ -87,7 +88,7 @@ dashboard/
 │   │   │   ├── server.ts       # Server client
 │   │   │   └── middleware.ts   # Session + auth handling (no paywall)
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
-│   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV calc (shared)
+│   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV, devigging, market edge (shared)
 │   │   ├── insights.ts         # Template-based insight generator
 │   │   ├── stats/columns.ts    # Column definitions for Data Vault tables
 │   │   ├── subscription.ts     # Subscription utils (dormant)
@@ -1134,32 +1135,46 @@ const sizingOdds = selectedLine ? selectedLine.relevantOdds : fallbackOdds
 const sizingModelProb = selectedLine ? selectedLine.modelProb : probability
 ```
 
-## DFS Edge Finder Page (`/dfs`) — Session 48
+## DFS Edge Finder Page (`/dfs`) — Sessions 48-49
 
-Compares DFS platform lines (PrizePicks, Underdog, Pick6, Betr) against the model's true probabilities to find +EV DFS picks.
+Three-mode edge analysis comparing DFS platform lines (PrizePicks, Underdog, Pick6, Betr) against model probabilities and sportsbook consensus.
+
+### Edge Modes
+
+| Mode | Signal Source | Description |
+|------|--------------|-------------|
+| **Model Edge** | Quantile interpolation | Model's probability at DFS line vs break-even threshold |
+| **Market Edge** | Devigged sportsbook consensus | Sharp market implied probability at DFS line vs break-even |
+| **Combined** | Both agree | Only shows picks where model AND market both have +EV and agree on direction. Edge = `min(model, market)` |
 
 ### Data Flow
 
 1. **Scraper** adds `us_dfs` region → DFS lines land in `raw_player_props_combined`
-2. **`get_dfs_lines` RPC** returns latest line per bookmaker/player/stat for today's games
-3. **Page** fetches predictions + DFS lines in parallel, joins client-side
-4. **For each DFS line:** Re-estimates model probability at the DFS-specific line via quantile interpolation (the DFS line may differ from the sharp sportsbook line), then computes EV against DFS break-even thresholds
+2. **`get_dfs_lines` RPC** returns latest DFS line per bookmaker/player/stat
+3. **`get_sportsbook_lines` RPC** returns latest non-DFS bookmaker lines
+4. **Page** fetches predictions + DFS lines + sportsbook lines in parallel (`Promise.all`)
+5. **Model Edge:** Re-estimates model probability at DFS line via quantile interpolation
+6. **Market Edge:** Indexes sportsbook lines by `{player_id}-{game_id}-{stat}`, finds books matching exact DFS line value, applies multiplicative devigging, computes consensus probability, identifies sharpest book (lowest vig)
+7. **Combined:** Cross-references model and market data, includes only rows where both signals agree
 
-### Key Insight
+### Key Insights
 
-DFS platforms often set different lines than sportsbooks (e.g., sharp has 24.5, PrizePicks has 25.5). The page re-estimates model probability at the DFS line using quantile interpolation from `dfs-utils.ts`, not just reusing `model_prob_over` from `daily_predictions`.
+- DFS platforms often set different lines than sportsbooks (e.g., sharp has 24.5, PrizePicks has 25.5)
+- Market Edge only computes probability when a sportsbook offers the **exact same line value** as the DFS platform (no approximation). Shows `"--"` otherwise.
+- Combined mode is the highest bar — requires both model AND market consensus plus directional agreement
 
 ### Components
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `DfsFilters` | `components/dfs/DfsFilters.tsx` | Platform tabs, slip type dropdown, stat filter, +EV toggle |
-| `DfsTable` | `components/dfs/DfsTable.tsx` | Sortable comparison table with color-coded edges |
+| `DfsFilters` | `components/dfs/DfsFilters.tsx` | Edge mode toggle, platform tabs, slip type dropdown, stat filter, +EV toggle |
+| `DfsTable` | `components/dfs/DfsTable.tsx` | Mode-specific column layouts, sortable, color-coded edges |
 
 ### Filter State
 
 | State | Type | Default | Description |
 |-------|------|---------|-------------|
+| `edgeMode` | `EdgeMode` | `'model'` | Which edge analysis to show |
 | `platformFilter` | string | `'all'` | Filter by DFS platform |
 | `slipType` | string | `'pp_6_flex'` | Break-even threshold for EV calc |
 | `statFilter` | string | `'all'` | Filter by stat type |
@@ -1174,36 +1189,71 @@ DFS platforms often set different lines than sportsbooks (e.g., sharp has 24.5, 
 | `pp_5_flex` | PP 5-Pick Flex | 54.25% | 10x |
 | `pp_6_flex` | PP 6-Pick Flex | 54.21% | 25x |
 
-### Table Columns
+### Table Columns (Per Mode)
 
-| Column | Description |
-|--------|------------|
-| Player | Avatar + name + matchup |
-| Stat | PTS/REB/AST badge |
-| Platform | DFS platform name |
-| Sharp | Line from sharpest sportsbook |
-| DFS | Line on DFS platform |
-| Diff | DFS line - sharp line (colored) |
-| Pick | Over/Under recommendation |
-| Model % | Model probability at DFS line |
-| B/E | Required probability for selected slip |
-| Edge | Model prob - break-even (colored tiers) |
+**Model Edge:**
+Player | Stat | Platform | Sharp | DFS | Diff | Pick | Model % | B/E | Edge
+
+**Market Edge:**
+Player | Stat | Platform | DFS Line | Pick | Market % | Books | Sharp Line | Line Diff | B/E | Edge
+
+**Combined:**
+Player | Stat | Platform | DFS Line | Pick | Model % | Market % | Books | B/E | Edge
 
 ### Shared Utilities
 
 **File:** `dashboard/src/lib/dfs-utils.ts`
 
-Functions extracted from `AnalysisModal.tsx` and shared:
+Model probability functions (Session 48):
 - `estimateUnderProb(line, q10, q25, q50, q75, q90)` — Quantile interpolation for P(Under)
 - `estimateOverProb(...)` — `1 - estimateUnderProb(...)`
 - `calcDfsEv(modelProb, breakEven)` — `modelProb - breakEven`
 - `calcAllSlipEvs(modelProb)` — EV for all slip types
 
+Devigging and market utilities (Session 49):
+- `americanToImpliedProb(odds)` — Convert American odds to raw implied probability
+- `devig(overOdds, underOdds)` — Multiplicative devigging → `[devigged_over, devigged_under]`
+- `computeVig(overOdds, underOdds)` — Compute booksum (vig indicator)
+- `formatBookmaker(name)` — Display name formatting for sportsbooks
+
 ### Database
 
 **RPC Function:** `get_dfs_lines(target_date date)` — SECURITY DEFINER function returning latest DFS lines. Uses `ROW_NUMBER()` partitioned by (player_id, game_id, bookmaker, market_key, outcome_label) ordered by snapshot_time DESC. Handles game ID format mismatch via LPAD.
 
-**Index:** `idx_props_bookmaker_dfs` — Partial index on `raw_player_props_combined(bookmaker, player_id, game_id, market_key) WHERE bookmaker IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')`. Required for acceptable query times on 26M+ row table.
+**RPC Function:** `get_sportsbook_lines(target_date date)` — SECURITY DEFINER function returning latest non-DFS bookmaker lines for players with predictions on target date. Excludes DFS platforms (prizepicks, underdog, pick6, betr_us_dfs). Returns over_odds, under_odds, snapshot_time per player/game/bookmaker/market/line.
+
+**Index:** `idx_props_bookmaker_dfs` — Partial index for DFS bookmaker queries on 26M+ row table.
+
+**Index:** `idx_props_sportsbook_lookup` — Partial index for non-DFS sportsbook queries (excludes DFS platforms).
+
+## NBA CDN Games API (`/api/games`) — Session 49
+
+Server-side Next.js API route that fetches today's NBA game schedule from the NBA CDN.
+
+### Purpose
+
+Provides a reliable game list for the dashboard's fallback display when predictions haven't been generated yet (e.g., before the inference job runs). Replaces the previous `get_games_for_date` Supabase RPC which depended on the odds scraper having already run.
+
+### Endpoint
+
+`GET /api/games?date=YYYY-MM-DD`
+
+### Data Source
+
+Fetches `https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json` — the full NBA season schedule. Always available, no scraper dependency.
+
+### Implementation
+
+1. Parses `date` query parameter (YYYY-MM-DD format)
+2. Fetches NBA CDN schedule JSON (1-hour `revalidate` cache)
+3. Matches target date against CDN's MM/DD/YYYY format
+4. Filters to regular season games (`gameId.startsWith('002')`)
+5. Maps tri-codes (e.g., "LAL") to full team names (e.g., "Los Angeles Lakers")
+6. Returns `[{ home_team, away_team, commence_time }]`
+
+### File
+
+`dashboard/src/app/api/games/route.ts`
 
 ## Future Enhancements
 

@@ -3,21 +3,27 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { DfsFilters } from '@/components/dfs/DfsFilters'
-import { DfsTable, type DfsRow } from '@/components/dfs/DfsTable'
+import { DfsTable, type DfsRow, type ModelDfsRow, type MarketDfsRow, type CombinedDfsRow } from '@/components/dfs/DfsTable'
 import { type Prediction, type StatType } from '@/types/predictions'
-import { type DfsLine, type DfsComparison, type DfsPlatformLine, MARKET_TO_STAT, DFS_SLIP_TYPES } from '@/types/dfs'
+import {
+  type DfsLine, type DfsComparison, type DfsPlatformLine,
+  type SportsbookLine, type MarketEdgePlatformLine, type CombinedEdgePlatformLine,
+  type EdgeMode, MARKET_TO_STAT, DFS_SLIP_TYPES,
+} from '@/types/dfs'
 import { TEAM_ABBREV } from '@/lib/constants'
 import { getToday, formatDate } from '@/lib/utils'
-import { estimateOverProb, estimateUnderProb, calcAllSlipEvs } from '@/lib/dfs-utils'
+import { estimateOverProb, estimateUnderProb, calcAllSlipEvs, devig, computeVig } from '@/lib/dfs-utils'
 
 export default function DfsPage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [dfsLines, setDfsLines] = useState<DfsLine[]>([])
+  const [sportsbookLines, setSportsbookLines] = useState<SportsbookLine[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedDate, setSelectedDate] = useState<string>(getToday())
   const [availableDates, setAvailableDates] = useState<string[]>([])
 
   // Filters
+  const [edgeMode, setEdgeMode] = useState<EdgeMode>('model')
   const [platformFilter, setPlatformFilter] = useState<string>('all')
   const [slipType, setSlipType] = useState<string>('pp_6_flex')
   const [statFilter, setStatFilter] = useState<'all' | StatType>('all')
@@ -32,25 +38,22 @@ export default function DfsPage() {
 
       if (data) {
         const dates = data.map((d: { prediction_date: string }) => d.prediction_date)
-        // Always include today so it's selectable even before predictions exist
         const today = getToday()
         if (!dates.includes(today)) {
           dates.unshift(today)
         }
         setAvailableDates(dates)
-        // selectedDate is already initialized to getToday(), so don't change it
       }
     }
     fetchDates()
   }, [])
 
-  // Fetch predictions and DFS lines when date changes
+  // Fetch predictions, DFS lines, and sportsbook lines when date changes
   const fetchData = useCallback(async (date: string) => {
     setLoading(true)
     const supabase = createClient()
 
-    // Fetch predictions and DFS lines in parallel
-    const [predictionsRes, dfsRes] = await Promise.all([
+    const [predictionsRes, dfsRes, sbRes] = await Promise.all([
       supabase
         .from('daily_predictions')
         .select('*')
@@ -59,6 +62,8 @@ export default function DfsPage() {
         .limit(3000),
       supabase
         .rpc('get_dfs_lines', { target_date: date }),
+      supabase
+        .rpc('get_sportsbook_lines', { target_date: date }),
     ])
 
     if (!predictionsRes.error && predictionsRes.data) {
@@ -90,6 +95,12 @@ export default function DfsPage() {
       setDfsLines([])
     }
 
+    if (!sbRes.error && sbRes.data) {
+      setSportsbookLines(sbRes.data)
+    } else {
+      setSportsbookLines([])
+    }
+
     setLoading(false)
   }, [])
 
@@ -97,17 +108,15 @@ export default function DfsPage() {
     if (selectedDate) fetchData(selectedDate)
   }, [selectedDate, fetchData])
 
-  // Join predictions with DFS lines and compute comparisons
+  // Join predictions with DFS lines and compute model comparisons (unchanged logic)
   const comparisons = useMemo<DfsComparison[]>(() => {
     if (predictions.length === 0 || dfsLines.length === 0) return []
 
-    // Index predictions by (player_id, game_id, stat)
     const predMap = new Map<string, Prediction>()
     for (const p of predictions) {
       predMap.set(`${p.player_id}-${p.game_id}-${p.stat}`, p)
     }
 
-    // Group DFS lines by (player_id, game_id, market_key)
     const dfsGrouped = new Map<string, DfsLine[]>()
     for (const dl of dfsLines) {
       const stat = MARKET_TO_STAT[dl.market_key]
@@ -136,7 +145,6 @@ export default function DfsPage() {
           overProb = estimateOverProb(dfsLine, pred.q10, pred.q25, pred.q50, pred.q75, pred.q90)
           underProb = estimateUnderProb(dfsLine, pred.q10, pred.q25, pred.q50, pred.q75, pred.q90)
         } else {
-          // Fallback: use model probabilities (only valid when DFS line matches sharp line)
           overProb = pred.model_prob_over
           underProb = pred.model_prob_under
         }
@@ -180,37 +188,242 @@ export default function DfsPage() {
     return results
   }, [predictions, dfsLines])
 
-  // Flatten comparisons into table rows and apply filters
+  // Index sportsbook lines by {player_id}-{game_id}-{stat}
+  const sbIndex = useMemo(() => {
+    const idx = new Map<string, SportsbookLine[]>()
+    for (const sb of sportsbookLines) {
+      const stat = MARKET_TO_STAT[sb.market_key]
+      if (!stat) continue
+      const key = `${sb.player_id}-${sb.game_id}-${stat}`
+      if (!idx.has(key)) idx.set(key, [])
+      idx.get(key)!.push(sb)
+    }
+    return idx
+  }, [sportsbookLines])
+
+  // Compute market edge data for each DFS line
+  const marketComparisons = useMemo(() => {
+    if (dfsLines.length === 0) return new Map<string, { comp: DfsComparison; platforms: MarketEdgePlatformLine[] }>()
+
+    // We need predictions for player info
+    const predMap = new Map<string, Prediction>()
+    for (const p of predictions) {
+      predMap.set(`${p.player_id}-${p.game_id}-${p.stat}`, p)
+    }
+
+    const dfsGrouped = new Map<string, DfsLine[]>()
+    for (const dl of dfsLines) {
+      const stat = MARKET_TO_STAT[dl.market_key]
+      if (!stat) continue
+      const key = `${dl.player_id}-${dl.game_id}-${stat}`
+      if (!dfsGrouped.has(key)) dfsGrouped.set(key, [])
+      dfsGrouped.get(key)!.push(dl)
+    }
+
+    const results = new Map<string, { comp: DfsComparison; platforms: MarketEdgePlatformLine[] }>()
+
+    for (const [key, dfsLinesForPlayer] of dfsGrouped) {
+      const pred = predMap.get(key)
+      if (!pred) continue
+
+      // Get sportsbook lines for this player/stat
+      const sbLines = sbIndex.get(key) || []
+
+      const platforms: MarketEdgePlatformLine[] = dfsLinesForPlayer.map(dl => {
+        const dfsLine = Number(dl.line)
+
+        // Find sportsbooks offering the exact same line value
+        const matchingBooks = sbLines.filter(sb => Number(sb.line) === dfsLine && sb.over_odds !== null && sb.under_odds !== null)
+
+        // Compute devigged consensus from matching books
+        let marketProbOver: number | null = null
+        let marketProbUnder: number | null = null
+        if (matchingBooks.length > 0) {
+          let sumOver = 0
+          let sumUnder = 0
+          for (const mb of matchingBooks) {
+            const [devOver, devUnder] = devig(mb.over_odds!, mb.under_odds!)
+            sumOver += devOver
+            sumUnder += devUnder
+          }
+          marketProbOver = sumOver / matchingBooks.length
+          marketProbUnder = sumUnder / matchingBooks.length
+        }
+
+        // Find the sharpest sportsbook (lowest vig) regardless of line value
+        let sharpBook: string | null = null
+        let sharpLine: number | null = null
+        let lowestVig = Infinity
+        for (const sb of sbLines) {
+          if (sb.over_odds === null || sb.under_odds === null) continue
+          const vig = computeVig(sb.over_odds, sb.under_odds)
+          if (vig < lowestVig) {
+            lowestVig = vig
+            sharpBook = sb.bookmaker
+            sharpLine = Number(sb.line)
+          }
+        }
+
+        const lineDiff = sharpLine !== null ? dfsLine - sharpLine : null
+
+        // Determine best direction from market probs
+        let bestDirection: 'over' | 'under' = 'over'
+        let bestMarketProb: number | null = null
+        if (marketProbOver !== null && marketProbUnder !== null) {
+          bestDirection = marketProbOver >= marketProbUnder ? 'over' : 'under'
+          bestMarketProb = Math.max(marketProbOver, marketProbUnder)
+        } else if (sharpLine !== null) {
+          // No exact match — use sharp line direction heuristic
+          bestDirection = dfsLine > sharpLine ? 'under' : 'over'
+        }
+
+        // Edge = market_prob - break_even per slip type
+        const evBySlip: Record<string, number> = {}
+        if (bestMarketProb !== null) {
+          for (const [slipKey, slip] of Object.entries(DFS_SLIP_TYPES)) {
+            evBySlip[slipKey] = bestMarketProb - slip.breakEven
+          }
+        }
+
+        return {
+          bookmaker: dl.bookmaker,
+          line: dfsLine,
+          best_direction: bestDirection,
+          market_prob: bestMarketProb,
+          market_books_count: matchingBooks.length,
+          sharp_book: sharpBook,
+          sharp_line: sharpLine,
+          line_diff: lineDiff,
+          ev_by_slip: evBySlip,
+        }
+      })
+
+      const comp: DfsComparison = {
+        player_id: pred.player_id,
+        player_name: pred.player_name || `Player ${pred.player_id}`,
+        game_id: pred.game_id,
+        stat: pred.stat,
+        team_abbrev: pred.team_abbrev || 'UNK',
+        opponent_abbrev: pred.opponent_abbrev || 'UNK',
+        game_time: pred.game_time,
+        sharp_line: pred.prop_line,
+        q10: pred.q10,
+        q25: pred.q25,
+        q50: pred.q50,
+        q75: pred.q75,
+        q90: pred.q90,
+        model_prob_over: pred.model_prob_over,
+        model_prob_under: pred.model_prob_under,
+        dfs_lines: [],
+      }
+
+      results.set(key, { comp, platforms })
+    }
+
+    return results
+  }, [dfsLines, predictions, sbIndex])
+
+  // Flatten comparisons into table rows and apply filters — branch on edgeMode
   const filteredRows = useMemo<DfsRow[]>(() => {
-    const rows: DfsRow[] = []
     const breakEven = DFS_SLIP_TYPES[slipType]?.breakEven ?? 0.55
 
+    if (edgeMode === 'model') {
+      const rows: ModelDfsRow[] = []
+      for (const comp of comparisons) {
+        if (statFilter !== 'all' && comp.stat !== statFilter) continue
+        for (const pl of comp.dfs_lines) {
+          if (platformFilter !== 'all' && pl.bookmaker !== platformFilter) continue
+          const edge = pl.ev_by_slip[slipType] ?? 0
+          if (evOnly && edge <= 0) continue
+          rows.push({ comparison: comp, platform: pl })
+        }
+      }
+      rows.sort((a, b) => (b.platform.ev_by_slip[slipType] ?? 0) - (a.platform.ev_by_slip[slipType] ?? 0))
+      return rows
+    }
+
+    if (edgeMode === 'market') {
+      const rows: MarketDfsRow[] = []
+      for (const [, { comp, platforms }] of marketComparisons) {
+        if (statFilter !== 'all' && comp.stat !== statFilter) continue
+        for (const pl of platforms) {
+          if (platformFilter !== 'all' && pl.bookmaker !== platformFilter) continue
+          const edge = pl.ev_by_slip[slipType] ?? 0
+          if (evOnly && (pl.market_prob === null || edge <= 0)) continue
+          rows.push({ comparison: comp, platform: pl })
+        }
+      }
+      // Sort: rows with market_prob first by edge desc, then rows without market_prob
+      rows.sort((a, b) => {
+        const aHas = a.platform.market_prob !== null ? 1 : 0
+        const bHas = b.platform.market_prob !== null ? 1 : 0
+        if (aHas !== bHas) return bHas - aHas
+        return (b.platform.ev_by_slip[slipType] ?? 0) - (a.platform.ev_by_slip[slipType] ?? 0)
+      })
+      return rows
+    }
+
+    // Combined mode — only rows where BOTH model AND market have positive edge and agree on direction
+    const rows: CombinedDfsRow[] = []
+
     for (const comp of comparisons) {
-      // Stat filter
       if (statFilter !== 'all' && comp.stat !== statFilter) continue
 
-      for (const pl of comp.dfs_lines) {
-        // Platform filter
-        if (platformFilter !== 'all' && pl.bookmaker !== platformFilter) continue
+      for (const modelPl of comp.dfs_lines) {
+        if (platformFilter !== 'all' && modelPl.bookmaker !== platformFilter) continue
 
-        const edge = pl.ev_by_slip[slipType] ?? 0
+        // Find matching market data
+        const key = `${comp.player_id}-${comp.game_id}-${comp.stat}`
+        const marketData = marketComparisons.get(key)
+        if (!marketData) continue
 
-        // EV filter
+        const marketPl = marketData.platforms.find(mp => mp.bookmaker === modelPl.bookmaker && mp.line === modelPl.line)
+        if (!marketPl || marketPl.market_prob === null) continue
+
+        // Direction must agree
+        if (modelPl.best_direction !== marketPl.best_direction) continue
+
+        const modelEdge = modelPl.best_prob - breakEven
+        const marketEdge = marketPl.market_prob - breakEven
+
+        // Both must be positive
+        if (modelEdge <= 0 || marketEdge <= 0) continue
+
+        // Combined edge = min(model, market) per slip type — conservative
+        const combinedEvBySlip: Record<string, number> = {}
+        const modelEvBySlip = modelPl.ev_by_slip
+        const marketEvBySlip = marketPl.ev_by_slip
+        for (const [slipKey, slip] of Object.entries(DFS_SLIP_TYPES)) {
+          const mEdge = modelPl.best_prob - slip.breakEven
+          const mkEdge = (marketPl.market_prob ?? 0) - slip.breakEven
+          combinedEvBySlip[slipKey] = Math.min(mEdge, mkEdge)
+        }
+
+        const combinedPl: CombinedEdgePlatformLine = {
+          bookmaker: modelPl.bookmaker,
+          line: modelPl.line,
+          best_direction: modelPl.best_direction,
+          model_prob: modelPl.best_prob,
+          model_ev_by_slip: modelEvBySlip,
+          market_prob: marketPl.market_prob,
+          market_books_count: marketPl.market_books_count,
+          market_ev_by_slip: marketEvBySlip,
+          sharp_book: marketPl.sharp_book,
+          sharp_line: marketPl.sharp_line,
+          line_diff: marketPl.line_diff,
+          ev_by_slip: combinedEvBySlip,
+        }
+
+        const edge = combinedEvBySlip[slipType] ?? 0
         if (evOnly && edge <= 0) continue
 
-        rows.push({ comparison: comp, platform: pl })
+        rows.push({ comparison: comp, platform: combinedPl })
       }
     }
 
-    // Default sort by edge descending
-    rows.sort((a, b) => {
-      const aEdge = a.platform.ev_by_slip[slipType] ?? 0
-      const bEdge = b.platform.ev_by_slip[slipType] ?? 0
-      return bEdge - aEdge
-    })
-
+    rows.sort((a, b) => (b.platform.ev_by_slip[slipType] ?? 0) - (a.platform.ev_by_slip[slipType] ?? 0))
     return rows
-  }, [comparisons, platformFilter, statFilter, slipType, evOnly])
+  }, [comparisons, marketComparisons, platformFilter, statFilter, slipType, evOnly, edgeMode])
 
   // Summary stats
   const summaryStats = useMemo(() => {
@@ -225,6 +438,12 @@ export default function DfsPage() {
       bestPick: filteredRows[0],
     }
   }, [filteredRows, slipType])
+
+  const modeSubtitles: Record<EdgeMode, string> = {
+    model: 'Model probability vs DFS break-even',
+    market: 'Sharp sportsbook consensus vs DFS line',
+    combined: 'Both model & market agree',
+  }
 
   return (
     <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
@@ -256,6 +475,8 @@ export default function DfsPage() {
       {/* Filters */}
       <div className="mb-6">
         <DfsFilters
+          edgeMode={edgeMode}
+          onEdgeModeChange={setEdgeMode}
           platformFilter={platformFilter}
           onPlatformChange={setPlatformFilter}
           slipType={slipType}
@@ -273,6 +494,7 @@ export default function DfsPage() {
           <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
             <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">+EV Picks</div>
             <div className="text-2xl font-bold text-green-400">{summaryStats.count}</div>
+            <div className="text-xs text-slate-500 mt-1">{modeSubtitles[edgeMode]}</div>
           </div>
           <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
             <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">Avg Edge</div>
@@ -304,7 +526,7 @@ export default function DfsPage() {
         </div>
       ) : (
         <div className="bg-slate-800/50 rounded-lg border border-slate-700">
-          <DfsTable rows={filteredRows} slipType={slipType} />
+          <DfsTable rows={filteredRows} slipType={slipType} edgeMode={edgeMode} />
         </div>
       )}
     </main>

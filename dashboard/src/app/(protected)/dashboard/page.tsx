@@ -147,6 +147,21 @@ export default function DashboardPage() {
     }
   }
 
+  // Fetch fallback games from NBA CDN schedule (when predictions haven't been generated yet)
+  const fetchFallbackGames = useCallback(async (date: string) => {
+    try {
+      const resp = await fetch(`/api/games?date=${date}`)
+      if (resp.ok) {
+        const games = await resp.json()
+        setFallbackGames(Array.isArray(games) && games.length > 0 ? games : [])
+      } else {
+        setFallbackGames([])
+      }
+    } catch {
+      setFallbackGames([])
+    }
+  }, [])
+
   // Fetch predictions for a specific date
   const fetchPredictions = useCallback(async (date: string) => {
     setLoading(true)
@@ -189,17 +204,15 @@ export default function DashboardPage() {
 
       setPredictions(mappedPredictions)
       if (mappedPredictions.length === 0) {
-        // Fallback: fetch games from game lines staging
-        const { data: gamesData } = await supabase.rpc('get_games_for_date', { target_date: date })
-        setFallbackGames(gamesData && gamesData.length > 0 ? gamesData : [])
+        // Fallback: fetch today's games from NBA CDN schedule
+        await fetchFallbackGames(date)
       } else {
         setFallbackGames([])
       }
     } else {
       setPredictions([])
-      // Fallback: fetch games from game lines staging
-      const { data: gamesData } = await supabase.rpc('get_games_for_date', { target_date: date })
-      setFallbackGames(gamesData && gamesData.length > 0 ? gamesData : [])
+      // Fallback: fetch today's games from NBA CDN schedule
+      await fetchFallbackGames(date)
     }
 
     setLoading(false)

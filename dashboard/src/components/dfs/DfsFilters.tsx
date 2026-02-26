@@ -1,13 +1,15 @@
 'use client'
 
 import { cn } from '@/lib/utils'
-import { DFS_SLIP_TYPES, DFS_PLATFORM_NAMES } from '@/types/dfs'
+import { DFS_SLIP_TYPES, DFS_PLATFORM_NAMES, type EdgeMode } from '@/types/dfs'
 import { type StatType, STAT_LABELS } from '@/types/predictions'
 
 type PlatformFilter = 'all' | string
 type StatFilter = 'all' | StatType
 
 interface DfsFiltersProps {
+  edgeMode: EdgeMode
+  onEdgeModeChange: (mode: EdgeMode) => void
   platformFilter: PlatformFilter
   onPlatformChange: (platform: PlatformFilter) => void
   slipType: string
@@ -30,7 +32,15 @@ const stats: { value: StatFilter; label: string }[] = [
   { value: 'ast', label: STAT_LABELS.ast },
 ]
 
+const edgeModes: { value: EdgeMode; label: string; activeColor: string }[] = [
+  { value: 'model', label: 'Model Edge', activeColor: 'bg-blue-600 text-white' },
+  { value: 'market', label: 'Market Edge', activeColor: 'bg-purple-600 text-white' },
+  { value: 'combined', label: 'Combined', activeColor: 'bg-amber-600 text-white' },
+]
+
 export function DfsFilters({
+  edgeMode,
+  onEdgeModeChange,
   platformFilter,
   onPlatformChange,
   slipType,
@@ -42,6 +52,24 @@ export function DfsFilters({
 }: DfsFiltersProps) {
   return (
     <div className="flex flex-wrap items-center gap-3">
+      {/* Edge mode toggle */}
+      <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg">
+        {edgeModes.map((m) => (
+          <button
+            key={m.value}
+            onClick={() => onEdgeModeChange(m.value)}
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+              edgeMode === m.value
+                ? m.activeColor
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+            )}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
       {/* Platform filter tabs */}
       <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg">
         {platforms.map((p) => (

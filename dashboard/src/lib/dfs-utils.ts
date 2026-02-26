@@ -1,5 +1,50 @@
 import { DFS_SLIP_TYPES } from '@/types/dfs'
 
+/** Convert American odds to raw implied probability */
+export function americanToImpliedProb(odds: number): number {
+  if (odds > 0) return 100 / (odds + 100)
+  return Math.abs(odds) / (Math.abs(odds) + 100)
+}
+
+/** Multiplicative devigging — returns [devigged_over, devigged_under] */
+export function devig(overOdds: number, underOdds: number): [number, number] {
+  const rawOver = americanToImpliedProb(overOdds)
+  const rawUnder = americanToImpliedProb(underOdds)
+  const booksum = rawOver + rawUnder
+  if (booksum <= 0) return [0.5, 0.5]
+  return [rawOver / booksum, rawUnder / booksum]
+}
+
+/** Compute booksum (vig indicator) from Over/Under odds */
+export function computeVig(overOdds: number, underOdds: number): number {
+  return americanToImpliedProb(overOdds) + americanToImpliedProb(underOdds)
+}
+
+/** Format bookmaker key for display */
+export function formatBookmaker(name: string): string {
+  const names: Record<string, string> = {
+    'draftkings': 'DraftKings',
+    'fanduel': 'FanDuel',
+    'betmgm': 'BetMGM',
+    'caesars': 'Caesars',
+    'pointsbet': 'PointsBet',
+    'bet365': 'Bet365',
+    'unibet': 'Unibet',
+    'williamhill': 'William Hill',
+    'williamhill_us': 'William Hill',
+    'fliff': 'Fliff',
+    'hardrockbet': 'Hard Rock',
+    'betrivers': 'BetRivers',
+    'espnbet': 'ESPN Bet',
+    'fanatics': 'Fanatics',
+    'novig': 'Novig',
+    'prophetx': 'ProphetX',
+    'pinnacle': 'Pinnacle',
+    'bovada': 'Bovada',
+  }
+  return names[name.toLowerCase()] || name.charAt(0).toUpperCase() + name.slice(1)
+}
+
 /**
  * Estimate probability of Under X using quantile interpolation.
  * P(stat < line) = probability the Under hits.

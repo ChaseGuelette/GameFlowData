@@ -10,7 +10,7 @@ import { type Prediction, type PlayerGameStats, type StatType, type BookmakerLin
 import { formatProb } from '@/lib/utils'
 import { generateInsights, type Insight } from '@/lib/insights'
 import { getAllowedBookmakers } from '@/lib/sportsbook-availability'
-import { estimateUnderProb } from '@/lib/dfs-utils'
+import { estimateUnderProb, americanToImpliedProb, formatBookmaker } from '@/lib/dfs-utils'
 
 interface AnalysisModalProps {
   prediction: Prediction
@@ -31,43 +31,9 @@ const STAT_TO_MARKET: Record<StatType, string> = {
   ast: 'player_assists',
 }
 
-// Format bookmaker name for display
-const formatBookmaker = (name: string): string => {
-  const names: Record<string, string> = {
-    'draftkings': 'DraftKings',
-    'fanduel': 'FanDuel',
-    'betmgm': 'BetMGM',
-    'caesars': 'Caesars',
-    'pointsbet': 'PointsBet',
-    'bet365': 'Bet365',
-    'unibet': 'Unibet',
-    'williamhill': 'William Hill',
-    'williamhill_us': 'William Hill',
-    'fliff': 'Fliff',
-    'hardrockbet': 'Hard Rock',
-    'betrivers': 'BetRivers',
-    'espnbet': 'ESPN Bet',
-    'fanatics': 'Fanatics',
-    'novig': 'Novig',
-    'prophetx': 'ProphetX',
-    'pinnacle': 'Pinnacle',
-    'bovada': 'Bovada',
-  }
-  return names[name.toLowerCase()] || name.charAt(0).toUpperCase() + name.slice(1)
-}
-
 // Format odds for display
 const formatOdds = (odds: number): string => {
   return odds >= 0 ? `+${odds}` : `${odds}`
-}
-
-// Convert American odds to implied probability
-const oddsToImpliedProb = (odds: number): number => {
-  if (odds > 0) {
-    return 100 / (odds + 100)
-  } else {
-    return Math.abs(odds) / (Math.abs(odds) + 100)
-  }
 }
 
 // Calculate Kelly stake as fraction of bankroll
@@ -313,7 +279,7 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
         const overProb = 1 - underProb
         const relevantOdds = isOverBet ? line.over_odds : line.under_odds
         const modelProb = isOverBet ? overProb : underProb
-        const impliedProb = oddsToImpliedProb(relevantOdds)
+        const impliedProb = americanToImpliedProb(relevantOdds)
         const lineEdge = modelProb - impliedProb
         return { ...line, modelProb, impliedProb, lineEdge, relevantOdds }
       })

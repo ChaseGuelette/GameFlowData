@@ -5,6 +5,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-26 Session 50] — MLB Statcast & FanGraphs Advanced Stats Scrapers
+
+### Added
+
+- **`mlb_statcast_scraper.py`:** Daily Statcast scraper using `pybaseball.statcast()`. Fetches pitch-level data (~4,500 rows/day), aggregates per (batter/pitcher, game_date) into contact quality (exit velo, barrel%, hard hit%, sweet spot%), expected stats (xBA, xSLG, xwOBA), batted ball distribution (GB/FB/LD/popup), spray direction, and plate discipline (zone%, chase%, whiff%). Pitching adds fastball velo/spin, pitch mix classification (FF/SI/FC=fastball, SL/CU/KC=breaking, CH/FS=offspeed), and CSW%. Uses `ON CONFLICT DO UPDATE` upserts (Statcast data corrected retroactively).
+- **`mlb_fangraphs_scraper.py`:** Season-level FanGraphs stats via `pybaseball.batting_stats()` / `pitching_stats()`. Batting: wRC+, wOBA, ISO, WAR, BB%, K%, Hard%. Pitching: FIP, xFIP, xERA, SIERA, K/9, BB/9, HR/9. Player ID resolution: name matching against `mlb_players` → fallback to `playerid_reverse_lookup()` FanGraphs→MLBAM crosswalk. Auto-inserts unknown players via `_ensure_player()`.
+- **`mlb_statcast_backfill.py`:** Bulk Statcast backfill orchestrator. Day-by-day iteration through MLB seasons (March–October). Progress file (`mlb_statcast_backfill_progress.json`) for resume capability. 1 req/sec rate limiting with tqdm progress bar.
+- **Supabase migration:** 3 new tables — `mlb_player_game_statcast_batting` (PK: player_id, game_date), `mlb_player_game_statcast_pitching` (PK: player_id, game_date), `mlb_player_season_advanced` (PK: player_id, season, player_type). All with FK to `mlb_players` and appropriate indexes.
+- **`pybaseball>=2.2.7`** added to `requirements.txt`.
+
+### Fixed
+
+- **FanGraphs FK violation:** Added `_ensure_player()` to FanGraphs scraper to auto-insert players resolved via crosswalk but not yet in `mlb_players` table.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/scrapers/mlb/mlb_statcast_scraper.py` | Created — Daily Statcast scraper with pitch-level aggregation |
+| `src/scrapers/mlb/mlb_fangraphs_scraper.py` | Created — Season-level FanGraphs advanced stats |
+| `src/scrapers/mlb/mlb_statcast_backfill.py` | Created — Backfill orchestrator with resume support |
+| `requirements.txt` | Modified — added pybaseball>=2.2.7 |
+
+### Database Migrations
+
+| Migration | Description |
+|-----------|-------------|
+| `create_mlb_statcast_and_advanced_tables` | 3 tables: statcast batting, statcast pitching, season advanced |
+
+### Verified
+
+- 608 Python tests pass, ruff clean
+- pybaseball sanity check: 4,294 pitch rows for 2025-06-15
+- Statcast single-day: 303 batting + 125 pitching rows upserted
+- FanGraphs 2024 season: 485 batting + 579 pitching rows upserted (92%/88% match rate)
+
+---
+
+## [2026-02-26 Session 49] — DFS Market/Combined Edge Modes + Fallback Games Fix
+
+### Added
+
+- **Market Edge mode (`/dfs`):** 3-way edge mode toggle (Model/Market/Combined) on DFS Edge Finder. Market Edge uses devigged sportsbook consensus probabilities vs DFS break-even thresholds. Combined Edge shows highest-conviction picks where both model AND market agree.
+- **`get_sportsbook_lines` RPC function:** Supabase SECURITY DEFINER function returning non-DFS bookmaker lines for a target date. Uses `ROW_NUMBER()` deduplication, handles game ID format normalization.
+- **`idx_props_sportsbook_lookup` partial index:** Performance index on `raw_player_props_combined` for sportsbook queries (excludes DFS platforms).
+- **Devigging utilities in `dfs-utils.ts`:** `americanToImpliedProb()`, `devig()`, `computeVig()`, `formatBookmaker()` — shared between DFS page and AnalysisModal.
+- **New types in `dfs.ts`:** `EdgeMode`, `SportsbookLine`, `MarketEdgePlatformLine`, `CombinedEdgePlatformLine`.
+- **`/api/games` API route:** Next.js server-side route fetching today's games from NBA CDN schedule (`scheduleLeagueV2.json`). Replaces `get_games_for_date` RPC for fallback games. 1-hour revalidation cache.
+- **`get_games_for_date` SQL function:** Fixed ET timezone boundaries and added `idx_staging_commence_time` index (query: 33s → 0.026s). Retained as SQL migration reference.
+
+### Changed
+
+- **`DfsFilters.tsx`:** Added 3-way edge mode segmented control (blue=Model, purple=Market, amber=Combined).
+- **`DfsTable.tsx`:** Conditional column layouts per mode (Model: 10 cols, Market: 11 cols, Combined: 10 cols). Extended `SortKey` with `market_prob` and `books`.
+- **`dfs/page.tsx`:** Added `get_sportsbook_lines` RPC to parallel fetch. New `sbIndex` and `marketComparisons` memos for market data. 3-way `filteredRows` branching. Mode-aware KPI cards.
+- **`AnalysisModal.tsx`:** Replaced local `oddsToImpliedProb` and `formatBookmaker` with imports from `dfs-utils.ts`.
+- **`dashboard/page.tsx`:** Replaced `get_games_for_date` RPC fallback with `/api/games` NBA CDN route.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/types/dfs.ts` | Modified — added EdgeMode, SportsbookLine, MarketEdgePlatformLine, CombinedEdgePlatformLine |
+| `dashboard/src/lib/dfs-utils.ts` | Modified — added americanToImpliedProb, devig, computeVig, formatBookmaker |
+| `dashboard/src/components/dfs/DfsFilters.tsx` | Modified — added edge mode toggle |
+| `dashboard/src/components/dfs/DfsTable.tsx` | Modified — 3 conditional column layouts |
+| `dashboard/src/app/(protected)/dfs/page.tsx` | Modified — sportsbook fetch, market comparisons, 3-way filtering |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — import shared utils |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — NBA CDN fallback |
+| `dashboard/src/app/api/games/route.ts` | Created — NBA CDN schedule proxy |
+| `sql/functions/get_sportsbook_lines.sql` | Created — sportsbook lines RPC |
+| `sql/functions/get_games_for_date.sql` | Created — ET-aware game lookup (reference) |
+
+### Database Migrations
+
+| Migration | Description |
+|-----------|-------------|
+| `get_sportsbook_lines` | RPC function for non-DFS bookmaker lines |
+| `idx_props_sportsbook_lookup` | Partial index for sportsbook queries |
+| `get_games_for_date` update | ET timezone boundaries + range filter |
+| `idx_staging_commence_time` | Index on `raw_game_lines_staging(commence_time)` |
+
+### Verified
+
+- 575 Python tests pass, ruff clean (pre-existing issues only)
+- `cd dashboard && npm run build` — no TypeScript errors
+- NBA CDN returns 10 games for today (Feb 26)
+- `get_sportsbook_lines('2026-02-26')` returns 2,291+ rows in ~2.5s
+
+---
+
 ## [2026-02-25 Session 48] — DFS Edge Finder Page
 
 ### Added

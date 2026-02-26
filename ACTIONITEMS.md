@@ -1,5 +1,54 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-26 — Session 50)
+
+### What We Did
+
+**Implemented MLB Statcast & FanGraphs advanced stats scrapers — Phase 2 of MLB data pipeline.**
+
+**New Scrapers:**
+- **`mlb_statcast_scraper.py`:** Daily Statcast scraper using `pybaseball.statcast()`. Fetches pitch-level data, aggregates per (batter/pitcher, game_date) into contact quality metrics (exit velo, barrel%, xBA, xwOBA), batted ball types, spray direction, plate discipline, pitch velocity/spin, and pitch mix. Uses `ON CONFLICT DO UPDATE` for retroactive corrections.
+- **`mlb_fangraphs_scraper.py`:** Season-level FanGraphs stats (wRC+, FIP, WAR, etc.) with FanGraphs→MLBAM player ID crosswalk resolution.
+- **`mlb_statcast_backfill.py`:** Bulk backfill orchestrator with progress file resume and tqdm progress.
+
+**Database:** 3 new tables (`mlb_player_game_statcast_batting`, `mlb_player_game_statcast_pitching`, `mlb_player_season_advanced`) with proper FK constraints and indexes.
+
+**Verified:** Single-day Statcast test (303 batting + 125 pitching rows), FanGraphs 2024 season test (485 batting + 579 pitching rows).
+
+### Remaining Action Items
+
+1. **Run MLB backfills** — boxscores (2022-2025), then FanGraphs (all seasons), then Statcast (2024-2025), then props/lines
+2. **Stripe integration** — subscribe page, customer portal, webhook
+3. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts (or find alternative data source)
+4. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
+## Session Summary (2026-02-26 — Session 49)
+
+### What We Did
+
+**Added Market Edge and Combined Edge modes to DFS Edge Finder + fixed dashboard fallback games display.**
+
+**DFS Edge Modes:**
+- **Market Edge mode:** Compares DFS lines against devigged sportsbook consensus probabilities. Created `get_sportsbook_lines` RPC function + `idx_props_sportsbook_lookup` performance index. Added `americanToImpliedProb`, `devig`, `computeVig`, `formatBookmaker` utilities to `dfs-utils.ts`. New types: `EdgeMode`, `SportsbookLine`, `MarketEdgePlatformLine`, `CombinedEdgePlatformLine`.
+- **Combined Edge mode:** Highest-conviction tier — only shows picks where BOTH model AND market agree on direction with positive edge. Displayed edge = `min(model_edge, market_edge)`.
+- **3-way toggle:** Segmented control in DfsFilters (Model Edge / Market Edge / Combined). DfsTable renders mode-specific column layouts. KPI cards adapt per mode.
+- **Refactored AnalysisModal:** Replaced local `oddsToImpliedProb` and `formatBookmaker` with shared imports from `dfs-utils.ts`.
+
+**Dashboard Fallback Games Fix:**
+- Fixed games not displaying when predictions haven't been generated yet. Root cause: `get_games_for_date` RPC depended on odds scraper data + had UTC/ET timezone mismatch + 33-second query on 3.1M row table (PostgREST timeout).
+- Created `/api/games` Next.js API route that fetches from NBA CDN schedule (always available, no scraper dependency). Maps tri-codes to full team names. 1-hour revalidation cache.
+- Updated dashboard page to use the new API route instead of Supabase RPC.
+
+### Remaining Action Items
+
+1. **Stripe integration** — subscribe page, customer portal, webhook
+2. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts (or find alternative data source)
+3. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-02-25 — Session 48)
 
 ### What We Did

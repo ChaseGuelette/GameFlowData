@@ -25,7 +25,7 @@ GameFlowData is a data-intensive application that ingests raw NBA game statistic
 | **ML Core** | XGBoost, Scikit-Learn, NumPy, SciPy | Quantile regression, isotonic calibration, statistics |
 | **HPO** | Optuna | Bayesian hyperparameter optimization |
 | **API** | FastAPI, Uvicorn, Pydantic | Web framework (future live pipeline) |
-| **Data Sources** | nba_api, The Odds API, ESPN | NBA stats, sportsbook odds, injury reports |
+| **Data Sources** | nba_api, The Odds API, ESPN, pybaseball | NBA stats, sportsbook odds, injury reports, MLB Statcast/FanGraphs |
 | **Pipeline** | Custom Python orchestration | Training, inference, and backfill jobs |
 | **Visualization** | Plotly | Backtest equity curves and diagnostic plots |
 | **Image Gen** | Pillow | Social media pick card rendering |
@@ -115,6 +115,25 @@ The system ingests data from two distinct worlds that don't natively share ident
 | `game_lines_scraper.py` | Historical game lines |
 | `rapidapi_injury_backfill.py` | Injury data from RapidAPI — historical backfill (2021-present, 88K+ rows) and daily collection via `run_daily.py --scrape-injuries` |
 | `play_type_scraper.py` | Team-level Synergy play type data (offensive/defensive frequency + efficiency) |
+
+#### MLB Scrapers (`src/scrapers/mlb/`)
+
+| Module | Purpose |
+|--------|---------|
+| `mlb_stats_scraper.py` | Game schedules and boxscores from MLB Stats API (`statsapi.mlb.com`) |
+| `mlb_player_props_scraper.py` | Historical MLB player props backfill from The Odds API |
+| `mlb_daily_player_props_scraper.py` | Live daily MLB player props |
+| `mlb_daily_game_lines_scraper.py` | Live daily MLB game lines (moneyline, spreads, totals) |
+| `mlb_reference.py` | Reference data seeding (teams, park factors) |
+| `mlb_backfill.py` | Orchestrator for full boxscore season backfill |
+| `mlb_statcast_scraper.py` | Daily Statcast scraper via `pybaseball` — pitch-level data aggregated to per-game batting/pitching (exit velo, barrel%, xBA, xwOBA, pitch mix, velo/spin, plate discipline) |
+| `mlb_fangraphs_scraper.py` | Season-level FanGraphs advanced stats via `pybaseball` (wRC+, FIP, WAR, etc.) |
+| `mlb_statcast_backfill.py` | Bulk Statcast backfill orchestrator with progress file resume |
+
+**Data Sources:**
+- **MLB Stats API** — Free, no auth. Game schedules, boxscores, player reference data.
+- **pybaseball** — Free Python library wrapping Baseball Savant (Statcast pitch-level data) and FanGraphs (season-level advanced stats). Used for quality-of-contact metrics critical for MLB modeling.
+- **The Odds API** — Same API as NBA, sport key `baseball_mlb`. Player props + game lines.
 
 #### The NBA Linker (`src/processing/nba_linker_local.py`)
 
@@ -456,12 +475,13 @@ dashboard/
 │   │   │   └── signup/page.tsx # Sign-up page
 │   │   ├── (protected)/        # Auth-gated routes
 │   │   │   ├── dashboard/page.tsx  # Main predictions dashboard
-│   │   │   ├── dfs/page.tsx          # DFS Edge Finder — DFS vs model comparison
+│   │   │   ├── dfs/page.tsx          # DFS Edge Finder — model/market/combined edge modes
 │   │   │   ├── history/page.tsx    # Bet history with filters
 │   │   │   ├── performance/page.tsx # Performance metrics
 │   │   │   ├── account/page.tsx    # Profile + community card
 │   │   │   ├── stats/page.tsx        # Data Vault — heatmap stat tables
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
+│   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback game list)
 │   │   ├── auth/callback/route.ts  # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
@@ -478,7 +498,7 @@ dashboard/
 │   ├── lib/
 │   │   ├── supabase/           # Client, server, and middleware helpers
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
-│   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV calculations
+│   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV, devigging, market edge calculations
 │   │   ├── insights.ts         # Template-based insight generator
 │   │   ├── sportsbook-availability.ts # US state → legal bookmaker mapping for line filtering
 │   │   ├── stats/columns.ts    # Column definitions for Data Vault heatmap tables
@@ -517,7 +537,11 @@ dashboard/
 - **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
 - **Free Beta Model:** No paywall — all authenticated users have full access. Public `/picks` page shows 3 real picks via `get_public_picks()` RPC to drive signups. All CTAs point to sign-up and Discord. Stripe infrastructure preserved (dormant) for future activation at ~200 Discord members.
 - **Data Vault (`/stats`):** Dense heatmap stat table with player, team, defense-vs-position, and play type breakdowns. Features percentile-based blue heatmap coloring (5-step gradient with inline legend), sortable columns, sticky name/position/team columns, window toggles (L5/L15/SZN), category tabs (Box Score/Shooting/Advanced/Consistency for players), position and team filters with info button explaining G/W/B groups, stat header tooltips, and player search. Reads from 3 database views (`player_stats_latest`, `team_stats_latest`, `defense_by_position_latest`) plus the `team_play_types` table (Synergy play type data) that join rolling average tables with player/team reference data. All filtering and sorting is client-side after initial parallel fetch.
-- **DFS Edge Finder (`/dfs`):** Compares DFS platform lines (PrizePicks, Underdog, Pick6, Betr) against the model's true probabilities. For each DFS line, re-estimates model probability at the DFS-specific line (which may differ from the sharp sportsbook line) via quantile interpolation using `estimateOverProb`/`estimateUnderProb` from `dfs-utils.ts`. Computes EV against DFS break-even thresholds per slip type (UD 3/5-Pick, PP 5/6-Flex). Platform filter tabs, slip type selector, stat filter, +EV toggle, KPI summary cards, and sortable table. Data fetched via `get_dfs_lines` RPC function with partial index on 26M+ row table.
+- **DFS Edge Finder (`/dfs`):** Three-mode edge analysis for DFS platforms (PrizePicks, Underdog, Pick6, Betr):
+  - **Model Edge:** Re-estimates model probability at the DFS-specific line via quantile interpolation from `dfs-utils.ts`. Computes EV = model_prob - break_even per slip type.
+  - **Market Edge:** Compares DFS lines against devigged sportsbook consensus probabilities. Uses `get_sportsbook_lines` RPC to fetch non-DFS bookmaker lines, finds exact line matches, applies multiplicative devigging (`americanToImpliedProb`, `devig` from `dfs-utils.ts`), identifies sharpest book (lowest vig). Shows `"--"` when no sportsbook offers the exact DFS line.
+  - **Combined Edge:** Highest-conviction tier — only shows picks where BOTH model AND market agree on direction AND both have positive edge. Displayed edge = `min(model_edge, market_edge)` (conservative estimate).
+  - Platform filter tabs, slip type selector (UD 3/5-Pick, PP 5/6-Flex), stat filter, +EV toggle, 3-way edge mode segmented control, KPI summary cards, and sortable table with mode-specific columns. Data fetched via `get_dfs_lines` and `get_sportsbook_lines` RPC functions.
 - **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account/stats/dfs (requires auth).
 
 **Data Sources:**
@@ -532,6 +556,7 @@ dashboard/
 - `defense_by_position_latest` view — Data Vault defense tab (defense-vs-position stats)
 - `team_play_types` table — Season-level Synergy play type data (30 teams x 11 play types x 2 groupings)
 - SQL view definitions version-controlled in `sql/views/` (player_stats_latest.sql, team_stats_latest.sql, defense_by_position_latest.sql). All views use deterministic `DISTINCT ON` with `game_id DESC` tiebreaker.
+- **NBA CDN Schedule API** — `/api/games` server-side route fetches today's games from `cdn.nba.com/static/json/staticData/scheduleLeagueV2.json`. Used as fallback when predictions haven't been generated yet (e.g., before inference runs). Maps tri-codes to full team names. 1-hour revalidation cache. Replaces previous `get_games_for_date` RPC which depended on the odds scraper having run.
 
 **Run Commands:**
 ```bash
@@ -717,6 +742,19 @@ DISCORD_CHANNEL_PERFORMANCE=...
   - **Core markets:** `player_points`, `player_rebounds`, `player_assists`, `player_threes`, `player_steals`, `player_blocks`, `player_turnovers`
   - **Combo markets (added 2026-01-31):** `player_points_rebounds_assists` (PRA), `player_points_rebounds`, `player_points_assists`, `player_rebounds_assists`, `player_blocks_steals`, `player_field_goals`
 
+### MLB Data
+- `mlb_players`: Player reference (player_id = MLBAM ID, player_name, primary_position).
+- `mlb_teams`: Team reference (team_id, team_name, abbreviation, league, division).
+- `mlb_game_schedule`: Game schedules (game_id, date, teams, scores, status).
+- `mlb_player_game_stats_batting`: Per-game batting boxscores (PA, AB, H, HR, BB, SO, etc.). PK: `(player_id, game_id)`.
+- `mlb_player_game_stats_pitching`: Per-game pitching boxscores (IP, SO, BB, ER, etc.). PK: `(player_id, game_id)`.
+- `mlb_player_game_statcast_batting`: Per-game Statcast batting aggregates — exit velocity, barrel%, hard hit%, xBA, xSLG, xwOBA, batted ball types, spray direction, plate discipline. PK: `(player_id, game_date)`.
+- `mlb_player_game_statcast_pitching`: Per-game Statcast pitching aggregates — contact quality against, fastball velo/spin, pitch mix, CSW%, plate discipline. PK: `(player_id, game_date)`.
+- `mlb_player_season_advanced`: Season-level FanGraphs stats (wRC+, wOBA, ISO, FIP, xFIP, SIERA, WAR). PK: `(player_id, season, player_type)`.
+- `mlb_park_factors`: Venue-level park factor adjustments (runs, HR, hits, SO).
+- `mlb_raw_player_props`: MLB player prop lines from The Odds API.
+- `mlb_raw_game_lines`: MLB game lines (moneyline, spreads, totals).
+
 ### Predictions
 - `daily_predictions`: Stored daily prediction quantiles, edges, and implied probabilities. Unique on `(prediction_date, player_id, game_id, stat)`. Supports upsert for re-runs.
 - `daily_prediction_samples`: Gzip-compressed MC sample arrays (10K float64 values per prediction, ~20-40KB). Unique on `(prediction_date, player_id, game_id, stat)`.
@@ -816,12 +854,32 @@ graph TD
 
 ## Entry Points & CLI
 
-### Scrapers
+### NBA Scrapers
 ```bash
 python src/scrapers/nba_unified_scraper.py [--season YYYY-YY] [--season-type TYPE] [--skip-team] [--skip-advanced]
 python src/scrapers/daily_player_props_scraper.py [--live|--date YYYY-MM-DD] [--combos|--combos-only|--markets M1 M2]
 python src/scrapers/player_prop_scraper.py [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--combos|--combos-only] [--dry-run]
 python src/scrapers/daily_game_lines_scraper.py
+```
+
+### MLB Scrapers
+```bash
+# Boxscores & schedules (MLB Stats API)
+python -m src.scrapers.mlb.mlb_stats_scraper --season 2025
+python -m src.scrapers.mlb.mlb_backfill --seasons 2022 2023 2024 2025
+
+# Statcast (pybaseball — Baseball Savant)
+python -m src.scrapers.mlb.mlb_statcast_scraper --date 2025-06-15
+python -m src.scrapers.mlb.mlb_statcast_scraper --yesterday
+python -m src.scrapers.mlb.mlb_statcast_backfill --seasons 2024 2025
+
+# FanGraphs season stats (pybaseball)
+python -m src.scrapers.mlb.mlb_fangraphs_scraper --season 2025
+python -m src.scrapers.mlb.mlb_fangraphs_scraper --all-seasons
+
+# Props & game lines (The Odds API)
+python -m src.scrapers.mlb.mlb_player_props_scraper --start-date 2024-04-01 --end-date 2024-09-30
+python -m src.scrapers.mlb.mlb_daily_game_lines_scraper --live
 ```
 
 ### Processing

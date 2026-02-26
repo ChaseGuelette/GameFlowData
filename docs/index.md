@@ -3,7 +3,7 @@
 ## Configuration
 - [Stat Config](stat_config_documentation.md) - Per-stat configuration for edge thresholds and BL tau values.
 
-## Scrapers
+## NBA Scrapers
 - [Game Lines Scraper](game_lines_scraper_documentation.md) - Historical odds for moneyline, spreads, totals.
 - [Player Prop Scraper](player_prop_scraper_documentation.md) - Historical player props snapshots.
 - [NBA Player Position](nba_player_position_documentation.md) - Updates player positions via NBA API.
@@ -11,6 +11,11 @@
 - [Update Player Position History](update_player_position_history_documentation.md) - Snapshot-based role history.
 - [Injury Database](injury_database_documentation.md) - Supabase storage and queries.
 - [Injury Scraper Job](injury_scraper_job_documentation.md) - Scheduled scraping orchestration.
+
+## MLB Scrapers
+- [MLB Statcast Scraper](mlb_statcast_scraper_documentation.md) - Daily Statcast pitch-level aggregation (exit velo, barrel%, xBA, pitch mix).
+- [MLB FanGraphs Scraper](mlb_fangraphs_scraper_documentation.md) - Season-level FanGraphs advanced stats (wRC+, FIP, WAR).
+- [MLB Expansion Plan](mlb_expansion_plan.md) - Full MLB data pipeline plan and architecture.
 
 ## Processing
 - [NBA Linker Local](nba_linker_local_documentation.md) - Local ID matching and uploads.
