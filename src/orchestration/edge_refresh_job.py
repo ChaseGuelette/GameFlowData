@@ -391,13 +391,13 @@ def filter_out_players(
     # Delete from database so dashboard stops showing them
     delete_query = text("""
         DELETE FROM daily_predictions
-        WHERE game_date = :game_date
+        WHERE prediction_date = :prediction_date
           AND player_id = ANY(:player_ids)
     """)
     player_id_list = list(out_ids)
     with engine.begin() as conn:
         result = conn.execute(delete_query, {
-            "game_date": target_date,
+            "prediction_date": target_date,
             "player_ids": player_id_list,
         })
         logger.info(
