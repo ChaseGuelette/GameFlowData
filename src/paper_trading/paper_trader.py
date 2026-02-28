@@ -222,6 +222,41 @@ class PaperTrader:
             return self.starting_bankroll
         return float(result[0])
 
+    def _get_started_game_ids(self, game_date: date) -> set[str]:
+        """Get game_ids for games that have already started (commence_time < now).
+
+        Uses raw_player_props_combined which has commence_time per game.
+        Returns set of game_id strings (10-digit zero-padded).
+        """
+        from datetime import datetime, timezone
+
+        query = text("""
+            SELECT DISTINCT game_id, commence_time
+            FROM raw_player_props_combined
+            WHERE game_id IS NOT NULL
+              AND commence_time IS NOT NULL
+              AND commence_time < :now
+              AND snapshot_time > :cutoff
+        """)
+
+        now = datetime.now(timezone.utc)
+        # Only look at recent snapshots (last 24h) to avoid scanning old data
+        cutoff = now - pd.Timedelta(hours=24)
+
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(query, {"now": now, "cutoff": cutoff}).fetchall()
+
+            started = set()
+            for row in rows:
+                gid = str(row[0]).zfill(10)
+                started.add(gid)
+                started.add(gid.lstrip("0"))  # Also add unpadded version
+            return started
+        except Exception as e:
+            logger.warning(f"Could not check game start times: {e}")
+            return set()
+
     def select_bets(self, game_date: date) -> list[dict[str, Any]]:
         """
         Query daily_predictions for game_date, filter by edge threshold,
@@ -230,9 +265,16 @@ class PaperTrader:
         When BL blending is enabled (bl_tau is set), loads MC samples and
         recalculates probabilities/edges using Black-Litterman blending.
 
+        Skips games that have already started (no live betting).
+
         Returns list of bet dictionaries ready for placement.
         """
         bankroll = self._get_current_bankroll()
+
+        # Identify games already in progress — skip them
+        started_game_ids = self._get_started_game_ids(game_date)
+        if started_game_ids:
+            logger.info(f"Excluding {len(started_game_ids) // 2} started games from bet selection")
 
         # Load MC samples if BL blending is enabled
         samples_dict: dict[tuple, np.ndarray] = {}
@@ -274,12 +316,18 @@ class PaperTrader:
             return []
 
         bets = []
+        skipped_live = 0
         for _, row in df.iterrows():
             stat = str(row["stat"])
             threshold = self._get_edge_threshold(stat)
             player_id = int(row["player_id"])
             game_id = str(row["game_id"])
             line = float(row["line"]) if pd.notna(row["line"]) else None
+
+            # Skip games already in progress
+            if game_id in started_game_ids or game_id.lstrip("0") in started_game_ids:
+                skipped_live += 1
+                continue
 
             if line is None:
                 continue
@@ -372,6 +420,8 @@ class PaperTrader:
             }
             bets.append(bet)
 
+        if skipped_live > 0:
+            logger.info(f"Skipped {skipped_live} predictions for games already in progress")
         logger.info(f"Selected {len(bets)} bets for {game_date}")
         return bets
 
