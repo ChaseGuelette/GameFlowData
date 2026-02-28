@@ -7,26 +7,17 @@ Runs all daily jobs on schedule using APScheduler.
 Schedule (ET → UTC for EST):
     9:00 AM ET  (14:00 UTC) - daily_stats_job
 
+    11 AM-11 PM ET (16:00-04:00 UTC) every 10 min:
+        :00,:10,:20,:30,:40,:50 - lines_job --live --props-only  (silent)
+        :02,:12,:22,:32,:42,:52 - edge_refresh_job               (silent)
+
     12:00 PM ET (17:00 UTC) - lines_job --live (full)
     12:15 PM ET (17:15 UTC) - inference_job (full MC)
-
-    1:00 PM ET  (18:00 UTC) - lines_job --live --props-only
-    1:02 PM ET  (18:02 UTC) - edge_refresh_job
-
-    2:00 PM ET  (19:00 UTC) - lines_job --live --props-only
-    2:02 PM ET  (19:02 UTC) - edge_refresh_job
-
-    3:00 PM ET  (20:00 UTC) - lines_job --live --props-only
-    3:02 PM ET  (20:02 UTC) - edge_refresh_job
 
     4:00 PM ET  (21:00 UTC) - lines_job --live (full)
     4:15 PM ET  (21:15 UTC) - inference_job (full MC)
 
-    4:30 PM ET  (21:30 UTC) - lines_job --live --props-only + edge_refresh
-    5:00 PM ET  (22:00 UTC) - lines_job --live --props-only + edge_refresh
-    5:30 PM ET  (22:30 UTC) - lines_job --live --props-only + edge_refresh
-    6:00 PM ET  (23:00 UTC) - lines_job --live --props-only + edge_refresh
-    6:30 PM ET  (23:30 UTC) - lines_job --live --props-only + edge_refresh (final)
+    "silent" = Discord alerts only on failure (~78 runs/day each).
 
 Usage:
     python src/orchestration/scheduler.py              # Start scheduler loop
@@ -180,8 +171,14 @@ def _send_job_alert(
         logger.warning(f"Failed to send Discord alert for {script_name}: {e}")
 
 
-def run_job(script_name: str, extra_args: str = ""):
-    """Run a job script as a subprocess and send alert on completion."""
+def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = False):
+    """Run a job script as a subprocess and send alert on completion.
+
+    Args:
+        script_name: The script to run.
+        extra_args: Additional CLI arguments.
+        silent_on_success: If True, skip Discord alerts on success (still alert on failure).
+    """
     script_path = PROJECT_ROOT / "src" / "orchestration" / script_name
     cmd = [sys.executable, str(script_path)] + (shlex.split(extra_args) if extra_args else [])
     logger.info(f"Starting job: {script_name}{' ' + extra_args if extra_args else ''}")
@@ -211,8 +208,9 @@ def run_job(script_name: str, extra_args: str = ""):
             logger.error(f"Job failed: {script_name}")
             logger.error(f"STDERR: {stderr[-2000:] if stderr else 'None'}")
 
-        # Send alert
-        _send_job_alert(script_name, success, duration, stdout, stderr)
+        # Send alert (skip success alerts if silent_on_success)
+        if not (silent_on_success and success):
+            _send_job_alert(script_name, success, duration, stdout, stderr)
 
     except subprocess.TimeoutExpired:
         duration = time.time() - start_time
@@ -300,6 +298,16 @@ def run_edge_refresh():
     run_job("edge_refresh_job.py")
 
 
+def run_lines_props_only_silent():
+    """Props-only scrape, Discord alerts only on failure."""
+    run_job("lines_job.py", extra_args="--live --props-only", silent_on_success=True)
+
+
+def run_edge_refresh_silent():
+    """Edge refresh, Discord alerts only on failure."""
+    run_job("edge_refresh_job.py", silent_on_success=True)
+
+
 def main():
     import argparse
 
@@ -355,21 +363,22 @@ def main():
         name="Inference (12:15 PM ET)",
     )
 
-    # --- Hourly props-only + edge refresh: 1-3 PM ET ---
+    # --- Every 10 min props-only + edge refresh: 11 AM - 11 PM ET ---
+    # UTC: hour 16-23 and 0-4 (EST = UTC-5)
 
-    for utc_hour, et_label in [(18, "1 PM"), (19, "2 PM"), (20, "3 PM")]:
-        scheduler.add_job(
-            run_lines_props_only,
-            CronTrigger(hour=utc_hour, minute=0),
-            id=f"props_{utc_hour}",
-            name=f"Props Only ({et_label} ET)",
-        )
-        scheduler.add_job(
-            run_edge_refresh,
-            CronTrigger(hour=utc_hour, minute=2),
-            id=f"edge_refresh_{utc_hour}",
-            name=f"Edge Refresh ({et_label}:02 ET)",
-        )
+    scheduler.add_job(
+        run_lines_props_only_silent,
+        CronTrigger(hour='16-23,0-4', minute='*/10'),
+        id="props_every_10",
+        name="Props Only (every 10 min, 11AM-11PM ET)",
+    )
+
+    scheduler.add_job(
+        run_edge_refresh_silent,
+        CronTrigger(hour='16-23,0-4', minute='2,12,22,32,42,52'),
+        id="edge_refresh_every_10",
+        name="Edge Refresh (every 10 min, 11AM-11PM ET)",
+    )
 
     # --- Second window: 4 PM full scrape + inference ---
 
@@ -388,26 +397,6 @@ def main():
         id="inference_4pm",
         name="Inference (4:15 PM ET)",
     )
-
-    # --- Half-hourly props-only + edge refresh: 4:30-6:30 PM ET ---
-
-    half_hourly = [
-        (21, 30, "4:30 PM"), (22, 0, "5 PM"), (22, 30, "5:30 PM"),
-        (23, 0, "6 PM"), (23, 30, "6:30 PM"),
-    ]
-    for utc_h, utc_m, et_label in half_hourly:
-        scheduler.add_job(
-            run_lines_props_only,
-            CronTrigger(hour=utc_h, minute=utc_m),
-            id=f"props_{utc_h}_{utc_m:02d}",
-            name=f"Props Only ({et_label} ET)",
-        )
-        scheduler.add_job(
-            run_edge_refresh,
-            CronTrigger(hour=utc_h, minute=utc_m + 2),
-            id=f"edge_refresh_{utc_h}_{utc_m:02d}",
-            name=f"Edge Refresh ({et_label}:02 ET)",
-        )
 
     # Log scheduled jobs
     logger.info("Scheduled jobs:")

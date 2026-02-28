@@ -31,6 +31,9 @@ const STAT_TO_MARKET: Record<StatType, string> = {
   ast: 'player_assists',
 }
 
+// DFS platforms to exclude from main dashboard sportsbook lines
+const DFS_BOOKMAKERS = ['prizepicks', 'underdog', 'pick6', 'betr_us_dfs']
+
 // Format odds for display
 const formatOdds = (odds: number): string => {
   return odds >= 0 ? `+${odds}` : `${odds}`
@@ -174,6 +177,7 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
         .eq('player_id', prediction.player_id)
         .eq('game_id', prediction.game_id)
         .eq('market_key', marketKey)
+        .not('bookmaker', 'in', `(${DFS_BOOKMAKERS.join(',')})`)
         .order('bookmaker')
 
       if (error) {

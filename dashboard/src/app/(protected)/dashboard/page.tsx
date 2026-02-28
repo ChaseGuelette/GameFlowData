@@ -361,7 +361,19 @@ export default function DashboardPage() {
           </h1>
           <p className="text-slate-400">
             {formatDate(selectedDate)} • {sortedPredictions.length} {showModelPicks ? 'recommended' : 'picks'}
-            {showModelPicks && <span className="text-green-400 ml-2">BL Edge ≥9%</span>}
+            {showModelPicks && (
+              <span className="text-green-400 ml-2 inline-flex items-center gap-1">
+                BL Edge ≥9%
+                <span className="relative group cursor-help">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 hover:text-slate-200 transition-colors">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM8.94 6.94a.75.75 0 1 1-1.061-1.061 3 3 0 1 1 2.871 5.026v.345a.75.75 0 0 1-1.5 0v-.5c0-.72.57-1.172 1.081-1.287A1.5 1.5 0 1 0 8.94 6.94ZM10 15a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
+                  </svg>
+                  <span className="invisible group-hover:visible absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 rounded-lg bg-slate-800 border border-slate-600 text-xs text-slate-300 leading-relaxed shadow-xl z-50">
+                    Edges shown here are market-anchored (Black-Litterman blended). The model&apos;s raw probability is blended with the sportsbook&apos;s implied probability, producing more conservative but higher-conviction picks. Raw edges are higher — switch to All Bets to see them.
+                  </span>
+                </span>
+              </span>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">

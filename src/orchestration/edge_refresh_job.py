@@ -106,7 +106,7 @@ def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataF
                 odds_american,
                 snapshot_time,
                 ROW_NUMBER() OVER (
-                    PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
+                    PARTITION BY player_id, game_id, market_key, bookmaker, outcome_label
                     ORDER BY snapshot_time DESC
                 ) as rn
             FROM raw_player_props_combined
@@ -119,12 +119,12 @@ def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataF
             LPAD(game_id, 10, '0') as game_id,
             bookmaker,
             market_key,
-            line,
+            MAX(line) as line,
             MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
             MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
         FROM ranked_lines
         WHERE rn = 1
-        GROUP BY player_id, game_id, bookmaker, market_key, line
+        GROUP BY player_id, game_id, bookmaker, market_key
     """).bindparams(
         bindparam("game_ids", expanding=True),
         bindparam("markets", expanding=True),
@@ -519,6 +519,22 @@ def main():
             store.store_predictions(updated, target_date)
         else:
             logger.info("[DRY RUN] Skipping database upsert")
+
+        # 7b. Place paper bets on newly-recommended predictions
+        if not args.dry_run:
+            try:
+                from src.paper_trading.paper_trader import PaperTrader
+
+                logger.info("Placing paper bets on recommended predictions...")
+                trader = PaperTrader()
+                bets = trader.select_bets(target_date)
+                if bets:
+                    count = trader.place_bets(bets)
+                    logger.info(f"Placed {count} paper bets for {target_date}")
+                else:
+                    logger.info("No predictions meet edge threshold for paper bets")
+            except Exception as e:
+                logger.warning(f"Paper bet placement failed: {e} (non-fatal)")
 
         # 8. Export CSV backup
         output_dir = Path("predictions")
