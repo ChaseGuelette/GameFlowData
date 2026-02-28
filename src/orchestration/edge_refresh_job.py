@@ -553,13 +553,25 @@ def main():
         else:
             logger.info("[DRY RUN] Skipping database upsert")
 
-        # 7b. Place paper bets on newly-recommended predictions
+        # 7b. Resolve past pending bets, then place new bets
         if not args.dry_run:
             try:
                 from src.paper_trading.paper_trader import PaperTrader
 
-                logger.info("Placing paper bets on recommended predictions...")
                 trader = PaperTrader()
+
+                # Resolve any pending bets from PREVIOUS days (exclude_today=True
+                # so we never falsely resolve today's games that haven't finished)
+                logger.info("Resolving pending bets from previous days...")
+                res = trader.resolve_all_pending(exclude_today=True)
+                if res["total_resolved"] > 0:
+                    logger.info(
+                        f"Resolved {res['total_resolved']} bets across {res['dates_processed']} days "
+                        f"({res['total_won']}W {res['total_lost']}L {res['total_push']}P)"
+                    )
+
+                # Place / update paper bets for today's predictions
+                logger.info("Placing paper bets on recommended predictions...")
                 bets = trader.select_bets(target_date)
                 if bets:
                     count = trader.place_bets(bets)
@@ -567,7 +579,7 @@ def main():
                 else:
                     logger.info("No predictions meet edge threshold for paper bets")
             except Exception as e:
-                logger.warning(f"Paper bet placement failed: {e} (non-fatal)")
+                logger.warning(f"Paper trading step failed: {e} (non-fatal)")
 
         # 8. Export CSV backup
         output_dir = Path("predictions")

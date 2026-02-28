@@ -557,27 +557,44 @@ class PaperTrader:
         )
         return results
 
-    def resolve_all_pending(self) -> dict[str, Any]:
+    def resolve_all_pending(self, exclude_today: bool = True) -> dict[str, Any]:
         """
         Resolve ALL pending bets where game results are available.
 
         This handles multi-day catchup (weekend gaps, job failures).
         Safe to run multiple times - only resolves bets with available stats.
 
+        Args:
+            exclude_today: If True (default), skip today's bets to avoid
+                false resolution of games that haven't finished yet.
+                The team_game_stats check provides a secondary guard, but
+                this prevents any edge case where partial stats exist.
+
         Returns:
             dict with {dates_processed: int, dates_skipped: int,
                        total_resolved: int, by_date: {...}}
         """
-        # Get all unique dates with pending bets
-        dates_query = text("""
-            SELECT DISTINCT game_date
-            FROM paper_bets
-            WHERE status = 'pending'
-            ORDER BY game_date ASC
-        """)
+        # Get all unique dates with pending bets (exclude today if requested)
+        if exclude_today:
+            dates_query = text("""
+                SELECT DISTINCT game_date
+                FROM paper_bets
+                WHERE status = 'pending'
+                  AND game_date < :today
+                ORDER BY game_date ASC
+            """)
+            query_params = {"today": date.today()}
+        else:
+            dates_query = text("""
+                SELECT DISTINCT game_date
+                FROM paper_bets
+                WHERE status = 'pending'
+                ORDER BY game_date ASC
+            """)
+            query_params = {}
 
         with self.engine.connect() as conn:
-            dates_result = conn.execute(dates_query).fetchall()
+            dates_result = conn.execute(dates_query, query_params).fetchall()
 
         if not dates_result:
             logger.info("No pending bets to resolve")
