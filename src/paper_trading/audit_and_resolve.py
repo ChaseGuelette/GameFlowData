@@ -163,7 +163,7 @@ def main():
         # Check for pending bets that CAN be resolved
         resolvable_dates = find_unresolved_with_stats(engine)
         if resolvable_dates:
-            print(f"\n⚠ Found {len(resolvable_dates)} dates with PENDING bets that have game stats available:")
+            print(f"\nWARNING: Found {len(resolvable_dates)} dates with PENDING bets that have game stats available:")
             for d in resolvable_dates:
                 print(f"  - {d}")
         else:
@@ -175,7 +175,7 @@ def main():
         missed = find_missed_bet_dates(engine, start_date, end_date)
         if missed:
             total_gap = sum(m["gap"] for m in missed)
-            print(f"\n⚠ Found {len(missed)} dates with MORE recommended predictions than placed bets ({total_gap} total gap):")
+            print(f"\nWARNING: Found {len(missed)} dates with MORE recommended predictions than placed bets ({total_gap} total gap):")
             for m in missed:
                 print(f"  - {m['game_date']}: {m['recommended']} recommended, {m['bets_placed']} placed (gap: {m['gap']})")
         else:
