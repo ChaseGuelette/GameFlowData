@@ -167,6 +167,23 @@ export default function DashboardPage() {
     setLoading(true)
     const supabase = createClient()
 
+    // Safety net: fetch "Out" player IDs from injury table to filter client-side
+    // Catches players the backend edge_refresh might not have cleaned up yet
+    let outPlayerIds = new Set<number>()
+    try {
+      const { data: injuryData } = await supabase
+        .from('rapidapi_injuries')
+        .select('player_id')
+        .eq('status', 'Out')
+        .eq('report_date', date)
+        .not('player_id', 'is', null)
+      if (injuryData) {
+        outPlayerIds = new Set(injuryData.map(r => r.player_id))
+      }
+    } catch {
+      // Table may not be accessible via RLS — silently continue
+    }
+
     const { data: predictionsData, error: predictionsError } = await supabase
       .from('daily_predictions')
       .select('*')
@@ -180,6 +197,8 @@ export default function DashboardPage() {
       // Map DB columns to frontend expected names and add team abbrevs
       const mappedPredictions = predictionsData
         .filter(p => {
+          // Filter out injured players (status = Out)
+          if (outPlayerIds.has(p.player_id)) return false
           const overEdge = p.over_edge
           const underEdge = p.under_edge
           return Number.isFinite(overEdge) || Number.isFinite(underEdge)

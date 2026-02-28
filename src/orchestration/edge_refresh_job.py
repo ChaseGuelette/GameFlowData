@@ -327,28 +327,61 @@ def refresh_injuries(engine, target_date: date) -> None:
 def get_out_player_ids(engine, target_date: date) -> set[int]:
     """Get player IDs whose most recent injury status (last 7 days) is 'Out'.
 
-    Replicates the same query used in daily_runner._filter_injured_players().
+    Two-pass approach:
+      1. Primary: match by player_id for linked injuries.
+      2. Fallback: join unlinked injuries (player_id IS NULL) against the players
+         table by name to catch the ~0.7% the linker couldn't resolve.
     """
-    query = text("""
-        WITH recent_injuries AS (
-            SELECT
-                player_id,
-                status,
-                ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY report_date DESC) as rn
-            FROM rapidapi_injuries
-            WHERE report_date >= :cutoff_date
-              AND report_date <= :target_date
-              AND player_id IS NOT NULL
-        )
-        SELECT DISTINCT player_id
-        FROM recent_injuries
-        WHERE rn = 1 AND status = 'Out'
-    """)
     cutoff_date = target_date - timedelta(days=7)
 
     with engine.connect() as conn:
+        # Pass 1: linked injuries (player_id IS NOT NULL)
+        query = text("""
+            WITH recent_injuries AS (
+                SELECT
+                    player_id,
+                    status,
+                    ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY report_date DESC) as rn
+                FROM rapidapi_injuries
+                WHERE report_date >= :cutoff_date
+                  AND report_date <= :target_date
+                  AND player_id IS NOT NULL
+            )
+            SELECT DISTINCT player_id
+            FROM recent_injuries
+            WHERE rn = 1 AND status = 'Out'
+        """)
         result = conn.execute(query, {"target_date": target_date, "cutoff_date": cutoff_date})
-        return {row[0] for row in result}
+        out_ids = {row[0] for row in result}
+
+        # Pass 2: unlinked injuries matched by name against the players table
+        name_query = text("""
+            WITH recent_unlinked AS (
+                SELECT
+                    player,
+                    status,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY LOWER(TRIM(player))
+                        ORDER BY report_date DESC
+                    ) as rn
+                FROM rapidapi_injuries
+                WHERE report_date >= :cutoff_date
+                  AND report_date <= :target_date
+                  AND player_id IS NULL
+            )
+            SELECT DISTINCT p.player_id
+            FROM recent_unlinked ru
+            JOIN players p ON LOWER(TRIM(p.player_name)) = LOWER(TRIM(ru.player))
+            WHERE ru.rn = 1 AND ru.status = 'Out'
+        """)
+        result = conn.execute(name_query, {"target_date": target_date, "cutoff_date": cutoff_date})
+        name_matched = {row[0] for row in result}
+
+        if name_matched:
+            logger.info(f"Found {len(name_matched)} additional Out players via name matching")
+            out_ids.update(name_matched)
+
+        return out_ids
 
 
 def filter_out_players(
