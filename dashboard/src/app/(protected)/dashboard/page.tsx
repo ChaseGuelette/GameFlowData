@@ -11,7 +11,8 @@ import { TonightsGames, type GameInfo } from '@/components/predictions/TonightsG
 import { type Prediction } from '@/types/predictions'
 import { getToday, formatDate, calculateBLConfidence, blendProbability } from '@/lib/utils'
 import { TEAM_ABBREV, TEAM_NAME_TO_ABBREV } from '@/lib/constants'
-import { US_STATES } from '@/lib/sportsbook-availability'
+import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS } from '@/lib/sportsbook-availability'
+import { STAT_TO_MARKET } from '@/types/dfs'
 
 export default function DashboardPage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
@@ -28,6 +29,8 @@ export default function DashboardPage() {
     if (typeof window === 'undefined') return ''
     return localStorage.getItem('user_state') || ''
   })
+  const [bookFilter, setBookFilter] = useState<string>('')
+  const [bookAvailability, setBookAvailability] = useState<Set<string> | null>(null)
 
   // Taken bets state (persisted per date in localStorage)
   const [takenBets, setTakenBets] = useState<Set<string>>(() => {
@@ -269,6 +272,38 @@ export default function DashboardPage() {
     }
   }, [selectedDate, fetchPredictions])
 
+  // Fetch book availability when bookFilter changes
+  useEffect(() => {
+    if (!bookFilter || predictions.length === 0) {
+      setBookAvailability(null)
+      return
+    }
+    async function fetchBookAvailability() {
+      const supabase = createClient()
+      const gameIds = [...new Set(predictions.map(p => p.game_id))]
+      const { data } = await supabase
+        .from('raw_player_props_combined')
+        .select('player_id, market_key')
+        .eq('bookmaker', bookFilter)
+        .in('game_id', gameIds)
+        .not('player_id', 'is', null)
+      if (data) {
+        setBookAvailability(new Set(data.map(r => `${r.player_id}_${r.market_key}`)))
+      }
+    }
+    fetchBookAvailability()
+  }, [bookFilter, predictions])
+
+  // Reset bookFilter if selected book isn't available in the new state
+  useEffect(() => {
+    if (userState && bookFilter) {
+      const allowed = STATE_SPORTSBOOKS[userState]
+      if (allowed && !allowed.includes(bookFilter)) {
+        setBookFilter('')
+      }
+    }
+  }, [userState, bookFilter])
+
   // Get unique matchups from predictions for dropdown (e.g., "LAL vs SAS")
   const availableMatchups = [...new Set(predictions.map(p => {
     const teams = [p.team_abbrev || 'UNK', p.opponent_abbrev || 'UNK'].sort()
@@ -345,7 +380,7 @@ export default function DashboardPage() {
     return p
   })
 
-  // Filter predictions by stat type, matchup, edge threshold, and Model Picks toggle
+  // Filter predictions by stat type, matchup, edge threshold, book availability, and Model Picks toggle
   const filteredPredictions = enrichedPredictions.filter(p => {
     if (showModelPicks && !p.is_recommended) return false
     if (filter !== 'all' && p.stat !== filter) return false
@@ -354,6 +389,10 @@ export default function DashboardPage() {
       if (!matchupTeams.includes(p.team_abbrev || '') && !matchupTeams.includes(p.opponent_abbrev || '')) {
         return false
       }
+    }
+    if (bookAvailability) {
+      const key = `${p.player_id}_${STAT_TO_MARKET[p.stat]}`
+      if (!bookAvailability.has(key)) return false
     }
     // Skip edge threshold for Model Picks (is_recommended already guarantees BL edge >= 9%)
     if (showModelPicks) return true
@@ -410,6 +449,19 @@ export default function DashboardPage() {
                 {s.value ? s.value : 'All States'}
               </option>
             ))}
+          </select>
+          {/* Sportsbook Filter */}
+          <select
+            value={bookFilter}
+            onChange={(e) => setBookFilter(e.target.value)}
+            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+          >
+            {SPORTSBOOK_OPTIONS
+              .filter(opt => !opt.value || !userState || (STATE_SPORTSBOOKS[userState]?.includes(opt.value)))
+              .map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))
+            }
           </select>
           {/* Model Picks Toggle */}
           <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
