@@ -149,7 +149,7 @@ def main():
             pnl_by_date = bets_df.groupby("game_date")["total_pnl"].sum()
             pivot["total_pnl"] = pnl_by_date
 
-            print(f"\nBets by date and status:")
+            print("\nBets by date and status:")
             print(pivot.to_string())
 
             # Summary

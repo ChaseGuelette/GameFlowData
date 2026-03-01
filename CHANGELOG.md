@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-28 Session 51] — 10-Minute Scheduler + Bet Resolution + Live Game Filter
+
+### Changed
+
+- **`scheduler.py`:** Replaced 21 hardcoded job definitions (hourly 1-3 PM, half-hourly 4:30-6:30 PM) with 2 APScheduler `CronTrigger` jobs covering 11 AM – 11 PM ET every 10 minutes. Props scrape at `:00/:10/:20/:30/:40/:50`, edge refresh at `:02/:12/:22/:32/:42/:52`. Added `silent_on_success` flag to `run_job()` — high-frequency jobs only send Discord alerts on failure (~78 runs/day each, down from 8/day previously). Total job definitions: 21 → 7.
+- **`edge_refresh_job.py`:** Step 7b now calls `PaperTrader.resolve_all_pending(exclude_today=True)` before placing new bets. Previous-day bets get resolved every 10 minutes instead of only once daily.
+- **`paper_trader.py`:** Added `exclude_today` parameter to `resolve_all_pending()` — filters `game_date < today` to prevent same-day false resolution. Added `_get_started_game_ids()` method checking `commence_time` from `raw_player_props_combined`. `select_bets()` now skips in-progress games to prevent false edges from mid-game line comparisons.
+
+### Added
+
+- **`audit_and_resolve.py`:** Diagnostic script for paper bet state. Supports `--audit` (show status breakdown), `--resolve` (resolve pending bets with available stats), `--backfill` (re-place missed bets from historical predictions), and `--dry-run` flags.
+
+### Fixed
+
+- **Paper bet resolution gap:** Bets placed after old schedule cutoff (6:30 PM) were never resolved. Backfilled 14 missed bets across 5 dates; corrected P&L from $1,841.68 → $2,231.14 (+$389.46).
+- **Live game false edges:** 16 of 36 pending bets were for games already in progress (pre-game MC samples vs mid-game lines). Live game filter prevents this going forward; existing 16 live bets were deleted.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/scheduler.py` | Modified — 10-min cron schedule, silent_on_success |
+| `src/orchestration/edge_refresh_job.py` | Modified — resolve pending bets before placing new ones |
+| `src/paper_trading/paper_trader.py` | Modified — exclude_today, live game filter |
+| `src/paper_trading/audit_and_resolve.py` | Created — diagnostic/fix script |
+
+### Verified
+
+- 575 Python tests pass, 1 skipped, ruff clean
+- Backfill resolved 18 additional bets correctly
+- Live game filter correctly identified 16 in-progress game bets
+- Deployed to Railway, 10-minute cadence confirmed
+
+---
+
 ## [2026-02-26 Session 50] — MLB Statcast & FanGraphs Advanced Stats Scrapers
 
 ### Added

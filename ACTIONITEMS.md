@@ -1,5 +1,38 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-02-28 — Session 51)
+
+### What We Did
+
+**Rewrote scheduler to 10-minute cadence + fixed paper bet resolution + added live game filtering.**
+
+**Scheduler Rewrite (`scheduler.py`):**
+- Replaced 21 hardcoded job definitions (hourly 1-3 PM, half-hourly 4:30-6:30 PM) with 2 APScheduler cron jobs covering 11 AM – 11 PM ET every 10 minutes (~78 runs/day each).
+- Added `silent_on_success` flag to `run_job()` — high-frequency jobs only send Discord alerts on failure.
+- Total job definitions reduced from 21 → 7.
+
+**Continuous Bet Resolution (`edge_refresh_job.py`):**
+- Edge refresh step 7b now calls `resolve_all_pending(exclude_today=True)` before placing new bets.
+- Bets from previous days are resolved every 10 minutes instead of only at the daily stats job.
+- Backfilled 14 missed historical bets across 5 dates; P&L corrected from $1,841.68 → $2,231.14.
+
+**Live Game Filter (`paper_trader.py`):**
+- Added `_get_started_game_ids()` — checks `commence_time` from `raw_player_props_combined` to identify in-progress games.
+- `select_bets()` now skips games where `commence_time < now()`, preventing false edges from mid-game line comparisons.
+- Added `exclude_today` parameter to `resolve_all_pending()` to prevent same-day false resolution.
+
+**Diagnostic Tool (`audit_and_resolve.py`):**
+- New script with `--audit`, `--resolve`, `--backfill`, `--dry-run` flags for inspecting and fixing paper bet state.
+
+### Remaining Action Items
+
+1. **Run MLB backfills** — boxscores (2022-2025), then FanGraphs (all seasons), then Statcast (2024-2025), then props/lines
+2. **Stripe integration** — subscribe page, customer portal, webhook
+3. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts (or find alternative data source)
+4. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-02-26 — Session 50)
 
 ### What We Did

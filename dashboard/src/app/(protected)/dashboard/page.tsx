@@ -25,6 +25,7 @@ export default function DashboardPage() {
   const [edgeThreshold, setEdgeThreshold] = useState<number>(0.03)  // Default 3%
   const [blTau, setBlTau] = useState<number | null>(null)  // null = no BL blending
   const [showModelPicks, setShowModelPicks] = useState<boolean>(false)  // Model Picks toggle
+  const [showLive, setShowLive] = useState<boolean>(false)  // Live betting toggle
   const [userState, setUserState] = useState<string>(() => {
     if (typeof window === 'undefined') return ''
     return localStorage.getItem('user_state') || ''
@@ -382,6 +383,9 @@ export default function DashboardPage() {
 
   // Filter predictions by stat type, matchup, edge threshold, book availability, and Model Picks toggle
   const filteredPredictions = enrichedPredictions.filter(p => {
+    if (!showLive && p.game_time) {
+      if (new Date(p.game_time) <= new Date()) return false
+    }
     if (showModelPicks && !p.is_recommended) return false
     if (filter !== 'all' && p.stat !== filter) return false
     if (teamFilter !== 'all') {
@@ -463,6 +467,29 @@ export default function DashboardPage() {
               ))
             }
           </select>
+          {/* Live Betting Toggle */}
+          <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
+            <button
+              onClick={() => setShowLive(false)}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                !showLive
+                  ? 'bg-slate-700 text-slate-100'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Pre-Game
+            </button>
+            <button
+              onClick={() => setShowLive(true)}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                showLive
+                  ? 'bg-orange-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              + Live
+            </button>
+          </div>
           {/* Model Picks Toggle */}
           <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
             <button

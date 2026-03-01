@@ -11,12 +11,14 @@ The daily pipeline is split into four jobs based on execution frequency:
 | `daily_stats_job.py` | 9:00 AM | NBA game results + processing | ~3-5 min |
 | `lines_job.py --live` | 12 PM, 4 PM | Full live scrape (game lines + props + injuries + linker) | ~30-90 sec |
 | `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation | ~16 sec |
-| `lines_job.py --live --props-only` | 1-3 PM hourly, 4:30-6:30 PM half-hourly | Props-only live scrape + linker | ~15-30 sec |
-| `edge_refresh_job.py` | 2 min after each props-only | Recalculate edges from stored samples + fresh lines | ~2-3 sec |
+| `lines_job.py --live --props-only` | Every 10 min, 11 AM – 11 PM | Props-only live scrape + linker | ~15-30 sec |
+| `edge_refresh_job.py` | Every 10 min (+2 min offset), 11 AM – 11 PM | Recalculate edges + resolve bets + place bets | ~2-3 sec |
 
 **Note:** Inference job optimized from ~3 min to ~16 sec in Session 27 via parallel feature building and prop lines query optimization.
 
-**API Budget:** 5M credits/month. New schedule uses ~3,250/month (previously ~750/month) — negligible impact.
+**API Budget:** 5M credits/month. Current schedule uses ~3,250/month — negligible impact.
+
+**Discord Alerts:** High-frequency jobs (props-only, edge refresh) only send Discord alerts on failure (`silent_on_success`). Full scrapes, inference, and daily stats always alert.
 
 ## Pipeline Timeline
 
@@ -47,19 +49,16 @@ The daily pipeline is split into four jobs based on execution frequency:
            ├─ Export predictions CSV
            └─ Send Discord alert
 
-1:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (1:02 PM)
-2:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (2:02 PM)
-3:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (3:02 PM)
+11 AM -    lines_job.py --live --props-only (every 10 min, :00/:10/:20/:30/:40/:50)
+11 PM      edge_refresh_job.py (every 10 min, :02/:12/:22/:32/:42/:52)
+           ├─ Resolve pending bets from previous days (exclude_today=True)
+           ├─ Recalculate edges from stored MC samples + fresh lines
+           └─ Place/update paper bets for today (skips live games)
+           Discord alerts: ONLY on failure (silent_on_success)
 
 4:00 PM    lines_job.py --live (full scrape — catches new player props)
 
 4:15 PM    inference_job.py (FULL MC inference — second window)
-
-4:30 PM    lines_job.py --live --props-only → edge_refresh_job.py (4:32 PM)
-5:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (5:02 PM)
-5:30 PM    lines_job.py --live --props-only → edge_refresh_job.py (5:32 PM)
-6:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (6:02 PM)
-6:30 PM    lines_job.py --live --props-only → edge_refresh_job.py (6:32 PM, final)
 
 7:00 PM    Games typically start
 ```
@@ -116,7 +115,7 @@ Output is written to `logs/daily_stats.log`.
 
 **Schedule:**
 - **Full scrape (`--live`):** 12 PM, 4 PM ET
-- **Props-only (`--live --props-only`):** 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET
+- **Props-only (`--live --props-only`):** Every 10 minutes, 11 AM – 11 PM ET (silent on success)
 - **Historical mode (no `--live`):** For backfills (uses historical API snapshots)
 
 ### Usage
@@ -169,7 +168,7 @@ Output is written to `logs/lines.log`.
 
 **Purpose:** Lightweight edge recalculation using stored MC samples and fresh prop lines. Does NOT re-run inference — no model loading, no feature engineering, no MC sampling.
 
-**Schedule:** 2 minutes after each props-only scrape (8 times daily)
+**Schedule:** Every 10 minutes (+2 min offset from props scrape), 11 AM – 11 PM ET (~78 runs/day, silent on success)
 
 ### Usage
 
@@ -208,6 +207,8 @@ python src/orchestration/edge_refresh_job.py --stats pts reb
 8. Recalculate Black-Litterman blended probabilities and recommendations
 9. Upsert updated predictions to `daily_predictions`
 10. Export CSV backup
+11. **Resolve pending paper bets** from previous days (`exclude_today=True`) — prevents same-day false resolution
+12. **Place/update paper bets** for today's recommended predictions — skips games already in progress (checks `commence_time`)
 
 ### Key Design Decisions
 

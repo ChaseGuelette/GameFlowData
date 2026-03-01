@@ -21,7 +21,7 @@ import gzip
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -228,7 +228,7 @@ class PaperTrader:
         Uses raw_player_props_combined which has commence_time per game.
         Returns set of game_id strings (10-digit zero-padded).
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         query = text("""
             SELECT DISTINCT game_id, commence_time
@@ -239,7 +239,7 @@ class PaperTrader:
               AND snapshot_time > :cutoff
         """)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # Only look at recent snapshots (last 24h) to avoid scanning old data
         cutoff = now - pd.Timedelta(hours=24)
 

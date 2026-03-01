@@ -399,8 +399,8 @@ A simulation environment to validate betting strategies.
 | `daily_stats_job.py` | 9:00 AM ET (once) | NBA game results + full processing pipeline |
 | `lines_job.py --live` | 12 PM, 4 PM ET | Full lines scrape (game lines + live props + injuries + linker) |
 | `inference_job.py` | 12:15 PM, 4:15 PM ET | Full inference (MC predictions + edges + BL) |
-| `lines_job.py --live --props-only` | 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET | Props-only scrape (live props + linker) |
-| `edge_refresh_job.py` | 2 min after each props-only | Recalculate edges from stored MC samples + fresh lines |
+| `lines_job.py --live --props-only` | Every 10 min, 11 AM–11 PM ET | Props-only scrape (~78 runs/day, silent Discord) |
+| `edge_refresh_job.py` | Every 10 min +2 min offset, 11 AM–11 PM ET | Recalculate edges + resolve past bets + place new bets (~78 runs/day, silent Discord) |
 
 **`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~3-5 minutes (optimized from ~30 minutes via incremental scripts).
 
@@ -427,12 +427,13 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 **Railway Cloud Deployment (2026-02-14):** Production deployment uses Railway with APScheduler for job orchestration:
 - `nixpacks.toml` — Nixpacks build config: Python venv with system-site-packages, explicit `LD_LIBRARY_PATH` for Nix-installed shared libraries (libz, libstdc++), zlib and stdenv.cc.cc.lib nixPkgs for numpy/scipy/xgboost C extensions
 - `railway.toml` — Railway-specific build and deploy settings (nixpacks builder, restart policy)
-- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 21 jobs on cron schedule (UTC times):
+- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 7 job definitions on cron schedule (UTC times):
   - `daily_stats_job.py` — 9 AM ET (scrapes NBA game results)
   - `lines_job.py --live` — 12 PM, 4 PM ET (full live scrape: game lines + props + injuries + linker)
   - `inference_job.py` — 12:15 PM, 4:15 PM ET (full MC inference)
-  - `lines_job.py --live --props-only` — 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET (props-only scrape + linker)
-  - `edge_refresh_job.py` — 2 min after each props-only run (recalculates edges from stored samples + fresh lines)
+  - `lines_job.py --live --props-only` — Every 10 min, 11 AM–11 PM ET (props-only scrape, ~78 runs/day)
+  - `edge_refresh_job.py` — Every 10 min offset by 2 min, 11 AM–11 PM ET (recalculates edges, ~78 runs/day)
+- **Silent alerts (2026-02-28):** The every-10-min props and edge refresh jobs use `silent_on_success=True` — Discord alerts only sent on failure to avoid notification spam. Full scrape and inference jobs still alert on success.
 - **Discord job status alerts (2026-02-15):** Scheduler sends success/failure notifications to `#alerts` channel after each job completes. Includes job name, duration, metrics (when available), and error details for failures. Non-fatal — alert failures don't affect job execution.
 - **Subprocess Python path (2026-02-18):** All orchestration job scripts use `sys.executable` instead of hardcoded `python` when spawning subprocesses, ensuring the venv Python (with all installed packages) is used consistently.
 - Single always-on worker process handles all scheduled jobs
@@ -443,7 +444,11 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 
 ### 10. Paper Trading (`src/paper_trading/`)
 
-Paper bet placement, outcome resolution, and P&L tracking. Bet placement is automated via `inference_job.py` (runs after each prediction generation). Resolution is automated via `daily_stats_job.py` (runs each morning after games finalize). Manual CLI scripts also available for ad-hoc operations. Integrated with the Dashboard for visualization.
+Paper bet placement, outcome resolution, and P&L tracking. Bet placement is automated via `edge_refresh_job.py` (runs every 10 min, 11 AM–11 PM ET). Resolution is automated at two points: (1) `edge_refresh_job.py` resolves previous-day bets before placing new ones (via `resolve_all_pending(exclude_today=True)`), and (2) `daily_stats_job.py` resolves any remaining pending bets each morning. Manual CLI scripts also available for ad-hoc operations. Integrated with the Dashboard for visualization.
+
+**Live game protection (2026-02-28):** `select_bets()` checks `commence_time` from `raw_player_props_combined` and skips games already in progress. Prevents false edges from comparing pre-game MC samples against mid-game lines.
+
+**Same-day resolution guard (2026-02-28):** `resolve_all_pending(exclude_today=True)` excludes today's bets from resolution, preventing false resolution of games that haven't finished. Secondary guard: `team_game_stats` won't have today's data until the 9 AM scraper runs the next morning.
 
 ### 11. Dashboard (`dashboard/`)
 
@@ -567,9 +572,10 @@ cd dashboard && npm run lint   # ESLint check
 
 | Module | Purpose |
 |--------|---------|
-| `paper_trader.py` | Core `PaperTrader` class — bet selection, Kelly sizing, outcome resolution, daily log updates |
+| `paper_trader.py` | Core `PaperTrader` class — bet selection (with live game filter), Kelly sizing, outcome resolution, daily log updates |
 | `place_bets.py` | CLI to place paper bets from daily predictions |
 | `resolve_bets.py` | CLI to resolve bets using actual game results |
+| `audit_and_resolve.py` | Diagnostic script — audits bet status by date, finds missed bets, backfills, and resolves |
 
 **Database Tables:**
 - `paper_bets` — Individual bet records with odds, edge, stake, status, P&L. Unique on `(game_date, player_id, stat_type, bet_direction)`.
