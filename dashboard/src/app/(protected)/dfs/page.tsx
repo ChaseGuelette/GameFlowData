@@ -206,7 +206,7 @@ export default function DfsPage() {
   const marketComparisons = useMemo(() => {
     if (dfsLines.length === 0) return new Map<string, { comp: DfsComparison; platforms: MarketEdgePlatformLine[] }>()
 
-    // We need predictions for player info
+    // Build prediction lookup (may be empty before inference)
     const predMap = new Map<string, Prediction>()
     for (const p of predictions) {
       predMap.set(`${p.player_id}-${p.game_id}-${p.stat}`, p)
@@ -225,7 +225,8 @@ export default function DfsPage() {
 
     for (const [key, dfsLinesForPlayer] of dfsGrouped) {
       const pred = predMap.get(key)
-      if (!pred) continue
+      const firstLine = dfsLinesForPlayer[0]
+      const stat = MARKET_TO_STAT[firstLine.market_key] as StatType
 
       // Get sportsbook lines for this player/stat
       const sbLines = sbIndex.get(key) || []
@@ -300,21 +301,21 @@ export default function DfsPage() {
       })
 
       const comp: DfsComparison = {
-        player_id: pred.player_id,
-        player_name: pred.player_name || `Player ${pred.player_id}`,
-        game_id: pred.game_id,
-        stat: pred.stat,
-        team_abbrev: pred.team_abbrev || 'UNK',
-        opponent_abbrev: pred.opponent_abbrev || 'UNK',
-        game_time: pred.game_time,
-        sharp_line: pred.prop_line,
-        q10: pred.q10,
-        q25: pred.q25,
-        q50: pred.q50,
-        q75: pred.q75,
-        q90: pred.q90,
-        model_prob_over: pred.model_prob_over,
-        model_prob_under: pred.model_prob_under,
+        player_id: pred?.player_id ?? firstLine.player_id,
+        player_name: pred?.player_name || firstLine.player_name || `Player ${firstLine.player_id}`,
+        game_id: pred?.game_id ?? firstLine.game_id,
+        stat: pred?.stat ?? stat,
+        team_abbrev: pred?.team_abbrev || 'UNK',
+        opponent_abbrev: pred?.opponent_abbrev || 'UNK',
+        game_time: pred?.game_time || firstLine.game_time,
+        sharp_line: pred?.prop_line ?? 0,
+        q10: pred?.q10 ?? 0,
+        q25: pred?.q25 ?? 0,
+        q50: pred?.q50 ?? 0,
+        q75: pred?.q75 ?? 0,
+        q90: pred?.q90 ?? 0,
+        model_prob_over: pred?.model_prob_over ?? 0,
+        model_prob_under: pred?.model_prob_under ?? 0,
         dfs_lines: [],
       }
 

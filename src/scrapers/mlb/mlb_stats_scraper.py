@@ -365,12 +365,14 @@ class MLBStatsScraper:
     # ------------------------------------------------------------------
 
     def _ensure_player(self, conn, player_id: int, player_name: str, position: str = ""):
-        """Insert player if not already in mlb_players."""
+        """Insert or update player in mlb_players."""
         conn.execute(
             text("""
                 INSERT INTO mlb_players (player_id, player_name, primary_position)
                 VALUES (:pid, :name, :pos)
-                ON CONFLICT (player_id) DO NOTHING
+                ON CONFLICT (player_id) DO UPDATE
+                    SET player_name = EXCLUDED.player_name,
+                        primary_position = COALESCE(EXCLUDED.primary_position, mlb_players.primary_position)
             """),
             {"pid": player_id, "name": player_name, "pos": position or None},
         )

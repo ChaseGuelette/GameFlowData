@@ -489,6 +489,33 @@ def main():
         engine = create_engine(DATABASE_URL)
         store = PredictionStore(engine)
 
+        # 0. DFS paper trading (market-edge — runs independently of model inference)
+        if not args.dry_run:
+            try:
+                from src.paper_trading.dfs_paper_trader import DfsPaperTrader
+
+                dfs_trader = DfsPaperTrader()
+
+                logger.info("Resolving pending DFS entries from previous days...")
+                dfs_res = dfs_trader.resolve_all_pending(exclude_today=True)
+                if dfs_res["total_resolved"] > 0:
+                    logger.info(
+                        f"Resolved {dfs_res['total_resolved']} DFS entries across "
+                        f"{dfs_res['dates_processed']} days "
+                        f"({dfs_res['total_won']}W {dfs_res['total_lost']}L "
+                        f"{dfs_res['total_partial']}P)"
+                    )
+
+                logger.info("Building DFS entries for today...")
+                entries = dfs_trader.build_entries(target_date)
+                if entries:
+                    count = dfs_trader.place_entries(entries)
+                    logger.info(f"Placed {count} DFS entries for {target_date}")
+                else:
+                    logger.info("No DFS entries meet edge criteria")
+            except Exception as e:
+                logger.warning(f"DFS paper trading step failed: {e} (non-fatal)")
+
         # 1. Load stored MC samples
         logger.info("Loading stored MC samples...")
         samples_dict = store.get_all_samples_for_date(target_date)
@@ -580,33 +607,6 @@ def main():
                     logger.info("No predictions meet edge threshold for paper bets")
             except Exception as e:
                 logger.warning(f"Paper trading step failed: {e} (non-fatal)")
-
-        # 7c. DFS paper trading (market-edge multi-leg entries)
-        if not args.dry_run:
-            try:
-                from src.paper_trading.dfs_paper_trader import DfsPaperTrader
-
-                dfs_trader = DfsPaperTrader()
-
-                logger.info("Resolving pending DFS entries from previous days...")
-                dfs_res = dfs_trader.resolve_all_pending(exclude_today=True)
-                if dfs_res["total_resolved"] > 0:
-                    logger.info(
-                        f"Resolved {dfs_res['total_resolved']} DFS entries across "
-                        f"{dfs_res['dates_processed']} days "
-                        f"({dfs_res['total_won']}W {dfs_res['total_lost']}L "
-                        f"{dfs_res['total_partial']}P)"
-                    )
-
-                logger.info("Building DFS entries for today...")
-                entries = dfs_trader.build_entries(target_date)
-                if entries:
-                    count = dfs_trader.place_entries(entries)
-                    logger.info(f"Placed {count} DFS entries for {target_date}")
-                else:
-                    logger.info("No DFS entries meet edge criteria")
-            except Exception as e:
-                logger.warning(f"DFS paper trading step failed: {e} (non-fatal)")
 
         # 8. Export CSV backup
         output_dir = Path("predictions")

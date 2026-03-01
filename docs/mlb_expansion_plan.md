@@ -845,6 +845,142 @@ tests/test_mlb_monte_carlo.py
 
 ---
 
+## Build Status (as of 2026-03-01)
+
+### Completed (Phase 1 — Foundation)
+
+| Component | File | Status |
+|-----------|------|--------|
+| DB schema (14 tables) | Supabase migration | Done |
+| MLB Stats API scraper | `src/scrapers/mlb/mlb_stats_scraper.py` | Done |
+| Boxscore backfill | `src/scrapers/mlb/mlb_backfill.py` | Done (2022-2025) |
+| Statcast scraper | `src/scrapers/mlb/mlb_statcast_scraper.py` | Done |
+| Statcast backfill | `src/scrapers/mlb/mlb_statcast_backfill.py` | **In progress** — 2022 done, 2023 ~65% done, 2024-2025 pending |
+| FanGraphs scraper | `src/scrapers/mlb/mlb_fangraphs_scraper.py` | Done |
+| Odds API props scraper | `src/scrapers/mlb/mlb_player_props_scraper.py` | Done |
+| Daily props scraper | `src/scrapers/mlb/mlb_daily_player_props_scraper.py` | Done |
+| Game lines scraper | `src/scrapers/mlb/mlb_daily_game_lines_scraper.py` | Done |
+| Reference data | `src/scrapers/mlb/mlb_reference.py` | Done |
+| MLB linker | `src/processing/mlb/mlb_linker.py` | Done |
+| Rolling average config | `src/processing/mlb/mlb_config.py` | Done |
+| Rolling average population | `src/processing/mlb/mlb_populate_averages.py` | Done |
+| Incremental averages | `src/processing/mlb/mlb_populate_averages_incremental.py` | Done |
+
+### Not Started (Phase 2-4)
+
+| Component | Priority | Notes |
+|-----------|----------|-------|
+| Matchup features | Phase 2 | `mlb_matchup_features.py` — pitcher vs batter context |
+| Platoon splits | Phase 2 | Integrate into rolling averages (vs LHP / vs RHP) |
+| Feature store | Phase 2 | `src/models/mlb/mlb_feature_store.py` — largest single file |
+| Pitcher K quantile trainer | Phase 3 | Reuse NBA pattern directly |
+| Batter hits NegBin trainer | Phase 3 | Fresh implementation (see decisions below) |
+| Batter HR binary classifier | Phase 3 | Simple XGBoost binary:logistic |
+| Monte Carlo (pitcher) | Phase 3 | Adapt from NBA MC |
+| Training pipeline | Phase 3 | Orchestrates all model types |
+| Backtesting harness | Phase 3 | Walk-forward on 2025 season |
+| Orchestration jobs | Phase 4 | Daily stats, lines, inference, edge refresh |
+| Paper trader | Phase 4 | Adapt from NBA paper_trader.py |
+| Scheduler integration | Phase 4 | Add MLB cron jobs to scheduler.py |
+
+### Backfills Still Needed
+
+1. **Statcast backfill** — currently running, ~6-7 hours remaining (2023 Sep onward + 2024-2025)
+2. **FanGraphs seasons** — need to run for all seasons (2022-2025)
+3. **Rolling averages population** — run `mlb_populate_averages.py` for batting + pitching after boxscores are complete
+4. **Historical props backfill** — run `mlb_player_props_scraper.py` for 2023-2025 (Odds API historical)
+5. **Linker** — run `mlb_linker.py` after props are loaded
+
+---
+
+## Modeling Decisions (confirmed 2026-03-01)
+
+### Decision 1: Three model types, not one
+
+| Prop Type | Model | Why | Output |
+|-----------|-------|-----|--------|
+| **Pitcher K, Pitcher Outs** | XGBoost Quantile Regression | Semi-continuous, range 2-14+. Same as NBA PTS/REB/AST. | Q10/Q25/Q50/Q75/Q90 → MC sampling → P(over/under) |
+| **Batter Hits, TB, RBI, Runs** | Negative Binomial (mu, alpha) | Discrete counts (0-4), quantiles collapse. NegBin handles overdispersion (variance > mean). | Analytical P(X >= k) from NegBin CDF |
+| **Batter HR, SB** | XGBoost Binary Classifier | ~90% zeros, effectively yes/no. Line is always 0.5. | Direct P(at least 1) |
+
+All three model types produce the same output: **P(over line)** and **P(under line)**. Everything downstream (edge calculation, paper trading, dashboard, DFS) is model-agnostic.
+
+### Decision 2: Fresh NegBin implementation, do NOT reuse threes code
+
+The archived `truncated_negbin.py` from the THREES model experiment failed for multiple reasons:
+- THREES had 50% missing prop lines and only produced 2 bets in backtesting
+- The truncation logic (zero-truncated NegBin) added complexity that MLB hits don't need
+- The hurdle model experiments (C3/C4/C5) were all dead ends
+
+**Action:** Write `src/models/mlb/mlb_negbin_trainer.py` from scratch. Standard (non-truncated) NegBin. XGBoost predicts mu and alpha, `scipy.stats.nbinom` computes P(over line) analytically. No Monte Carlo needed for count stats.
+
+### Decision 3: Build order — pitcher K first, batting stats second
+
+1. **Pitcher K** (quantile regression) — known pattern, most liquid market, tightest juice. Ship first, validate edge.
+2. **Batter Hits** (NegBin) — highest volume batter market, proves the NegBin approach works.
+3. **Batter HR** (binary classifier) — add once hits pipeline is validated.
+4. **TB, RBI, Runs** (NegBin) — same NegBin pattern as hits, quick to replicate.
+
+**Rationale:** If we're not ready by March 25, pitcher K alone is a viable launch product. Batting stats can be added iteratively without disrupting the pipeline.
+
+### Decision 4: No minutes-rate decomposition for MLB
+
+NBA uses a two-stage model: minutes model → rate model → Monte Carlo combines them. This handles the bimodality of starter-vs-DNP.
+
+MLB doesn't have this problem:
+- Batters get 3-5 plate appearances per game (consistent)
+- Starting pitchers pitch until pulled (5-7 innings typically)
+- DNPs are handled by lineup confirmation, not modeled
+
+MLB models predict the stat directly, not a rate.
+
+---
+
+## Next Steps (Phase 2 — after backfills complete)
+
+### Step 1: Run remaining backfills
+- Wait for Statcast backfill to finish (~6-7 hours)
+- Run FanGraphs backfill for all seasons (2022-2025)
+- Run rolling averages population (`mlb_populate_averages.py`) for batting + pitching
+- Run historical props backfill from Odds API (2023-2025)
+- Run linker on historical props
+
+### Step 2: Build feature store (`src/models/mlb/mlb_feature_store.py`)
+- SQL lateral joins pulling from `mlb_player_average_batting`, `mlb_player_average_pitching`, `mlb_team_average_stats`, `mlb_park_factors`
+- Separate feature sets per prop type (pitcher K ~15 features, batter hits ~18 features)
+- Same interface as NBA: `get_player_game_features()` for inference, `get_training_dataset()` for training
+
+### Step 3: Build matchup features (`src/processing/mlb/mlb_matchup_features.py`)
+- Opposing starter identification per game
+- `opp_starter_k_per_9_l5`, `opp_starter_whip_l5`, `opp_starter_era_l5`, `opp_starter_handedness`
+- Platoon splits: batter averages vs LHP and vs RHP separately
+
+### Step 4: Build pitcher K model (quantile regression)
+- `src/models/mlb/mlb_quantile_trainer.py` — thin wrapper around existing `quantile_trainer.py` pattern
+- `src/models/mlb/mlb_monte_carlo.py` — sample from quantile distribution (no minutes step)
+- Train on 2022-2024, calibrate on 2025
+
+### Step 5: Build batter hits model (NegBin)
+- `src/models/mlb/mlb_negbin_trainer.py` — fresh implementation
+- XGBoost regressor predicts mu (mean) and alpha (dispersion)
+- `scipy.stats.nbinom.sf(k-1, n, p)` for P(over k) — no MC sampling needed
+- Train on 2022-2024, validate on 2025
+
+### Step 6: Build batter HR model (binary classifier)
+- `src/models/mlb/mlb_binary_trainer.py` — XGBoost binary:logistic
+- Target: `(actual_hr >= 1).astype(int)`
+- Output: P(HR >= 1) directly
+
+### Step 7: Training pipeline + backtesting
+- `src/models/mlb/mlb_train_pipeline.py` — orchestrates all model types
+- `src/backtesting/mlb/mlb_backtest_harness.py` — walk-forward on 2025 season
+- Calibration targets: pitcher K quantile gaps < 3%, NegBin P(over) within 3% of actual rates, HR AUC > 0.65
+
+### Step 8: Production pipeline (Phase 4)
+- Orchestration jobs, scheduler integration, paper trading, Railway deployment
+
+---
+
 ## Risk Mitigation
 
 1. **If models aren't ready by March 25:** Launch with pitcher strikeouts only (most like NBA, uses existing quantile regression). Add batting props iteratively.

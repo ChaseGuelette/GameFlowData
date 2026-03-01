@@ -52,6 +52,7 @@ export interface CombinedEdgePlatformLine {
 
 export interface DfsLine {
   player_id: number
+  player_name?: string
   game_id: string
   bookmaker: string
   market_key: string
@@ -59,6 +60,7 @@ export interface DfsLine {
   over_odds: number | null
   under_odds: number | null
   snapshot_time: string
+  game_time?: string
 }
 
 export interface DfsComparison {

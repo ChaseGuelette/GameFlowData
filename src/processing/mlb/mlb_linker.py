@@ -20,6 +20,7 @@ Usage:
 import argparse
 import logging
 import sys
+import time
 import unicodedata
 from collections import defaultdict
 from datetime import datetime
@@ -276,9 +277,11 @@ def match_batch(
 
     # Apply fuzzy results to unmatched rows
     if unmatched_names:
-        batch_df.loc[unmatched_mask, "matched_player_id"] = (
-            batch_df.loc[unmatched_mask, "player_norm"].map(fuzzy_cache)
-        )
+        fuzzy_mapped = batch_df.loc[unmatched_mask, "player_norm"].map(fuzzy_cache)
+        # Only assign non-null fuzzy results to avoid dtype conflicts
+        has_fuzzy = fuzzy_mapped.notna()
+        if has_fuzzy.any():
+            batch_df.loc[has_fuzzy[has_fuzzy].index, "matched_player_id"] = fuzzy_mapped[has_fuzzy]
 
     # --- Match team_id (vectorized via tuple key lookup) ---
     def _match_team(row):
@@ -322,6 +325,7 @@ def apply_updates(engine, batch_df: pd.DataFrame) -> tuple[int, int, int]:
                 SET game_id = t.matched_game_id::integer
                 FROM _tmp_mlb_game_updates t
                 WHERE r.staging_id = t.staging_id
+                  AND r.game_id IS NULL
             """))
             game_matched = result.rowcount
             conn.execute(text("DROP TABLE _tmp_mlb_game_updates"))
@@ -487,40 +491,56 @@ def link_backfill():
     processed = 0
     fuzzy_cache: dict[str, int | None] = {}
 
+    consecutive_errors = 0
+    max_retries = 5
+
     while True:
-        # Always fetch from offset 0 since previous batch got linked
-        with engine.connect() as conn:
-            batch_df = pd.read_sql(
-                text("""
-                    SELECT staging_id, api_player_name, home_team, away_team, commence_time
-                    FROM mlb_raw_player_props
-                    WHERE player_id IS NULL
-                    ORDER BY staging_id
-                    LIMIT :lim
-                """),
-                conn,
-                params={"lim": batch_size},
+        try:
+            # Always fetch from offset 0 since previous batch got linked
+            with engine.connect() as conn:
+                batch_df = pd.read_sql(
+                    text("""
+                        SELECT staging_id, api_player_name, home_team, away_team, commence_time
+                        FROM mlb_raw_player_props
+                        WHERE player_id IS NULL
+                        ORDER BY staging_id
+                        LIMIT :lim
+                    """),
+                    conn,
+                    params={"lim": batch_size},
+                )
+
+            if batch_df.empty:
+                break
+
+            batch_df = match_batch(batch_df, game_lookup, player_lookup, team_id_lookup, fuzzy_cache)
+            g, p, t = apply_updates(engine, batch_df)
+            total_game += g
+            total_player += p
+            total_team += t
+            processed += len(batch_df)
+            consecutive_errors = 0  # Reset on success
+
+            # If no new player matches, remaining rows are unmatchable
+            if p == 0:
+                logger.info("No new player matches in last batch — remaining rows are unmatchable.")
+                break
+
+            logger.info(
+                f"Backfill progress: {processed:,}/{total_unlinked:,} — "
+                f"games={total_game:,} players={total_player:,} teams={total_team:,}"
             )
 
-        if batch_df.empty:
-            break
-
-        batch_df = match_batch(batch_df, game_lookup, player_lookup, team_id_lookup, fuzzy_cache)
-        g, p, t = apply_updates(engine, batch_df)
-        total_game += g
-        total_player += p
-        total_team += t
-        processed += len(batch_df)
-
-        # If nothing matched in this batch, remaining rows are truly unmatchable
-        if g == 0 and p == 0:
-            logger.info("No matches in last batch — remaining rows are unmatchable.")
-            break
-
-        logger.info(
-            f"Backfill progress: {processed:,}/{total_unlinked:,} — "
-            f"games={total_game:,} players={total_player:,} teams={total_team:,}"
-        )
+        except Exception as e:
+            consecutive_errors += 1
+            if consecutive_errors > max_retries:
+                logger.error(f"Failed {max_retries} consecutive times, giving up. Last error: {e}")
+                break
+            wait = min(30, 5 * consecutive_errors)
+            logger.warning(f"Connection error (attempt {consecutive_errors}/{max_retries}): {e}")
+            logger.info(f"Recycling connection pool and retrying in {wait}s...")
+            engine.dispose()
+            time.sleep(wait)
 
     # Summary
     logger.info("[3/3] Backfill summary")
