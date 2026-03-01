@@ -28,6 +28,7 @@ export default function DfsPage() {
   const [slipType, setSlipType] = useState<string>('pp_6_flex')
   const [statFilter, setStatFilter] = useState<'all' | StatType>('all')
   const [evOnly, setEvOnly] = useState(true)
+  const [showLive, setShowLive] = useState(false)
 
   // Fetch available dates
   useEffect(() => {
@@ -327,9 +328,12 @@ export default function DfsPage() {
   const filteredRows = useMemo<DfsRow[]>(() => {
     const breakEven = DFS_SLIP_TYPES[slipType]?.breakEven ?? 0.55
 
+    const now = new Date()
+
     if (edgeMode === 'model') {
       const rows: ModelDfsRow[] = []
       for (const comp of comparisons) {
+        if (!showLive && comp.game_time && new Date(comp.game_time) <= now) continue
         if (statFilter !== 'all' && comp.stat !== statFilter) continue
         for (const pl of comp.dfs_lines) {
           if (platformFilter !== 'all' && pl.bookmaker !== platformFilter) continue
@@ -345,6 +349,7 @@ export default function DfsPage() {
     if (edgeMode === 'market') {
       const rows: MarketDfsRow[] = []
       for (const [, { comp, platforms }] of marketComparisons) {
+        if (!showLive && comp.game_time && new Date(comp.game_time) <= now) continue
         if (statFilter !== 'all' && comp.stat !== statFilter) continue
         for (const pl of platforms) {
           if (platformFilter !== 'all' && pl.bookmaker !== platformFilter) continue
@@ -367,6 +372,7 @@ export default function DfsPage() {
     const rows: CombinedDfsRow[] = []
 
     for (const comp of comparisons) {
+      if (!showLive && comp.game_time && new Date(comp.game_time) <= now) continue
       if (statFilter !== 'all' && comp.stat !== statFilter) continue
 
       for (const modelPl of comp.dfs_lines) {
@@ -423,7 +429,7 @@ export default function DfsPage() {
 
     rows.sort((a, b) => (b.platform.ev_by_slip[slipType] ?? 0) - (a.platform.ev_by_slip[slipType] ?? 0))
     return rows
-  }, [comparisons, marketComparisons, platformFilter, statFilter, slipType, evOnly, edgeMode])
+  }, [comparisons, marketComparisons, platformFilter, statFilter, slipType, evOnly, edgeMode, showLive])
 
   // Summary stats
   const summaryStats = useMemo(() => {
@@ -485,6 +491,8 @@ export default function DfsPage() {
           onStatChange={setStatFilter}
           evOnly={evOnly}
           onEvOnlyChange={setEvOnly}
+          showLive={showLive}
+          onShowLiveChange={setShowLive}
         />
       </div>
 

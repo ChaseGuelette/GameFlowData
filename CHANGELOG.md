@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-02-28 Session 53] — DFS Paper Trading Engine + Live Toggle
+
+### Added
+
+- **DFS Paper Trading Engine (`dfs_paper_trader.py`):** Backend paper trading engine for multi-leg DFS entries using devigged sportsbook consensus (market edge, no model dependency). Builds 4 entries/day across slip types: UD 3-pick (6x), UD 5-pick (20x), PP 5-flex (10x/2x/0.4x), PP 6-flex (25x/2x/0.4x). Port of TypeScript market edge logic (exact-line-match devigging, multiplicative consensus averaging) to Python. Entry selection: positive edge filter, platform preference tiebreaker, one-leg-per-player dedup, started game exclusion. Resolution handles push/cancel (reduce effective entry), flex partial payouts. $500 bankroll, $10/entry.
+- **Database Migration (`003_dfs_paper_trading.sql`):** Three new tables — `dfs_paper_entries` (unique on entry_date/slip_type), `dfs_paper_legs` (FK cascade, unique on entry_id/player_id), `dfs_paper_daily_log` (unique on entry_date). Indices on date/status, entry_id, date.
+- **Edge Refresh Step 7c (`edge_refresh_job.py`):** DFS paper trading integrated into 10-minute edge refresh cycle. Resolves previous-day entries, then builds and places new ones. Non-fatal try/except wrapper.
+- **DFS Audit (`audit_and_resolve.py`):** `--dfs` flag shows entry/leg status breakdown, per-slip-type W/L/P stats, leg details, daily log with cumulative P&L and bankroll.
+- **DFS Live Toggle (`DfsFilters.tsx`, `dfs/page.tsx`):** "Pre-Game / + Live" toggle on DFS Edge Finder page. Default hides started-game picks. Orange "+ Live" mode shows all picks. Same pattern as main dashboard live toggle.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/paper_trading/dfs_paper_trader.py` | Created — DFS paper trading engine (~900 lines) |
+| `database/migrations/003_dfs_paper_trading.sql` | Created — 3 new tables + indices |
+| `src/orchestration/edge_refresh_job.py` | Modified — added step 7c DFS paper trading |
+| `src/paper_trading/audit_and_resolve.py` | Modified — added `--dfs` flag |
+| `dashboard/src/app/(protected)/dfs/page.tsx` | Modified — `showLive` state + filtering |
+| `dashboard/src/components/dfs/DfsFilters.tsx` | Modified — live toggle UI |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- TypeScript compiles with zero errors
+- Migration ran successfully — all 3 tables verified in Supabase
+- `build_entries(date.today())` successfully built 4 entries (824 DFS lines, 2781 sportsbook lines)
+- First entries placed: entry_ids 1-4 for 2026-02-28
+
+---
+
+## [2026-02-28 Session 52] — Dashboard Live Toggle + DFS 2-Pick
+
+### Added
+
+- **Live Betting Toggle (`dashboard/page.tsx`):** "Pre-Game / + Live" pill toggle in dashboard header controls. Default (Pre-Game) hides predictions whose `game_time` has passed. "+ Live" (orange pill) shows all predictions including in-progress games. Client-side comparison: `new Date(p.game_time) <= new Date()`.
+- **DFS PP 2-Pick Slip Type (`dfs.ts`):** Added `pp_2_power` to `DFS_SLIP_TYPES` — PrizePicks 2-Pick Power with 3x payout, 57.7% break-even per leg. Most conservative slip type for high-conviction plays.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — `showLive` state, filter logic, toggle UI |
+| `dashboard/src/types/dfs.ts` | Modified — added `pp_2_power` slip type |
+
+### Verified
+
+- TypeScript compiles successfully (`npx next build`)
+- 575 Python tests pass, ruff auto-fixed 5 issues (pre-existing)
+
+---
+
 ## [2026-02-28 Session 51] — 10-Minute Scheduler + Bet Resolution + Live Game Filter
 
 ### Changed

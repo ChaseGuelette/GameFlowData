@@ -450,6 +450,8 @@ Paper bet placement, outcome resolution, and P&L tracking. Bet placement is auto
 
 **Same-day resolution guard (2026-02-28):** `resolve_all_pending(exclude_today=True)` excludes today's bets from resolution, preventing false resolution of games that haven't finished. Secondary guard: `team_game_stats` won't have today's data until the 9 AM scraper runs the next morning.
 
+**DFS Paper Trading (2026-02-28):** `dfs_paper_trader.py` — Separate paper trading engine for multi-leg DFS entries using market edge (devigged sportsbook consensus, no model dependency). Builds 4 entries/day (ud_3_standard, ud_5_standard, pp_5_flex, pp_6_flex), each selecting top-N positive-edge legs by consensus probability. Supports flex partial payouts (e.g., PP 5-flex: 5/5=10x, 4/5=2x, 3/5=0.4x). Automated via `edge_refresh_job.py` step 7c. Bankroll: $500 start, $10/entry. `--dfs` flag added to `audit_and_resolve.py` for inspection.
+
 ### 11. Dashboard (`dashboard/`)
 
 Next.js web application for viewing daily predictions, analyzing player props, and tracking paper trading performance.
@@ -523,6 +525,7 @@ dashboard/
 **Key Features:**
 - **Play of the Day:** Featured card at the top of the dashboard highlighting the model's highest-edge pick. Amber/gold visual treatment with trophy badge, large player avatar, star rating, and prominent edge display. Respects current filter settings (date, edge threshold, BL blending). Clicking "Analyze Pick" opens the analysis modal.
 - **Predictions View (`/`):** Displays predictions filtered by stat type (pts/reb/ast), sorted by edge magnitude. Matchup filter allows viewing predictions for specific games (e.g., "LAL vs SAS"). Includes:
+  - **Live Betting Toggle:** Pill-style "Pre-Game / + Live" toggle. Default (Pre-Game) hides predictions whose `game_time` has passed (game started or finished). "+ Live" (orange pill) shows all predictions including live games. Comparison is client-side: `new Date(p.game_time) <= new Date()`.
   - **Date Selector:** View predictions from any date in the last 30 days (uses `get_prediction_dates()` RPC function for efficient distinct query)
   - **Edge Threshold Filter:** Filter picks by minimum edge (All, ≥3%, ≥5%, ≥7%, ≥10%, ≥15%, ≥20%)
   - **Black-Litterman Blending Filter:** Optionally apply BL blending to edges (Off, τ=0.03, τ=0.05, τ=0.10, τ=0.15, τ=0.25). BL calculation implemented client-side using `calculateBLConfidence()` and `blendProbability()` utility functions.
@@ -546,7 +549,8 @@ dashboard/
   - **Model Edge:** Re-estimates model probability at the DFS-specific line via quantile interpolation from `dfs-utils.ts`. Computes EV = model_prob - break_even per slip type.
   - **Market Edge:** Compares DFS lines against devigged sportsbook consensus probabilities. Uses `get_sportsbook_lines` RPC to fetch non-DFS bookmaker lines, finds exact line matches, applies multiplicative devigging (`americanToImpliedProb`, `devig` from `dfs-utils.ts`), identifies sharpest book (lowest vig). Shows `"--"` when no sportsbook offers the exact DFS line.
   - **Combined Edge:** Highest-conviction tier — only shows picks where BOTH model AND market agree on direction AND both have positive edge. Displayed edge = `min(model_edge, market_edge)` (conservative estimate).
-  - Platform filter tabs, slip type selector (UD 3/5-Pick, PP 5/6-Flex), stat filter, +EV toggle, 3-way edge mode segmented control, KPI summary cards, and sortable table with mode-specific columns. Data fetched via `get_dfs_lines` and `get_sportsbook_lines` RPC functions.
+  - **Live Toggle:** "Pre-Game / + Live" toggle filters out started games by default. When enabled (orange), shows all picks including in-progress games.
+  - Platform filter tabs, slip type selector (PP 2-Pick, UD 3/5-Pick, PP 5/6-Flex), stat filter, +EV toggle, 3-way edge mode segmented control, KPI summary cards, and sortable table with mode-specific columns. Data fetched via `get_dfs_lines` and `get_sportsbook_lines` RPC functions.
 - **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account/stats/dfs (requires auth).
 
 **Data Sources:**
@@ -765,9 +769,14 @@ DISCORD_CHANNEL_PERFORMANCE=...
 - `daily_predictions`: Stored daily prediction quantiles, edges, and implied probabilities. Unique on `(prediction_date, player_id, game_id, stat)`. Supports upsert for re-runs.
 - `daily_prediction_samples`: Gzip-compressed MC sample arrays (10K float64 values per prediction, ~20-40KB). Unique on `(prediction_date, player_id, game_id, stat)`.
 
-### Paper Trading
+### Paper Trading (Model-Based)
 - `paper_bets`: Individual paper bet records with full context (odds, edge, stake, status, P&L). Unique on `(game_date, player_id, stat_type, bet_direction)`.
 - `paper_trading_daily_log`: Daily aggregated P&L tracking. Unique on `game_date`. Tracks wins/losses, total staked, ROI, cumulative P&L, and running bankroll.
+
+### DFS Paper Trading (Market-Edge)
+- `dfs_paper_entries`: Multi-leg DFS entries (slips). One row per slip type per day. Unique on `(entry_date, slip_type)`. Tracks legs won/lost/push/cancelled, payout multiplier, P&L. Supports 4 slip types: ud_3_standard, ud_5_standard, pp_5_flex, pp_6_flex.
+- `dfs_paper_legs`: Individual picks within entries. FK to `dfs_paper_entries(id) ON DELETE CASCADE`. Unique on `(entry_id, player_id)`. Stores player, stat, line, direction, market consensus probability, edge, actual value.
+- `dfs_paper_daily_log`: Daily aggregate tracking for DFS entries. Unique on `entry_date`. Tracks entries placed/won/lost/partial, cumulative P&L, bankroll ($500 start, $10/entry).
 
 ### Dashboard Views (Pre-Computed Joins)
 - `player_stats_latest`: Latest per-player rolling stats — joins `player_average_game_stats` + `player_average_advanced_stats` + `players` + `player_position_history`. ~529 rows.
@@ -1114,3 +1123,7 @@ See `ACTIONITEMS.md` for full details.
 5. **Historical backfill:** `src/tools/backfill_prediction_features.py` script populates feat_* columns for historical predictions without modifying prediction values. Supports `--date`, `--start/--end`, `--dry-run` flags.
 
 **Dashboard Vercel deployment (2026-02-14):** Dashboard deployed to Vercel at `game-flow-data.vercel.app`. Configuration: root directory `dashboard`, environment variables `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Vercel MCP available via `claude mcp add --transport http vercel https://mcp.vercel.com`.
+
+**Dashboard live toggle + DFS 2-pick (2026-02-28):** Two dashboard enhancements:
+1. **Live Betting Toggle:** Added "Pre-Game / + Live" pill toggle to the main predictions dashboard. Default state (Pre-Game) hides predictions for games that have already started by comparing `game_time` against current time client-side. Orange "+ Live" pill reveals all predictions including in-progress games. State variable `showLive` (default `false`) controls filter in `filteredPredictions`.
+2. **DFS PP 2-Pick Slip Type:** Added PrizePicks 2-Pick Power (3x payout) to `DFS_SLIP_TYPES` in `dashboard/src/types/dfs.ts`. Break-even per leg = 57.7% (`1/√3`). This is the most conservative slip type — highest per-leg threshold — suitable for high-conviction plays.

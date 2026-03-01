@@ -100,6 +100,7 @@ export interface DfsPlatformLine {
 
 // DFS platform break-even thresholds (probability per leg needed to break even)
 export const DFS_SLIP_TYPES: Record<string, { label: string; breakEven: number; payout: string }> = {
+  'pp_2_power':     { label: 'PP 2-Pick',     breakEven: 0.577, payout: '3x'  },
   'ud_3_standard':  { label: 'UD 3-Pick',     breakEven: 0.550, payout: '6x'  },
   'ud_5_standard':  { label: 'UD 5-Pick',     breakEven: 0.549, payout: '20x' },
   'pp_5_flex':      { label: 'PP 5-Pick Flex', breakEven: 0.5425, payout: '10x' },

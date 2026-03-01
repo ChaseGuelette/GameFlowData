@@ -347,12 +347,30 @@ if (blTau !== null && p.pred_mean && p.pred_std) {
 }
 ```
 
-**UI Layout (Session 26):**
+### Live Betting Toggle (Session 52)
+
+Pill-style toggle that controls visibility of predictions for games that have already started.
+
+| Button | Active Style | Behavior |
+|--------|-------------|----------|
+| **Pre-Game** (default) | `bg-slate-700` | Hides predictions where `game_time ≤ now()` |
+| **+ Live** | `bg-orange-600` | Shows all predictions including live/started games |
+
+**State:** `const [showLive, setShowLive] = useState<boolean>(false)`
+
+**Filter logic:** Applied before all other filters in `filteredPredictions`:
+```typescript
+if (!showLive && p.game_time) {
+  if (new Date(p.game_time) <= new Date()) return false
+}
 ```
-┌──────────┐ ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌───────────┐
-│ Feb 13 ▼ │ │All Games▼│ │Edge: ≥5% ▼│ │BL: τ=0.10 ▼│ │All│PTS│...│
-└──────────┘ └──────────┘ └───────────┘ └────────────┘ └───────────┘
- Date        Matchup       Edge Filter   BL Blending   Stat Filter
+
+**UI Layout (Session 52):**
+```
+┌──────────┐ ┌──────────┐ ┌────────────────┐ ┌──────────────────┐ ┌──────────┐ ...
+│ State  ▼ │ │  Book  ▼ │ │Pre-Game│+ Live │ │All Bets│Model    │ │ Date   ▼ │
+└──────────┘ └──────────┘ └────────────────┘ └──────────────────┘ └──────────┘
+ State        Sportsbook   Live Toggle        Model Picks         Date
 ```
 
 ### PropCard
@@ -1167,7 +1185,7 @@ Three-mode edge analysis comparing DFS platform lines (PrizePicks, Underdog, Pic
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `DfsFilters` | `components/dfs/DfsFilters.tsx` | Edge mode toggle, platform tabs, slip type dropdown, stat filter, +EV toggle |
+| `DfsFilters` | `components/dfs/DfsFilters.tsx` | Edge mode toggle, platform tabs, slip type dropdown, stat filter, +EV toggle, live toggle |
 | `DfsTable` | `components/dfs/DfsTable.tsx` | Mode-specific column layouts, sortable, color-coded edges |
 
 ### Filter State
@@ -1179,11 +1197,13 @@ Three-mode edge analysis comparing DFS platform lines (PrizePicks, Underdog, Pic
 | `slipType` | string | `'pp_6_flex'` | Break-even threshold for EV calc |
 | `statFilter` | string | `'all'` | Filter by stat type |
 | `evOnly` | boolean | `true` | Only show +EV picks |
+| `showLive` | boolean | `false` | Include picks from started games |
 
 ### Slip Types
 
 | Key | Label | Break-Even | Payout |
 |-----|-------|-----------|--------|
+| `pp_2_power` | PP 2-Pick | 57.7% | 3x |
 | `ud_3_standard` | UD 3-Pick | 55.0% | 6x |
 | `ud_5_standard` | UD 5-Pick | 54.9% | 20x |
 | `pp_5_flex` | PP 5-Pick Flex | 54.25% | 10x |

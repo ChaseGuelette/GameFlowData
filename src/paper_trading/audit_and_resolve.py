@@ -18,6 +18,9 @@ Usage:
 
     # Full fix: backfill + resolve
     python src/paper_trading/audit_and_resolve.py --backfill --resolve --days 30
+
+    # DFS paper trading audit
+    python src/paper_trading/audit_and_resolve.py --dfs
 """
 
 import argparse
@@ -120,11 +123,12 @@ def main():
     parser.add_argument("--resolve", action="store_true", help="Resolve all pending bets with available stats")
     parser.add_argument("--backfill", action="store_true", help="Re-place bets from historical predictions that were missed")
     parser.add_argument("--days", type=int, default=30, help="Days to look back for backfill (default: 30)")
+    parser.add_argument("--dfs", action="store_true", help="Show DFS entry/leg status breakdown")
     parser.add_argument("--dry-run", action="store_true", help="Show what would happen without making changes")
 
     args = parser.parse_args()
 
-    if not any([args.audit, args.resolve, args.backfill]):
+    if not any([args.audit, args.resolve, args.backfill, args.dfs]):
         args.audit = True  # Default to audit
 
     engine = get_engine()
@@ -247,6 +251,102 @@ def main():
 
             bankroll = trader._get_current_bankroll()
             print(f"\nCurrent bankroll: ${bankroll:,.2f}")
+
+    # ---- DFS AUDIT ----
+    if args.dfs:
+        print("\n" + "=" * 80)
+        print("DFS PAPER TRADING AUDIT")
+        print("=" * 80)
+
+        # Entry-level summary by date and slip type
+        dfs_entries_df = pd.read_sql(
+            text("""
+                SELECT
+                    entry_date, slip_type, status, num_legs,
+                    legs_won, legs_lost, legs_push, legs_cancelled,
+                    ROUND(payout_multiplier::numeric, 2) AS multiplier,
+                    ROUND(stake::numeric, 2) AS stake,
+                    ROUND(pnl::numeric, 2) AS pnl,
+                    ROUND(avg_edge::numeric, 4) AS avg_edge
+                FROM dfs_paper_entries
+                ORDER BY entry_date DESC, slip_type
+            """),
+            engine,
+        )
+
+        if dfs_entries_df.empty:
+            print("\nNo DFS entries found in database.")
+        else:
+            print("\nEntries by date:")
+            print(dfs_entries_df.to_string(index=False))
+
+            # Summary stats
+            total_entries = len(dfs_entries_df)
+            pending = len(dfs_entries_df[dfs_entries_df["status"] == "pending"])
+            won = len(dfs_entries_df[dfs_entries_df["status"] == "won"])
+            lost = len(dfs_entries_df[dfs_entries_df["status"] == "lost"])
+            partial = len(dfs_entries_df[dfs_entries_df["status"] == "partial"])
+            total_pnl = float(dfs_entries_df["pnl"].sum())
+
+            print(f"\nTotal entries: {total_entries}")
+            print(f"  Pending: {pending} | Won: {won} | Lost: {lost} | Partial: {partial}")
+            print(f"  Total P&L: ${total_pnl:+,.2f}")
+
+            # By slip type
+            print("\nBy slip type:")
+            by_slip = dfs_entries_df.groupby("slip_type").agg(
+                entries=("status", "count"),
+                won=("status", lambda x: (x == "won").sum()),
+                lost=("status", lambda x: (x == "lost").sum()),
+                partial=("status", lambda x: (x == "partial").sum()),
+                pnl=("pnl", "sum"),
+            )
+            print(by_slip.to_string())
+
+        # Leg-level detail for pending entries
+        dfs_legs_df = pd.read_sql(
+            text("""
+                SELECT
+                    e.entry_date, e.slip_type,
+                    l.player_name, l.stat_type, l.line, l.direction,
+                    l.dfs_bookmaker, l.market_books,
+                    ROUND(l.edge::numeric, 4) AS edge,
+                    l.status, l.actual_value
+                FROM dfs_paper_legs l
+                JOIN dfs_paper_entries e ON e.id = l.entry_id
+                ORDER BY e.entry_date DESC, e.slip_type, l.edge DESC
+            """),
+            engine,
+        )
+
+        if not dfs_legs_df.empty:
+            print(f"\nLeg details ({len(dfs_legs_df)} total legs):")
+            print(dfs_legs_df.to_string(index=False))
+
+        # Daily log
+        dfs_daily_df = pd.read_sql(
+            text("""
+                SELECT
+                    entry_date, entries_placed, entries_won, entries_lost,
+                    entries_partial,
+                    ROUND(total_staked::numeric, 2) AS staked,
+                    ROUND(total_pnl::numeric, 2) AS pnl,
+                    ROUND(roi_pct::numeric, 2) AS roi_pct,
+                    ROUND(cumulative_pnl::numeric, 2) AS cum_pnl,
+                    ROUND(bankroll_after::numeric, 2) AS bankroll
+                FROM dfs_paper_daily_log
+                ORDER BY entry_date DESC
+            """),
+            engine,
+        )
+
+        if not dfs_daily_df.empty:
+            print("\nDaily log:")
+            print(dfs_daily_df.to_string(index=False))
+
+            from src.paper_trading.dfs_paper_trader import DfsPaperTrader
+            dfs_trader = DfsPaperTrader()
+            print(f"\nDFS bankroll: ${dfs_trader._get_current_bankroll():,.2f}")
 
 
 if __name__ == "__main__":
