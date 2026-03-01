@@ -1,32 +1,31 @@
 # GameFlowData — Roadmap
 
-## Session Summary (2026-02-28 — Session 53)
+## Session Summary (2026-03-01 — Session 54)
 
 ### What We Did
 
-**Built DFS Paper Trading Engine — market-edge multi-leg entries with flex payouts + live toggle on DFS page.**
+**Fixed critical DFS pipeline bugs, added LIVE tags to game cards, built DFS performance tab, and decoupled RPCs from inference.**
 
-**DFS Paper Trading Engine (`dfs_paper_trader.py`):**
-- New backend engine builds 4 multi-leg DFS entries daily using devigged sportsbook consensus (no model dependency).
-- Slip types: UD 3-pick (6x), UD 5-pick (20x), PP 5-flex (10x/2x/0.4x), PP 6-flex (25x/2x/0.4x).
-- Port of TypeScript market edge logic to Python: exact-line-match devigging, multiplicative consensus averaging.
-- Entry selection: positive edge only, platform preference tiebreaker, one-leg-per-player dedup, live game toggle.
-- Resolution handles push/cancel (reduce effective entry), flex partial payouts.
-- $500 bankroll, $10/entry, automated via edge refresh step 7c.
+**Critical Bug Fixes:**
+- Edge refresh `sys.exit(0)` was killing the process before DFS paper trading could run. Moved DFS to step 0 (before MC check).
+- Both `get_dfs_lines` and `get_sportsbook_lines` RPCs required `daily_predictions` to exist. Updated to scope by `commence_time::date` — DFS/market data available immediately after scraping.
+- DFS page market mode blank before inference — now builds comparisons from DFS line data as fallback.
+- Stale prediction lines (Danny Wolf 13.5→10.5) — edge refresh properly handles line movement, just wasn't executing.
 
-**Database:** 3 new tables (`dfs_paper_entries`, `dfs_paper_legs`, `dfs_paper_daily_log`) — migration ran and verified.
+**LIVE Tags & Game Times:**
+- PropCard, PlayOfTheDay, TonightsGames now show pulsing red "Live" badge when game has started.
+- Game times always display ("TBD" fallback). Client-side backfill propagates times across same-game predictions.
 
-**DFS Dashboard Live Toggle:** "Pre-Game / + Live" toggle on DFS Edge Finder page, matching main dashboard pattern.
-
-**First entries placed:** 4 entries for 2026-02-28 with avg edges 5.5-6.3%.
+**DFS Performance Tab:** New Props/DFS tab toggle on performance page with DFS KPIs, bankroll chart, and slip type breakdown.
 
 ### Remaining Action Items
 
-1. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
-2. **Run MLB backfills** — boxscores (2022-2025), then FanGraphs (all seasons), then Statcast (2024-2025), then props/lines
-3. **Stripe integration** — subscribe page, customer portal, webhook
-4. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts (or find alternative data source)
-5. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+1. **Deploy to Railway** — push edge_refresh_job.py fix so DFS entries start building and stale edges get refreshed
+2. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+3. **Run MLB backfills** — boxscores (2022-2025), then FanGraphs (all seasons), then Statcast (2024-2025), then props/lines
+4. **Stripe integration** — subscribe page, customer portal, webhook
+5. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts (or find alternative data source)
+6. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
 
 ---
 

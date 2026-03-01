@@ -35,11 +35,18 @@ interface TonightsGamesProps {
   isToday: boolean
 }
 
-function formatGameTime(gameTime: string | null): string | null {
-  if (!gameTime) return null
+function formatGameTime(gameTime: string | null): string {
+  if (!gameTime) return 'TBD'
   const d = new Date(gameTime)
-  if (isNaN(d.getTime())) return null
+  if (isNaN(d.getTime())) return 'TBD'
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
+function isLive(gameTime: string | null): boolean {
+  if (!gameTime) return false
+  const d = new Date(gameTime)
+  if (isNaN(d.getTime())) return false
+  return d <= new Date()
 }
 
 export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday }: TonightsGamesProps) {
@@ -145,11 +152,17 @@ export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday }
                 <span className="text-sm font-semibold whitespace-nowrap">
                   {g.teams[0]} vs {g.teams[1]}
                 </span>
-                {time && (
+                <div className="flex items-center gap-1.5">
                   <span className={`text-xs ${isActive ? 'text-blue-200' : 'text-slate-500'}`}>
                     {time}
                   </span>
-                )}
+                  {isLive(g.gameTime) && (
+                    <span className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-red-500/20 text-red-400 border border-red-500/30">
+                      <span className="w-1 h-1 rounded-full bg-red-400 animate-pulse" />
+                      Live
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Prediction count badge (hidden when no predictions yet) */}

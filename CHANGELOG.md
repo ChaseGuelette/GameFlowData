@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-01 Session 54] — DFS Fixes, LIVE Tags, Performance DFS Tab, RPC Independence
+
+### Fixed
+
+- **Edge refresh early exit blocking DFS paper trading (`edge_refresh_job.py`):** `sys.exit(0)` at line 496-501 (when no MC samples exist before inference) killed the process before DFS step 7c could run. Moved DFS paper trading to **step 0** (before MC sample check) so it runs every 10 minutes independently of model inference.
+- **RPCs dependent on `daily_predictions` (`004_fix_rpc_prediction_dependency.sql`):** Both `get_dfs_lines` and `get_sportsbook_lines` RPC functions joined on `daily_predictions` for game scoping — returned no data before inference. Updated both to scope by `commence_time::date` directly. `get_dfs_lines` now also joins `players` table for `player_name` and returns `game_time` (commence_time).
+- **DFS page blank in market mode before inference (`dfs/page.tsx`):** `marketComparisons` useMemo required a matching prediction to build comparisons. Now constructs comparisons from DFS line data as fallback when no predictions exist.
+- **Stale prediction lines (Danny Wolf 13.5 → 10.5):** Edge refresh mechanism properly re-evaluates MC samples at new lines, but wasn't running due to the sys.exit(0) bug above. Now fixed — edges update within 10 minutes of line movement.
+
+### Added
+
+- **LIVE tags on game cards:** PropCard, PlayOfTheDay, and TonightsGames game pills now show a pulsing red dot + "Live" badge when `game_time <= now()`. Added `isGameLive()` utility to `utils.ts`. Game times always display ("TBD" when unknown instead of blank).
+- **Game time backfill (`dashboard/page.tsx`):** Client-side propagation of `game_time` from predictions that have it to same-game predictions that don't (570/783 were missing game_time).
+- **DFS Performance tab (`performance/page.tsx`):** New "Props / DFS" tab toggle. DFS tab shows KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table with per-type stats.
+- **`DfsLine` type updates (`dfs.ts`):** Added `player_name` and `game_time` optional fields to match updated RPC return type.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/edge_refresh_job.py` | Modified — moved DFS block from step 7c to step 0 |
+| `database/migrations/004_fix_rpc_prediction_dependency.sql` | Created — updates both RPCs to remove prediction dependency |
+| `sql/functions/get_sportsbook_lines.sql` | Modified — updated to match deployed RPC |
+| `dashboard/src/app/(protected)/dfs/page.tsx` | Modified — market comparisons without predictions |
+| `dashboard/src/app/(protected)/performance/page.tsx` | Modified — DFS performance tab |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — game_time backfill |
+| `dashboard/src/lib/utils.ts` | Modified — formatGameTime returns "TBD", added isGameLive() |
+| `dashboard/src/types/dfs.ts` | Modified — player_name, game_time fields |
+| `dashboard/src/components/predictions/PropCard.tsx` | Modified — always show time, LIVE tag |
+| `dashboard/src/components/predictions/PlayOfTheDay.tsx` | Modified — always show time, LIVE tag |
+| `dashboard/src/components/predictions/TonightsGames.tsx` | Modified — always show time, LIVE tag |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- Ruff: only pre-existing warnings (E402, F841 in MLB/linker files)
+- Migration 004 ran successfully — 2,098 DFS lines and 5,490 sportsbook lines returned for today before inference
+
+---
+
 ## [2026-02-28 Session 53] — DFS Paper Trading Engine + Live Toggle
 
 ### Added

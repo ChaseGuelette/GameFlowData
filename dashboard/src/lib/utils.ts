@@ -89,18 +89,30 @@ export function americanToImplied(american: number): number {
 }
 
 // Format game time for display (e.g., "7:30 PM")
-export function formatGameTime(gameTime: string | undefined): string {
-  if (!gameTime) return ''
+export function formatGameTime(gameTime: string | undefined | null): string {
+  if (!gameTime) return 'TBD'
   try {
     const date = new Date(gameTime)
-    if (isNaN(date.getTime())) return ''
+    if (isNaN(date.getTime())) return 'TBD'
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
     })
   } catch {
-    return ''
+    return 'TBD'
+  }
+}
+
+// Check if a game is currently live (has started)
+export function isGameLive(gameTime: string | undefined | null): boolean {
+  if (!gameTime) return false
+  try {
+    const date = new Date(gameTime)
+    if (isNaN(date.getTime())) return false
+    return date <= new Date()
+  } catch {
+    return false
   }
 }
 

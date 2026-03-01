@@ -211,6 +211,20 @@ Paper trading results for bankroll display and performance tracking.
 - `total_staked` — Total amount staked
 - `total_pnl` — Profit/loss for the day
 
+### `dfs_paper_entries`
+
+DFS multi-leg entry records for DFS performance tab.
+
+**Columns used:**
+- `entry_date`, `slip_type`, `status`, `legs_won`, `legs_lost`, `legs_push`, `legs_cancelled`, `payout_multiplier`, `pnl`, `avg_edge`, `stake`
+
+### `dfs_paper_daily_log`
+
+DFS daily aggregates for bankroll chart in DFS performance tab.
+
+**Columns used:**
+- `entry_date`, `entries_placed`, `entries_won`, `entries_lost`, `entries_partial`, `total_staked`, `total_pnl`, `cumulative_pnl`, `bankroll_after`
+
 ### `paper_bets`
 
 Individual bet records for history view.
@@ -373,6 +387,25 @@ if (!showLive && p.game_time) {
  State        Sportsbook   Live Toggle        Model Picks         Date
 ```
 
+### LIVE Tags & Game Times (Session 54)
+
+All game-related components display game times and a live indicator when games have started:
+
+**Components affected:** PropCard, PlayOfTheDay, TonightsGames
+
+**Game time display:**
+- Always visible — shows "TBD" when game_time is null/undefined via `formatGameTime()` in `utils.ts`
+- Client-side backfill in `dashboard/page.tsx` propagates game_time from predictions that have it to same-game predictions that don't
+
+**LIVE badge:**
+- Pulsing red dot + "Live" text (uppercase, 10px bold)
+- Appears when `isGameLive(game_time)` returns true (`game_time <= now()`)
+- Styling: `bg-red-500/20 text-red-400 border border-red-500/30` with `animate-pulse` dot
+
+**Utility functions (`utils.ts`):**
+- `formatGameTime(gameTime)` — Returns time string (e.g., "7:30 PM") or "TBD"
+- `isGameLive(gameTime)` — Returns true if game has started
+
 ### PropCard
 
 Individual prediction card with:
@@ -381,6 +414,7 @@ Individual prediction card with:
 - Over/under probabilities
 - Edge badge (high/medium/low)
 - Prop line
+- Game time and LIVE tag
 
 ```tsx
 <PropCard

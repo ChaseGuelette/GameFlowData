@@ -225,6 +225,23 @@ export default function DashboardPage() {
           opponent_abbrev: TEAM_ABBREV[p.opponent_id] || 'UNK',
         }))
 
+      // Backfill missing game_time: if any prediction for a game has game_time,
+      // propagate it to all predictions for that game
+      const gameTimeMap = new Map<string, string>()
+      for (const p of mappedPredictions) {
+        if (p.game_time && p.game_id && !gameTimeMap.has(p.game_id)) {
+          gameTimeMap.set(p.game_id, p.game_time)
+        }
+      }
+      if (gameTimeMap.size > 0) {
+        for (const p of mappedPredictions) {
+          if (!p.game_time && p.game_id) {
+            const gt = gameTimeMap.get(p.game_id)
+            if (gt) p.game_time = gt
+          }
+        }
+      }
+
       setPredictions(mappedPredictions)
       if (mappedPredictions.length === 0) {
         // Fallback: fetch today's games from NBA CDN schedule

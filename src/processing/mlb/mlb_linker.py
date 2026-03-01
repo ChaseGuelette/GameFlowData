@@ -492,7 +492,7 @@ def link_backfill():
     fuzzy_cache: dict[str, int | None] = {}
 
     consecutive_errors = 0
-    max_retries = 5
+    max_retries = 20  # High count to survive laptop sleep/wake cycles
 
     while True:
         try:
@@ -536,25 +536,28 @@ def link_backfill():
             if consecutive_errors > max_retries:
                 logger.error(f"Failed {max_retries} consecutive times, giving up. Last error: {e}")
                 break
-            wait = min(30, 5 * consecutive_errors)
+            wait = min(60, 10 * consecutive_errors)
             logger.warning(f"Connection error (attempt {consecutive_errors}/{max_retries}): {e}")
             logger.info(f"Recycling connection pool and retrying in {wait}s...")
             engine.dispose()
             time.sleep(wait)
 
     # Summary
-    logger.info("[3/3] Backfill summary")
-    logger.info("=" * 60)
-    logger.info(f"  Rows processed:  {processed:,}")
-    logger.info(f"  Games matched:   {total_game:,}")
-    logger.info(f"  Players matched: {total_player:,}")
-    logger.info(f"  Teams matched:   {total_team:,}")
+    try:
+        logger.info("[3/3] Backfill summary")
+        logger.info("=" * 60)
+        logger.info(f"  Rows processed:  {processed:,}")
+        logger.info(f"  Games matched:   {total_game:,}")
+        logger.info(f"  Players matched: {total_player:,}")
+        logger.info(f"  Teams matched:   {total_team:,}")
 
-    with engine.connect() as conn:
-        remaining = conn.execute(
-            text("SELECT COUNT(*) FROM mlb_raw_player_props WHERE player_id IS NULL")
-        ).scalar()
-    logger.info(f"  Remaining unlinked: {remaining:,}")
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                text("SELECT COUNT(*) FROM mlb_raw_player_props WHERE player_id IS NULL")
+            ).scalar()
+        logger.info(f"  Remaining unlinked: {remaining:,}")
+    except Exception:
+        logger.info("  (Could not query remaining count — connection unavailable)")
     logger.info("=" * 60)
 
 
