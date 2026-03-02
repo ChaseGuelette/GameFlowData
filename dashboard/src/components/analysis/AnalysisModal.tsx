@@ -140,6 +140,7 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
         .from('player_game_stats')
         .select('game_date, pts, reb, ast, fg3m, min')
         .eq('player_id', prediction.player_id)
+        .gt('min', 0)
         .order('game_date', { ascending: false })
         .limit(5)
 
