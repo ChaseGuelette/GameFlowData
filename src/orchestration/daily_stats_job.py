@@ -154,6 +154,7 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
             text=True,
             shell=False,
             cwd=PROJECT_ROOT,  # Run from project root for proper path resolution
+            timeout=600,  # 10 minute per-step timeout
         )
         elapsed = time.time() - start_time
         logger.info(f"COMPLETED: {description} ({elapsed:.1f}s)")
@@ -161,6 +162,17 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
             # Log last 200 chars of stdout for debugging
             logger.debug(f"  Output: ...{result.stdout[-200:]}")
         return True
+    except subprocess.TimeoutExpired as e:
+        elapsed = time.time() - start_time
+        logger.error(f"TIMED OUT: {description} ({elapsed:.1f}s)")
+        logger.error(f"  Step exceeded 10 minute timeout")
+        if e.stdout:
+            stdout = e.stdout if isinstance(e.stdout, str) else e.stdout.decode(errors="replace")
+            logger.error(f"  Partial stdout: {stdout[-500:]}")
+        if e.stderr:
+            stderr = e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace")
+            logger.error(f"  Partial stderr: {stderr[-500:]}")
+        return False
     except subprocess.CalledProcessError as e:
         elapsed = time.time() - start_time
         logger.error(f"FAILED: {description} ({elapsed:.1f}s)")

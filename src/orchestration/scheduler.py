@@ -212,15 +212,22 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
         if not (silent_on_success and success):
             _send_job_alert(script_name, success, duration, stdout, stderr)
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         duration = time.time() - start_time
         logger.error(f"Job timed out after 30 minutes: {script_name}")
+        partial_stdout = ""
+        partial_stderr = "Job timed out after 30 minutes"
+        if e.stdout:
+            partial_stdout = e.stdout if isinstance(e.stdout, str) else e.stdout.decode(errors="replace")
+        if e.stderr:
+            partial_stderr = (e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace"))
+            partial_stderr += "\n\nJob timed out after 30 minutes"
         _send_job_alert(
             script_name,
             success=False,
             duration=duration,
-            stdout="",
-            stderr="Job timed out after 30 minutes",
+            stdout=partial_stdout,
+            stderr=partial_stderr,
         )
 
     except Exception as e:

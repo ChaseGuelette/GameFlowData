@@ -873,7 +873,7 @@ def _fetch_upcoming_games_from_nba_api(target_date: date | None = None) -> list[
         date_str = check_date.strftime("%Y-%m-%d")
 
         try:
-            scoreboard = ScoreboardV2(game_date=date_str)
+            scoreboard = ScoreboardV2(game_date=date_str, timeout=10)
             game_header = scoreboard.get_data_frames()[0]  # GameHeader DataFrame
 
             for _, row in game_header.iterrows():

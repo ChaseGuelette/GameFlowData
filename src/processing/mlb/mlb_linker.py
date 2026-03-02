@@ -7,13 +7,16 @@ Pattern: src/processing/nba_linker_local.py (NBA equivalent) with MLB-specific
 adaptations: INTEGER game_id (not zero-padded string), ±1 day date window,
 team_id from boxscore cross-reference.
 
-Two modes:
+Three modes:
+  - status:      Check linking progress without running anything
   - incremental: Daily use, processes WHERE player_id IS NULL in batches
   - backfill:    One-time, processes all unlinked rows with progress logging
 
 Usage:
+    python -m src.processing.mlb.mlb_linker status
     python -m src.processing.mlb.mlb_linker incremental
     python -m src.processing.mlb.mlb_linker backfill
+    python -m src.processing.mlb.mlb_linker backfill --delay 2
     python -m src.processing.mlb.mlb_linker incremental --batch-size 100000
 """
 
@@ -452,11 +455,38 @@ def link_incremental(batch_size: int = LINKER_BATCH_SIZE, limit: int | None = No
 
 
 # ============================================================================
+# STATUS MODE
+# ============================================================================
+
+
+def show_status():
+    """Show linking progress without processing anything."""
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        total = conn.execute(text("SELECT COUNT(*) FROM mlb_raw_player_props")).scalar()
+        linked = conn.execute(
+            text("SELECT COUNT(*) FROM mlb_raw_player_props WHERE player_id IS NOT NULL")
+        ).scalar()
+
+    unlinked = total - linked
+    pct = (linked / total * 100) if total > 0 else 0.0
+
+    logger.info("=" * 60)
+    logger.info("MLB LINKER — STATUS")
+    logger.info("=" * 60)
+    logger.info(f"  Total rows:     {total:,}")
+    logger.info(f"  Linked:         {linked:,} ({pct:.1f}%)")
+    logger.info(f"  Unlinked:       {unlinked:,}")
+    logger.info("=" * 60)
+
+
+# ============================================================================
 # BACKFILL MODE
 # ============================================================================
 
 
-def link_backfill():
+def link_backfill(batch_delay: float = 0):
     """One-time backfill — processes ALL unlinked rows with progress logging."""
     engine = get_engine()
 
@@ -470,16 +500,25 @@ def link_backfill():
     player_lookup = build_player_lookup(engine)
     team_id_lookup = build_team_id_lookup(engine)
 
-    # Count all unlinked
+    # Count total and unlinked for progress context on restart
     with engine.connect() as conn:
+        total_rows = conn.execute(text("SELECT COUNT(*) FROM mlb_raw_player_props")).scalar()
         total_unlinked = conn.execute(
             text("SELECT COUNT(*) FROM mlb_raw_player_props WHERE player_id IS NULL")
         ).scalar()
 
-    logger.info(f"Total unlinked rows: {total_unlinked:,}")
+    already_linked = total_rows - total_unlinked
+    linked_pct = (already_linked / total_rows * 100) if total_rows > 0 else 0.0
+    logger.info(
+        f"Total rows: {total_rows:,} | Already linked: {already_linked:,} ({linked_pct:.1f}%) "
+        f"| Remaining: {total_unlinked:,}"
+    )
     if total_unlinked == 0:
         logger.info("Nothing to backfill — done.")
         return
+
+    if batch_delay > 0:
+        logger.info(f"Batch delay: {batch_delay}s between batches (I/O throttling)")
 
     # Process all in batches (no limit)
     logger.info(f"[2/3] Processing all {total_unlinked:,} unlinked rows...")
@@ -531,6 +570,9 @@ def link_backfill():
                 f"games={total_game:,} players={total_player:,} teams={total_team:,}"
             )
 
+            if batch_delay > 0:
+                time.sleep(batch_delay)
+
         except Exception as e:
             consecutive_errors += 1
             if consecutive_errors > max_retries:
@@ -570,20 +612,25 @@ def main():
     parser = argparse.ArgumentParser(description="MLB Data Linker")
     parser.add_argument(
         "mode",
-        choices=["incremental", "backfill"],
-        help="incremental = daily batched linking; backfill = process all unlinked rows",
+        choices=["status", "incremental", "backfill"],
+        help="status = check progress; incremental = daily batched linking; backfill = process all unlinked rows",
     )
     parser.add_argument("--batch-size", type=int, default=LINKER_BATCH_SIZE, help="Batch size (default 50000)")
     parser.add_argument("--limit", type=int, default=None, help="Max rows to process (incremental only)")
+    parser.add_argument(
+        "--delay", type=float, default=0, help="Seconds to sleep between batches for I/O throttling (default 0)"
+    )
 
     args = parser.parse_args()
 
     start = datetime.now()
 
-    if args.mode == "incremental":
+    if args.mode == "status":
+        show_status()
+    elif args.mode == "incremental":
         link_incremental(batch_size=args.batch_size, limit=args.limit)
     else:
-        link_backfill()
+        link_backfill(batch_delay=args.delay)
 
     elapsed = datetime.now() - start
     logger.info(f"Total elapsed: {elapsed}")
