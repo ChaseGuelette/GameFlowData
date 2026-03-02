@@ -664,7 +664,7 @@ class DailyPredictionRunner:
                     odds_american,
                     snapshot_time,
                     ROW_NUMBER() OVER (
-                        PARTITION BY player_id, game_id, market_key, bookmaker, outcome_label
+                        PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
                         ORDER BY snapshot_time DESC
                     ) as rn
                 FROM raw_player_props_combined
@@ -677,12 +677,14 @@ class DailyPredictionRunner:
                 LPAD(game_id, 10, '0') as game_id,
                 bookmaker,
                 market_key,
-                MAX(line) as line,
+                line,
                 MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
                 MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
             FROM ranked_lines
             WHERE rn = 1
-            GROUP BY player_id, game_id, bookmaker, market_key
+            GROUP BY player_id, game_id, bookmaker, market_key, line
+            HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
+               AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
         """).bindparams(
             bindparam("game_ids", expanding=True),
             bindparam("markets", expanding=True),

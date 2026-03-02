@@ -54,7 +54,8 @@ export default function DfsPage() {
     setLoading(true)
     const supabase = createClient()
 
-    const [predictionsRes, dfsRes, sbRes] = await Promise.all([
+    // Step 1: Fetch predictions and DFS lines in parallel
+    const [predictionsRes, dfsRes] = await Promise.all([
       supabase
         .from('daily_predictions')
         .select('*')
@@ -63,8 +64,6 @@ export default function DfsPage() {
         .limit(3000),
       supabase
         .rpc('get_dfs_lines', { target_date: date }),
-      supabase
-        .rpc('get_sportsbook_lines', { target_date: date }),
     ])
 
     if (!predictionsRes.error && predictionsRes.data) {
@@ -90,14 +89,35 @@ export default function DfsPage() {
       setPredictions([])
     }
 
+    let dfsData: DfsLine[] = []
     if (!dfsRes.error && dfsRes.data) {
-      setDfsLines(dfsRes.data)
+      dfsData = dfsRes.data
+      setDfsLines(dfsData)
     } else {
       setDfsLines([])
     }
 
-    if (!sbRes.error && sbRes.data) {
-      setSportsbookLines(sbRes.data)
+    // Step 2: Fetch sportsbook lines per-game in parallel (avoids timeout on large table)
+    const gameIds = [...new Set(dfsData.map(dl => dl.game_id))]
+    if (gameIds.length > 0) {
+      // Batch game_ids into groups of 3 to balance parallelism vs query size
+      const batchSize = 3
+      const batches: string[][] = []
+      for (let i = 0; i < gameIds.length; i += batchSize) {
+        batches.push(gameIds.slice(i, i + batchSize))
+      }
+      const sbResults = await Promise.all(
+        batches.map(batch =>
+          supabase.rpc('get_sportsbook_lines_by_games', { p_game_ids: batch })
+        )
+      )
+      const allSbLines: SportsbookLine[] = []
+      for (const res of sbResults) {
+        if (!res.error && res.data) {
+          allSbLines.push(...res.data)
+        }
+      }
+      setSportsbookLines(allSbLines)
     } else {
       setSportsbookLines([])
     }

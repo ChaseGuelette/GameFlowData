@@ -1,12 +1,16 @@
 -- Migration 005: Fast sportsbook lines RPC
 -- The original get_sportsbook_lines(date) times out on Supabase because scanning
--- raw_player_props_combined by commence_time is too slow (no efficient index path).
+-- raw_player_props_combined by commence_time is too slow (millions of accumulated
+-- snapshot rows, no efficient index path for sportsbooks).
 --
--- New approach: dashboard first loads DFS lines (fast), then passes known game_ids
--- to get_sportsbook_lines_by_games(text[]). This uses idx_props_sportsbook_lookup
--- (game_id first column) and is sub-second.
+-- New approach: dashboard first loads DFS lines (fast), extracts unique game_ids,
+-- then passes them to get_sportsbook_lines_by_games(text[]) in batches of 3.
+-- This uses idx_props_sportsbook_lookup (game_id first column) and the 24h
+-- snapshot_time cutoff to keep queries sub-second.
 
-CREATE OR REPLACE FUNCTION get_sportsbook_lines_by_games(p_game_ids text[])
+DROP FUNCTION IF EXISTS get_sportsbook_lines_by_games(text[]);
+
+CREATE FUNCTION get_sportsbook_lines_by_games(p_game_ids text[])
 RETURNS TABLE (
   player_id   bigint,
   game_id     text,
@@ -17,9 +21,7 @@ RETURNS TABLE (
   under_odds  integer,
   snapshot_time timestamptz
 )
-LANGUAGE plpgsql SECURITY DEFINER AS $$
-BEGIN
-  RETURN QUERY
+LANGUAGE sql SECURITY DEFINER STABLE AS $$
   WITH latest AS (
     SELECT
       rp.player_id, rp.game_id, rp.bookmaker, rp.market_key,
@@ -33,6 +35,7 @@ BEGIN
       AND rp.market_key IN ('player_points', 'player_rebounds', 'player_assists')
       AND rp.bookmaker NOT IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
       AND rp.player_id IS NOT NULL
+      AND rp.snapshot_time > now() - interval '24 hours'
   )
   SELECT
     l.player_id, l.game_id, l.bookmaker, l.market_key, l.line,
@@ -43,6 +46,6 @@ BEGIN
   GROUP BY l.player_id, l.game_id, l.bookmaker, l.market_key, l.line
   HAVING MAX(CASE WHEN l.outcome_label = 'Over'  THEN l.odds_american END) IS NOT NULL
      AND MAX(CASE WHEN l.outcome_label = 'Under' THEN l.odds_american END) IS NOT NULL;
-END; $$;
+$$;
 
 GRANT EXECUTE ON FUNCTION get_sportsbook_lines_by_games(text[]) TO anon, authenticated, service_role;
