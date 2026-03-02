@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-01 Session 57] — Fix DFS Dashboard, Sportsbook Timeouts, Edge Refresh Timeout
+
+### Fixed
+
+- **DFS dashboard showing no data on production:** Migration 004 (RPC independence from `daily_predictions`) was not applied. Applied via SQLAlchemy. Both `get_dfs_lines` and `get_sportsbook_lines` RPCs updated from `commence_time::date` cast to range conditions for index-friendly queries.
+- **Sportsbook RPC statement timeout:** `get_sportsbook_lines(date)` timed out on multi-million row `raw_player_props_combined` table (8s Supabase limit). Created new `get_sportsbook_lines_by_games(text[])` RPC with game_id parameter and 24h snapshot_time cutoff. Dashboard updated to two-step batched fetch (3 games per parallel call, 0.3s each).
+- **Edge refresh 30-minute timeout:** `fetch_fresh_lines()` had no `snapshot_time` cutoff, scanning all historical snapshots. During evening games, query degraded past 30-min timeout causing 3 consecutive skipped runs. Added `snapshot_time > now() - interval '24 hours'` cutoff.
+- **DFS paper trader slow queries:** `_fetch_dfs_lines()` and `_fetch_sportsbook_lines()` used `commence_time::date` cast and had no snapshot_time cutoff. Updated to range conditions + 24h cutoff.
+- **MLB rolling averages pgBouncer crash:** `mlb_populate_averages.py` crashed with "lost synchronization with server" fetching entire batting stats table. Added season-by-season fetch with `_get_seasons()` helper.
+
+### Added
+
+- **`get_sportsbook_lines_by_games(text[])` RPC:** Pure SQL function accepting game_id array, 24h snapshot_time cutoff. Migration `005_fast_sportsbook_rpc.sql`.
+- **`idx_props_commence_time` index:** On `raw_player_props_combined(commence_time)` for range query performance.
+- **`allGamesStarted` UX on DFS page:** Shows helpful message with clickable "+ Live" button when Pre-Game filter hides all started games.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/edge_refresh_job.py` | Modified — 24h snapshot_time cutoff in `fetch_fresh_lines()` |
+| `src/paper_trading/dfs_paper_trader.py` | Modified — range conditions + 24h cutoff in both fetch methods |
+| `src/processing/mlb/mlb_populate_averages.py` | Modified — season-by-season fetch |
+| `database/migrations/004_fix_rpc_prediction_dependency.sql` | Modified — range conditions, index |
+| `database/migrations/005_fast_sportsbook_rpc.sql` | Created — batched sportsbook RPC |
+| `dashboard/src/app/(protected)/dfs/page.tsx` | Modified — batched sportsbook fetch, allGamesStarted UX |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- Ruff: no new issues (pre-existing E402 only)
+- Railway logs confirm edge refresh completing in ~2 min after fix (was timing out at 30 min)
+- Sportsbook RPC batch of 3 games returns in 0.3s (was timing out at 8s+)
+
+---
+
 ## [2026-03-01 Session 56] — Fix Stale Prediction Lines (MAX(line) Alt-Line Bug)
 
 ### Fixed

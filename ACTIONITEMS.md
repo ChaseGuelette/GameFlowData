@@ -1,27 +1,47 @@
 # GameFlowData — Roadmap
 
-## Session Summary (2026-03-01 — Session 56)
+## Session Summary (2026-03-01 — Session 57)
 
 ### What We Did
 
-**Fixed critical stale prediction line bug (`MAX(line)` alt-line conflation) in edge refresh and daily runner.**
+**Fixed production DFS dashboard (no data showing), sportsbook RPC timeouts, and edge refresh 30-minute timeout.**
 
-**Stale Line Bug Fix (edge_refresh_job.py + daily_runner.py):**
-- Root cause: `fetch_fresh_lines()` SQL used `MAX(line)` to collapse Over/Under rows, which picked the highest alt line from bookmakers offering multiple lines (e.g., novig at 7.5/9.5/11.5/13.5/15.5). This caused mismatched odds (Over odds from line 15.5 paired with Under odds from 11.5), artificially low booksum, and selection of wrong lines as "sharpest."
-- Impact: Wembanyama stored at line=15.5 (market=11.5), Dort at line=7.5 (market=3.5). Both had false edge calculations and bad `is_recommended` flags.
-- Fix: Added `line` to `ROW_NUMBER PARTITION BY` so alt lines are treated as separate rows. Replaced `MAX(line)` with plain `line` in `GROUP BY`. Added `HAVING` clause requiring both Over and Under odds. Sharpest-book selection now correctly picks primary lines (lowest vig from matched odds).
-- Applied to both `edge_refresh_job.py:fetch_fresh_lines()` and `daily_runner.py._get_current_lines()`.
+**DFS Dashboard Fix:**
+- Applied migration 004 to production (RPCs no longer depend on `daily_predictions`).
+- Fixed `get_dfs_lines` and `get_sportsbook_lines` RPCs: replaced `commence_time::date` cast (prevents index usage) with range conditions.
+- Created `idx_props_commence_time` index on `raw_player_props_combined(commence_time)`.
+
+**Sportsbook RPC Timeout Fix:**
+- Old `get_sportsbook_lines(date)` timed out scanning millions of accumulated snapshot rows (8s Supabase PostgREST limit).
+- Created new `get_sportsbook_lines_by_games(text[])` RPC (migration 005): accepts game_id array, 24h snapshot_time cutoff, pure SQL function. Returns in 0.3s for 3 games.
+- Updated DFS dashboard page to two-step fetch: load DFS lines first, extract game_ids, then batch sportsbook calls (3 games per batch, parallel).
+
+**Edge Refresh 30-Minute Timeout Fix:**
+- `fetch_fresh_lines()` had no `snapshot_time` cutoff — scanned ALL historical snapshots. During evening games (22:22-22:52 UTC), query degraded past 30-minute timeout, causing 3 consecutive skipped runs.
+- Added `AND snapshot_time > now() - interval '24 hours'` cutoff.
+
+**DFS Paper Trader Query Fix:**
+- Both `_fetch_dfs_lines()` and `_fetch_sportsbook_lines()` used slow `commence_time::date` cast and had no snapshot_time cutoff.
+- Updated to range conditions + 24-hour cutoff, matching the RPC fix pattern.
+
+**MLB Rolling Averages pgBouncer Fix:**
+- `mlb_populate_averages.py` crashed with "lost synchronization with server" when fetching the entire batting stats table through pgBouncer.
+- Added `_get_seasons()` helper; fetch/concat data season-by-season.
+
+**Dashboard UX:**
+- Added `allGamesStarted` detection — shows helpful message with "+ Live" button when Pre-Game filter hides all games.
 
 ### Remaining Action Items
 
-1. **Deploy to Railway** — push stale line fix (critical)
-2. **MLB linker backfill in progress** — re-run averages backfill after linker completes
-3. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
-4. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
-5. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
-6. **Stripe integration** — subscribe page, customer portal, webhook
-7. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
-8. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+1. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (code committed, not yet deployed)
+2. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` were started but stopped mid-creation; may be in invalid state
+3. **MLB linker backfill in progress** — re-run averages backfill after linker completes
+4. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+5. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+6. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+7. **Stripe integration** — subscribe page, customer portal, webhook
+8. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+9. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
 
 ---
 

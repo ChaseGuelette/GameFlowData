@@ -12,7 +12,7 @@ The daily pipeline is split into four jobs based on execution frequency:
 | `lines_job.py --live` | 12 PM, 4 PM | Full live scrape (game lines + props + injuries + linker) | ~30-90 sec |
 | `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation | ~16 sec |
 | `lines_job.py --live --props-only` | Every 10 min, 11 AM – 11 PM | Props-only live scrape + linker | ~15-30 sec |
-| `edge_refresh_job.py` | Every 10 min (+2 min offset), 11 AM – 11 PM | Recalculate edges + resolve bets + place bets | ~2-3 sec |
+| `edge_refresh_job.py` | Every 10 min (+2 min offset), 11 AM – 11 PM | Recalculate edges + resolve bets + place bets | ~2-3 min |
 
 **Note:** Inference job optimized from ~3 min to ~16 sec in Session 27 via parallel feature building and prop lines query optimization.
 
@@ -200,7 +200,7 @@ python src/orchestration/edge_refresh_job.py --stats pts reb
 1. Load stored MC samples via `PredictionStore.get_all_samples_for_date()` — returns `dict[(player_id, game_id, stat) -> np.ndarray]`
 2. Load stored predictions from `daily_predictions` for target date
 3. Get unique game_ids from predictions
-4. Fetch fresh prop lines from `raw_player_props_combined` (sharpest book per player/game/market)
+4. Fetch fresh prop lines from `raw_player_props_combined` (sharpest book per player/game/market, 24h snapshot_time cutoff)
 5. Recalculate over/under probabilities from MC samples (empirical CDF)
 6. Compute implied probabilities from odds (multiplicative devigging)
 7. Recalculate raw edges (model prob - implied prob)
