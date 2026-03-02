@@ -3,7 +3,7 @@
 import { PlayerAvatar } from '@/components/shared/PlayerAvatar'
 import { Badge, EdgeBadge } from '@/components/shared/Badge'
 import { type Prediction } from '@/types/predictions'
-import { formatProb, formatGameTime, isGameLive } from '@/lib/utils'
+import { formatProb, formatGameTime, isGameLive, isGameDone } from '@/lib/utils'
 
 interface PlayOfTheDayProps {
   prediction: Prediction
@@ -54,6 +54,11 @@ export function PlayOfTheDay({ prediction, onAnalyze }: PlayOfTheDayProps) {
                 <span className="ml-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-500/20 text-red-400 border border-red-500/30">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
                   Live
+                </span>
+              )}
+              {isGameDone(prediction.game_time) && (
+                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-600/30 text-slate-400 border border-slate-600/30">
+                  Final
                 </span>
               )}
             </p>

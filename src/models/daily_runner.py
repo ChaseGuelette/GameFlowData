@@ -390,9 +390,12 @@ class DailyPredictionRunner:
         """
         from datetime import timedelta
 
-        # Games for target_date evening are stored with next day's UTC date
-        # (e.g., 7:30 PM ET on Feb 10 = 00:30 UTC on Feb 11)
-        utc_date = target_date + timedelta(days=1)
+        # Games on target_date span two UTC dates:
+        #   - Matinee games (noon-6 PM ET) fall on the same UTC date
+        #   - Evening games (7 PM+ ET) roll into the next UTC date
+        # Search both to catch all games.
+        utc_start = target_date
+        utc_end = target_date + timedelta(days=2)
 
         query = text("""
             WITH game_times AS (
@@ -401,7 +404,9 @@ class DailyPredictionRunner:
                     away_team,
                     commence_time
                 FROM raw_game_lines_staging
-                WHERE commence_time::date = :utc_date
+                WHERE commence_time >= CAST(:utc_start AS date)
+                  AND commence_time < CAST(:utc_end AS date)
+                  AND CAST(commence_time AT TIME ZONE 'US/Eastern' AS date) = CAST(:target_date AS date)
                 ORDER BY home_team, away_team, snapshot_time DESC
             )
             SELECT
@@ -417,7 +422,11 @@ class DailyPredictionRunner:
 
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(query, {"utc_date": utc_date})
+                result = conn.execute(query, {
+                    "utc_start": utc_start,
+                    "utc_end": utc_end,
+                    "target_date": target_date,
+                })
                 time_lookup = {
                     (row[0], row[1]): row[2]
                     for row in result

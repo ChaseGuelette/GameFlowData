@@ -43,32 +43,44 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# DATA FETCHING
+# DATA FETCHING  (season-by-season to avoid pgBouncer timeouts)
 # ============================================================================
 
 
+def _get_seasons(engine, table: str) -> list[int]:
+    """Return sorted list of distinct seasons in a game-stats table."""
+    query = f"SELECT DISTINCT season FROM {table} ORDER BY season"
+    df = pd.read_sql(query, engine)
+    return df["season"].tolist()
+
+
 def fetch_batting_stats(engine, season: int | None = None) -> pd.DataFrame:
-    """Fetch all batting game stats (excluding DNP rows)."""
-    query = """
+    """Fetch batting game stats (excluding DNP rows), season-by-season."""
+    base = """
         SELECT
             player_id, game_id, game_date::date AS game_date, season, team_id,
             pa, ab, r, h, doubles, triples, hr, rbi, bb, so, sb, cs, hbp, sf, tb
         FROM mlb_player_game_stats_batting
         WHERE did_not_play = false
     """
-    if season:
-        query += f" AND season = {int(season)}"
-    query += " ORDER BY player_id, season, game_date"
+    seasons = [season] if season else _get_seasons(engine, "mlb_player_game_stats_batting")
+    logger.info(f"Fetching batting stats for {len(seasons)} season(s): {seasons}")
 
-    logger.info("Fetching batting stats...")
-    df = pd.read_sql(query, engine)
-    logger.info(f"Fetched {len(df):,} batting rows")
+    chunks = []
+    for s in seasons:
+        query = base + f" AND season = {int(s)} ORDER BY player_id, game_date"
+        df_s = pd.read_sql(query, engine)
+        logger.info(f"  Season {s}: {len(df_s):,} rows")
+        chunks.append(df_s)
+
+    df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+    logger.info(f"Fetched {len(df):,} batting rows total")
     return df
 
 
 def fetch_pitching_stats(engine, season: int | None = None) -> pd.DataFrame:
-    """Fetch all pitching game stats (excluding DNP rows)."""
-    query = """
+    """Fetch pitching game stats (excluding DNP rows), season-by-season."""
+    base = """
         SELECT
             player_id, game_id, game_date::date AS game_date, season, team_id,
             is_starter, ip, h_allowed, r_allowed, er, bb, so, hr_allowed,
@@ -76,13 +88,18 @@ def fetch_pitching_stats(engine, season: int | None = None) -> pd.DataFrame:
         FROM mlb_player_game_stats_pitching
         WHERE did_not_play = false
     """
-    if season:
-        query += f" AND season = {int(season)}"
-    query += " ORDER BY player_id, season, game_date"
+    seasons = [season] if season else _get_seasons(engine, "mlb_player_game_stats_pitching")
+    logger.info(f"Fetching pitching stats for {len(seasons)} season(s): {seasons}")
 
-    logger.info("Fetching pitching stats...")
-    df = pd.read_sql(query, engine)
-    logger.info(f"Fetched {len(df):,} pitching rows")
+    chunks = []
+    for s in seasons:
+        query = base + f" AND season = {int(s)} ORDER BY player_id, game_date"
+        df_s = pd.read_sql(query, engine)
+        logger.info(f"  Season {s}: {len(df_s):,} rows")
+        chunks.append(df_s)
+
+    df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+    logger.info(f"Fetched {len(df):,} pitching rows total")
     return df
 
 

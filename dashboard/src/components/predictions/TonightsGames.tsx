@@ -42,11 +42,21 @@ function formatGameTime(gameTime: string | null): string {
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
+const GAME_DURATION_MS = 3 * 60 * 60 * 1000
+
 function isLive(gameTime: string | null): boolean {
   if (!gameTime) return false
   const d = new Date(gameTime)
   if (isNaN(d.getTime())) return false
-  return d <= new Date()
+  const now = Date.now()
+  return d.getTime() <= now && now < d.getTime() + GAME_DURATION_MS
+}
+
+function isDone(gameTime: string | null): boolean {
+  if (!gameTime) return false
+  const d = new Date(gameTime)
+  if (isNaN(d.getTime())) return false
+  return Date.now() >= d.getTime() + GAME_DURATION_MS
 }
 
 export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday }: TonightsGamesProps) {
@@ -160,6 +170,11 @@ export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday }
                     <span className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-red-500/20 text-red-400 border border-red-500/30">
                       <span className="w-1 h-1 rounded-full bg-red-400 animate-pulse" />
                       Live
+                    </span>
+                  )}
+                  {isDone(g.gameTime) && (
+                    <span className="inline-flex items-center px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-slate-600/30 text-slate-400 border border-slate-600/30">
+                      Final
                     </span>
                   )}
                 </div>

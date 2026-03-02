@@ -104,13 +104,27 @@ export function formatGameTime(gameTime: string | undefined | null): string {
   }
 }
 
-// Check if a game is currently live (has started)
+// Game status based on start time (~3 hour game duration)
+const GAME_DURATION_MS = 3 * 60 * 60 * 1000
+
 export function isGameLive(gameTime: string | undefined | null): boolean {
   if (!gameTime) return false
   try {
-    const date = new Date(gameTime)
-    if (isNaN(date.getTime())) return false
-    return date <= new Date()
+    const start = new Date(gameTime)
+    if (isNaN(start.getTime())) return false
+    const now = Date.now()
+    return start.getTime() <= now && now < start.getTime() + GAME_DURATION_MS
+  } catch {
+    return false
+  }
+}
+
+export function isGameDone(gameTime: string | undefined | null): boolean {
+  if (!gameTime) return false
+  try {
+    const start = new Date(gameTime)
+    if (isNaN(start.getTime())) return false
+    return Date.now() >= start.getTime() + GAME_DURATION_MS
   } catch {
     return false
   }
