@@ -446,6 +446,21 @@ export default function DfsPage() {
     }
   }, [filteredRows, slipType])
 
+  // Detect when Pre-Game filter is hiding all results (all games have started)
+  const allGamesStarted = useMemo(() => {
+    if (showLive || loading) return false
+    const now = new Date()
+    const hasData = edgeMode === 'model'
+      ? comparisons.length > 0
+      : marketComparisons.size > 0
+    if (!hasData) return false
+    // Check if every comparison has a past game_time
+    if (edgeMode === 'model') {
+      return comparisons.every(c => c.game_time && new Date(c.game_time) <= now)
+    }
+    return [...marketComparisons.values()].every(({ comp }) => comp.game_time && new Date(comp.game_time) <= now)
+  }, [showLive, loading, edgeMode, comparisons, marketComparisons])
+
   const modeSubtitles: Record<EdgeMode, string> = {
     model: 'Model probability vs DFS break-even',
     market: 'Sharp sportsbook consensus vs DFS line',
@@ -531,6 +546,17 @@ export default function DfsPage() {
           <div className="flex flex-col items-center gap-3">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
             <div className="text-slate-400">Loading DFS lines...</div>
+          </div>
+        </div>
+      ) : allGamesStarted ? (
+        <div className="bg-slate-800/50 rounded-lg border border-slate-700">
+          <div className="flex items-center justify-center py-16">
+            <div className="text-center">
+              <p className="text-slate-400 text-lg">All games have started</p>
+              <p className="text-slate-500 text-sm mt-2">
+                Click <button onClick={() => setShowLive(true)} className="text-orange-400 hover:text-orange-300 font-medium">+ Live</button> to view in-progress and completed game lines
+              </p>
+            </div>
           </div>
         </div>
       ) : (
