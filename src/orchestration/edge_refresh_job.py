@@ -34,11 +34,11 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT))
 
-from dotenv import load_dotenv
-from sqlalchemy import bindparam, create_engine, text
+from dotenv import load_dotenv  # noqa: E402
+from sqlalchemy import bindparam, create_engine, text  # noqa: E402
 
-from src.models.black_litterman import BlackLittermanBlender, BLConfig
-from src.models.prediction_store import PredictionStore
+from src.models.black_litterman import BlackLittermanBlender, BLConfig  # noqa: E402
+from src.models.prediction_store import PredictionStore  # noqa: E402
 
 # Configure logging
 LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
