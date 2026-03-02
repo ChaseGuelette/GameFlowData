@@ -435,7 +435,7 @@ class DailyPredictionRunner:
             # Log if no times found in database
             if not time_lookup:
                 logger.warning(
-                    f"No game times found in raw_game_lines_staging for UTC date {utc_date}. "
+                    f"No game times found in raw_game_lines_staging for date {target_date}. "
                     "Ensure lines_job ran before inference."
                 )
                 return games

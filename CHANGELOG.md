@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-01 Session 55] — MLB Processing Pipeline + Game Time TBD Fix
+
+### Added
+
+- **MLB Processing Module (`src/processing/mlb/`):** Complete Phase 2 processing pipeline:
+  - `mlb_config.py` — Shared constants: rolling windows (batting L5/L10/L20/SZN, pitching L3/L5/SZN), 12 batting stats, 8 pitching stats, team aliases, batch sizes.
+  - `mlb_linker.py` — Links `mlb_raw_player_props` by populating `game_id`, `player_id`, `team_id`. Temp table UPDATE pattern, fuzzy player matching (cached), ±1 day date window. Modes: `incremental` (daily) and `backfill` (one-time). Retry logic (20 attempts, escalating waits) survives connection drops and laptop sleep/wake.
+  - `mlb_populate_averages.py` — Full backfill of `mlb_player_average_batting` (71 columns) and `mlb_player_average_pitching` (41 columns). Shift(1) rolling averages, rate stats from rolling sums, std devs, context metrics.
+  - `mlb_populate_averages_incremental.py` — Daily incremental per-player rolling calculation with UPSERT.
+- **MLB Average Tables (`database/migrations/002_mlb_averages.sql`):** Two new tables for model consumption with indexes and RLS.
+
+### Fixed
+
+- **995 placeholder player names in `mlb_players`:** Batch-fetched real names from MLB Stats API. All 995 resolved. Linker match rate jumped from ~1% to 100%.
+- **`_ensure_player` in `mlb_stats_scraper.py`:** Changed from `ON CONFLICT DO NOTHING` to `DO UPDATE` to prevent future placeholder name stagnation.
+- **Dashboard game times showing "TBD" (`daily_runner.py`):** `_enrich_game_times()` assumed all NBA games are evening (UTC date = target+1). Matinee/afternoon games fall on same UTC date and were missed. Fixed to search 2-day UTC window filtered by ET date. Backfilled 2,073 predictions — all dates now 100% coverage.
+- **Ruff lint:** Removed unused `starter_float` variable in `mlb_populate_averages.py`, fixed undefined `utc_date` reference in `daily_runner.py`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/processing/mlb/__init__.py` | Created — module marker |
+| `src/processing/mlb/mlb_config.py` | Created — shared constants |
+| `src/processing/mlb/mlb_linker.py` | Created — MLB props linker (~580 lines) |
+| `src/processing/mlb/mlb_populate_averages.py` | Created — full backfill averages (~400 lines) |
+| `src/processing/mlb/mlb_populate_averages_incremental.py` | Created — daily incremental averages (~350 lines) |
+| `database/migrations/002_mlb_averages.sql` | Created — batting + pitching average tables |
+| `src/scrapers/mlb/mlb_stats_scraper.py` | Modified — `_ensure_player` DO UPDATE |
+| `src/models/daily_runner.py` | Modified — game time enrichment UTC fix |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- Ruff: all checks pass for modified files
+- MLB averages backfill completed: 201,306 batting + 82,979 pitching rows
+- MLB linker backfill in progress (~2.2M/22.7M linked, running in terminal)
+- Game time backfill: 2,073 predictions updated, 100% coverage across all dates
+
+---
+
 ## [2026-03-01 Session 54] — DFS Fixes, LIVE Tags, Performance DFS Tab, RPC Independence
 
 ### Fixed

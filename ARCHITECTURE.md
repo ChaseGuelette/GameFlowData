@@ -163,6 +163,15 @@ Serves as the bridge between NBA and sportsbook data:
 | `feature_selection.py` | `ImprovedFeatureSelector` — per-quantile feature selection with time-series aware 3-split CV and permutation importance. |
 | `link_injury_data.py` | Links RapidAPI injury records to NBA player/team IDs via 3-tier cascade: manual CSV overrides → exact normalized match → SequenceMatcher fuzzy match (threshold 0.80, +0.15 last name bonus). 99.3% coverage. |
 
+#### MLB Processing (`src/processing/mlb/`)
+
+| Module | Purpose |
+|--------|---------|
+| `mlb_config.py` | Shared constants: rolling windows (`BATTING_WINDOWS`, `PITCHING_WINDOWS`), stat lists, team aliases, batch sizes. |
+| `mlb_linker.py` | Links `mlb_raw_player_props` rows by populating `game_id`, `player_id`, `team_id`. Mirrors NBA linker with MLB-specific adaptations (INTEGER game_id, ±1 day date window, team_id from boxscore cross-reference). Modes: `incremental` (daily) and `backfill` (one-time). Retry logic survives connection drops and laptop sleep. |
+| `mlb_populate_averages.py` | Full backfill of `mlb_player_average_batting` and `mlb_player_average_pitching`. Shift(1) rolling averages (no data leakage), rate stats from rolling sums (BA, OBP, SLG, OPS, ERA, WHIP, K/9, BB/9), std devs, context metrics (rest days, pitch count). |
+| `mlb_populate_averages_incremental.py` | Daily incremental — processes only players active on target date. Per-player rolling calculation, UPSERT via `ON CONFLICT DO UPDATE`. |
+
 ### 4. Diagnostics (`src/diagnostics/`)
 
 Database health monitoring and model calibration analysis tools.
@@ -763,7 +772,9 @@ DISCORD_CHANNEL_PERFORMANCE=...
 - `mlb_player_game_statcast_pitching`: Per-game Statcast pitching aggregates — contact quality against, fastball velo/spin, pitch mix, CSW%, plate discipline. PK: `(player_id, game_date)`.
 - `mlb_player_season_advanced`: Season-level FanGraphs stats (wRC+, wOBA, ISO, FIP, xFIP, SIERA, WAR). PK: `(player_id, season, player_type)`.
 - `mlb_park_factors`: Venue-level park factor adjustments (runs, HR, hits, SO).
-- `mlb_raw_player_props`: MLB player prop lines from The Odds API.
+- `mlb_player_average_batting`: Pre-game rolling batting averages (shift(1)). 12 stats × 4 windows (L5/L10/L20/SZN) + 7 std devs at L5 + 4 rate stats at L10 (BA, OBP, SLG, OPS from rolling sums) + context (rest_days, games_last_7d). PK: `(player_id, game_id)`.
+- `mlb_player_average_pitching`: Pre-game rolling pitching averages (shift(1)). 8 stats × 3 windows (L3/L5/SZN) + 4 derived rates at L5 (ERA, WHIP, K/9, BB/9) + 2 std devs + context (days_rest, pitch_count_last_start, starts_l3/l5/szn). PK: `(player_id, game_id)`.
+- `mlb_raw_player_props`: MLB player prop lines from The Odds API. Linked to entities via `mlb_linker.py`.
 - `mlb_raw_game_lines`: MLB game lines (moneyline, spreads, totals).
 
 ### Predictions
@@ -906,6 +917,13 @@ python src/processing/populate_average_stats.py [--season YYYY-YY] [--table play
 python src/processing/populate_average_stats_incremental.py [--date YYYY-MM-DD]  # Lightweight daily update (~1s)
 python src/processing/backfill_opponent_allowed.py
 python src/processing/backfill_league_priors.py
+
+# MLB Processing
+python -m src.processing.mlb.mlb_linker incremental                    # Daily: link new unlinked props
+python -m src.processing.mlb.mlb_linker backfill                       # One-time: link all unlinked props
+python -m src.processing.mlb.mlb_populate_averages --table all         # Full backfill of rolling averages
+python -m src.processing.mlb.mlb_populate_averages --table batting --season 2024  # Single table/season
+python -m src.processing.mlb.mlb_populate_averages_incremental --date 2024-09-15  # Daily incremental
 ```
 
 ### Training

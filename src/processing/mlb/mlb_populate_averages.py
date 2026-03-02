@@ -298,7 +298,6 @@ def _calculate_pitching_context(df: pd.DataFrame, group_cols: list[str]):
     # starts counts (shifted) — rolling sum of is_starter
     if "is_starter" in df.columns:
         group_key = df[group_cols].apply(lambda x: tuple(x), axis=1)
-        starter_float = df["is_starter"].astype(float)
         shifted_starter = df.groupby(group_cols)["is_starter"].shift(1).astype(float)
 
         df["starts_l3"] = rolling_with_groupby(shifted_starter, group_key, window=3, agg="sum")

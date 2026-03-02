@@ -1,31 +1,37 @@
 # GameFlowData — Roadmap
 
-## Session Summary (2026-03-01 — Session 54)
+## Session Summary (2026-03-01 — Session 55)
 
 ### What We Did
 
-**Fixed critical DFS pipeline bugs, added LIVE tags to game cards, built DFS performance tab, and decoupled RPCs from inference.**
+**Built MLB Phase 2 processing pipeline (linker + rolling averages), fixed placeholder player names, and fixed dashboard game time TBD bug.**
 
-**Critical Bug Fixes:**
-- Edge refresh `sys.exit(0)` was killing the process before DFS paper trading could run. Moved DFS to step 0 (before MC check).
-- Both `get_dfs_lines` and `get_sportsbook_lines` RPCs required `daily_predictions` to exist. Updated to scope by `commence_time::date` — DFS/market data available immediately after scraping.
-- DFS page market mode blank before inference — now builds comparisons from DFS line data as fallback.
-- Stale prediction lines (Danny Wolf 13.5→10.5) — edge refresh properly handles line movement, just wasn't executing.
+**MLB Processing Pipeline (Phase 2):**
+- Created `src/processing/mlb/` module with 4 files: `mlb_config.py`, `mlb_linker.py`, `mlb_populate_averages.py`, `mlb_populate_averages_incremental.py`.
+- Created `database/migrations/002_mlb_averages.sql` — two new tables (`mlb_player_average_batting`, `mlb_player_average_pitching`).
+- MLB linker links `mlb_raw_player_props` rows by populating `game_id`, `player_id`, `team_id`. Supports `incremental` and `backfill` modes with robust retry logic (survives connection drops and laptop sleep).
+- Rolling averages: shift(1) pattern, rate stats from rolling sums (not avg of per-game rates), batting (L5/L10/L20/SZN) and pitching (L3/L5/SZN) windows.
+- Averages backfill completed: 201,306 batting + 82,979 pitching rows.
 
-**LIVE Tags & Game Times:**
-- PropCard, PlayOfTheDay, TonightsGames now show pulsing red "Live" badge when game has started.
-- Game times always display ("TBD" fallback). Client-side backfill propagates times across same-game predictions.
+**MLB Player Name Fix:**
+- Fixed 995 placeholder player names ("Player 542303") in `mlb_players` by batch-fetching real names from MLB Stats API.
+- Fixed `_ensure_player` in `mlb_stats_scraper.py` to use `ON CONFLICT DO UPDATE` (prevents future stagnation).
+- Linker match rate jumped from ~1% to 100% per batch after fix.
 
-**DFS Performance Tab:** New Props/DFS tab toggle on performance page with DFS KPIs, bankroll chart, and slip type breakdown.
+**Dashboard Game Time TBD Fix:**
+- Root cause: `_enrich_game_times()` assumed all NBA games are evening (UTC date = target+1). Matinee/afternoon games (noon-6 PM ET) fall on same UTC date and were missed.
+- Fix: Changed query to search 2-day UTC window filtered by `commence_time AT TIME ZONE 'US/Eastern'` cast to target date.
+- Backfilled 2,073 existing predictions — all dates now at 100% game_time coverage (was as low as 0%).
 
 ### Remaining Action Items
 
-1. **Deploy to Railway** — push edge_refresh_job.py fix so DFS entries start building and stale edges get refreshed
-2. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
-3. **Run MLB backfills** — boxscores (2022-2025), then FanGraphs (all seasons), then Statcast (2024-2025), then props/lines
-4. **Stripe integration** — subscribe page, customer portal, webhook
-5. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts (or find alternative data source)
-6. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+1. **MLB linker backfill in progress** — ~2.2M/22.7M linked so far, running in terminal. Re-run averages backfill after linker completes.
+2. **Deploy to Railway** — push edge_refresh_job.py fix + game time fix
+3. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+4. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+5. **Stripe integration** — subscribe page, customer portal, webhook
+6. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+7. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
 
 ---
 
