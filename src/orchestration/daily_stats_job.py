@@ -165,7 +165,7 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
     except subprocess.TimeoutExpired as e:
         elapsed = time.time() - start_time
         logger.error(f"TIMED OUT: {description} ({elapsed:.1f}s)")
-        logger.error(f"  Step exceeded 10 minute timeout")
+        logger.error("  Step exceeded 10 minute timeout")
         if e.stdout:
             stdout = e.stdout if isinstance(e.stdout, str) else e.stdout.decode(errors="replace")
             logger.error(f"  Partial stdout: {stdout[-500:]}")
