@@ -1,8 +1,15 @@
 -- Migration 004: Remove daily_predictions dependency from DFS RPCs
 -- Both get_dfs_lines and get_sportsbook_lines previously scoped games via
 -- daily_predictions, meaning they returned nothing before inference ran.
--- Now they scope by commence_time::date directly, so DFS/market edge data
+-- Now they scope by commence_time range directly, so DFS/market edge data
 -- is available as soon as lines are scraped.
+--
+-- Also adds idx_props_commence_time index for performance — the old
+-- commence_time::date cast caused full table scans and statement timeouts.
+
+-- 0. Index for commence_time range queries
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_props_commence_time
+  ON raw_player_props_combined (commence_time);
 
 -- 1. get_dfs_lines: DROP + recreate (return type changes: adds player_name, game_time)
 DROP FUNCTION IF EXISTS get_dfs_lines(date);
@@ -41,7 +48,8 @@ BEGIN
     FROM raw_player_props_combined r
     WHERE r.bookmaker IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
       AND r.player_id IS NOT NULL
-      AND r.commence_time::date = target_date
+      AND r.commence_time >= target_date::timestamptz
+      AND r.commence_time < (target_date + 1)::timestamptz
   )
   SELECT
     d.player_id,
@@ -61,7 +69,9 @@ BEGIN
 END; $$;
 
 
--- 2. get_sportsbook_lines: same return type, just change WHERE clause
+-- 2. get_sportsbook_lines: same fix — range instead of ::date cast
+DROP FUNCTION IF EXISTS get_sportsbook_lines(date);
+
 CREATE OR REPLACE FUNCTION get_sportsbook_lines(target_date date)
 RETURNS TABLE (
   player_id   bigint,
@@ -88,7 +98,8 @@ BEGIN
     WHERE rp.market_key IN ('player_points', 'player_rebounds', 'player_assists')
       AND rp.bookmaker NOT IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
       AND rp.player_id IS NOT NULL
-      AND rp.commence_time::date = target_date
+      AND rp.commence_time >= target_date::timestamptz
+      AND rp.commence_time < (target_date + 1)::timestamptz
   )
   SELECT
     l.player_id, l.game_id, l.bookmaker, l.market_key, l.line,
