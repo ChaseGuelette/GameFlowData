@@ -1,37 +1,27 @@
 # GameFlowData — Roadmap
 
-## Session Summary (2026-03-01 — Session 55)
+## Session Summary (2026-03-01 — Session 56)
 
 ### What We Did
 
-**Built MLB Phase 2 processing pipeline (linker + rolling averages), fixed placeholder player names, and fixed dashboard game time TBD bug.**
+**Fixed critical stale prediction line bug (`MAX(line)` alt-line conflation) in edge refresh and daily runner.**
 
-**MLB Processing Pipeline (Phase 2):**
-- Created `src/processing/mlb/` module with 4 files: `mlb_config.py`, `mlb_linker.py`, `mlb_populate_averages.py`, `mlb_populate_averages_incremental.py`.
-- Created `database/migrations/002_mlb_averages.sql` — two new tables (`mlb_player_average_batting`, `mlb_player_average_pitching`).
-- MLB linker links `mlb_raw_player_props` rows by populating `game_id`, `player_id`, `team_id`. Supports `incremental` and `backfill` modes with robust retry logic (survives connection drops and laptop sleep).
-- Rolling averages: shift(1) pattern, rate stats from rolling sums (not avg of per-game rates), batting (L5/L10/L20/SZN) and pitching (L3/L5/SZN) windows.
-- Averages backfill completed: 201,306 batting + 82,979 pitching rows.
-
-**MLB Player Name Fix:**
-- Fixed 995 placeholder player names ("Player 542303") in `mlb_players` by batch-fetching real names from MLB Stats API.
-- Fixed `_ensure_player` in `mlb_stats_scraper.py` to use `ON CONFLICT DO UPDATE` (prevents future stagnation).
-- Linker match rate jumped from ~1% to 100% per batch after fix.
-
-**Dashboard Game Time TBD Fix:**
-- Root cause: `_enrich_game_times()` assumed all NBA games are evening (UTC date = target+1). Matinee/afternoon games (noon-6 PM ET) fall on same UTC date and were missed.
-- Fix: Changed query to search 2-day UTC window filtered by `commence_time AT TIME ZONE 'US/Eastern'` cast to target date.
-- Backfilled 2,073 existing predictions — all dates now at 100% game_time coverage (was as low as 0%).
+**Stale Line Bug Fix (edge_refresh_job.py + daily_runner.py):**
+- Root cause: `fetch_fresh_lines()` SQL used `MAX(line)` to collapse Over/Under rows, which picked the highest alt line from bookmakers offering multiple lines (e.g., novig at 7.5/9.5/11.5/13.5/15.5). This caused mismatched odds (Over odds from line 15.5 paired with Under odds from 11.5), artificially low booksum, and selection of wrong lines as "sharpest."
+- Impact: Wembanyama stored at line=15.5 (market=11.5), Dort at line=7.5 (market=3.5). Both had false edge calculations and bad `is_recommended` flags.
+- Fix: Added `line` to `ROW_NUMBER PARTITION BY` so alt lines are treated as separate rows. Replaced `MAX(line)` with plain `line` in `GROUP BY`. Added `HAVING` clause requiring both Over and Under odds. Sharpest-book selection now correctly picks primary lines (lowest vig from matched odds).
+- Applied to both `edge_refresh_job.py:fetch_fresh_lines()` and `daily_runner.py._get_current_lines()`.
 
 ### Remaining Action Items
 
-1. **MLB linker backfill in progress** — ~2.2M/22.7M linked so far, running in terminal. Re-run averages backfill after linker completes.
-2. **Deploy to Railway** — push edge_refresh_job.py fix + game time fix
-3. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
-4. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
-5. **Stripe integration** — subscribe page, customer portal, webhook
-6. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
-7. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+1. **Deploy to Railway** — push stale line fix (critical)
+2. **MLB linker backfill in progress** — re-run averages backfill after linker completes
+3. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+4. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+5. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+6. **Stripe integration** — subscribe page, customer portal, webhook
+7. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+8. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
 
 ---
 

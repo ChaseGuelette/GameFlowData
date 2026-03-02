@@ -107,7 +107,8 @@ class DfsPaperTrader:
             WITH game_ids AS (
                 SELECT DISTINCT game_id
                 FROM raw_player_props_combined
-                WHERE commence_time::date = :game_date
+                WHERE commence_time >= :game_date::timestamptz
+                  AND commence_time < (:game_date::date + 1)::timestamptz
                   AND game_id IS NOT NULL
                   AND bookmaker IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
             ),
@@ -135,6 +136,7 @@ class DfsPaperTrader:
                 WHERE rp.market_key IN ('player_points', 'player_rebounds', 'player_assists')
                   AND rp.bookmaker IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
                   AND rp.player_id IS NOT NULL
+                  AND rp.snapshot_time > now() - interval '24 hours'
             )
             SELECT
                 l.player_id,
@@ -169,7 +171,8 @@ class DfsPaperTrader:
             WITH game_ids AS (
                 SELECT DISTINCT game_id
                 FROM raw_player_props_combined
-                WHERE commence_time::date = :game_date
+                WHERE commence_time >= :game_date::timestamptz
+                  AND commence_time < (:game_date::date + 1)::timestamptz
                   AND game_id IS NOT NULL
                   AND bookmaker NOT IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
             ),
@@ -196,6 +199,7 @@ class DfsPaperTrader:
                 WHERE rp.market_key IN ('player_points', 'player_rebounds', 'player_assists')
                   AND rp.bookmaker NOT IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
                   AND rp.player_id IS NOT NULL
+                  AND rp.snapshot_time > now() - interval '24 hours'
             )
             SELECT
                 l.player_id,

@@ -113,6 +113,7 @@ def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataF
             WHERE game_id IN :game_ids
               AND market_key IN :markets
               AND player_id IS NOT NULL
+              AND snapshot_time > now() - interval '24 hours'
         )
         SELECT
             player_id,

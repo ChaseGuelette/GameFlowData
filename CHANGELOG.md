@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-01 Session 56] — Fix Stale Prediction Lines (MAX(line) Alt-Line Bug)
+
+### Fixed
+
+- **Critical: `MAX(line)` alt-line conflation in `fetch_fresh_lines()` SQL** — Bookmakers offering multiple alt lines (e.g., novig at 7.5/9.5/11.5/13.5/15.5) caused `MAX(line)` to pick the highest alt line. Over/Under odds from different line values got paired together, producing artificially low booksums that made broken data appear "sharpest." Result: Wembanyama stored at line=15.5 (market=11.5), Dort at line=7.5 (market=3.5).
+- **Fix:** Added `line` to `ROW_NUMBER PARTITION BY` and `GROUP BY` so each bookmaker×line is its own row. Added `HAVING` clause requiring both Over and Under odds. Applied to both `edge_refresh_job.py` and `daily_runner.py`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/edge_refresh_job.py` | Modified — `fetch_fresh_lines()` SQL: line in partition, HAVING clause |
+| `src/models/daily_runner.py` | Modified — `_get_current_lines()` SQL: same fix |
+| `ARCHITECTURE.md` | Updated — line selection documentation |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- Ruff: no new issues (pre-existing E402 only)
+- DB queries confirmed: Wembanyama line=15.5 stored (should be 11.5), Dort line=7.5 (should be 3.5) — fix will correct on next edge refresh
+
+---
+
 ## [2026-03-01 Session 55] — MLB Processing Pipeline + Game Time TBD Fix
 
 ### Added
