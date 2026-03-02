@@ -61,8 +61,7 @@ def fetch_batting_stats(engine, season: int | None = None) -> pd.DataFrame:
     query += " ORDER BY player_id, season, game_date"
 
     logger.info("Fetching batting stats...")
-    with engine.connect() as conn:
-        df = pd.read_sql(query, conn)
+    df = pd.read_sql(query, engine)
     logger.info(f"Fetched {len(df):,} batting rows")
     return df
 
@@ -82,8 +81,7 @@ def fetch_pitching_stats(engine, season: int | None = None) -> pd.DataFrame:
     query += " ORDER BY player_id, season, game_date"
 
     logger.info("Fetching pitching stats...")
-    with engine.connect() as conn:
-        df = pd.read_sql(query, conn)
+    df = pd.read_sql(query, engine)
     logger.info(f"Fetched {len(df):,} pitching rows")
     return df
 
