@@ -1,11 +1,8 @@
 """Tests for pipeline resilience: dependency checks, retry logic, and job status tracking."""
 
 import subprocess
-import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 class TestCheckDependency:
@@ -27,7 +24,7 @@ class TestCheckDependency:
 
         JOB_STATUS["daily_stats_job.py"] = {
             "status": "failed",
-            "end_time": datetime.now(timezone.utc),
+            "end_time": datetime.now(UTC),
             "duration": 100.0,
         }
         assert check_dependency("daily_stats_job.py") is False
@@ -37,7 +34,7 @@ class TestCheckDependency:
 
         JOB_STATUS["daily_stats_job.py"] = {
             "status": "timeout",
-            "end_time": datetime.now(timezone.utc),
+            "end_time": datetime.now(UTC),
             "duration": 1800.0,
         }
         assert check_dependency("daily_stats_job.py") is False
@@ -47,7 +44,7 @@ class TestCheckDependency:
 
         JOB_STATUS["daily_stats_job.py"] = {
             "status": "success",
-            "end_time": datetime.now(timezone.utc) - timedelta(hours=1),
+            "end_time": datetime.now(UTC) - timedelta(hours=1),
             "duration": 300.0,
         }
         assert check_dependency("daily_stats_job.py") is True
@@ -57,7 +54,7 @@ class TestCheckDependency:
 
         JOB_STATUS["daily_stats_job.py"] = {
             "status": "success",
-            "end_time": datetime.now(timezone.utc) - timedelta(hours=10),
+            "end_time": datetime.now(UTC) - timedelta(hours=10),
             "duration": 300.0,
         }
         assert check_dependency("daily_stats_job.py", max_age_hours=8) is False
@@ -67,7 +64,7 @@ class TestCheckDependency:
 
         JOB_STATUS["daily_stats_job.py"] = {
             "status": "success",
-            "end_time": datetime.now(timezone.utc) - timedelta(hours=3),
+            "end_time": datetime.now(UTC) - timedelta(hours=3),
             "duration": 300.0,
         }
         assert check_dependency("daily_stats_job.py", max_age_hours=2) is False
@@ -243,7 +240,7 @@ class TestDailyStatsRetry:
 
         JOB_STATUS["daily_stats_job.py"] = {
             "status": "success",
-            "end_time": datetime.now(timezone.utc),
+            "end_time": datetime.now(UTC),
             "duration": 300.0,
         }
         run_daily_stats_retry()
@@ -257,7 +254,7 @@ class TestDailyStatsRetry:
 
         JOB_STATUS["daily_stats_job.py"] = {
             "status": "failed",
-            "end_time": datetime.now(timezone.utc),
+            "end_time": datetime.now(UTC),
             "duration": 100.0,
         }
         run_daily_stats_retry()

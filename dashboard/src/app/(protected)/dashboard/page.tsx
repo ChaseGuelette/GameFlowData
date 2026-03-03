@@ -9,7 +9,7 @@ import { AnalysisModal } from '@/components/analysis/AnalysisModal'
 import { SlateModal } from '@/components/predictions/SlateModal'
 import { TonightsGames, type GameInfo } from '@/components/predictions/TonightsGames'
 import { type Prediction } from '@/types/predictions'
-import { getToday, formatDate, calculateBLConfidence, blendProbability } from '@/lib/utils'
+import { getToday, formatDate, calculateBLConfidence, blendProbability, isGameDone } from '@/lib/utils'
 import { TEAM_ABBREV, TEAM_NAME_TO_ABBREV } from '@/lib/constants'
 import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS } from '@/lib/sportsbook-availability'
 import { STAT_TO_MARKET } from '@/types/dfs'
@@ -400,6 +400,9 @@ export default function DashboardPage() {
 
   // Filter predictions by stat type, matchup, edge threshold, book availability, and Model Picks toggle
   const filteredPredictions = enrichedPredictions.filter(p => {
+    // Exclude finished games (started > 3 hours ago) regardless of filter mode
+    if (isGameDone(p.game_time)) return false
+    // Pre-Game mode: also exclude games that have started
     if (!showLive && p.game_time) {
       if (new Date(p.game_time) <= new Date()) return false
     }

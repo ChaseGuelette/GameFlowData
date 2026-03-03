@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-02 Session 58] — Pipeline Resilience Overhaul
+
+### Added
+
+- **Job status tracking (`scheduler.py`):** In-memory `JOB_STATUS` dict tracks every job's status, end time, and duration. `record_job_execution()` persists history to `job_executions` Supabase table for debugging and observability.
+- **Dependency gate (`scheduler.py`):** `check_dependency()` verifies upstream jobs succeeded within a configurable time window. `run_inference()` checks daily stats succeeded in last 8 hours — if not, passes `--stale-warning` flag and sends Discord alert.
+- **9:30 AM automatic retry (`scheduler.py`):** New `run_daily_stats_retry()` scheduled at 14:30 UTC. Checks if 9 AM run succeeded, re-runs if not. Gives the system a second chance before inference at 12:15 PM.
+- **Per-step retries with backoff (`daily_stats_job.py`):** `run_command()` accepts `max_retries` and `retry_delay` params. Critical steps get 2 retries with exponential backoff (15s, 30s). Non-critical steps get 0 retries.
+- **`--stale-warning` flag (`inference_job.py`):** Scheduler passes this when daily stats dependency check fails. Triggers stale-data Discord alert after predictions are generated.
+- **MC sample staleness check (`edge_refresh_job.py`):** Warns via Discord if MC samples are >6 hours old.
+- **`job_executions` table (`007_job_executions.sql`):** Persistent job execution history with index on `(job_name, started_at DESC)`.
+- **21 unit tests (`test_pipeline_resilience.py`):** Coverage for `check_dependency()`, `run_command()` retries, `JOB_STATUS` tracking, and 9:30 retry logic.
+
+### Changed
+
+- **Global job timeout:** Increased from 30m → 45m in `scheduler.py:run_job()` to accommodate retry attempts.
+- **Per-step timeouts:** Step 6 (rolling averages) 10m→20m, Step 7 (opponent stats) 10m→15m, Steps 3-5 (non-critical) 10m→5m.
+- **Staleness check in inference:** Changed from `days_stale > 2` to checking if latest `game_date < yesterday`. Inference never hard-fails — stale data is better than zero predictions.
+- **Edge refresh no-op message:** Changed "No MC samples" from warning to info-level "NO-OP" message (expected before first inference).
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/scheduler.py` | Modified — JOB_STATUS, check_dependency(), record_job_execution(), 9:30 retry, 45m timeout |
+| `src/orchestration/daily_stats_job.py` | Modified — per-step retries with backoff, timeout tuning |
+| `src/orchestration/inference_job.py` | Modified — --stale-warning flag, improved staleness check, stale data Discord alert |
+| `src/orchestration/edge_refresh_job.py` | Modified — MC sample staleness warning, improved no-op logging |
+| `database/migrations/007_job_executions.sql` | Created — persistent job execution history table |
+| `tests/test_pipeline_resilience.py` | Created — 21 unit tests for resilience features |
+
+### Verified
+
+- 629 Python tests pass, 0 failures (21 new tests)
+- Ruff: 0 remaining issues (18 auto-fixed)
+- `--dry-run` confirms all 7 steps with correct timeout/retry params
+- `--stale-warning` flag accepted by inference_job CLI
+- Scheduler module imports cleanly, dependency check returns False when no status exists
+
+---
+
 ## [2026-03-01 Session 57] — Fix DFS Dashboard, Sportsbook Timeouts, Edge Refresh Timeout
 
 ### Fixed

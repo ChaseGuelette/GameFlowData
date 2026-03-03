@@ -34,7 +34,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -100,7 +100,7 @@ def record_job_execution(
                 {
                     "job_name": job_name,
                     "started_at": started_at,
-                    "ended_at": datetime.now(timezone.utc),
+                    "ended_at": datetime.now(UTC),
                     "status": status,
                     "duration": duration,
                     "error_message": error_message,
@@ -125,7 +125,7 @@ def check_dependency(upstream_job: str, max_age_hours: float = 8) -> bool:
     if end_time is None:
         return False
 
-    age_hours = (datetime.now(timezone.utc) - end_time).total_seconds() / 3600
+    age_hours = (datetime.now(UTC) - end_time).total_seconds() / 3600
     return age_hours <= max_age_hours
 
 
@@ -249,7 +249,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
     logger.info(f"Starting job: {script_name}{' ' + extra_args if extra_args else ''}")
 
     start_time = time.time()
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     success = False
     stdout = ""
     stderr = ""
@@ -313,7 +313,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
     # Update in-memory status for dependency checks
     JOB_STATUS[script_name] = {
         "status": job_status,
-        "end_time": datetime.now(timezone.utc),
+        "end_time": datetime.now(UTC),
         "duration": duration,
     }
 

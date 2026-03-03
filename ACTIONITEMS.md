@@ -1,5 +1,53 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-02 — Session 58)
+
+### What We Did
+
+**Pipeline Resilience Overhaul — made the pipeline self-healing, dependency-aware, and transparent about failures.**
+
+**Job Status Tracking:**
+- Added `JOB_STATUS` in-memory dict to `scheduler.py` — tracks every job's status, end time, and duration after execution.
+- Added `record_job_execution()` — persists execution history to `job_executions` Supabase table (migration 007).
+- Provides both fast in-memory dependency checks and persistent history for debugging.
+
+**Per-Step Retries with Backoff:**
+- Extended `run_command()` in `daily_stats_job.py` with `max_retries` and `retry_delay` params.
+- Critical steps (scrape, linker, rolling averages, opponent stats) get 2 retries with exponential backoff (15s, 30s).
+- Step 6 (rolling averages) timeout increased from 10m→20m (most common timeout culprit).
+- Step 7 (opponent stats) timeout increased to 15m. Non-critical steps reduced to 5m.
+- Global scheduler timeout increased from 30m→45m.
+
+**Dependency Gate:**
+- `check_dependency()` in scheduler verifies upstream jobs succeeded within configurable time window.
+- `run_inference()` checks daily stats succeeded in last 8 hours before running.
+- If stale: passes `--stale-warning` flag, sends Discord alert, but still runs inference (stale data > no data).
+
+**Automatic 9:30 AM Retry:**
+- New `run_daily_stats_retry()` at 14:30 UTC checks if 9 AM run succeeded, re-runs if not.
+- Gives the system a second chance before inference at 12:15 PM.
+
+**Stale Data Transparency:**
+- Inference staleness check improved: changed from `days_stale > 2` to `latest_game_date < yesterday`.
+- `--stale-warning` flag triggers stale-data Discord alert after successful prediction generation.
+- Edge refresh warns via Discord if MC samples are >6 hours old.
+
+### Remaining Action Items
+
+1. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+2. **Deploy to Railway** — push changes so new scheduler, retries, and dependency gates are active in production
+3. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+4. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+5. **MLB linker backfill in progress** — re-run averages backfill after linker completes
+6. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+7. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+8. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+9. **Stripe integration** — subscribe page, customer portal, webhook
+10. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+11. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-03-01 — Session 57)
 
 ### What We Did
