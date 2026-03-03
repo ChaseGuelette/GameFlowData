@@ -1,5 +1,36 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-02 — Session 59)
+
+### What We Did
+
+**MLB Local Linker with Checkpoint/Resume — offline CSV-based linking pipeline mirroring the NBA local linker.**
+
+**New File: `src/processing/mlb/mlb_linker_local.py`**
+- Download/process/upload workflow: downloads 6 tables to `mlb_linker_data/` CSVs, matches IDs locally in pandas, uploads via chunked temp tables
+- Checkpoint/resume system (`_checkpoint.json`) tracks per-stage and per-chunk progress — interrupted runs pick up where they left off
+- 4 processing sub-stages: game_lines, props_games (±1 day fuzzy), props_players (exact + fuzzy), props_teams (boxscore cross-ref)
+- Upload retry/backoff (20 retries, 60s cap, `engine.dispose()` on error) survives laptop sleep/wake
+- CLI: download, process, upload, all, status, init, reset with `--force` and `--batch-delay` flags
+- Reuses matching functions from `mlb_linker.py` — no code duplication
+- Player name diagnostics: `unmatched_players.csv` with fuzzy suggestions, `player_mappings.csv` for manual overrides
+
+### Remaining Action Items
+
+1. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+2. **Deploy to Railway** — push changes so new scheduler, retries, and dependency gates are active in production
+3. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+4. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+5. **MLB linker backfill in progress** — run `mlb_linker_local all` for full offline pipeline, then re-run averages backfill
+6. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+7. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+8. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+9. **Stripe integration** — subscribe page, customer portal, webhook
+10. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+11. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-03-02 — Session 58)
 
 ### What We Did

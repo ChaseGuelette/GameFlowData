@@ -38,17 +38,13 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 from src.db.client import get_engine
 from src.processing.mlb.mlb_config import (
     FUZZY_THRESHOLD,
-    LINKER_BATCH_SIZE,
     MLB_TEAM_ALIASES,
 )
 from src.processing.mlb.mlb_linker import (
-    build_game_lookup,
-    build_player_lookup,
-    build_team_id_lookup,
+    _resolve_fuzzy_names,
     find_closest_game_date,
     normalize_player,
     normalize_team,
-    _resolve_fuzzy_names,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -423,7 +419,7 @@ def process_player_props_games(
     if not matched.empty:
         matched.to_csv(DATA_DIR / "props_game_updates.csv", index=False)
         logger.info(f"  Matched: {len(matched):,} (exact={exact_matches}, fuzzy_date={fuzzy_matches})")
-        logger.info(f"  -> props_game_updates.csv")
+        logger.info("  -> props_game_updates.csv")
     else:
         logger.info("  No matches found")
 
@@ -623,7 +619,7 @@ def process_player_props_teams(
         team_matched = int(result["team_id"].notna().sum())
         logger.info(f"  player_id matched: {len(result):,}")
         logger.info(f"  team_id matched:   {team_matched:,}")
-        logger.info(f"  -> props_full_updates.csv")
+        logger.info("  -> props_full_updates.csv")
 
     checkpoint = mark_stage(
         checkpoint, "process_props_teams", "completed",

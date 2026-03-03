@@ -169,6 +169,7 @@ Serves as the bridge between NBA and sportsbook data:
 |--------|---------|
 | `mlb_config.py` | Shared constants: rolling windows (`BATTING_WINDOWS`, `PITCHING_WINDOWS`), stat lists, team aliases, batch sizes. |
 | `mlb_linker.py` | Links `mlb_raw_player_props` rows by populating `game_id`, `player_id`, `team_id`. Mirrors NBA linker with MLB-specific adaptations (INTEGER game_id, ±1 day date window, team_id from boxscore cross-reference). Modes: `incremental` (daily) and `backfill` (one-time). Retry logic survives connection drops and laptop sleep. |
+| `mlb_linker_local.py` | Local CSV-based linker with checkpoint/resume. Downloads 6 tables to `mlb_linker_data/`, processes matching in pandas, uploads via chunked temp tables. Checkpoint file (`_checkpoint.json`) tracks per-stage and per-chunk progress for resume after interruption. Retry/backoff (20 attempts, 60s cap) survives laptop sleep. Reuses matching functions from `mlb_linker.py`. |
 | `mlb_populate_averages.py` | Full backfill of `mlb_player_average_batting` and `mlb_player_average_pitching`. Shift(1) rolling averages (no data leakage), rate stats from rolling sums (BA, OBP, SLG, OPS, ERA, WHIP, K/9, BB/9), std devs, context metrics (rest days, pitch count). |
 | `mlb_populate_averages_incremental.py` | Daily incremental — processes only players active on target date. Per-player rolling calculation, UPSERT via `ON CONFLICT DO UPDATE`. |
 
@@ -933,6 +934,11 @@ python src/processing/backfill_league_priors.py
 # MLB Processing
 python -m src.processing.mlb.mlb_linker incremental                    # Daily: link new unlinked props
 python -m src.processing.mlb.mlb_linker backfill                       # One-time: link all unlinked props
+python -m src.processing.mlb.mlb_linker_local download                 # Download tables to mlb_linker_data/
+python -m src.processing.mlb.mlb_linker_local process                  # Match IDs locally in pandas
+python -m src.processing.mlb.mlb_linker_local upload                   # Push results back to DB
+python -m src.processing.mlb.mlb_linker_local all                      # Full pipeline (download + process + upload)
+python -m src.processing.mlb.mlb_linker_local status                   # Show checkpoint progress
 python -m src.processing.mlb.mlb_populate_averages --table all         # Full backfill of rolling averages
 python -m src.processing.mlb.mlb_populate_averages --table batting --season 2024  # Single table/season
 python -m src.processing.mlb.mlb_populate_averages_incremental --date 2024-09-15  # Daily incremental

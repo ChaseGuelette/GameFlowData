@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-02 Session 59] — MLB Local Linker with Checkpoint/Resume
+
+### Added
+
+- **`mlb_linker_local.py`** — Local CSV-based MLB linker with checkpoint/resume, mirroring the NBA local linker pattern. Downloads 6 tables to `mlb_linker_data/`, processes matching in pandas, uploads via chunked temp tables with retry/backoff.
+- **Checkpoint system** — `_checkpoint.json` tracks per-stage and per-chunk progress. Completed stages skip on resume, in-progress uploads resume from last completed chunk.
+- **4 processing sub-stages** — game_lines matching, props→games (±1 day fuzzy), props→players (exact + fuzzy + manual mappings), props→teams (boxscore cross-ref).
+- **Upload retry/backoff** — 20 retries with linear backoff capped at 60s, `engine.dispose()` on error (survives laptop sleep/wake).
+- **CLI commands** — download, process, upload, all, status, init, reset with `--force` and `--batch-delay` flags.
+- **Player diagnostics** — `unmatched_players.csv` with fuzzy suggestions and confidence scores, `player_mappings.csv` for manual overrides.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/processing/mlb/mlb_linker_local.py` | Created — ~550 lines, full download/process/upload pipeline |
+| `ARCHITECTURE.md` | Updated — added mlb_linker_local.py to module table and CLI reference |
+| `docs/mlb_processing_pipeline_documentation.md` | Updated — added mlb_linker_local.py section |
+
+### Verified
+
+- 629 Python tests pass, 0 failures
+- Ruff: 0 remaining issues (7 auto-fixed)
+- CLI `--help`, `status`, and `reset` commands verified working
+- All imports resolve correctly
+
+---
+
 ## [2026-03-02 Session 58] — Pipeline Resilience Overhaul
 
 ### Added

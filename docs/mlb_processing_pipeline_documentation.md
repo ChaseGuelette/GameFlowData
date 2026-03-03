@@ -75,6 +75,67 @@ python -m src.processing.mlb.mlb_linker incremental --batch-size 100000  # Custo
 
 ---
 
+### `mlb_linker_local.py` — Local CSV-Based Linker with Checkpoint/Resume
+
+Offline version of the MLB linker. Downloads all reference/staging tables to local CSVs, processes matching in pandas, then uploads results. Checkpoint file allows interrupted runs to resume.
+
+**Pattern:** Mirrors `src/processing/nba_linker_local.py` with MLB-specific adaptations and a robust checkpoint system.
+
+#### Data Flow
+
+```
+[DB] --download--> [mlb_linker_data/*.csv] --process--> [*_updates.csv] --upload--> [DB]
+                   _checkpoint.json tracks all progress
+```
+
+#### Stage 1: Download (6 tables)
+
+| CSV | Source Table | Batched? |
+|-----|-------------|----------|
+| `mlb_teams.csv` | `mlb_teams` | No |
+| `mlb_players.csv` | `mlb_players` | No |
+| `mlb_game_schedule.csv` | `mlb_game_schedule` | No |
+| `mlb_player_game_stats.csv` | UNION batting + pitching | No |
+| `mlb_raw_player_props.csv` | `mlb_raw_player_props` | Yes (100k by staging_id) |
+| `mlb_raw_game_lines.csv` | `mlb_raw_game_lines` | Yes (100k by staging_id) |
+
+#### Stage 2: Process (4 sub-stages)
+
+1. **process_game_lines** — Match game lines to schedule by (home, away, date). Output: `game_lines_updates.csv`
+2. **process_player_props_games** — Match props to games with ±1 day fuzzy window. Output: `props_game_updates.csv`
+3. **process_player_props_players** — Match players via manual mappings → exact normalized → fuzzy. Output: `props_player_updates.csv`, `unmatched_players.csv`
+4. **process_player_props_teams** — Resolve team_id from (player_id, game_id) via boxscore data. Output: `props_full_updates.csv`
+
+#### Stage 3: Upload (chunked temp tables)
+
+3 upload operations, each chunked at 50k rows with retry/backoff (20 retries, 60s cap, `engine.dispose()` on error).
+
+#### Checkpoint System
+
+`_checkpoint.json` tracks per-stage status and per-chunk progress for uploads. Resume behavior: completed stages skip, in-progress uploads resume from last completed chunk.
+
+#### Usage
+
+```bash
+python -m src.processing.mlb.mlb_linker_local download       # Stage 1
+python -m src.processing.mlb.mlb_linker_local process        # Stage 2
+python -m src.processing.mlb.mlb_linker_local upload         # Stage 3
+python -m src.processing.mlb.mlb_linker_local all            # All 3 stages
+python -m src.processing.mlb.mlb_linker_local status         # Show progress
+python -m src.processing.mlb.mlb_linker_local init           # Create player_mappings.csv template
+python -m src.processing.mlb.mlb_linker_local reset          # Clear checkpoint
+python -m src.processing.mlb.mlb_linker_local all --force    # Ignore checkpoint, re-run everything
+python -m src.processing.mlb.mlb_linker_local upload --batch-delay 2  # Throttle uploads
+```
+
+#### Player Name Workflow
+
+1. Run `process` — generates `unmatched_players.csv` with fuzzy suggestions
+2. Review suggestions, copy confirmed mappings to `player_mappings.csv` (format: `api_name,player_id`)
+3. Re-run `process` to apply new mappings
+
+---
+
 ### `mlb_populate_averages.py` — Full Backfill
 
 TRUNCATE + reload both average tables.
@@ -171,6 +232,8 @@ python -m src.processing.mlb.mlb_populate_averages_incremental --date 2024-09-15
 ```
 1. Scrapers (Phase 1)     → Raw data in DB
 2. MLB Linker             → Props linked to game_id/player_id/team_id
+   - Daily: mlb_linker incremental (direct DB)
+   - Bulk:  mlb_linker_local all (offline CSV with checkpoint/resume)
 3. MLB Rolling Averages   → Pre-game feature tables populated
 4. Feature Store (Phase 3) → Model-ready feature vectors
 5. Training (Phase 3)     → XGBoost quantile regression models
