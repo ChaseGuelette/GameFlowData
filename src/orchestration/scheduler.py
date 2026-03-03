@@ -26,6 +26,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shlex
@@ -33,6 +34,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -62,6 +64,69 @@ JOB_NAMES = {
     "edge_refresh_job.py": "Edge Refresh",
     "test_job.py": "System Test",
 }
+
+# In-memory job status tracking for dependency checks.
+# Updated by run_job() after every execution.
+# Format: {"daily_stats_job.py": {"status": "success", "end_time": datetime, "duration": float}}
+JOB_STATUS: dict[str, dict] = {}
+
+
+def record_job_execution(
+    job_name: str,
+    started_at: datetime,
+    status: str,
+    duration: float,
+    error_message: str | None = None,
+    metrics: dict | None = None,
+) -> None:
+    """Record a job execution to the job_executions table in Supabase.
+
+    Non-fatal: failures are logged but don't affect job status.
+    """
+    try:
+        from src.db.client import get_engine
+
+        engine = get_engine()
+        from sqlalchemy import text
+
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO job_executions
+                        (job_name, started_at, ended_at, status, duration_seconds, error_message, metrics)
+                    VALUES
+                        (:job_name, :started_at, :ended_at, :status, :duration, :error_message, :metrics)
+                """),
+                {
+                    "job_name": job_name,
+                    "started_at": started_at,
+                    "ended_at": datetime.now(timezone.utc),
+                    "status": status,
+                    "duration": duration,
+                    "error_message": error_message,
+                    "metrics": json.dumps(metrics) if metrics else None,
+                },
+            )
+        logger.debug(f"Recorded job execution: {job_name} ({status})")
+    except Exception as e:
+        logger.warning(f"Failed to record job execution for {job_name}: {e}")
+
+
+def check_dependency(upstream_job: str, max_age_hours: float = 8) -> bool:
+    """Return True if upstream job succeeded within max_age_hours.
+
+    Checks the in-memory JOB_STATUS dict for fast lookups.
+    """
+    status = JOB_STATUS.get(upstream_job, {})
+    if status.get("status") != "success":
+        return False
+
+    end_time = status.get("end_time")
+    if end_time is None:
+        return False
+
+    age_hours = (datetime.now(timezone.utc) - end_time).total_seconds() / 3600
+    return age_hours <= max_age_hours
 
 
 def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> dict | None:
@@ -184,9 +249,11 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
     logger.info(f"Starting job: {script_name}{' ' + extra_args if extra_args else ''}")
 
     start_time = time.time()
+    started_at = datetime.now(timezone.utc)
     success = False
     stdout = ""
     stderr = ""
+    job_status = "failed"
 
     try:
         result = subprocess.run(
@@ -194,7 +261,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=1800,  # 30 minute timeout
+            timeout=2700,  # 45 minute global timeout (was 30m)
         )
 
         stdout = result.stdout or ""
@@ -204,6 +271,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
         if result.returncode == 0:
             logger.info(f"Job completed successfully: {script_name}")
             success = True
+            job_status = "success"
         else:
             logger.error(f"Job failed: {script_name}")
             logger.error(f"STDERR: {stderr[-2000:] if stderr else 'None'}")
@@ -214,14 +282,15 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
 
     except subprocess.TimeoutExpired as e:
         duration = time.time() - start_time
-        logger.error(f"Job timed out after 30 minutes: {script_name}")
+        job_status = "timeout"
+        logger.error(f"Job timed out after 45 minutes: {script_name}")
         partial_stdout = ""
-        partial_stderr = "Job timed out after 30 minutes"
+        partial_stderr = "Job timed out after 45 minutes"
         if e.stdout:
             partial_stdout = e.stdout if isinstance(e.stdout, str) else e.stdout.decode(errors="replace")
         if e.stderr:
             partial_stderr = (e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace"))
-            partial_stderr += "\n\nJob timed out after 30 minutes"
+            partial_stderr += "\n\nJob timed out after 45 minutes"
         _send_job_alert(
             script_name,
             success=False,
@@ -240,6 +309,25 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
             stdout="",
             stderr=str(e),
         )
+
+    # Update in-memory status for dependency checks
+    JOB_STATUS[script_name] = {
+        "status": job_status,
+        "end_time": datetime.now(timezone.utc),
+        "duration": duration,
+    }
+
+    # Record to persistent DB (non-fatal)
+    metrics = _parse_metrics_from_output(script_name, stdout, stderr)
+    error_msg = stderr.strip()[-500:] if not success and stderr else None
+    record_job_execution(
+        job_name=script_name,
+        started_at=started_at,
+        status=job_status,
+        duration=duration,
+        error_message=error_msg,
+        metrics=metrics,
+    )
 
 
 def _validate_environment():
@@ -286,6 +374,23 @@ def run_daily_stats():
     run_job("daily_stats_job.py")
 
 
+def run_daily_stats_retry():
+    """Re-run daily stats if the 9 AM run failed or didn't run."""
+    status = JOB_STATUS.get("daily_stats_job.py", {})
+    if status.get("status") == "success":
+        logger.info("Daily stats already succeeded today, skipping 9:30 retry.")
+        return
+    logger.warning("Daily stats failed or did not run at 9 AM — retrying now...")
+    _send_job_alert(
+        "daily_stats_job.py",
+        success=False,
+        duration=0,
+        stdout="",
+        stderr="9 AM daily stats job failed or missing — automatic retry at 9:30 AM ET",
+    )
+    run_job("daily_stats_job.py")
+
+
 def run_lines_full():
     """Full lines scrape: game lines + props (live) + injuries + linker."""
     run_job("lines_job.py", extra_args="--live")
@@ -297,7 +402,25 @@ def run_lines_props_only():
 
 
 def run_inference():
-    run_job("inference_job.py")
+    """Run inference, checking if daily stats succeeded first."""
+    if not check_dependency("daily_stats_job.py", max_age_hours=8):
+        logger.warning(
+            "Daily stats job has not succeeded in the last 8 hours — "
+            "inference will run with potentially stale rolling averages."
+        )
+        _send_job_alert(
+            "daily_stats_job.py",
+            success=False,
+            duration=0,
+            stdout="",
+            stderr=(
+                "Daily stats job has not succeeded today — "
+                "inference will run with stale rolling averages"
+            ),
+        )
+        run_job("inference_job.py", extra_args="--stale-warning")
+    else:
+        run_job("inference_job.py")
 
 
 def run_edge_refresh():
@@ -350,6 +473,14 @@ def main():
         CronTrigger(hour=14, minute=0),
         id="daily_stats",
         name="Daily Stats (9 AM ET)",
+    )
+
+    # 9:30 AM ET (14:30 UTC) - Retry daily stats if 9 AM run failed
+    scheduler.add_job(
+        run_daily_stats_retry,
+        CronTrigger(hour=14, minute=30),
+        id="daily_stats_retry",
+        name="Daily Stats Retry (9:30 AM ET)",
     )
 
     # --- First window: noon full scrape + inference ---

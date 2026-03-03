@@ -524,11 +524,45 @@ def main():
         samples_dict = store.get_all_samples_for_date(target_date)
 
         if not samples_dict:
-            logger.warning(
-                f"No MC samples found for {target_date}. "
-                "Inference must run before edge refresh. Exiting gracefully."
+            logger.info(
+                f"EDGE REFRESH NO-OP: No MC samples found for {target_date}. "
+                "Inference must run before edge refresh can recalculate. "
+                "This is expected before the first inference run of the day."
             )
             sys.exit(0)
+
+        # Check MC sample staleness (warn if >6 hours old)
+        try:
+            with engine.connect() as conn:
+                sample_age = conn.execute(text(
+                    "SELECT EXTRACT(EPOCH FROM (NOW() - MAX(created_at))) / 3600.0 "
+                    "FROM mc_samples WHERE prediction_date = :target_date"
+                ), {"target_date": target_date}).scalar()
+
+                if sample_age is not None and sample_age > 6:
+                    logger.warning(
+                        f"MC samples are {sample_age:.1f} hours old — "
+                        "edge calculations may be based on stale inference."
+                    )
+                    # Send Discord warning for stale MC samples
+                    try:
+                        if os.getenv("DISCORD_BOT_TOKEN"):
+                            from src.discord_bot.alerts import send_job_alert_sync
+                            send_job_alert_sync(
+                                job_name="Edge Refresh (Stale Samples Warning)",
+                                success=True,
+                                duration_seconds=0,
+                                error_message=(
+                                    f"MC samples are {sample_age:.1f} hours old. "
+                                    "Edge recalculations use stale inference data."
+                                ),
+                            )
+                    except Exception as e:
+                        logger.warning(f"Stale samples Discord alert failed: {e} (non-fatal)")
+                elif sample_age is not None:
+                    logger.info(f"MC samples are {sample_age:.1f} hours old")
+        except Exception as e:
+            logger.warning(f"Could not check MC sample age: {e} (non-fatal)")
 
         # 2. Load stored predictions
         logger.info("Loading stored predictions...")
