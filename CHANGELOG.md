@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-03 Session 61] — MLB Linker Deep Debug: Team Alias Fix + Re-link Pass
+
+### Fixed
+
+- **ARI→AZ / OAK→ATH team abbreviation mismatch (`mlb_config.py`):** `MLB_TEAM_ALIASES` mapped Arizona → "ARI" and Oakland → "OAK", but the `mlb_teams` database table uses "AZ" and "ATH". Every game involving Arizona or Oakland failed game matching (~3M+ affected prop rows). Fixed all 6 alias entries (full names, variants, abbreviation pass-through).
+
+### Added
+
+- **Re-link pass (`mlb_linker_local.py`):** New `process_player_props_relink()` function — Sub-stage 5 that finds rows with game_id + player_id set but team_id NULL. Categorizes root cause (wrong player_id, correct player not in boxscore, no boxscore, name not found). Fixes wrong player_ids where correct player IS in game's boxscore. Resolves team_id from nearby games (within 30 days) for rows where player wasn't in that specific game's boxscore.
+- **Upload stages for re-link data:** `upload_props_relink_with_team` (player_id corrections) and `upload_props_teams_backfill` (team_id from nearby games) with chunked retry.
+- **Status display enhancements:** Summary now shows all 5 processing sub-stages and all upload stages with row counts.
+
+### Results
+
+- Fully linked: 14,075,000 → **21,974,799** (+7.9M rows, **96.8%** of 22.71M total)
+- Missing game_id: 7,111,625 → 231,687 (-96.7%)
+- Player_id corrections: 79,074 + 14,844 rows fixed
+- Team_id backfill: 1,348,841 + 2,402,353 rows resolved
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/processing/mlb/mlb_config.py` | Fixed — ARI→AZ, OAK→ATH in `MLB_TEAM_ALIASES` (6 entries) |
+| `src/processing/mlb/mlb_linker_local.py` | Modified — added `process_player_props_relink()`, upload stages, status tracking |
+| `ARCHITECTURE.md` | Updated — mlb_linker_local.py description with re-link pass and coverage stats |
+| `ACTIONITEMS.md` | Updated — Session 61 summary and revised action items |
+| `docs/mlb_processing_pipeline_documentation.md` | Updated — added Sub-stage 5 documentation |
+
+### Verified
+
+- 629 Python tests pass, 0 failures
+- Ruff: 0 remaining issues
+
+---
+
 ## [2026-03-03 Session 60] — Faster Lines Pipeline: Fuzzy Cache + Parallel Steps
 
 ### Added

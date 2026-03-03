@@ -115,18 +115,47 @@ def record_job_execution(
 def check_dependency(upstream_job: str, max_age_hours: float = 8) -> bool:
     """Return True if upstream job succeeded within max_age_hours.
 
-    Checks the in-memory JOB_STATUS dict for fast lookups.
+    Checks in-memory JOB_STATUS first, then falls back to the
+    job_executions table so dependency checks survive redeployments.
     """
+    # 1. Fast path: in-memory check
     status = JOB_STATUS.get(upstream_job, {})
-    if status.get("status") != "success":
-        return False
+    if status.get("status") == "success":
+        end_time = status.get("end_time")
+        if end_time is not None:
+            age_hours = (datetime.now(UTC) - end_time).total_seconds() / 3600
+            if age_hours <= max_age_hours:
+                return True
 
-    end_time = status.get("end_time")
-    if end_time is None:
-        return False
+    # 2. Fallback: query job_executions table (survives redeployments)
+    try:
+        from src.db.client import get_engine
 
-    age_hours = (datetime.now(UTC) - end_time).total_seconds() / 3600
-    return age_hours <= max_age_hours
+        engine = get_engine()
+        from sqlalchemy import text
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT ended_at FROM job_executions
+                    WHERE job_name = :job_name
+                      AND status = 'success'
+                      AND ended_at > now() - make_interval(hours => :max_age)
+                    ORDER BY ended_at DESC
+                    LIMIT 1
+                """),
+                {"job_name": upstream_job, "max_age": max_age_hours},
+            ).fetchone()
+        if row is not None:
+            logger.info(
+                f"Dependency '{upstream_job}' satisfied via job_executions table "
+                f"(ended_at={row[0]})"
+            )
+            return True
+    except Exception as e:
+        logger.warning(f"Failed to check job_executions for {upstream_job}: {e}")
+
+    return False
 
 
 def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> dict | None:

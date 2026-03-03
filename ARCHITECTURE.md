@@ -169,9 +169,9 @@ Serves as the bridge between NBA and sportsbook data:
 
 | Module | Purpose |
 |--------|---------|
-| `mlb_config.py` | Shared constants: rolling windows (`BATTING_WINDOWS`, `PITCHING_WINDOWS`), stat lists, team aliases, batch sizes. |
+| `mlb_config.py` | Shared constants: rolling windows (`BATTING_WINDOWS`, `PITCHING_WINDOWS`), stat lists, team aliases (`MLB_TEAM_ALIASES` — 66 entries mapping Odds API names/variants/abbreviations to canonical DB abbreviations like AZ, ATH), batch sizes. |
 | `mlb_linker.py` | Links `mlb_raw_player_props` rows by populating `game_id`, `player_id`, `team_id`. Mirrors NBA linker with MLB-specific adaptations (INTEGER game_id, ±1 day date window, team_id from boxscore cross-reference). Modes: `incremental` (daily) and `backfill` (one-time). Retry logic survives connection drops and laptop sleep. |
-| `mlb_linker_local.py` | Local CSV-based linker with checkpoint/resume. Downloads 6 tables to `mlb_linker_data/`, processes matching in pandas, uploads via chunked temp tables. Checkpoint file (`_checkpoint.json`) tracks per-stage and per-chunk progress for resume after interruption. Retry/backoff (20 attempts, 60s cap) survives laptop sleep. Reuses matching functions from `mlb_linker.py`. |
+| `mlb_linker_local.py` | Local CSV-based linker with checkpoint/resume. Downloads 6 tables to `mlb_linker_data/`, processes matching in pandas, uploads via chunked temp tables. 5 processing sub-stages: game_lines, props→games, props→players, props→teams, re-link (fixes wrong player_ids + team_id backfill from nearby games). Checkpoint file (`_checkpoint.json`) tracks per-stage and per-chunk progress for resume after interruption. Retry/backoff (20 attempts, 60s cap) survives laptop sleep. Reuses matching functions from `mlb_linker.py`. As of Session 61: 96.8% linking coverage (21.97M/22.71M rows). |
 | `mlb_populate_averages.py` | Full backfill of `mlb_player_average_batting` and `mlb_player_average_pitching`. Shift(1) rolling averages (no data leakage), rate stats from rolling sums (BA, OBP, SLG, OPS, ERA, WHIP, K/9, BB/9), std devs, context metrics (rest days, pitch count). |
 | `mlb_populate_averages_incremental.py` | Daily incremental — processes only players active on target date. Per-player rolling calculation, UPSERT via `ON CONFLICT DO UPDATE`. |
 

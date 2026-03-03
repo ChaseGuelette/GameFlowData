@@ -26,7 +26,7 @@ All modules live in `src/processing/mlb/` and share configuration via `mlb_confi
 | `BATCH_SIZE` | 100 | Rows per DB insert batch |
 | `LINKER_BATCH_SIZE` | 50,000 | Rows per linker processing batch |
 | `FUZZY_THRESHOLD` | 0.70 | Minimum SequenceMatcher ratio for auto-match |
-| `MLB_TEAM_ALIASES` | 66 entries | All 30 teams with Odds API names, variants, and abbreviation pass-through |
+| `MLB_TEAM_ALIASES` | 66 entries | All 30 teams with Odds API names, variants, and abbreviation pass-through. Uses canonical DB abbreviations (AZ not ARI, ATH not OAK). |
 
 ---
 
@@ -99,16 +99,22 @@ Offline version of the MLB linker. Downloads all reference/staging tables to loc
 | `mlb_raw_player_props.csv` | `mlb_raw_player_props` | Yes (100k by staging_id) |
 | `mlb_raw_game_lines.csv` | `mlb_raw_game_lines` | Yes (100k by staging_id) |
 
-#### Stage 2: Process (4 sub-stages)
+#### Stage 2: Process (5 sub-stages)
 
 1. **process_game_lines** — Match game lines to schedule by (home, away, date). Output: `game_lines_updates.csv`
 2. **process_player_props_games** — Match props to games with ±1 day fuzzy window. Output: `props_game_updates.csv`
 3. **process_player_props_players** — Match players via manual mappings → exact normalized → fuzzy. Output: `props_player_updates.csv`, `unmatched_players.csv`
 4. **process_player_props_teams** — Resolve team_id from (player_id, game_id) via boxscore data. Output: `props_full_updates.csv`
+5. **process_player_props_relink** — Fix wrong player_ids + backfill team_id for rows with game+player but no team. Categorizes each combo as wrong_pid_fixable, correct_pid_not_in_game, game_no_boxscore, or name_not_found. Fixes wrong player_ids where the correct player IS in the boxscore. Resolves team_id from nearby games (within 30 days) using `find_closest_game_date()`. Output: `props_relink_pid_updates.csv`, `props_team_backfill_updates.csv`
 
 #### Stage 3: Upload (chunked temp tables)
 
-3 upload operations, each chunked at 50k rows with retry/backoff (20 retries, 60s cap, `engine.dispose()` on error).
+5 upload operations, each chunked at 50k rows with retry/backoff (20 retries, 60s cap, `engine.dispose()` on error):
+1. Game lines updates
+2. Props game_id updates
+3. Props player_id + team_id updates
+4. Props player_id corrections (from re-link)
+5. Props team_id backfill from nearby games (from re-link)
 
 #### Checkpoint System
 
@@ -133,6 +139,24 @@ python -m src.processing.mlb.mlb_linker_local upload --batch-delay 2  # Throttle
 1. Run `process` — generates `unmatched_players.csv` with fuzzy suggestions
 2. Review suggestions, copy confirmed mappings to `player_mappings.csv` (format: `api_name,player_id`)
 3. Re-run `process` to apply new mappings
+
+#### Team Alias Gotcha
+
+The `MLB_TEAM_ALIASES` dict in `mlb_config.py` must use the canonical abbreviations from the `mlb_teams` database table, **not** common abbreviations. Key differences:
+- Arizona Diamondbacks = **AZ** (not ARI)
+- Oakland Athletics = **ATH** (not OAK)
+
+If aliases are wrong, ALL games involving those teams will fail to match, causing massive linking gaps.
+
+#### Linking Coverage (as of Session 61)
+
+| Metric | Value |
+|--------|-------|
+| Total rows | 22,710,247 |
+| Fully linked (game+player+team) | 21,974,799 (96.8%) |
+| Missing game_id | 231,687 (1.0%) |
+| Missing player_id | 3,442 (0.0%) |
+| Missing team_id only | 500,319 (2.2%) |
 
 ---
 

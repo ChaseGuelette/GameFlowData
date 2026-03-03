@@ -1,5 +1,48 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-03 — Session 61)
+
+### What We Did
+
+**MLB Linker Deep Debug — Team Alias Fix + Re-link Pass → 62% to 96.8% Linking**
+
+**Root Cause: ARI/OAK Team Abbreviation Mismatch (`mlb_config.py`):**
+- `MLB_TEAM_ALIASES` mapped "Arizona Diamondbacks" → "ARI" and "Oakland Athletics" → "OAK", but the `mlb_teams` DB table uses "AZ" and "ATH"
+- This caused EVERY game involving Arizona or Oakland to fail game matching (~3M+ affected rows)
+- Fixed: "ARI" → "AZ", "OAK" → "ATH", plus all abbreviation pass-through entries
+
+**New Re-link Pass (Sub-stage 5 in `mlb_linker_local.py`):**
+- Added `process_player_props_relink()` function that runs after initial 4 sub-stages
+- Finds rows with game_id + player_id set but team_id NULL
+- Categorizes: wrong_pid_fixable, correct_pid_not_in_game, game_no_boxscore, name_not_found
+- Fixes wrong player_ids where the correct player IS in the game's boxscore
+- Resolves team_id from nearby games (within 30 days) for remaining rows
+- Added corresponding upload stages with chunked retry
+
+**Results:**
+- Fully linked: 14,075,000 → 21,974,799 (+7.9M rows)
+- Linked %: 62.0% → 96.8%
+- Missing game_id: 7,111,625 → 231,687 (-96.7%)
+- Missing team_id: 1,520,376 → 500,319 (-67.1%)
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Monitor first few 5-min cycles** — verify fuzzy cache creates on first run, hits on subsequent runs
+3. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+4. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id (46 unmatched games not in schedule), 500K missing team_id (player not in any nearby boxscore), 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+11. **Stripe integration** — subscribe page, customer portal, webhook
+12. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+13. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-03-03 — Session 60)
 
 ### What We Did

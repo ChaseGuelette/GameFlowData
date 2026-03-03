@@ -629,21 +629,29 @@ def process_player_props_teams(
     return checkpoint
 
 
-def process_player_props_teams_backfill(
+def process_player_props_relink(
     props_df: pd.DataFrame,
+    player_lookup: dict,
     team_id_lookup: dict,
+    stats_df: pd.DataFrame,
     checkpoint: dict,
     force: bool = False,
 ) -> dict:
-    """Sub-stage 5: Backfill team_id for rows that already have game_id + player_id but missing team_id."""
+    """Sub-stage 5: Fix wrong player_ids and backfill team_id for unresolved rows.
+
+    Handles three categories:
+    1. wrong_pid_fixable: player_id is wrong, correct one exists in boxscore -> fix player_id + team_id
+    2. correct_pid_not_in_game: player_id is right but not in boxscore -> resolve team_id from nearby games
+    3. game_no_boxscore / name_not_found: team_id resolved from player's team in nearby games
+    """
     if get_stage_status(checkpoint, "process_props_teams_backfill") == "completed" and not force:
-        logger.info("  process_props_teams_backfill: already completed (skipping)")
+        logger.info("  process_props_relink: already completed (skipping)")
         return checkpoint
 
-    logger.info("\n--- Backfill team_id (game_id + player_id set, team_id missing) ---")
+    logger.info("\n--- Re-link: fix wrong player_ids + backfill team_id ---")
 
     # Find rows with game_id and player_id already set, but team_id missing
-    needs_team = props_df[
+    needs_fix = props_df[
         props_df["game_id"].notna()
         & props_df["player_id"].notna()
         & props_df["team_id"].isna()
@@ -653,45 +661,124 @@ def process_player_props_teams_backfill(
     full_updates_file = DATA_DIR / "props_full_updates.csv"
     if full_updates_file.exists():
         already_handled = set(pd.read_csv(full_updates_file)["staging_id"])
-        needs_team = needs_team[~needs_team["staging_id"].isin(already_handled)]
+        needs_fix = needs_fix[~needs_fix["staging_id"].isin(already_handled)]
 
-    logger.info(f"  Rows with game_id + player_id but no team_id: {len(needs_team):,}")
+    logger.info(f"  Rows with game_id + player_id but no team_id: {len(needs_fix):,}")
 
-    if needs_team.empty:
+    if needs_fix.empty:
         checkpoint = mark_stage(checkpoint, "process_props_teams_backfill", "completed", rows_matched=0)
         return checkpoint
 
-    def get_team_id(row):
-        pid = row["player_id"]
-        gid = row["game_id"]
-        if pd.isna(pid) or pd.isna(gid):
-            return None
-        return team_id_lookup.get((int(pid), int(gid)))
+    # Build boxscore set and per-game player sets
+    boxscore_combos = set()
+    boxscore_by_game = defaultdict(set)
+    for _, r in stats_df.iterrows():
+        pid, gid = int(r["player_id"]), int(r["game_id"])
+        boxscore_combos.add((pid, gid))
+        boxscore_by_game[gid].add(pid)
 
-    tqdm.pandas(desc="Backfilling team_id")
-    try:
-        needs_team["team_id_resolved"] = needs_team.progress_apply(get_team_id, axis=1)
-    except (AttributeError, ImportError):
-        needs_team["team_id_resolved"] = needs_team.apply(get_team_id, axis=1)
+    # Build player -> team history from boxscore: player_id -> [(game_id, team_id), ...]
+    player_team_history = defaultdict(list)
+    for _, r in stats_df.iterrows():
+        player_team_history[int(r["player_id"])].append((int(r["game_id"]), int(r["team_id"])))
 
-    matched = needs_team[needs_team["team_id_resolved"].notna()][["staging_id", "team_id_resolved"]].copy()
-    matched.columns = ["staging_id", "team_id"]
-    matched["team_id"] = matched["team_id"].astype(int)
+    # Load schedule for date-based team resolution
+    schedule_df = pd.read_csv(DATA_DIR / "mlb_game_schedule.csv")
+    game_date_map = dict(zip(schedule_df["game_id"], schedule_df["game_date"]))
 
-    if not matched.empty:
-        matched.to_csv(DATA_DIR / "props_team_backfill_updates.csv", index=False)
-        logger.info(f"  Resolved: {len(matched):,} -> props_team_backfill_updates.csv")
-    else:
-        logger.info("  No team_id matches found (boxscore data may not cover these games)")
+    # Process unique combos first for efficiency
+    unique_combos = needs_fix[["api_player_name", "player_id", "game_id"]].drop_duplicates()
+    logger.info(f"  Unique (name, player_id, game_id) combos: {len(unique_combos):,}")
 
-    unresolved = len(needs_team) - len(matched)
-    if unresolved > 0:
-        logger.info(f"  Unresolved: {unresolved:,} (no boxscore entry for that player+game combo)")
+    results = {}  # (api_player_name, old_player_id, game_id) -> (new_player_id, team_id, fix_type)
 
+    fix_counts = {"wrong_pid_fixed": 0, "team_from_nearby": 0, "unfixable": 0}
+
+    for _, row in tqdm(unique_combos.iterrows(), total=len(unique_combos), desc="Re-linking"):
+        api_name = row["api_player_name"]
+        old_pid = int(row["player_id"])
+        gid = int(row["game_id"])
+        norm = normalize_player(api_name)
+        correct_pid = player_lookup.get(norm) if norm else None
+        game_players = boxscore_by_game.get(gid, set())
+        key = (api_name, old_pid, gid)
+
+        # Case 1: Wrong player_id, correct one is in boxscore for this game
+        if correct_pid and correct_pid != old_pid and correct_pid in game_players:
+            tid = team_id_lookup.get((correct_pid, gid))
+            results[key] = (correct_pid, tid, "wrong_pid_fixed")
+            fix_counts["wrong_pid_fixed"] += 1
+            continue
+
+        # Case 2: Try to resolve team_id from nearby games for the player
+        # Use the correct pid if available, otherwise the existing one
+        resolve_pid = correct_pid if correct_pid else old_pid
+        history = player_team_history.get(resolve_pid, [])
+
+        if history:
+            game_date = game_date_map.get(gid)
+            if game_date:
+                # Find the closest game in history by date
+                best_team = None
+                best_diff = float("inf")
+                for hist_gid, hist_tid in history:
+                    hist_date = game_date_map.get(hist_gid)
+                    if hist_date:
+                        try:
+                            diff = abs((pd.Timestamp(game_date) - pd.Timestamp(hist_date)).days)
+                            if diff < best_diff:
+                                best_diff = diff
+                                best_team = hist_tid
+                        except Exception:
+                            continue
+
+                if best_team is not None and best_diff <= 30:  # Within 30 days
+                    new_pid = correct_pid if (correct_pid and correct_pid != old_pid) else None
+                    results[key] = (new_pid, best_team, "team_from_nearby")
+                    fix_counts["team_from_nearby"] += 1
+                    continue
+
+        fix_counts["unfixable"] += 1
+
+    logger.info(f"  Wrong player_id fixed:     {fix_counts['wrong_pid_fixed']:,}")
+    logger.info(f"  Team from nearby games:    {fix_counts['team_from_nearby']:,}")
+    logger.info(f"  Unfixable:                 {fix_counts['unfixable']:,}")
+
+    # Apply results to the full dataframe
+    pid_fixes = []  # staging_id, player_id, team_id (player_id corrected)
+    team_only_fixes = []  # staging_id, team_id (player_id stays)
+
+    for _, row in needs_fix.iterrows():
+        key = (row["api_player_name"], int(row["player_id"]), int(row["game_id"]))
+        result = results.get(key)
+        if not result:
+            continue
+        new_pid, tid, fix_type = result
+        if new_pid is not None:
+            pid_fixes.append({"staging_id": row["staging_id"], "player_id": new_pid,
+                              "team_id": tid if tid and pd.notna(tid) else None})
+        elif tid is not None:
+            team_only_fixes.append({"staging_id": row["staging_id"], "team_id": tid})
+
+    # Output: player_id corrections
+    if pid_fixes:
+        df_pid = pd.DataFrame(pid_fixes)
+        df_pid.to_csv(DATA_DIR / "props_relink_pid_updates.csv", index=False)
+        logger.info(f"  -> props_relink_pid_updates.csv: {len(df_pid):,} rows (player_id + team_id fixes)")
+
+    # Output: team_id-only backfills
+    if team_only_fixes:
+        df_team = pd.DataFrame(team_only_fixes)
+        df_team.to_csv(DATA_DIR / "props_team_backfill_updates.csv", index=False)
+        logger.info(f"  -> props_team_backfill_updates.csv: {len(df_team):,} rows (team_id from nearby games)")
+
+    total_fixed = len(pid_fixes) + len(team_only_fixes)
     checkpoint = mark_stage(
         checkpoint, "process_props_teams_backfill", "completed",
-        rows_matched=len(matched),
-        rows_unresolved=unresolved,
+        rows_matched=total_fixed,
+        pid_fixes=len(pid_fixes),
+        team_only_fixes=len(team_only_fixes),
+        unfixable=fix_counts["unfixable"],
     )
     return checkpoint
 
@@ -743,7 +830,9 @@ def process_local(force: bool = False) -> None:
     checkpoint = process_player_props_games(props_df, game_lookup, checkpoint, force)
     checkpoint = process_player_props_players(props_df, player_lookup, player_name_by_id, checkpoint, force)
     checkpoint = process_player_props_teams(props_df, team_id_lookup, checkpoint, force)
-    checkpoint = process_player_props_teams_backfill(props_df, team_id_lookup, checkpoint, force)
+    checkpoint = process_player_props_relink(
+        props_df, player_lookup, team_id_lookup, stats_df, checkpoint, force
+    )
 
     # Summary
     logger.info("\n" + "=" * 60)
@@ -754,7 +843,8 @@ def process_local(force: bool = False) -> None:
         ("props_game_updates.csv", "Props game_id to update"),
         ("props_player_updates.csv", "Props player_id to update"),
         ("props_full_updates.csv", "Props player_id + team_id to update"),
-        ("props_team_backfill_updates.csv", "Backfill team_id (had game_id + player_id)"),
+        ("props_relink_pid_updates.csv", "Fix wrong player_id + team_id"),
+        ("props_team_backfill_updates.csv", "Backfill team_id from nearby games"),
         ("unmatched_games.csv", "Unmatched games (review)"),
         ("unmatched_players.csv", "Unmatched players (review & add to player_mappings.csv)"),
     ]:
@@ -844,7 +934,9 @@ def upload_results(force: bool = False, batch_delay: float = 0) -> None:
     checkpoint = load_checkpoint()
 
     if force:
-        for stage in ["upload_game_lines", "upload_props_games", "upload_props_players", "upload_props_teams_backfill"]:
+        for stage in ["upload_game_lines", "upload_props_games", "upload_props_players",
+                       "upload_props_relink_with_team", "upload_props_relink_pid_only",
+                       "upload_props_teams_backfill"]:
             checkpoint["stages"].pop(stage, None)
         save_checkpoint(checkpoint)
 
@@ -914,10 +1006,50 @@ def upload_results(force: bool = False, batch_delay: float = 0) -> None:
     else:
         logger.info("  No props_full_updates.csv found — skipping")
 
-    # 4. Props team_id backfill (rows that already had game_id + player_id)
+    # 4. Props player_id corrections (wrong player_id -> correct one)
+    props_relink_file = DATA_DIR / "props_relink_pid_updates.csv"
+    if props_relink_file.exists():
+        df = pd.read_csv(props_relink_file)
+        # Split into rows with team_id and without
+        has_team = df[df["team_id"].notna()].copy()
+        no_team = df[df["team_id"].isna()][["staging_id", "player_id"]].copy()
+
+        if not has_team.empty:
+            checkpoint = _upload_with_retry(
+                engine, has_team,
+                "_tmp_mlb_relink_upload",
+                """UPDATE mlb_raw_player_props r
+                   SET player_id = t.player_id::integer,
+                       team_id = t.team_id::integer
+                   FROM _tmp_mlb_relink_upload t
+                   WHERE r.staging_id = t.staging_id""",
+                "props player_id + team_id corrections",
+                checkpoint,
+                "upload_props_relink_with_team",
+                batch_delay,
+            )
+
+        if not no_team.empty:
+            checkpoint = _upload_with_retry(
+                engine, no_team,
+                "_tmp_mlb_relink2_upload",
+                """UPDATE mlb_raw_player_props r
+                   SET player_id = t.player_id::integer
+                   FROM _tmp_mlb_relink2_upload t
+                   WHERE r.staging_id = t.staging_id""",
+                "props player_id corrections (no team_id)",
+                checkpoint,
+                "upload_props_relink_pid_only",
+                batch_delay,
+            )
+    else:
+        logger.info("  No props_relink_pid_updates.csv found — skipping")
+
+    # 5. Props team_id backfill (team resolved from nearby games)
     props_backfill_file = DATA_DIR / "props_team_backfill_updates.csv"
     if props_backfill_file.exists():
         df = pd.read_csv(props_backfill_file)
+        df = df[df["team_id"].notna()]
         checkpoint = _upload_with_retry(
             engine, df,
             "_tmp_mlb_tb_upload",
@@ -926,7 +1058,7 @@ def upload_results(force: bool = False, batch_delay: float = 0) -> None:
                FROM _tmp_mlb_tb_upload t
                WHERE r.staging_id = t.staging_id
                  AND r.team_id IS NULL""",
-            "props team_id backfill",
+            "props team_id backfill (nearby games)",
             checkpoint,
             "upload_props_teams_backfill",
             batch_delay,
@@ -963,6 +1095,7 @@ def show_status() -> None:
         "process_props_players", "process_props_teams",
         "process_props_teams_backfill",
         "upload_game_lines", "upload_props_games", "upload_props_players",
+        "upload_props_relink_with_team", "upload_props_relink_pid_only",
         "upload_props_teams_backfill",
     ]
 

@@ -47,7 +47,7 @@ FUZZY_THRESHOLD = 0.70  # minimum SequenceMatcher ratio for auto-match
 
 MLB_TEAM_ALIASES = {
     # Standard Odds API names
-    "Arizona Diamondbacks": "ARI",
+    "Arizona Diamondbacks": "AZ",
     "Atlanta Braves": "ATL",
     "Baltimore Orioles": "BAL",
     "Boston Red Sox": "BOS",
@@ -66,7 +66,7 @@ MLB_TEAM_ALIASES = {
     "Minnesota Twins": "MIN",
     "New York Mets": "NYM",
     "New York Yankees": "NYY",
-    "Oakland Athletics": "OAK",
+    "Oakland Athletics": "ATH",
     "Philadelphia Phillies": "PHI",
     "Pittsburgh Pirates": "PIT",
     "San Diego Padres": "SD",
@@ -81,15 +81,15 @@ MLB_TEAM_ALIASES = {
     "Cleveland Indians": "CLE",
     "LA Angels": "LAA",
     "LA Dodgers": "LAD",
-    "Athletics": "OAK",
-    "D-backs": "ARI",
-    "Diamondbacks": "ARI",
+    "Athletics": "ATH",
+    "D-backs": "AZ",
+    "Diamondbacks": "AZ",
     # Abbreviation pass-through
-    "ARI": "ARI", "ATL": "ATL", "BAL": "BAL", "BOS": "BOS",
+    "ARI": "AZ", "AZ": "AZ", "ATL": "ATL", "ATH": "ATH", "BAL": "BAL", "BOS": "BOS",
     "CHC": "CHC", "CWS": "CWS", "CIN": "CIN", "CLE": "CLE",
     "COL": "COL", "DET": "DET", "HOU": "HOU", "KC": "KC",
     "LAA": "LAA", "LAD": "LAD", "MIA": "MIA", "MIL": "MIL",
-    "MIN": "MIN", "NYM": "NYM", "NYY": "NYY", "OAK": "OAK",
+    "MIN": "MIN", "NYM": "NYM", "NYY": "NYY", "OAK": "ATH",
     "PHI": "PHI", "PIT": "PIT", "SD": "SD", "SF": "SF",
     "SEA": "SEA", "STL": "STL", "TB": "TB", "TEX": "TEX",
     "TOR": "TOR", "WSH": "WSH",
