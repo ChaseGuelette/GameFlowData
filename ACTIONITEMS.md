@@ -1,5 +1,45 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-03 — Session 60)
+
+### What We Did
+
+**Faster Lines Pipeline — Fuzzy Cache + Parallel Steps + 5-Minute Refresh Cadence**
+
+**Persistent Fuzzy Cache (`nba_linker_local.py`):**
+- Added `_load_fuzzy_cache()` / `_save_fuzzy_cache()` — file-based cache at `linker_data/_fuzzy_cache.json` maps `{normalized_name: player_id_or_null}` with player count for invalidation
+- Added `_resolve_fuzzy_names()` — batch SequenceMatcher on unique unmatched names (0.80 threshold, +0.15 last name bonus)
+- Refactored player matching in both `link_incremental()` and `process_local()` from per-row `match_player()` to 3-step batch: manual `.map()` → exact `.map(player_lookup)` → fuzzy cache lookup
+- First run builds cache, subsequent runs see 95%+ cache hits (~15s → <1s for linker step)
+
+**Parallel Steps (`lines_job.py`):**
+- Added `--parallel` flag: props path (game lines → props → linker) and injury path (scraper → linker) run concurrently via threads
+- New `run_step_group()` and `run_parallel_groups()` helpers
+- Without `--parallel`: identical sequential behavior (backward compatible)
+- Full mode runtime: ~90s → ~45-55s
+
+**5-Minute Refresh (`scheduler.py`):**
+- Props-only cron: `*/10` → `*/5` (every 5 minutes, ~156 runs/day)
+- Edge refresh cron: updated to match 5-minute cadence
+- Noon/4pm full runs now use `--parallel` via `run_lines_full_parallel()`
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Monitor first few 5-min cycles** — verify fuzzy cache creates on first run, hits on subsequent runs
+3. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+4. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker backfill in progress** — run `mlb_linker_local all` for full offline pipeline, then re-run averages backfill
+7. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+8. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+9. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+10. **Stripe integration** — subscribe page, customer portal, webhook
+11. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+12. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-03-02 — Session 59)
 
 ### What We Did

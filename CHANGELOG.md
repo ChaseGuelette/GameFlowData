@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-03 Session 60] — Faster Lines Pipeline: Fuzzy Cache + Parallel Steps
+
+### Added
+
+- **Persistent fuzzy cache (`nba_linker_local.py`):** File-based cache at `linker_data/_fuzzy_cache.json` stores `{normalized_name: player_id_or_null}` with player count for auto-invalidation. `_load_fuzzy_cache()`, `_save_fuzzy_cache()`, and `_resolve_fuzzy_names()` helpers ported from MLB linker pattern. Both `link_incremental()` and `process_local()` refactored from per-row `match_player()` to 3-step batch pipeline: manual `.map()` → exact `.map(player_lookup)` → fuzzy cache. Typical runs: 95%+ cache hits, linker step ~15s → <1s.
+- **Parallel step execution (`lines_job.py`):** New `--parallel` flag runs props path (game lines → props → linker) and injury path (scraper → linker) concurrently via `threading.Thread`. `run_step_group()` and `run_parallel_groups()` helpers. Full mode runtime: ~90s → ~45-55s. Without `--parallel`: unchanged sequential behavior.
+- **`run_lines_full_parallel()` (`scheduler.py`):** New wrapper for noon/4pm full runs using `--live --parallel`.
+
+### Changed
+
+- **Props-only cron:** `*/10` → `*/5` (every 5 minutes, ~156 runs/day, up from ~78)
+- **Edge refresh cron:** Updated to 5-minute cadence matching props schedule
+- **Full run schedule:** Noon/4pm now use `run_lines_full_parallel()` with `--parallel`
+- **API credit impact:** ~6,400 credits/day (up from ~3,200) — 4% of 5M monthly quota
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/processing/nba_linker_local.py` | Modified — fuzzy cache helpers, batch player matching in both `link_incremental()` and `process_local()` |
+| `src/orchestration/lines_job.py` | Modified — `--parallel` flag, `run_step_group()`, `run_parallel_groups()` |
+| `src/orchestration/scheduler.py` | Modified — 5-min crons, `run_lines_full_parallel()`, updated noon/4pm jobs |
+
+### Verified
+
+- 629 Python tests pass, 0 failures
+- Ruff: 0 remaining issues
+- All 3 files compile without syntax errors
+
+---
+
 ## [2026-03-02 Session 59] — MLB Local Linker with Checkpoint/Resume
 
 ### Added

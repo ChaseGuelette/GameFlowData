@@ -7,17 +7,17 @@ Runs all daily jobs on schedule using APScheduler.
 Schedule (ET → UTC for EST):
     9:00 AM ET  (14:00 UTC) - daily_stats_job
 
-    11 AM-11 PM ET (16:00-04:00 UTC) every 10 min:
-        :00,:10,:20,:30,:40,:50 - lines_job --live --props-only  (silent)
-        :02,:12,:22,:32,:42,:52 - edge_refresh_job               (silent)
+    11 AM-11 PM ET (16:00-04:00 UTC) every 5 min:
+        :00,:05,...,:55         - lines_job --live --props-only  (silent)
+        :02,:07,...,:57         - edge_refresh_job               (silent)
 
-    12:00 PM ET (17:00 UTC) - lines_job --live (full)
+    12:00 PM ET (17:00 UTC) - lines_job --live --parallel (full)
     12:15 PM ET (17:15 UTC) - inference_job (full MC)
 
-    4:00 PM ET  (21:00 UTC) - lines_job --live (full)
+    4:00 PM ET  (21:00 UTC) - lines_job --live --parallel (full)
     4:15 PM ET  (21:15 UTC) - inference_job (full MC)
 
-    "silent" = Discord alerts only on failure (~78 runs/day each).
+    "silent" = Discord alerts only on failure (~156 runs/day each).
 
 Usage:
     python src/orchestration/scheduler.py              # Start scheduler loop
@@ -396,6 +396,11 @@ def run_lines_full():
     run_job("lines_job.py", extra_args="--live")
 
 
+def run_lines_full_parallel():
+    """Full lines scrape with parallel execution (props + injuries concurrently)."""
+    run_job("lines_job.py", extra_args="--live --parallel")
+
+
 def run_lines_props_only():
     """Props-only scrape: live props + linker (no game lines or injuries)."""
     run_job("lines_job.py", extra_args="--live --props-only")
@@ -485,12 +490,12 @@ def main():
 
     # --- First window: noon full scrape + inference ---
 
-    # 12:00 PM ET (17:00 UTC) - Full lines scrape (live)
+    # 12:00 PM ET (17:00 UTC) - Full lines scrape (live, parallel)
     scheduler.add_job(
-        run_lines_full,
+        run_lines_full_parallel,
         CronTrigger(hour=17, minute=0),
         id="lines_noon_full",
-        name="Lines Full (12 PM ET)",
+        name="Lines Full Parallel (12 PM ET)",
     )
 
     # 12:15 PM ET (17:15 UTC) - Full inference
@@ -501,31 +506,31 @@ def main():
         name="Inference (12:15 PM ET)",
     )
 
-    # --- Every 10 min props-only + edge refresh: 11 AM - 11 PM ET ---
+    # --- Every 5 min props-only + edge refresh: 11 AM - 11 PM ET ---
     # UTC: hour 16-23 and 0-4 (EST = UTC-5)
 
     scheduler.add_job(
         run_lines_props_only_silent,
-        CronTrigger(hour='16-23,0-4', minute='*/10'),
-        id="props_every_10",
-        name="Props Only (every 10 min, 11AM-11PM ET)",
+        CronTrigger(hour='16-23,0-4', minute='*/5'),
+        id="props_every_5",
+        name="Props Only (every 5 min, 11AM-11PM ET)",
     )
 
     scheduler.add_job(
         run_edge_refresh_silent,
-        CronTrigger(hour='16-23,0-4', minute='2,12,22,32,42,52'),
-        id="edge_refresh_every_10",
-        name="Edge Refresh (every 10 min, 11AM-11PM ET)",
+        CronTrigger(hour='16-23,0-4', minute='2,7,12,17,22,27,32,37,42,47,52,57'),
+        id="edge_refresh_every_5",
+        name="Edge Refresh (every 5 min, 11AM-11PM ET)",
     )
 
     # --- Second window: 4 PM full scrape + inference ---
 
-    # 4:00 PM ET (21:00 UTC) - Full lines scrape (live)
+    # 4:00 PM ET (21:00 UTC) - Full lines scrape (live, parallel)
     scheduler.add_job(
-        run_lines_full,
+        run_lines_full_parallel,
         CronTrigger(hour=21, minute=0),
         id="lines_4pm_full",
-        name="Lines Full (4 PM ET)",
+        name="Lines Full Parallel (4 PM ET)",
     )
 
     # 4:15 PM ET (21:15 UTC) - Full inference

@@ -6,8 +6,8 @@ Checkpoint system allows interrupted runs to pick up where they left off.
 
 Steps:
 1. python -m src.processing.mlb.mlb_linker_local download   - Pull tables to CSV
-2. python -m src.processing.mlb.mlb_linker_local process    - Match IDs locally
-3. python -m src.processing.mlb.mlb_linker_local upload     - Push results back
+2. python -m src.processing.mlb.mlb_linker_local process    - Match IDs locally (includes team_id backfill)
+3. python -m src.processing.mlb.mlb_linker_local upload     - Push results back (includes team_id backfill)
 4. python -m src.processing.mlb.mlb_linker_local all        - All 3 stages
 5. python -m src.processing.mlb.mlb_linker_local status     - Show progress
 6. python -m src.processing.mlb.mlb_linker_local init       - Create player_mappings.csv template
@@ -629,12 +629,80 @@ def process_player_props_teams(
     return checkpoint
 
 
+def process_player_props_teams_backfill(
+    props_df: pd.DataFrame,
+    team_id_lookup: dict,
+    checkpoint: dict,
+    force: bool = False,
+) -> dict:
+    """Sub-stage 5: Backfill team_id for rows that already have game_id + player_id but missing team_id."""
+    if get_stage_status(checkpoint, "process_props_teams_backfill") == "completed" and not force:
+        logger.info("  process_props_teams_backfill: already completed (skipping)")
+        return checkpoint
+
+    logger.info("\n--- Backfill team_id (game_id + player_id set, team_id missing) ---")
+
+    # Find rows with game_id and player_id already set, but team_id missing
+    needs_team = props_df[
+        props_df["game_id"].notna()
+        & props_df["player_id"].notna()
+        & props_df["team_id"].isna()
+    ].copy()
+
+    # Exclude rows already covered by props_full_updates.csv (newly matched this run)
+    full_updates_file = DATA_DIR / "props_full_updates.csv"
+    if full_updates_file.exists():
+        already_handled = set(pd.read_csv(full_updates_file)["staging_id"])
+        needs_team = needs_team[~needs_team["staging_id"].isin(already_handled)]
+
+    logger.info(f"  Rows with game_id + player_id but no team_id: {len(needs_team):,}")
+
+    if needs_team.empty:
+        checkpoint = mark_stage(checkpoint, "process_props_teams_backfill", "completed", rows_matched=0)
+        return checkpoint
+
+    def get_team_id(row):
+        pid = row["player_id"]
+        gid = row["game_id"]
+        if pd.isna(pid) or pd.isna(gid):
+            return None
+        return team_id_lookup.get((int(pid), int(gid)))
+
+    tqdm.pandas(desc="Backfilling team_id")
+    try:
+        needs_team["team_id_resolved"] = needs_team.progress_apply(get_team_id, axis=1)
+    except (AttributeError, ImportError):
+        needs_team["team_id_resolved"] = needs_team.apply(get_team_id, axis=1)
+
+    matched = needs_team[needs_team["team_id_resolved"].notna()][["staging_id", "team_id_resolved"]].copy()
+    matched.columns = ["staging_id", "team_id"]
+    matched["team_id"] = matched["team_id"].astype(int)
+
+    if not matched.empty:
+        matched.to_csv(DATA_DIR / "props_team_backfill_updates.csv", index=False)
+        logger.info(f"  Resolved: {len(matched):,} -> props_team_backfill_updates.csv")
+    else:
+        logger.info("  No team_id matches found (boxscore data may not cover these games)")
+
+    unresolved = len(needs_team) - len(matched)
+    if unresolved > 0:
+        logger.info(f"  Unresolved: {unresolved:,} (no boxscore entry for that player+game combo)")
+
+    checkpoint = mark_stage(
+        checkpoint, "process_props_teams_backfill", "completed",
+        rows_matched=len(matched),
+        rows_unresolved=unresolved,
+    )
+    return checkpoint
+
+
 def process_local(force: bool = False) -> None:
-    """Run all 4 processing sub-stages on local CSVs."""
+    """Run all 5 processing sub-stages on local CSVs."""
     checkpoint = load_checkpoint()
 
     if force:
-        for stage in ["process_game_lines", "process_props_games", "process_props_players", "process_props_teams"]:
+        for stage in ["process_game_lines", "process_props_games", "process_props_players",
+                       "process_props_teams", "process_props_teams_backfill"]:
             checkpoint["stages"].pop(stage, None)
         save_checkpoint(checkpoint)
 
@@ -675,6 +743,7 @@ def process_local(force: bool = False) -> None:
     checkpoint = process_player_props_games(props_df, game_lookup, checkpoint, force)
     checkpoint = process_player_props_players(props_df, player_lookup, player_name_by_id, checkpoint, force)
     checkpoint = process_player_props_teams(props_df, team_id_lookup, checkpoint, force)
+    checkpoint = process_player_props_teams_backfill(props_df, team_id_lookup, checkpoint, force)
 
     # Summary
     logger.info("\n" + "=" * 60)
@@ -685,6 +754,7 @@ def process_local(force: bool = False) -> None:
         ("props_game_updates.csv", "Props game_id to update"),
         ("props_player_updates.csv", "Props player_id to update"),
         ("props_full_updates.csv", "Props player_id + team_id to update"),
+        ("props_team_backfill_updates.csv", "Backfill team_id (had game_id + player_id)"),
         ("unmatched_games.csv", "Unmatched games (review)"),
         ("unmatched_players.csv", "Unmatched players (review & add to player_mappings.csv)"),
     ]:
@@ -774,7 +844,7 @@ def upload_results(force: bool = False, batch_delay: float = 0) -> None:
     checkpoint = load_checkpoint()
 
     if force:
-        for stage in ["upload_game_lines", "upload_props_games", "upload_props_players"]:
+        for stage in ["upload_game_lines", "upload_props_games", "upload_props_players", "upload_props_teams_backfill"]:
             checkpoint["stages"].pop(stage, None)
         save_checkpoint(checkpoint)
 
@@ -844,6 +914,26 @@ def upload_results(force: bool = False, batch_delay: float = 0) -> None:
     else:
         logger.info("  No props_full_updates.csv found — skipping")
 
+    # 4. Props team_id backfill (rows that already had game_id + player_id)
+    props_backfill_file = DATA_DIR / "props_team_backfill_updates.csv"
+    if props_backfill_file.exists():
+        df = pd.read_csv(props_backfill_file)
+        checkpoint = _upload_with_retry(
+            engine, df,
+            "_tmp_mlb_tb_upload",
+            """UPDATE mlb_raw_player_props r
+               SET team_id = t.team_id::integer
+               FROM _tmp_mlb_tb_upload t
+               WHERE r.staging_id = t.staging_id
+                 AND r.team_id IS NULL""",
+            "props team_id backfill",
+            checkpoint,
+            "upload_props_teams_backfill",
+            batch_delay,
+        )
+    else:
+        logger.info("  No props_team_backfill_updates.csv found — skipping")
+
     logger.info("\n[OK] Upload complete!")
 
 
@@ -871,7 +961,9 @@ def show_status() -> None:
         "download",
         "process_game_lines", "process_props_games",
         "process_props_players", "process_props_teams",
+        "process_props_teams_backfill",
         "upload_game_lines", "upload_props_games", "upload_props_players",
+        "upload_props_teams_backfill",
     ]
 
     for stage in all_stages:

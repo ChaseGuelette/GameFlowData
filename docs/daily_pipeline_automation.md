@@ -10,14 +10,14 @@ The daily pipeline is split into four jobs based on execution frequency:
 |-----|---------------|---------|---------|
 | `daily_stats_job.py` | 9:00 AM | NBA game results + processing | ~3-5 min |
 | `daily_stats_job.py` (retry) | 9:30 AM | Auto-retry if 9 AM run failed | ~3-5 min |
-| `lines_job.py --live` | 12 PM, 4 PM | Full live scrape (game lines + props + injuries + linker) | ~30-90 sec |
+| `lines_job.py --live --parallel` | 12 PM, 4 PM | Full live scrape with parallel props + injury paths | ~45-55 sec |
 | `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation (checks daily stats dependency) | ~16 sec |
-| `lines_job.py --live --props-only` | Every 10 min, 11 AM – 11 PM | Props-only live scrape + linker | ~15-30 sec |
-| `edge_refresh_job.py` | Every 10 min (+2 min offset), 11 AM – 11 PM | Recalculate edges + resolve bets + place bets | ~2-3 min |
+| `lines_job.py --live --props-only` | Every 5 min, 11 AM – 11 PM | Props-only live scrape + linker | ~25-30 sec |
+| `edge_refresh_job.py` | Every 5 min (+2 min offset), 11 AM – 11 PM | Recalculate edges + resolve bets + place bets | ~2-3 min |
 
 **Note:** Inference job optimized from ~3 min to ~16 sec in Session 27 via parallel feature building and prop lines query optimization.
 
-**API Budget:** 5M credits/month. Current schedule uses ~3,250/month — negligible impact.
+**API Budget:** 5M credits/month. Current schedule uses ~6,400/day (~200K/month) — 4% of quota.
 
 **Discord Alerts:** High-frequency jobs (props-only, edge refresh) only send Discord alerts on failure (`silent_on_success`). Full scrapes, inference, and daily stats always alert.
 
@@ -37,12 +37,12 @@ The daily pipeline is split into four jobs based on execution frequency:
 9:30 AM    daily_stats_retry (auto-retry if 9 AM failed)
            └─ Checks JOB_STATUS["daily_stats_job.py"], re-runs if not "success"
 
-12:00 PM   lines_job.py --live (full scrape)
-           ├─ daily_game_lines_scraper.py
-           ├─ daily_player_props_scraper.py --live --target-table raw_player_props_combined
-           ├─ rapidapi_injury_backfill.py
-           ├─ link_injury_data.py
-           └─ nba_linker_local.py incremental
+12:00 PM   lines_job.py --live --parallel (full scrape, parallel)
+           Group A (props):    ├─ daily_game_lines_scraper.py
+                               ├─ daily_player_props_scraper.py --live --target-table raw_player_props_combined
+                               └─ nba_linker_local.py incremental
+           Group B (injuries): ├─ rapidapi_injury_backfill.py
+              (concurrent)     └─ link_injury_data.py
 
 12:15 PM   inference_job.py (FULL MC inference)
            ├─ Scheduler checks daily_stats dependency (8h window)
@@ -55,14 +55,14 @@ The daily pipeline is split into four jobs based on execution frequency:
            ├─ Export predictions CSV
            └─ Send Discord alert (+ stale data warning if applicable)
 
-11 AM -    lines_job.py --live --props-only (every 10 min, :00/:10/:20/:30/:40/:50)
-11 PM      edge_refresh_job.py (every 10 min, :02/:12/:22/:32/:42/:52)
+11 AM -    lines_job.py --live --props-only (every 5 min, :00/:05/:10/.../:55)
+11 PM      edge_refresh_job.py (every 5 min, :02/:07/:12/.../:57)
            ├─ Resolve pending bets from previous days (exclude_today=True)
            ├─ Recalculate edges from stored MC samples + fresh lines
            └─ Place/update paper bets for today (skips live games)
            Discord alerts: ONLY on failure (silent_on_success)
 
-4:00 PM    lines_job.py --live (full scrape — catches new player props)
+4:00 PM    lines_job.py --live --parallel (full scrape — catches new player props)
 
 4:15 PM    inference_job.py (FULL MC inference — second window)
 
@@ -124,14 +124,17 @@ Output is written to `logs/daily_stats.log`.
 **Purpose:** Scrape latest player prop lines and injury updates. Supports full scrapes and lightweight props-only refreshes.
 
 **Schedule:**
-- **Full scrape (`--live`):** 12 PM, 4 PM ET
-- **Props-only (`--live --props-only`):** Every 10 minutes, 11 AM – 11 PM ET (silent on success)
+- **Full scrape (`--live --parallel`):** 12 PM, 4 PM ET (props + injuries run concurrently)
+- **Props-only (`--live --props-only`):** Every 5 minutes, 11 AM – 11 PM ET (silent on success)
 - **Historical mode (no `--live`):** For backfills (uses historical API snapshots)
 
 ### Usage
 
 ```bash
-# Live full scrape (game lines + props + injuries + linker)
+# Live full scrape with parallel execution
+python src/orchestration/lines_job.py --live --parallel
+
+# Live full scrape (sequential, backward compatible)
 python src/orchestration/lines_job.py --live
 
 # Live props-only (fast — props + linker only)
@@ -140,11 +143,8 @@ python src/orchestration/lines_job.py --live --props-only
 # Historical scrape for specific date
 python src/orchestration/lines_job.py --date 2026-02-05
 
-# Skip injuries (faster)
-python src/orchestration/lines_job.py --live --skip-injuries
-
 # Dry run
-python src/orchestration/lines_job.py --live --props-only --dry-run
+python src/orchestration/lines_job.py --live --parallel --dry-run
 ```
 
 ### CLI Arguments
@@ -154,17 +154,25 @@ python src/orchestration/lines_job.py --live --props-only --dry-run
 | `--date YYYY-MM-DD` | Target date (defaults to today) |
 | `--live` | Use live API endpoints; writes props to `raw_player_props_combined` |
 | `--props-only` | Skip game lines and injuries (only props + linker) |
+| `--parallel` | Run props path and injury path concurrently (full mode only) |
 | `--dry-run` | Show what would be executed without running |
 | `--skip-injuries` | Skip injury scraping (faster execution) |
 | `--skip-linker` | Skip incremental linker (if already run today) |
 
 ### Pipeline Steps (Full Mode)
 
+When `--parallel` is set, Group A and Group B run concurrently:
+
+**Group A (props path — serial):**
 1. `daily_game_lines_scraper.py` - Fetch game lines from Odds API (skipped in `--props-only`)
 2. `daily_player_props_scraper.py --live --target-table raw_player_props_combined` - Fetch live player props
-3. `rapidapi_injury_backfill.py` - Fetch injury updates (skipped in `--props-only`)
-4. `link_injury_data.py` - Link injury player names to IDs (skipped in `--props-only`)
-5. `nba_linker_local.py incremental` - Link new props to player/game IDs
+3. `nba_linker_local.py incremental` - Link new props to player/game IDs
+
+**Group B (injury path — serial, concurrent with Group A):**
+4. `rapidapi_injury_backfill.py` - Fetch injury updates (skipped in `--props-only`)
+5. `link_injury_data.py` - Link injury player names to IDs (skipped in `--props-only`)
+
+Without `--parallel`, all steps run sequentially in order 1→2→4→5→3.
 
 ### Logs
 
@@ -178,7 +186,7 @@ Output is written to `logs/lines.log`.
 
 **Purpose:** Lightweight edge recalculation using stored MC samples and fresh prop lines. Does NOT re-run inference — no model loading, no feature engineering, no MC sampling.
 
-**Schedule:** Every 10 minutes (+2 min offset from props scrape), 11 AM – 11 PM ET (~78 runs/day, silent on success)
+**Schedule:** Every 5 minutes (+2 min offset from props scrape), 11 AM – 11 PM ET (~156 runs/day, silent on success)
 
 ### Usage
 

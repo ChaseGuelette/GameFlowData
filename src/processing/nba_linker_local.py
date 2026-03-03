@@ -21,6 +21,7 @@ Requirements:
 """
 
 import argparse
+import json
 import logging
 import sys
 import unicodedata
@@ -59,6 +60,7 @@ from src.db.client import get_engine  # noqa: E402
 DATA_DIR = Path("./linker_data")
 EASTERN = pytz.timezone("America/New_York")
 FUZZY_DATE_WINDOW_DAYS = 90  # Match games within ±90 days
+FUZZY_PLAYER_THRESHOLD = 0.80  # Minimum SequenceMatcher score for fuzzy match
 
 # Team name aliases - normalize everything to 3-letter abbreviations
 TEAM_NAME_ALIASES = {
@@ -565,38 +567,65 @@ def process_local():
     if len(needs_player) > 0:
         needs_player["player_name_norm"] = needs_player["api_player_name"].apply(normalize_player)
 
-        def match_player(row):
-            api_name = row["api_player_name"]
-            norm_name = row["player_name_norm"]
+        # Load fuzzy cache
+        fuzzy_cache, cached_player_count = _load_fuzzy_cache()
+        current_player_count = len(player_lookup)
+        if cached_player_count != current_player_count:
+            if fuzzy_cache:
+                print(f"  Fuzzy cache invalidated: player count changed ({cached_player_count} -> {current_player_count})")
+            fuzzy_cache = {}
+        else:
+            print(f"  Fuzzy cache loaded: {len(fuzzy_cache)} cached name mappings")
 
-            # Check manual mappings first (exact api_name match)
-            if api_name in manual_mappings:
-                return manual_mappings[api_name]
+        # Step A: Manual mappings (api_name -> player_id)
+        needs_player["matched_player_id"] = needs_player["api_player_name"].map(manual_mappings)
 
-            # Check normalized lookup
-            if norm_name in player_lookup:
-                return player_lookup[norm_name]
+        # Step B: Exact match on normalized name (vectorized)
+        unmatched_mask = needs_player["matched_player_id"].isna()
+        if unmatched_mask.any():
+            exact = needs_player.loc[unmatched_mask, "player_name_norm"].map(player_lookup)
+            has_exact = exact.notna()
+            if has_exact.any():
+                needs_player.loc[has_exact[has_exact].index, "matched_player_id"] = exact[has_exact]
 
-            return None
+        # Step C: Fuzzy match with cache
+        unmatched_mask = needs_player["matched_player_id"].isna() & needs_player["player_name_norm"].notna()
+        if unmatched_mask.any():
+            unmatched_names = set(needs_player.loc[unmatched_mask, "player_name_norm"].unique())
+            new_names = unmatched_names - set(fuzzy_cache.keys())
 
-        needs_player["matched_player_id"] = _progress_apply(needs_player, match_player, desc="Matching players", axis=1)
+            if new_names:
+                print(f"  Fuzzy matching {len(new_names)} new names (cache has {len(fuzzy_cache)})...")
+                new_fuzzy = _resolve_fuzzy_names(new_names, player_lookup)
+                fuzzy_cache.update(new_fuzzy)
 
-        # Track unmatched
+            cache_hits = len(unmatched_names) - len(new_names)
+            print(f"  Cache: {cache_hits} hits, {len(new_names)} new fuzzy lookups")
+
+            # Apply fuzzy results from cache
+            fuzzy_mapped = needs_player.loc[unmatched_mask, "player_name_norm"].map(fuzzy_cache)
+            has_fuzzy = fuzzy_mapped.notna()
+            if has_fuzzy.any():
+                needs_player.loc[has_fuzzy[has_fuzzy].index, "matched_player_id"] = fuzzy_mapped[has_fuzzy]
+
+        # Save fuzzy cache
+        _save_fuzzy_cache(fuzzy_cache, current_player_count)
+        print(f"  Fuzzy cache saved: {len(fuzzy_cache)} entries")
+
+        # Track unmatched (still no match after fuzzy)
         unmatched = needs_player[needs_player["matched_player_id"].isna()]["api_player_name"].unique()
 
         if len(unmatched) > 0:
             print(f"\n  {len(unmatched)} unmatched player names - generating suggestions...")
 
-            # Fuzzy match suggestions
+            # Fuzzy match suggestions for human review
             def find_best_matches(api_name, top_n=3):
                 api_lower = api_name.lower().strip()
                 scores = []
                 for norm_name, pid in player_lookup.items():
-                    # Skip NaN/None values
                     if pd.isna(norm_name) or not isinstance(norm_name, str):
                         continue
                     score = SequenceMatcher(None, api_lower, norm_name).ratio()
-                    # Bonus for matching last name
                     api_parts = api_lower.split()
                     norm_parts = norm_name.split()
                     if api_parts and norm_parts and api_parts[-1] == norm_parts[-1]:
@@ -613,7 +642,7 @@ def process_local():
                     suggestions.append(
                         {
                             "api_name": api_name,
-                            "player_id": best_id if best_score >= 0.7 else "",  # Only pre-fill if confident
+                            "player_id": best_id if best_score >= 0.7 else "",
                             "suggested_name": best_name,
                             "confidence": f"{best_score:.2f}",
                             "other_suggestions": "; ".join([f"{n} ({s:.2f})" for _, n, s in matches[1:]]),
@@ -945,6 +974,72 @@ def _fetch_upcoming_games_from_cdn(target_date: date | None = None) -> list[dict
         return []
 
 
+# ============================================================================
+# FUZZY CACHE — persist name→player_id mappings to disk
+# ============================================================================
+
+
+def _load_fuzzy_cache() -> tuple[dict[str, int | None], int]:
+    """Load cached fuzzy matches and the player count used to build them.
+
+    Returns:
+        (cache_dict, player_count) where cache_dict maps normalized_name -> player_id or None,
+        and player_count is the number of players when the cache was last saved (for invalidation).
+    """
+    cache_file = DATA_DIR / "_fuzzy_cache.json"
+    if not cache_file.exists():
+        return {}, 0
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        cache = data.get("cache", {})
+        player_count = data.get("player_count", 0)
+        return cache, player_count
+    except (json.JSONDecodeError, KeyError, OSError) as e:
+        logging.warning(f"Could not load fuzzy cache, starting fresh: {e}")
+        return {}, 0
+
+
+def _save_fuzzy_cache(cache: dict[str, int | None], player_count: int) -> None:
+    """Persist fuzzy cache to disk."""
+    DATA_DIR.mkdir(exist_ok=True)
+    cache_file = DATA_DIR / "_fuzzy_cache.json"
+    payload = {"player_count": player_count, "cache": cache}
+    cache_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _resolve_fuzzy_names(
+    unmatched_names: set[str], player_lookup: dict[str, int]
+) -> dict[str, int | None]:
+    """Resolve unique unmatched names via fuzzy matching (run once per unique name).
+
+    Returns dict mapping normalized_name -> player_id (or None if no match).
+    """
+    result: dict[str, int | None] = {}
+    lookup_items = list(player_lookup.items())
+
+    for norm in unmatched_names:
+        best_match = None
+        best_score = FUZZY_PLAYER_THRESHOLD
+        norm_parts = norm.split()
+        norm_last = norm_parts[-1] if norm_parts else ""
+
+        for pname, pid in lookup_items:
+            if not pname or not isinstance(pname, str):
+                continue
+            score = SequenceMatcher(None, norm, pname).ratio()
+            # Bonus for matching last name
+            pname_parts = pname.split()
+            if norm_last and pname_parts and norm_last == pname_parts[-1]:
+                score += 0.15
+            if score > best_score:
+                best_score = score
+                best_match = pid
+
+        result[norm] = best_match
+
+    return result
+
+
 def link_incremental(batch_size: int = 50000, limit: int | None = None):
     """
     Lightweight incremental linker for daily use.
@@ -1001,6 +1096,16 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
             print(f"  Loaded {len(manual_mappings)} manual player mappings")
         except Exception as e:
             print(f"  Warning: Could not load manual mappings: {e}")
+
+    # Load fuzzy cache (invalidate if player roster changed)
+    fuzzy_cache, cached_player_count = _load_fuzzy_cache()
+    current_player_count = len(player_lookup)
+    if cached_player_count != current_player_count:
+        if fuzzy_cache:
+            print(f"  Fuzzy cache invalidated: player count changed ({cached_player_count} -> {current_player_count})")
+        fuzzy_cache = {}
+    else:
+        print(f"  Fuzzy cache loaded: {len(fuzzy_cache)} cached name mappings")
 
     # Build game lookup: (home_team_norm, away_team_norm) -> [(game_id, game_date), ...]
     props_game_lookup = defaultdict(list)
@@ -1114,36 +1219,37 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
 
         batch_df["matched_game_id"] = batch_df.apply(match_game, axis=1)
 
-        # Match players
-        def match_player(row):
-            api_name = row["api_player_name"]
-            norm_name = row["player_name_norm"]
+        # Match players — batch approach with fuzzy cache
+        # Step A: Manual mappings (api_name -> player_id)
+        batch_df["matched_player_id"] = batch_df["api_player_name"].map(manual_mappings)
 
-            if api_name in manual_mappings:
-                return manual_mappings[api_name]
-            if norm_name in player_lookup:
-                return player_lookup[norm_name]
+        # Step B: Exact match on normalized name (vectorized)
+        unmatched_mask = batch_df["matched_player_id"].isna()
+        if unmatched_mask.any():
+            exact = batch_df.loc[unmatched_mask, "player_name_norm"].map(player_lookup)
+            has_exact = exact.notna()
+            if has_exact.any():
+                batch_df.loc[has_exact[has_exact].index, "matched_player_id"] = exact[has_exact]
 
-            # Fuzzy match fallback
-            if norm_name and isinstance(norm_name, str):
-                best_match = None
-                best_score = 0.80  # Threshold
-                for pname, pid in player_lookup.items():
-                    if not pname or not isinstance(pname, str):
-                        continue
-                    score = SequenceMatcher(None, norm_name, pname).ratio()
-                    # Bonus for matching last name
-                    norm_parts = norm_name.split()
-                    pname_parts = pname.split()
-                    if norm_parts and pname_parts and norm_parts[-1] == pname_parts[-1]:
-                        score += 0.15
-                    if score > best_score:
-                        best_score = score
-                        best_match = pid
-                return best_match
-            return None
+        # Step C: Fuzzy match — check cache first, only resolve truly new names
+        unmatched_mask = batch_df["matched_player_id"].isna() & batch_df["player_name_norm"].notna()
+        if unmatched_mask.any():
+            unmatched_names = set(batch_df.loc[unmatched_mask, "player_name_norm"].unique())
+            new_names = unmatched_names - set(fuzzy_cache.keys())
 
-        batch_df["matched_player_id"] = batch_df.apply(match_player, axis=1)
+            if new_names:
+                print(f"    Fuzzy matching {len(new_names)} new names (cache has {len(fuzzy_cache)})...")
+                new_fuzzy = _resolve_fuzzy_names(new_names, player_lookup)
+                fuzzy_cache.update(new_fuzzy)
+
+            cache_hits = len(unmatched_names) - len(new_names)
+            print(f"    Cache: {cache_hits} hits, {len(new_names)} new fuzzy lookups")
+
+            # Apply fuzzy results from cache
+            fuzzy_mapped = batch_df.loc[unmatched_mask, "player_name_norm"].map(fuzzy_cache)
+            has_fuzzy = fuzzy_mapped.notna()
+            if has_fuzzy.any():
+                batch_df.loc[has_fuzzy[has_fuzzy].index, "matched_player_id"] = fuzzy_mapped[has_fuzzy]
 
         # Get team_id for matched players
         def get_team_id(row):
@@ -1196,6 +1302,10 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
         offset += current_batch_size
         pct = (offset / total_to_process) * 100
         print(f"  Processed {offset:,}/{total_to_process:,} ({pct:.1f}%) - Games: {total_game_matched:,}, Players: {total_player_matched:,}")
+
+    # Save fuzzy cache to disk
+    _save_fuzzy_cache(fuzzy_cache, current_player_count)
+    print(f"  Fuzzy cache saved: {len(fuzzy_cache)} entries")
 
     # 4. Summary
     print("\n[4/4] Summary")

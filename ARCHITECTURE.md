@@ -139,6 +139,8 @@ The system ingests data from two distinct worlds that don't natively share ident
 
 Serves as the bridge between NBA and sportsbook data:
 - **Fuzzy Matching:** Matches variations of player names (e.g., "Luka Doncic" vs "Luka Dončić") and team names.
+- **Persistent Fuzzy Cache (2026-03-03):** File-based cache at `linker_data/_fuzzy_cache.json` stores `{normalized_name: player_id_or_null}` mappings. Eliminates redundant O(n*m) SequenceMatcher runs — typical runs see 95%+ cache hits (0 new fuzzy lookups). Cache auto-invalidates when player count changes (new player added to DB). Used by both `process` and `incremental` modes.
+- **Batch Player Matching (2026-03-03):** Player matching refactored from per-row `match_player()` to 3-step batch pipeline: (1) manual mappings via `.map()`, (2) exact normalized match via `.map(player_lookup)` (vectorized), (3) fuzzy cache lookup for remaining unmatched. Only truly new names trigger SequenceMatcher.
 - **Team Normalization:** All team names normalized to 3-letter abbreviations (e.g., "Atlanta Hawks" → "ATL", "Los Angeles Lakers" → "LAL") for consistent matching between Odds API full names and NBA API abbreviations.
 - **Date Alignment:** Handles timezone differences and scheduling quirks (e.g., ±90 day fuzzy windows for futures).
 - **Staging Tables:** Data first lands in `raw_*_staging` tables before being linked to official `game_id` and `player_id`.
@@ -407,10 +409,10 @@ A simulation environment to validate betting strategies.
 | Script | Schedule | Purpose |
 |--------|----------|---------|
 | `daily_stats_job.py` | 9:00 AM ET (once) | NBA game results + full processing pipeline |
-| `lines_job.py --live` | 12 PM, 4 PM ET | Full lines scrape (game lines + live props + injuries + linker) |
+| `lines_job.py --live --parallel` | 12 PM, 4 PM ET | Full lines scrape with parallel execution (props + injuries concurrent) |
 | `inference_job.py` | 12:15 PM, 4:15 PM ET | Full inference (MC predictions + edges + BL) |
-| `lines_job.py --live --props-only` | Every 10 min, 11 AM–11 PM ET | Props-only scrape (~78 runs/day, silent Discord) |
-| `edge_refresh_job.py` | Every 10 min +2 min offset, 11 AM–11 PM ET | Recalculate edges + resolve past bets + place new bets (~78 runs/day, silent Discord) |
+| `lines_job.py --live --props-only` | Every 5 min, 11 AM–11 PM ET | Props-only scrape (~156 runs/day, silent Discord) |
+| `edge_refresh_job.py` | Every 5 min +2 min offset, 11 AM–11 PM ET | Recalculate edges + resolve past bets + place new bets (~156 runs/day, silent Discord) |
 
 **`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~3-5 minutes (optimized from ~30 minutes via incremental scripts).
 
@@ -418,10 +420,11 @@ A simulation environment to validate betting strategies.
 
 **Per-step retries and timeout tuning (2026-03-02):** `run_command()` now accepts `max_retries` and `retry_delay` parameters with exponential backoff. Critical steps get 2 retries (15s base delay, doubling each attempt). Per-step timeouts tuned to actual workload: Step 6 (rolling averages) increased from 10m→20m (most common timeout culprit), Step 7 (opponent allowed) increased to 15m, Steps 3-5 (non-critical) reduced to 5m. Global scheduler timeout increased from 30m→45m to accommodate retries.
 
-**`lines_job.py`** — Multiple-times-daily props and injuries scraping. Two modes:
-- **Full mode (`--live`):** `daily_game_lines_scraper.py` → `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `rapidapi_injury_backfill.py` → `link_injury_data.py` → `nba_linker_local.py incremental`. Used at 12 PM and 4 PM ET.
-- **Props-only mode (`--live --props-only`):** `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `nba_linker_local.py incremental`. Skips game lines and injuries for fast intra-day refreshes. Used hourly/half-hourly between inference windows.
-- Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`, `--live`, `--props-only`. Runtime: ~30-90 seconds (full), ~15-30 seconds (props-only).
+**`lines_job.py`** — Multiple-times-daily props and injuries scraping. Three modes:
+- **Full mode (`--live`):** `daily_game_lines_scraper.py` → `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `rapidapi_injury_backfill.py` → `link_injury_data.py` → `nba_linker_local.py incremental`.
+- **Full parallel mode (`--live --parallel`):** Same steps but props path (game lines → props → linker) and injury path (injury scraper → injury linker) run concurrently via threads. Used at 12 PM and 4 PM ET. Runtime: ~45-55 seconds (was ~90 seconds sequential).
+- **Props-only mode (`--live --props-only`):** `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `nba_linker_local.py incremental`. Skips game lines and injuries for fast intra-day refreshes. Used every 5 minutes between inference windows.
+- Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`, `--live`, `--props-only`, `--parallel`. Runtime: ~45-55 seconds (full parallel), ~25-30 seconds (props-only).
 
 **`inference_job.py`** — Full prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, checks upstream data freshness (warns if latest `game_date` in `player_average_game_stats` is before yesterday — stale data from a failed 9 AM job), generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, **automatically places paper bets** on recommended predictions (via `PaperTrader.select_bets()` + `place_bets()`), sends Discord alert, and exports CSV backup. Runs twice daily (12:15 PM, 4:15 PM ET) to catch new player props. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`, `--skip-bets`, `--skip-discord`, `--stale-warning`. Runtime: ~1-3 minutes.
 
@@ -448,14 +451,15 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 - `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 8 job definitions on cron schedule (UTC times):
   - `daily_stats_job.py` — 9 AM ET (scrapes NBA game results)
   - `daily_stats_job.py` (retry) — 9:30 AM ET (auto-retry if 9 AM run failed)
-  - `lines_job.py --live` — 12 PM, 4 PM ET (full live scrape: game lines + props + injuries + linker)
+  - `lines_job.py --live --parallel` — 12 PM, 4 PM ET (full live scrape with parallel props + injury paths)
   - `inference_job.py` — 12:15 PM, 4:15 PM ET (full MC inference, with dependency check on daily stats)
-  - `lines_job.py --live --props-only` — Every 10 min, 11 AM–11 PM ET (props-only scrape, ~78 runs/day)
-  - `edge_refresh_job.py` — Every 10 min offset by 2 min, 11 AM–11 PM ET (recalculates edges, ~78 runs/day)
+  - `lines_job.py --live --props-only` — Every 5 min, 11 AM–11 PM ET (props-only scrape, ~156 runs/day)
+  - `edge_refresh_job.py` — Every 5 min offset by 2 min, 11 AM–11 PM ET (recalculates edges, ~156 runs/day)
 - **Job status tracking (2026-03-02):** `JOB_STATUS` in-memory dict tracks every job's status, end time, and duration. `record_job_execution()` writes to `job_executions` Supabase table for persistent history and debugging. `check_dependency()` queries `JOB_STATUS` before running dependent jobs (e.g., inference checks daily stats succeeded in last 8 hours).
 - **Automatic retry (2026-03-02):** 9:30 AM ET retry job (`run_daily_stats_retry()`) checks if the 9 AM daily stats succeeded — if not, re-runs it. Gives the system a second chance before inference at 12:15 PM.
 - **Dependency gate (2026-03-02):** `run_inference()` checks `check_dependency("daily_stats_job.py", max_age_hours=8)`. If stale, still runs inference but passes `--stale-warning` flag and sends Discord alert about stale rolling averages.
-- **Silent alerts (2026-02-28):** The every-10-min props and edge refresh jobs use `silent_on_success=True` — Discord alerts only sent on failure to avoid notification spam. Full scrape and inference jobs still alert on success.
+- **5-minute refresh cadence (2026-03-03):** Props-only and edge refresh increased from every 10 min to every 5 min (~156 runs/day each). Full scrapes at noon/4pm use `--parallel` for concurrent props + injury paths. Enabled by fuzzy cache optimization reducing linker overhead to <1s.
+- **Silent alerts (2026-02-28):** The every-5-min props and edge refresh jobs use `silent_on_success=True` — Discord alerts only sent on failure to avoid notification spam. Full scrape and inference jobs still alert on success.
 - **Discord job status alerts (2026-02-15):** Scheduler sends success/failure notifications to `#alerts` channel after each job completes. Includes job name, duration, metrics (when available), and error details for failures. Non-fatal — alert failures don't affect job execution.
 - **Subprocess Python path (2026-02-18):** All orchestration job scripts use `sys.executable` instead of hardcoded `python` when spawning subprocesses, ensuring the venv Python (with all installed packages) is used consistently.
 - Single always-on worker process handles all scheduled jobs
@@ -986,9 +990,9 @@ python src/orchestration/run_daily.py [--date YYYY-MM-DD] [--skip-scraping] [--s
 
 # Frequency-separated jobs (E6)
 python src/orchestration/daily_stats_job.py [--dry-run]                           # 9 AM ET - Stats + processing
-python src/orchestration/lines_job.py --live [--dry-run]                          # 12/4 PM ET - Full live scrape
-python src/orchestration/lines_job.py --live --props-only [--dry-run]             # Hourly/half-hourly - Props only
-python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker]  # Historical mode
+python src/orchestration/lines_job.py --live --parallel [--dry-run]               # 12/4 PM ET - Full live scrape (parallel)
+python src/orchestration/lines_job.py --live --props-only [--dry-run]             # Every 5 min - Props only
+python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker] [--parallel]  # Historical mode
 python src/orchestration/inference_job.py [--date YYYY-MM-DD] [--dry-run] [--model-dir PATH] [--stats pts reb ast] [--skip-bets] [--skip-discord]  # 12:15/4:15 PM ET
 python src/orchestration/edge_refresh_job.py [--date YYYY-MM-DD] [--dry-run] [--stats pts reb ast] [--skip-discord]  # After each props scrape
 ```
