@@ -167,6 +167,13 @@ def recalculate_edges(
     """
     df = predictions_df.copy()
 
+    # Preserve old line columns so we can fall back when fresh lines are missing
+    line_preserve_cols = ["line", "over_odds", "under_odds", "bookmaker"]
+    old_lines = {}
+    for c in line_preserve_cols:
+        if c in df.columns:
+            old_lines[c] = df[c].copy()
+
     # Drop old line/edge/BL columns — we'll recalculate them
     edge_cols = [
         "line", "over_odds", "under_odds", "bookmaker",
@@ -182,6 +189,12 @@ def recalculate_edges(
     line_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds", "bookmaker"]
     available_line_cols = [c for c in line_cols if c in lines_df.columns]
     df = df.merge(lines_df[available_line_cols], on=merge_cols, how="left")
+
+    # Fill missing lines with previous values (preserves old predictions
+    # when fresh lines aren't available, e.g. after games finish)
+    for c, old_series in old_lines.items():
+        if c in df.columns:
+            df[c] = df[c].fillna(old_series)
 
     # Calculate over_prob from MC samples
     def estimate_over_prob(row):
