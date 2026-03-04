@@ -390,11 +390,13 @@ export default function DashboardPage() {
 
   // Filter predictions by stat type, matchup, edge threshold, book availability, and Model Picks toggle
   const filteredPredictions = enrichedPredictions.filter(p => {
-    // Exclude finished games (started > 3 hours ago) regardless of filter mode
-    if (isGameDone(p.game_time)) return false
-    // Pre-Game mode: also exclude games that have started
-    if (!showLive && p.game_time) {
-      if (new Date(p.game_time) <= new Date()) return false
+    // For today: exclude finished games and optionally in-progress games
+    if (selectedDate === getToday()) {
+      if (isGameDone(p.game_time)) return false
+      // Pre-Game mode: also exclude games that have started
+      if (!showLive && p.game_time) {
+        if (new Date(p.game_time) <= new Date()) return false
+      }
     }
     if (showModelPicks && !p.is_recommended) return false
     if (filter !== 'all' && p.stat !== filter) return false
