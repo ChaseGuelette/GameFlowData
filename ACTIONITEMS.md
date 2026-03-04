@@ -1,5 +1,19 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-04 — Session 65)
+
+### What We Did
+
+**Removed NCAAB Cron Jobs from Scheduler (1 file)**
+
+Removed 3 NCAAB cron job registrations (`ncaab_daily_stats`, `ncaab_lines_noon`, `ncaab_lines_4pm`), their wrapper functions (`run_ncaab_daily_stats`, `run_ncaab_lines`), and JOB_NAMES entries from `scheduler.py`. These jobs were failing on Railway because migrations 009-011 haven't been applied, no historical data has been backfilled, and `cbbpy` isn't in `requirements.txt`.
+
+**Modified:** `src/orchestration/scheduler.py`
+
+NCAAB jobs should be re-added once items 15-18 from the action items are completed (migrations applied, cbbpy added, data backfilled, models trained).
+
+---
+
 ## Session Summary (2026-03-03 — Session 64)
 
 ### What We Did
@@ -45,6 +59,7 @@ Built full-stack user bet tracking: database migration, React hooks, dashboard i
 18. **Backfill NCAAB historical data** — CBBpy box scores, Barttorvik snapshots, game lines
 19. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
 20. **Add stake calculation to useUserBets** — currently records bets without stake; could use Kelly from preferences
+21. **Re-add NCAAB cron jobs to scheduler** — removed in Session 65 (failing on Railway); re-add after items 15-18 are complete
 
 ---
 

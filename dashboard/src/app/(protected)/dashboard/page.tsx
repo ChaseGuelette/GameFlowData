@@ -12,6 +12,7 @@ import { type Prediction } from '@/types/predictions'
 import { getToday, formatDate, calculateBLConfidence, blendProbability, isGameDone } from '@/lib/utils'
 import { TEAM_ABBREV, TEAM_NAME_TO_ABBREV } from '@/lib/constants'
 import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS } from '@/lib/sportsbook-availability'
+import { BookFilterDropdown } from '@/components/predictions/BookFilterDropdown'
 import { STAT_TO_MARKET } from '@/types/dfs'
 import { useUserBets } from '@/lib/hooks/useUserBets'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
@@ -34,7 +35,7 @@ export default function DashboardPage() {
   const userState = prefs.userState
   const { takenBets, toggleBet: handleToggleTaken } = useUserBets(selectedDate)
 
-  const [bookFilter, setBookFilter] = useState<string>('')
+  const [excludedBooks, setExcludedBooks] = useState<Set<string>>(new Set())
   const [bookAvailability, setBookAvailability] = useState<Set<string> | null>(null)
 
   // Slate builder state
@@ -265,19 +266,29 @@ export default function DashboardPage() {
     }
   }, [selectedDate, fetchPredictions])
 
-  // Fetch book availability when bookFilter changes
+  // Fetch book availability when excludedBooks changes
   useEffect(() => {
-    if (!bookFilter || predictions.length === 0) {
+    if (excludedBooks.size === 0 || predictions.length === 0) {
       setBookAvailability(null)
       return
     }
     async function fetchBookAvailability() {
       const supabase = createClient()
       const gameIds = [...new Set(predictions.map(p => p.game_id))]
+      // Build the list of active (non-excluded) books
+      const allowedBooks = SPORTSBOOK_OPTIONS
+        .filter(opt => opt.value && (!userState || STATE_SPORTSBOOKS[userState]?.includes(opt.value)))
+        .map(opt => opt.value)
+      const activeBooks = allowedBooks.filter(b => !excludedBooks.has(b))
+      if (activeBooks.length === 0) {
+        // All books excluded — nothing can match
+        setBookAvailability(new Set())
+        return
+      }
       const { data } = await supabase
         .from('raw_player_props_combined')
         .select('player_id, market_key')
-        .eq('bookmaker', bookFilter)
+        .in('bookmaker', activeBooks)
         .in('game_id', gameIds)
         .not('player_id', 'is', null)
       if (data) {
@@ -285,17 +296,21 @@ export default function DashboardPage() {
       }
     }
     fetchBookAvailability()
-  }, [bookFilter, predictions])
+  }, [excludedBooks, predictions, userState])
 
-  // Reset bookFilter if selected book isn't available in the new state
+  // Clean up excluded books when user state changes (remove stale exclusions)
   useEffect(() => {
-    if (userState && bookFilter) {
-      const allowed = STATE_SPORTSBOOKS[userState]
-      if (allowed && !allowed.includes(bookFilter)) {
-        setBookFilter('')
+    if (!userState) return
+    const allowed = STATE_SPORTSBOOKS[userState]
+    if (!allowed) return
+    setExcludedBooks(prev => {
+      const next = new Set<string>()
+      for (const b of prev) {
+        if (allowed.includes(b)) next.add(b)
       }
-    }
-  }, [userState, bookFilter])
+      return next.size === prev.size ? prev : next
+    })
+  }, [userState])
 
   // Get unique matchups from predictions for dropdown (e.g., "LAL vs SAS")
   const availableMatchups = [...new Set(predictions.map(p => {
@@ -447,18 +462,11 @@ export default function DashboardPage() {
             ))}
           </select>
           {/* Sportsbook Filter */}
-          <select
-            value={bookFilter}
-            onChange={(e) => setBookFilter(e.target.value)}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-          >
-            {SPORTSBOOK_OPTIONS
-              .filter(opt => !opt.value || !userState || (STATE_SPORTSBOOKS[userState]?.includes(opt.value)))
-              .map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))
-            }
-          </select>
+          <BookFilterDropdown
+            excludedBooks={excludedBooks}
+            onChange={setExcludedBooks}
+            userState={userState}
+          />
           {/* Live Betting Toggle */}
           <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
             <button
