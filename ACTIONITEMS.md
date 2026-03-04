@@ -1,5 +1,53 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-03 — Session 64)
+
+### What We Did
+
+**User Bet Tracking — Cross-Device Sync + Auto-Resolution (9 files)**
+
+Built full-stack user bet tracking: database migration, React hooks, dashboard integration, backend auto-resolution, and My Bets tabs on History and Performance pages.
+
+**New Files (4):**
+- `database/migrations/012_user_bet_tracking.sql` — `user_profiles` + `user_bets` tables with RLS policies, indexes, `updated_at` trigger
+- `dashboard/src/lib/hooks/useUserBets.ts` — Optimistic UI toggle + async Supabase upsert/delete, per-date fetching
+- `dashboard/src/lib/hooks/useUserPreferences.ts` — localStorage-first + debounced DB sync for bankroll/kelly/state
+- `src/paper_trading/user_bet_resolver.py` — `UserBetResolver` class mirroring `PaperTrader.resolve_bets()` for `user_bets` table
+
+**Modified (5):**
+- `dashboard/src/app/(protected)/dashboard/page.tsx` — Replaced localStorage with `useUserBets` + `useUserPreferences` hooks
+- `dashboard/src/components/analysis/AnalysisModal.tsx` — Replaced 6 localStorage reads with `useUserPreferences` hook
+- `src/orchestration/daily_stats_job.py` — Added `resolve_pending_user_bets()` step after paper bet resolution
+- `dashboard/src/app/(protected)/history/page.tsx` — Added "My Bets" / "Model History" tab toggle
+- `dashboard/src/app/(protected)/performance/page.tsx` — Added "My Bets" tab alongside Props / DFS
+
+**Migration applied to Supabase:** Both tables created with RLS enabled.
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Deploy dashboard to Vercel** — user bet tracking features need frontend deployment
+3. **Monitor cross-device sync** — verify checkmark state syncs between phone and laptop
+4. **Monitor user bet auto-resolution** — verify bets resolve correctly after daily_stats_job runs
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id, 500K missing team_id, 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **Train pitcher K model on 2024 data** — run end-to-end training pipeline, validate calibration
+11. **Build MLB daily runner** — inference pipeline mirroring NBA `daily_runner.py`
+12. **Build MLB backtesting harness** — historical replay for pitcher K predictions
+13. **Stripe integration** — subscribe page, customer portal, webhook
+14. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+15. **Apply NCAAB migrations 009-011 to Supabase** — NCAAB tables
+16. **Fix ncaab_teams UNIQUE constraint** — add UNIQUE(team_name) to migration 009
+17. **Add `cbbpy` to requirements.txt** — NCAAB dependency
+18. **Backfill NCAAB historical data** — CBBpy box scores, Barttorvik snapshots, game lines
+19. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
+20. **Add stake calculation to useUserBets** — currently records bets without stake; could use Kelly from preferences
+
+---
+
 ## Session Summary (2026-03-03 — Session 63)
 
 ### What We Did

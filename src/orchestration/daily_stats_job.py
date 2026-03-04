@@ -131,6 +131,50 @@ def resolve_pending_bets(dry_run: bool = False) -> bool:
         return True  # Don't fail the job for resolution errors (stats are more important)
 
 
+def resolve_pending_user_bets(dry_run: bool = False) -> bool:
+    """Resolve all pending user bets (from dashboard checkmark feature).
+
+    Non-fatal: failures are logged but don't affect job status.
+    """
+    logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: Resolving Pending User Bets")
+
+    if dry_run:
+        logger.info("  Would call: UserBetResolver().resolve_all_pending()")
+        return True
+
+    start_time = time.time()
+    try:
+        from src.paper_trading.user_bet_resolver import UserBetResolver
+
+        resolver = UserBetResolver()
+        result = resolver.resolve_all_pending()
+
+        elapsed = time.time() - start_time
+
+        if result["dates_processed"] == 0 and result["dates_skipped"] == 0:
+            logger.info(f"COMPLETED: No pending user bets to resolve ({elapsed:.1f}s)")
+        else:
+            logger.info(
+                f"COMPLETED: User bet resolution - {result['total_resolved']} bets across "
+                f"{result['dates_processed']} dates ({result['dates_skipped']} skipped) "
+                f"[{result['total_won']}W {result['total_lost']}L {result['total_push']}P] ({elapsed:.1f}s)"
+            )
+
+        return True
+
+    except ImportError as e:
+        elapsed = time.time() - start_time
+        logger.warning(f"SKIPPED: User bet resolution - module not found ({elapsed:.1f}s)")
+        logger.warning(f"  Import error: {e}")
+        return True
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error(f"FAILED: User bet resolution ({elapsed:.1f}s)")
+        logger.error(f"  Exception: {e}")
+        return True  # Non-fatal
+
+
 def run_command(
     command: str,
     description: str,
@@ -308,6 +352,10 @@ def main():
     # 2. It should not fail the job if it fails (stats are more critical)
     if not args.skip_resolution:
         resolve_pending_bets(args.dry_run)
+
+    # Resolve pending user bets (from dashboard checkmark feature)
+    if not args.skip_resolution:
+        resolve_pending_user_bets(args.dry_run)
 
     elapsed = time.time() - start_time
     logger.info("=" * 60)

@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-03 Session 64] — User Bet Tracking: Cross-Device Sync + Auto-Resolution
+
+### Added
+
+- **`database/migrations/012_user_bet_tracking.sql`** — `user_profiles` table (bankroll, kelly, state preferences) and `user_bets` table (taken bets from PropCard checkmark). Both with RLS policies, indexes, and `updated_at` trigger.
+- **`dashboard/src/lib/hooks/useUserBets.ts`** — React hook for cross-device bet tracking. Optimistic UI toggle (instant response), async Supabase upsert/delete, auto-rollback on error. Fetches per-date bets on mount. Auto-captures direction, odds, book, model_prob, edge from Prediction object.
+- **`dashboard/src/lib/hooks/useUserPreferences.ts`** — React hook for cross-device user preferences. localStorage-first (instant load) + debounced (500ms) Supabase DB sync. Covers: userState, bankroll, kellyFraction, useCustomKelly.
+- **`src/paper_trading/user_bet_resolver.py`** — `UserBetResolver` class that resolves user-placed bets against actual game stats. Mirrors `PaperTrader.resolve_bets()` resolution logic (over/under comparison, DNP void, push handling). Multi-day catchup via `resolve_all_pending()`.
+
+### Changed
+
+- **`dashboard/src/app/(protected)/dashboard/page.tsx`** — Replaced localStorage-based `takenBets` state and `userState` with `useUserBets` and `useUserPreferences` hooks. Removed ~30 lines of localStorage read/write logic.
+- **`dashboard/src/components/analysis/AnalysisModal.tsx`** — Replaced 6 localStorage reads/writes (bankroll, kelly, state) with `useUserPreferences` hook. Input fields sync when preferences load from DB.
+- **`src/orchestration/daily_stats_job.py`** — Added `resolve_pending_user_bets()` function + call after existing paper bet resolution. Non-fatal: errors logged but don't fail the job.
+- **`dashboard/src/app/(protected)/history/page.tsx`** — Added "My Bets" / "Model History" tab toggle. My Bets (default, green) queries `user_bets` table. Model History preserves existing paper_bets view with BetSourceFilter.
+- **`dashboard/src/app/(protected)/performance/page.tsx`** — Added "My Bets" tab alongside existing "Props" and "DFS" tabs. My Bets shows personal KPIs, bankroll chart (cumulative PnL), and stat breakdown computed from `user_bets`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `database/migrations/012_user_bet_tracking.sql` | Created |
+| `dashboard/src/lib/hooks/useUserBets.ts` | Created |
+| `dashboard/src/lib/hooks/useUserPreferences.ts` | Created |
+| `src/paper_trading/user_bet_resolver.py` | Created |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — hooks replace localStorage |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — preferences hook |
+| `src/orchestration/daily_stats_job.py` | Modified — user bet resolution step |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — My Bets tab |
+| `dashboard/src/app/(protected)/performance/page.tsx` | Modified — My Bets tab |
+| `ARCHITECTURE.md` | Updated — user bet tracking sections |
+| `ACTIONITEMS.md` | Updated — Session 64 summary |
+| `CHANGELOG.md` | Updated — Session 64 entry |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- TypeScript compiles cleanly (`tsc --noEmit`)
+- Ruff: 1 auto-fixed issue (unused import), 0 remaining
+- Migration applied to Supabase: tables + RLS confirmed
+
+---
+
 ## [2026-03-03 Session 63] — NCAAB Game-Level Prediction Pipeline
 
 ### Added

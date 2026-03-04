@@ -9,7 +9,7 @@ import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFi
 import { cn } from '@/lib/utils'
 import { type DailyPerformance, type StatPerformance, type PaperBet, type StatType } from '@/types/predictions'
 
-type PerformanceTab = 'props' | 'dfs'
+type PerformanceTab = 'props' | 'dfs' | 'my_bets'
 
 // Extended type to include is_recommended from joined daily_predictions
 interface PaperBetWithRecommended extends PaperBet {
@@ -68,6 +68,10 @@ export default function PerformancePage() {
   const [dfsEntries, setDfsEntries] = useState<DfsEntry[]>([])
   const [dfsDailyData, setDfsDailyData] = useState<DfsDailyLog[]>([])
   const [dfsLoading, setDfsLoading] = useState(false)
+
+  // My Bets state
+  const [myBets, setMyBets] = useState<PaperBet[]>([])
+  const [myBetsLoading, setMyBetsLoading] = useState(false)
 
   // Fetch props data
   useEffect(() => {
@@ -159,6 +163,47 @@ export default function PerformancePage() {
 
     fetchDfsData()
   }, [activeTab, dfsEntries.length])
+
+  // Fetch My Bets data when tab switches
+  useEffect(() => {
+    if (activeTab !== 'my_bets') return
+    if (myBets.length > 0) return // Already loaded
+
+    async function fetchMyBets() {
+      setMyBetsLoading(true)
+      const supabase = createClient()
+
+      const { data, error } = await supabase
+        .from('user_bets')
+        .select('*')
+        .in('status', ['won', 'lost', 'push'])
+        .order('game_date', { ascending: true })
+
+      if (!error && data) {
+        const mapped: PaperBet[] = data.map(row => ({
+          id: row.id,
+          game_date: row.game_date,
+          player_id: row.player_id,
+          player_name: row.player_name,
+          stat_type: row.stat_type,
+          line: Number(row.line),
+          bet_direction: row.bet_direction,
+          odds_at_bet: row.odds_at_bet ? Number(row.odds_at_bet) : -110,
+          stake: row.stake ? Number(row.stake) : 0,
+          edge: row.edge ? Number(row.edge) : 0,
+          status: row.status,
+          actual_value: row.actual_value != null ? Number(row.actual_value) : null,
+          pnl: row.pnl != null ? Number(row.pnl) : null,
+          bookmaker: row.book_at_bet,
+        }))
+        setMyBets(mapped)
+      }
+
+      setMyBetsLoading(false)
+    }
+
+    fetchMyBets()
+  }, [activeTab, myBets.length])
 
   // Filter bets based on source (Model Picks = is_recommended from daily_predictions)
   const filteredBets = useMemo(() => {
@@ -325,6 +370,82 @@ export default function PerformancePage() {
     })).sort((a, b) => b.entries - a.entries)
   }, [dfsEntries])
 
+  // My Bets KPIs
+  const myBetsKpis = useMemo(() => {
+    const wins = myBets.filter(b => b.status === 'won').length
+    const losses = myBets.filter(b => b.status === 'lost').length
+    const pnl = myBets.reduce((sum, b) => sum + (b.pnl || 0), 0)
+    const staked = myBets.reduce((sum, b) => sum + (b.stake || 0), 0)
+    const roi = staked > 0 ? (pnl / staked) * 100 : 0
+    const total = wins + losses
+    const winRate = total > 0 ? (wins / total) * 100 : 0
+    return { wins, losses, pnl, staked, roi, winRate }
+  }, [myBets])
+
+  // My Bets bankroll chart data
+  const myBetsChartData = useMemo(() => {
+    const INITIAL_BANKROLL = 1000
+    const dailyPnlMap = new Map<string, number>()
+
+    for (const bet of myBets) {
+      const date = bet.game_date
+      dailyPnlMap.set(date, (dailyPnlMap.get(date) || 0) + (bet.pnl || 0))
+    }
+
+    const dates = Array.from(dailyPnlMap.keys()).sort()
+    let cumulativePnl = 0
+
+    return dates.map(date => {
+      const dayPnl = dailyPnlMap.get(date) || 0
+      cumulativePnl += dayPnl
+      return {
+        game_date: date,
+        total_pnl: dayPnl,
+        cumulative_pnl: cumulativePnl,
+        bankroll_after: INITIAL_BANKROLL + cumulativePnl,
+        total_bets: 0,
+        bets_won: 0,
+        bets_lost: 0,
+        total_staked: 0,
+        roi_pct: 0,
+      } as DailyPerformance
+    })
+  }, [myBets])
+
+  // My Bets stat breakdown
+  const myBetsStatData = useMemo(() => {
+    const statMap = new Map<StatType, { wins: number; losses: number; pnl: number; staked: number }>()
+
+    for (const bet of myBets) {
+      const stat = bet.stat_type
+      if (!statMap.has(stat)) {
+        statMap.set(stat, { wins: 0, losses: 0, pnl: 0, staked: 0 })
+      }
+      const entry = statMap.get(stat)!
+      if (bet.status === 'won') entry.wins++
+      if (bet.status === 'lost') entry.losses++
+      entry.pnl += bet.pnl || 0
+      entry.staked += bet.stake || 0
+    }
+
+    const statPerformance: StatPerformance[] = []
+    for (const [stat, data] of statMap) {
+      const totalBets = data.wins + data.losses
+      statPerformance.push({
+        stat,
+        total_bets: totalBets,
+        wins: data.wins,
+        losses: data.losses,
+        win_rate: totalBets > 0 ? (data.wins / totalBets) * 100 : 0,
+        total_pnl: data.pnl,
+        roi: data.staked > 0 ? (data.pnl / data.staked) * 100 : 0,
+      })
+    }
+
+    statPerformance.sort((a, b) => b.total_bets - a.total_bets)
+    return statPerformance
+  }, [myBets])
+
   return (
     <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
@@ -334,12 +455,25 @@ export default function PerformancePage() {
           <p className="text-slate-400">
             {activeTab === 'props'
               ? (betSource === 'model' ? 'Model Picks only (BL Edge ≥9%)' : 'All bets')
-              : 'DFS Paper Trading (Market Edge)'}
+              : activeTab === 'dfs'
+                ? 'DFS Paper Trading (Market Edge)'
+                : 'Your personal bet performance'}
           </p>
         </div>
         <div className="flex items-center gap-3">
           {/* Tab Toggle */}
           <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg border border-slate-700">
+            <button
+              onClick={() => setActiveTab('my_bets')}
+              className={cn(
+                'px-3 py-1.5 rounded text-sm font-medium transition-colors',
+                activeTab === 'my_bets'
+                  ? 'bg-green-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              )}
+            >
+              My Bets
+            </button>
             <button
               onClick={() => setActiveTab('props')}
               className={cn(
@@ -500,6 +634,51 @@ export default function PerformancePage() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+        </>
+      )}
+      {/* My Bets Tab */}
+      {activeTab === 'my_bets' && (
+        <>
+          {myBetsLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="text-slate-400">Loading your bet performance...</div>
+            </div>
+          ) : myBets.length === 0 ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="text-center">
+                <p className="text-slate-400 text-lg">No resolved bets yet</p>
+                <p className="text-slate-500 text-sm mt-2">
+                  Tap the checkmark on prop cards to track bets. Results appear after games finish.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <KPICard
+                  label="My Bankroll"
+                  value={`$${(1000 + myBetsKpis.pnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                />
+                <KPICard
+                  label="Total P&L"
+                  value={`${myBetsKpis.pnl >= 0 ? '+' : ''}$${myBetsKpis.pnl.toFixed(2)}`}
+                  trend={myBetsKpis.pnl >= 0 ? 'up' : 'down'}
+                />
+                <KPICard
+                  label="Overall ROI"
+                  value={`${myBetsKpis.roi >= 0 ? '+' : ''}${myBetsKpis.roi.toFixed(1)}%`}
+                  trend={myBetsKpis.roi >= 0 ? 'up' : 'down'}
+                />
+                <KPICard
+                  label="Win Rate"
+                  value={`${myBetsKpis.winRate.toFixed(1)}%`}
+                  subValue={`${myBetsKpis.wins}W - ${myBetsKpis.losses}L`}
+                />
+              </div>
+              <BankrollChart data={myBetsChartData} />
+              <StatBreakdown stats={myBetsStatData} />
             </div>
           )}
         </>

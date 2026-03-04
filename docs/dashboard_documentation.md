@@ -1119,20 +1119,15 @@ Dropdown filter that restricts AnalysisModal sportsbook lines to only show bookm
 
 ### Dashboard Integration
 
-State stored in `localStorage` under key `user_state`. Set on the dashboard page, read in the AnalysisModal.
+State synced cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Both the dashboard page and AnalysisModal consume the same hook.
 
 ```typescript
-// Dashboard page — read + write
-const [userState, setUserState] = useState<string>(() => {
-  if (typeof window === 'undefined') return ''
-  return localStorage.getItem('user_state') || ''
-})
+// Both dashboard/page.tsx and AnalysisModal.tsx
+const { prefs, updatePref } = useUserPreferences()
+const userState = prefs.userState
 
-// AnalysisModal — read-only
-const [userState] = useState<string>(() => {
-  if (typeof window === 'undefined') return ''
-  return localStorage.getItem('user_state') || ''
-})
+// Update (dashboard page state selector)
+onChange={(e) => updatePref('userState', e.target.value)}
 ```
 
 ### AnalysisModal Filtering
@@ -1309,9 +1304,60 @@ Fetches `https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json` — t
 
 `dashboard/src/app/api/games/route.ts`
 
+## User Bet Tracking (Session 64)
+
+Cross-device sync for user-placed bets and preferences, replacing per-device localStorage.
+
+### Custom Hooks
+
+**`dashboard/src/lib/hooks/useUserBets.ts`** — Bet tracking hook.
+- Fetches user's bets for `selectedDate` from `user_bets` table on mount/date change
+- Returns `{ takenBets: Set<string>, toggleBet: (prediction) => void, loading }`
+- `toggleBet`: optimistic UI update → async Supabase upsert/delete → rollback on error
+- On insert: auto-captures direction, odds, book, model_prob, edge from the Prediction object
+- Key format: `${player_id}-${stat}` (same as PropCard/PropGrid)
+- Uses `betRowsRef` (Map) to track row IDs for efficient deletes
+- Unique constraint: `(user_id, game_date, player_id, stat_type)` — one bet per player/stat/date
+
+**`dashboard/src/lib/hooks/useUserPreferences.ts`** — Preferences sync hook.
+- Loads instantly from localStorage (SSR-safe), then syncs from `user_profiles` table
+- On change: writes to localStorage (instant) and DB (500ms debounced)
+- Covers: `userState`, `bankroll`, `kellyFraction`, `useCustomKelly`
+- Auto-creates profile row on first use via upsert
+- Returns `{ prefs, updatePref, loading }`
+
+### Database Tables
+
+**`user_profiles`** — Per-user preferences.
+- `user_id` (uuid PK, FK auth.users), `user_state`, `bankroll` (default 1000), `kelly_fraction` (default 0.25), `use_custom_kelly`, `created_at`, `updated_at`
+- RLS: users access only their own row
+
+**`user_bets`** — User-placed bets from PropCard checkmark.
+- `id` (bigserial PK), `user_id`, `prediction_id`, `game_date`, `player_id`, `player_name`, `stat_type`, `line`, `bet_direction`, `odds_at_bet`, `book_at_bet`, `model_prob`, `edge`, `stake`, `status` (default 'pending'), `actual_value`, `pnl`, `placed_at`, `resolved_at`
+- Unique: `(user_id, game_date, player_id, stat_type)`
+- Indexes: `(user_id, game_date DESC)`, partial on `status='pending'`
+- RLS: users access only their own rows
+
+### Auto-Resolution
+
+**`src/paper_trading/user_bet_resolver.py`** — Backend resolution.
+- `UserBetResolver.resolve_all_pending()` called from `daily_stats_job.py` after paper bet resolution
+- Queries `user_bets WHERE status='pending' AND game_date < today`
+- Gets actuals from `player_game_stats` via `team_game_stats` join
+- Resolution logic mirrors `PaperTrader.resolve_bets()`: over/under comparison, DNP void, push handling
+- Non-fatal: failures logged but don't fail the daily stats job
+
+### Dashboard Changes
+
+- **Dashboard page** — `useUserBets(selectedDate)` replaces localStorage `takenBets`. `useUserPreferences()` replaces localStorage `userState`.
+- **AnalysisModal** — `useUserPreferences()` replaces 6 localStorage reads for bankroll/kelly/state.
+- **History page** — Two tabs: "My Bets" (default, green) queries `user_bets`, "Model History" preserves existing paper_bets view.
+- **Performance page** — Three tabs: "My Bets" (green), "Props", "DFS". My Bets shows KPIs, bankroll chart, and stat breakdown from `user_bets`.
+
 ## Future Enhancements
 
 1. **Date range selector** — Allow selecting custom date ranges for history/performance
 2. **Vercel Analytics** — Add `@vercel/analytics` for page view tracking
 3. **Error monitoring** — Add Sentry for error tracking
 4. **Health check endpoint** — `/api/health` for uptime monitoring
+5. **Stake calculation in useUserBets** — Use Kelly from preferences to auto-calculate stake on bet placement

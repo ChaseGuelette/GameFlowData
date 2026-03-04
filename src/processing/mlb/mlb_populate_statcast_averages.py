@@ -103,7 +103,8 @@ STATCAST_PITCH_STD_STATS = ["avg_exit_velocity_against", "xera", "whiff_pct", "a
 def _get_seasons(engine, table: str) -> list[int]:
     """Return sorted list of distinct seasons in a statcast table."""
     query = f"SELECT DISTINCT EXTRACT(YEAR FROM game_date)::int AS season FROM {table} ORDER BY season"
-    df = pd.read_sql(query, engine)
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn)
     return df["season"].tolist()
 
 
@@ -129,7 +130,8 @@ def fetch_statcast_batting(engine, season: int | None = None) -> pd.DataFrame:
     chunks = []
     for s in seasons:
         query = base + f" AND EXTRACT(YEAR FROM game_date) = {int(s)} ORDER BY player_id, game_date"
-        df_s = pd.read_sql(query, engine)
+        with engine.connect() as conn:
+            df_s = pd.read_sql(query, conn)
         logger.info(f"  Season {s}: {len(df_s):,} rows")
         chunks.append(df_s)
 
@@ -162,7 +164,8 @@ def fetch_statcast_pitching(engine, season: int | None = None) -> pd.DataFrame:
     chunks = []
     for s in seasons:
         query = base + f" AND EXTRACT(YEAR FROM game_date) = {int(s)} ORDER BY player_id, game_date"
-        df_s = pd.read_sql(query, engine)
+        with engine.connect() as conn:
+            df_s = pd.read_sql(query, conn)
         logger.info(f"  Season {s}: {len(df_s):,} rows")
         chunks.append(df_s)
 

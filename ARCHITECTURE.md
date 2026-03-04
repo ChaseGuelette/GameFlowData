@@ -589,6 +589,9 @@ dashboard/
 │   │   └── shared/             # PlayerAvatar, Badge, BetSourceFilter components
 │   ├── lib/
 │   │   ├── supabase/           # Client, server, and middleware helpers
+│   │   ├── hooks/              # Custom React hooks
+│   │   │   ├── useUserBets.ts  # Cross-device bet tracking (optimistic UI + Supabase sync)
+│   │   │   └── useUserPreferences.ts # Cross-device preferences (localStorage cache + DB sync)
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
 │   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV, devigging, market edge calculations
 │   │   ├── insights.ts         # Template-based insight generator
@@ -620,11 +623,12 @@ dashboard/
   - Sportsbook line shopping with actual edge calculations
   - Kelly bet sizing calculator with bankroll input and fraction selection
   - Model probabilities, market implied probabilities, and edge breakdown
-- **State Selector:** Dropdown filter persisted to localStorage (`user_state`). Filters AnalysisModal sportsbook lines to only show bookmakers legal in the selected state. Offshore books (Pinnacle, Novig, ProphetX, Bovada) excluded from all states. Mapping in `sportsbook-availability.ts` covers ~26 legal sports betting states.
+- **State Selector:** Dropdown filter synced cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Filters AnalysisModal sportsbook lines to only show bookmakers legal in the selected state. Offshore books (Pinnacle, Novig, ProphetX, Bovada) excluded from all states. Mapping in `sportsbook-availability.ts` covers ~26 legal sports betting states.
 - **Line Shopping:** Shows all available bookmaker lines for each prop (filtered by state if set). For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line. Lines are clickable — selecting a line recalculates the bet sizing section using that line's odds and model probability. Defaults to the best-edge line.
-- **Kelly Sizing:** Bankroll persisted to localStorage. Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
-- **History View (`/history`):** Shows past betting results with bet source filter (Model Picks/All Bets), status filters (All/Won/Lost/Push), summary stats bar, and individual bet cards with actual vs line comparison. Model Picks filter shows only bets with edge ≥9% (matching production model configuration). Displays bookmaker badge on each bet card showing which sportsbook had the sharpest line.
-- **Performance View (`/performance`):** Two tabs — **Props** (default) and **DFS**. Props tab: KPI cards (bankroll, P&L, ROI, win rate), bankroll over time chart (Recharts AreaChart), and performance breakdown by stat type. Includes bet source filter to view Model Picks performance separately from all bets. DFS tab: KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table showing per-type W/L/P stats with average edge.
+- **Kelly Sizing:** Bankroll persisted cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
+- **User Bet Tracking:** Clicking the green checkmark on a PropCard records the bet in `user_bets` table with full context (direction, odds, book, model probability, edge). Syncs across devices via `useUserBets` hook with optimistic UI updates (instant toggle, async DB write, rollback on error). Bets auto-resolve against actual game results via `UserBetResolver` in the daily stats job.
+- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Won/Lost/Push), summary stats bar, and individual bet cards.
+- **Performance View (`/performance`):** Three tabs — **My Bets**, **Props**, and **DFS**. My Bets tab: personal KPI cards (bankroll, P&L, ROI, win rate), bankroll chart from cumulative user bet P&L, and stat breakdown. Props tab: model paper trading KPIs with bet source filter (Model Picks/All Bets). DFS tab: KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
 - **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
@@ -645,6 +649,8 @@ dashboard/
 - `raw_player_props_combined` table — bookmaker lines for line shopping
 - `paper_bets` table — individual bet records with status and P&L
 - `paper_trading_daily_log` table — daily aggregated stats, bankroll tracking
+- `user_bets` table — user-placed bets from dashboard checkmark (RLS-filtered by user)
+- `user_profiles` table — per-user preferences: state, bankroll, kelly settings (RLS-filtered)
 - `player_stats_latest` view — Data Vault player tab (rolling averages + advanced stats)
 - `team_stats_latest` view — Data Vault team tab (rolling team averages)
 - `defense_by_position_latest` view — Data Vault defense tab (defense-vs-position stats)
@@ -663,6 +669,7 @@ cd dashboard && npm run lint   # ESLint check
 | Module | Purpose |
 |--------|---------|
 | `paper_trader.py` | Core `PaperTrader` class — bet selection (with live game filter), Kelly sizing, outcome resolution, daily log updates |
+| `user_bet_resolver.py` | `UserBetResolver` — resolves user-placed bets (from dashboard checkmark) against actual game stats. Mirrors `PaperTrader.resolve_bets()` logic for `user_bets` table. Called from `daily_stats_job.py` after paper bet resolution. |
 | `place_bets.py` | CLI to place paper bets from daily predictions |
 | `resolve_bets.py` | CLI to resolve bets using actual game results |
 | `audit_and_resolve.py` | Diagnostic script — audits bet status by date, finds missed bets, backfills, and resolves |
@@ -680,6 +687,8 @@ cd dashboard && npm run lint   # ESLint check
 2. Daily Stats Job (9:00 AM ET, next day):
    daily_stats_job.py → stats scraped → PaperTrader.resolve_all_pending()
    └── Reads player_game_stats → Compares to lines → Updates paper_bets & daily_log
+   Then: UserBetResolver.resolve_all_pending()
+   └── Same logic for user_bets table (dashboard checkmark bets)
 ```
 
 **Manual CLI (ad-hoc operations):**
@@ -868,6 +877,10 @@ DISCORD_CHANNEL_PERFORMANCE=...
 ### Paper Trading (Model-Based)
 - `paper_bets`: Individual paper bet records with full context (odds, edge, stake, status, P&L). Unique on `(game_date, player_id, stat_type, bet_direction)`.
 - `paper_trading_daily_log`: Daily aggregated P&L tracking. Unique on `game_date`. Tracks wins/losses, total staked, ROI, cumulative P&L, and running bankroll.
+
+### User Bet Tracking (Cross-Device)
+- `user_profiles`: Per-user preferences (state, bankroll, kelly_fraction, use_custom_kelly). PK on `user_id` (FK to `auth.users`). RLS: users access only their own row. `updated_at` auto-trigger.
+- `user_bets`: User-placed bets from dashboard checkmark. Unique on `(user_id, game_date, player_id, stat_type)`. Tracks prediction context (direction, odds, book, model_prob, edge), resolution status (pending/won/lost/push/cancelled), actual_value, and P&L. RLS: users access only their own rows. Resolved by `UserBetResolver` in `daily_stats_job.py`.
 
 ### DFS Paper Trading (Market-Edge)
 - `dfs_paper_entries`: Multi-leg DFS entries (slips). One row per slip type per day. Unique on `(entry_date, slip_type)`. Tracks legs won/lost/push/cancelled, payout multiplier, P&L. Supports 4 slip types: ud_3_standard, ud_5_standard, pp_5_flex, pp_6_flex.

@@ -11,6 +11,7 @@ import { formatProb } from '@/lib/utils'
 import { generateInsights, type Insight } from '@/lib/insights'
 import { getAllowedBookmakers } from '@/lib/sportsbook-availability'
 import { estimateUnderProb, americanToImpliedProb, formatBookmaker } from '@/lib/dfs-utils'
+import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 
 interface AnalysisModalProps {
   prediction: Prediction
@@ -69,68 +70,45 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
   const [loading, setLoading] = useState(true)
   const [linesLoading, setLinesLoading] = useState(true)
 
-  // Read user's state filter (set on dashboard page, read-only here)
-  const [userState] = useState<string>(() => {
-    if (typeof window === 'undefined') return ''
-    return localStorage.getItem('user_state') || ''
-  })
+  // Cross-device synced preferences
+  const { prefs, updatePref } = useUserPreferences()
+  const userState = prefs.userState
+  const bankroll = prefs.bankroll
+  const kellyFraction = prefs.kellyFraction
+  const useCustomKelly = prefs.useCustomKelly
 
-  // Bankroll and Kelly settings (persisted to localStorage) - use lazy initialization
-  const [bankroll, setBankroll] = useState<number>(() => {
-    if (typeof window === 'undefined') return 1000
-    const saved = localStorage.getItem('betting_bankroll')
-    return saved ? parseFloat(saved) : 1000
-  })
-  const [bankrollInput, setBankrollInput] = useState<string>(() => {
-    if (typeof window === 'undefined') return '1000'
-    const saved = localStorage.getItem('betting_bankroll')
-    return saved || '1000'
-  })
-  const [kellyFraction, setKellyFraction] = useState<number>(() => {
-    if (typeof window === 'undefined') return 0.25
-    const saved = localStorage.getItem('betting_kelly_fraction')
-    return saved ? parseFloat(saved) : 0.25
-  })
-  const [useCustomKelly, setUseCustomKelly] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return localStorage.getItem('betting_use_custom_kelly') === 'true'
-  })
-  const [customKellyInput, setCustomKellyInput] = useState<string>(() => {
-    if (typeof window === 'undefined') return '0.25'
-    const saved = localStorage.getItem('betting_kelly_fraction')
-    return saved || '0.25'
-  })
+  // Local input state for controlled text fields
+  const [bankrollInput, setBankrollInput] = useState<string>(bankroll.toString())
+  const [customKellyInput, setCustomKellyInput] = useState<string>(kellyFraction.toString())
 
-  // Save bankroll to localStorage when changed
+  // Sync input fields when prefs load from DB
+  useEffect(() => {
+    setBankrollInput(prefs.bankroll.toString())
+    setCustomKellyInput(prefs.kellyFraction.toString())
+  }, [prefs.bankroll, prefs.kellyFraction])
+
   const handleBankrollChange = (value: string) => {
     setBankrollInput(value)
     const num = parseFloat(value) || 0
-    setBankroll(num)
-    localStorage.setItem('betting_bankroll', num.toString())
+    updatePref('bankroll', num)
   }
 
-  // Save Kelly fraction to localStorage when changed (preset)
   const handleKellyChange = (value: string) => {
     const num = parseFloat(value)
-    setKellyFraction(num)
     setCustomKellyInput(num.toString())
-    localStorage.setItem('betting_kelly_fraction', num.toString())
+    updatePref('kellyFraction', num)
   }
 
-  // Save custom Kelly fraction
   const handleCustomKellyChange = (value: string) => {
     setCustomKellyInput(value)
     const num = parseFloat(value)
     if (!isNaN(num) && num >= 0 && num <= 1) {
-      setKellyFraction(num)
-      localStorage.setItem('betting_kelly_fraction', num.toString())
+      updatePref('kellyFraction', num)
     }
   }
 
-  // Toggle custom Kelly mode
   const handleKellyToggle = (useCustom: boolean) => {
-    setUseCustomKelly(useCustom)
-    localStorage.setItem('betting_use_custom_kelly', useCustom.toString())
+    updatePref('useCustomKelly', useCustom)
   }
 
   useEffect(() => {

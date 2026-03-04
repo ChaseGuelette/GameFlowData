@@ -32,7 +32,8 @@ The daily pipeline is split into four jobs based on execution frequency:
            ├─ update_league_position_averages.py               [5m timeout, no retries]
            ├─ populate_average_stats_incremental.py            [20m timeout, 2 retries]
            ├─ backfill_opponent_allowed_incremental.py         [15m timeout, 2 retries]
-           └─ resolve ALL pending paper bets
+           ├─ resolve ALL pending paper bets
+           └─ resolve ALL pending user bets (from dashboard checkmark)
 
 9:30 AM    daily_stats_retry (auto-retry if 9 AM failed)
            └─ Checks JOB_STATUS["daily_stats_job.py"], re-runs if not "success"

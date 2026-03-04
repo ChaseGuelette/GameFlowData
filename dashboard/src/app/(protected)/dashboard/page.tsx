@@ -13,6 +13,8 @@ import { getToday, formatDate, calculateBLConfidence, blendProbability, isGameDo
 import { TEAM_ABBREV, TEAM_NAME_TO_ABBREV } from '@/lib/constants'
 import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS } from '@/lib/sportsbook-availability'
 import { STAT_TO_MARKET } from '@/types/dfs'
+import { useUserBets } from '@/lib/hooks/useUserBets'
+import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 
 export default function DashboardPage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
@@ -26,21 +28,14 @@ export default function DashboardPage() {
   const [blTau, setBlTau] = useState<number | null>(null)  // null = no BL blending
   const [showModelPicks, setShowModelPicks] = useState<boolean>(false)  // Model Picks toggle
   const [showLive, setShowLive] = useState<boolean>(false)  // Live betting toggle
-  const [userState, setUserState] = useState<string>(() => {
-    if (typeof window === 'undefined') return ''
-    return localStorage.getItem('user_state') || ''
-  })
+
+  // Cross-device synced preferences & bets
+  const { prefs, updatePref } = useUserPreferences()
+  const userState = prefs.userState
+  const { takenBets, toggleBet: handleToggleTaken } = useUserBets(selectedDate)
+
   const [bookFilter, setBookFilter] = useState<string>('')
   const [bookAvailability, setBookAvailability] = useState<Set<string> | null>(null)
-
-  // Taken bets state (persisted per date in localStorage)
-  const [takenBets, setTakenBets] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set()
-    try {
-      const stored = localStorage.getItem(`taken_bets_${selectedDate}`)
-      return stored ? new Set(JSON.parse(stored)) : new Set()
-    } catch { return new Set() }
-  })
 
   // Slate builder state
   const [slateMode, setSlateMode] = useState<boolean>(false)
@@ -70,26 +65,6 @@ export default function DashboardPage() {
       setEdgeThreshold(0.03)
       setBlTau(null)
     }
-  }
-
-  // Reload taken bets when date changes
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(`taken_bets_${selectedDate}`)
-      setTakenBets(stored ? new Set(JSON.parse(stored)) : new Set())
-    } catch { setTakenBets(new Set()) }
-  }, [selectedDate])
-
-  // Toggle taken bet
-  const handleToggleTaken = (prediction: Prediction) => {
-    const key = `${prediction.player_id}-${prediction.stat}`
-    setTakenBets(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      localStorage.setItem(`taken_bets_${selectedDate}`, JSON.stringify([...next]))
-      return next
-    })
   }
 
   // Toggle pick selection for slate
@@ -462,10 +437,7 @@ export default function DashboardPage() {
           {/* State Selector */}
           <select
             value={userState}
-            onChange={(e) => {
-              setUserState(e.target.value)
-              localStorage.setItem('user_state', e.target.value)
-            }}
+            onChange={(e) => updatePref('userState', e.target.value)}
             className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
           >
             {US_STATES.map((s) => (
