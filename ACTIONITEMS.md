@@ -1,5 +1,69 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-03 — Session 63)
+
+### What We Did
+
+**NCAAB Game-Level Prediction Pipeline — Full Stack Implementation (~20 new files)**
+
+Built the complete NCAA Men's Basketball prediction pipeline from scratch: database migrations, scrapers, processing, feature store, XGBoost models, backtester, orchestration, and tests.
+
+**New Files (20):**
+- `database/migrations/009_ncaab_foundation.sql` — Core tables (teams, schedule, box scores, game lines)
+- `database/migrations/010_ncaab_barttorvik.sql` — Barttorvik ratings snapshot table
+- `database/migrations/011_ncaab_averages.sql` — Team rolling averages table
+- `src/scrapers/ncaab/ncaab_game_lines_scraper.py` — Odds API (sport key `basketball_ncaab`)
+- `src/scrapers/ncaab/ncaab_cbbpy_scraper.py` — ESPN box scores via CBBpy
+- `src/scrapers/ncaab/ncaab_barttorvik_scraper.py` — Free efficiency ratings CSV download
+- `src/processing/ncaab/ncaab_config.py` — Rolling windows, stat lists, team aliases
+- `src/processing/ncaab/ncaab_linker.py` — Game-level linking (Odds API → schedule)
+- `src/processing/ncaab/ncaab_populate_averages.py` — Shift(1) rolling team averages
+- `src/processing/ncaab/ncaab_barttorvik_linker.py` — Link Barttorvik names to teams
+- `src/models/ncaab_feature_store.py` — ~30 game-level matchup features (team differentials)
+- `src/models/ncaab_trainer.py` — XGBoost spread + total quantile models
+- `src/models/ncaab_backtest.py` — Time-travel backtester (ATS, O/U tracking)
+- `src/orchestration/ncaab_daily_stats_job.py` — Daily pipeline (CBBpy → averages → Barttorvik)
+- `src/orchestration/ncaab_lines_job.py` — Game lines scrape + linker
+- 4 test files (34 tests, all passing)
+
+**Modified:** `src/orchestration/scheduler.py` (3 new NCAAB cron jobs with `month="11-12,1-4"` guard)
+
+**Key Design Decisions:**
+- Game-level only (no player props for college sports — regulatory)
+- Features are team differentials (home - away) for efficiency, box scores, pace, context
+- Barttorvik for adjusted efficiency (free alternative to KenPom)
+- Point-in-time Barttorvik via LATERAL JOIN (`snapshot_date < game_date`)
+- Reuses existing `QuantileModelSuite` — XGBoost quantile regression (Q10-Q90)
+- Moneyline derived from spread distribution (fit normal to Q25/Q50/Q75)
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Monitor first few 5-min cycles** — verify fuzzy cache creates on first run, hits on subsequent runs
+3. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+4. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id, 500K missing team_id, 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **Train pitcher K model on 2024 data** — run end-to-end training pipeline, validate calibration, evaluate backtesting performance
+11. **Build MLB daily runner** — inference pipeline mirroring NBA `daily_runner.py` for production predictions
+12. **Build MLB backtesting harness** — historical replay for pitcher K predictions
+13. **Stripe integration** — subscribe page, customer portal, webhook
+14. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+15. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+16. **Apply NCAAB migrations 009-011 to Supabase** — create ncaab_teams, ncaab_game_schedule, ncaab_team_box_scores, ncaab_raw_game_lines, ncaab_barttorvik_ratings, ncaab_team_rolling_averages tables
+17. **Fix ncaab_teams UNIQUE constraint** — migration 009 has UNIQUE on espn_team_id but CBBpy scraper uses ON CONFLICT (team_name). Need to add UNIQUE(team_name) to migration.
+18. **Add `cbbpy` to requirements.txt** — new dependency for NCAAB ESPN data scraping
+19. **Populate NCAAB team aliases** — `ODDS_API_TEAM_ALIASES` and `BARTTORVIK_TO_ESPN` dicts need expansion after first scrape
+20. **Verify CBBpy import path** — `cbbpy.mens_scraper` needs runtime verification
+21. **Backfill NCAAB historical data** — CBBpy box scores (2022-2025), Barttorvik snapshots, Odds API historical game lines
+22. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
+23. **Build NCAAB dashboard section** — if models show promise
+
+---
+
 ## Session Summary (2026-03-03 — Session 62)
 
 ### What We Did

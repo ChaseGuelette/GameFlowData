@@ -25,7 +25,7 @@ GameFlowData is a data-intensive application that ingests raw NBA game statistic
 | **ML Core** | XGBoost, Scikit-Learn, NumPy, SciPy | Quantile regression, isotonic calibration, statistics |
 | **HPO** | Optuna | Bayesian hyperparameter optimization |
 | **API** | FastAPI, Uvicorn, Pydantic | Web framework (future live pipeline) |
-| **Data Sources** | nba_api, The Odds API, ESPN, pybaseball | NBA stats, sportsbook odds, injury reports, MLB Statcast/FanGraphs |
+| **Data Sources** | nba_api, The Odds API, ESPN, pybaseball, CBBpy, Barttorvik | NBA stats, sportsbook odds, injury reports, MLB Statcast/FanGraphs, NCAAB box scores/efficiency |
 | **Pipeline** | Custom Python orchestration | Training, inference, and backfill jobs |
 | **Visualization** | Plotly | Backtest equity curves and diagnostic plots |
 | **Image Gen** | Pillow | Social media pick card rendering |
@@ -135,6 +135,19 @@ The system ingests data from two distinct worlds that don't natively share ident
 - **pybaseball** — Free Python library wrapping Baseball Savant (Statcast pitch-level data) and FanGraphs (season-level advanced stats). Used for quality-of-contact metrics critical for MLB modeling.
 - **The Odds API** — Same API as NBA, sport key `baseball_mlb`. Player props + game lines.
 
+#### NCAAB Scrapers (`src/scrapers/ncaab/`)
+
+| Module | Purpose |
+|--------|---------|
+| `ncaab_game_lines_scraper.py` | Live/historical game lines (spreads, totals, moneylines) from The Odds API (`basketball_ncaab`). Direct port of `mlb_daily_game_lines_scraper.py`. |
+| `ncaab_cbbpy_scraper.py` | ESPN box scores and schedules via CBBpy package. Aggregates player-level data to team level. Computes possessions (`FGA - OREB + TOV + 0.44 * FTA`) and Four Factors inline. |
+| `ncaab_barttorvik_scraper.py` | Bulk CSV download of adjusted efficiency ratings from barttorvik.com. Flexible column mapping for year-to-year header variations. Stores point-in-time snapshots. |
+
+**Data Sources:**
+- **CBBpy** — Python package wrapping ESPN D1 basketball data. Free, no auth. Returns player box scores that are aggregated to team-level stats.
+- **Barttorvik/T-Rank** — Free adjusted efficiency metrics (AdjOE, AdjDE, AdjT, Barthag, Four Factors). Bulk CSV at `barttorvik.com/{season}_team_results.csv`. No API key, updates every 15 min in-season.
+- **The Odds API** — Sport key `basketball_ncaab`. Game lines only (no player props for college sports — regulatory).
+
 #### The NBA Linker (`src/processing/nba_linker_local.py`)
 
 Serves as the bridge between NBA and sportsbook data:
@@ -176,6 +189,30 @@ Serves as the bridge between NBA and sportsbook data:
 | `mlb_populate_averages_incremental.py` | Daily incremental — processes only players active on target date. Per-player rolling calculation, UPSERT via `ON CONFLICT DO UPDATE`. |
 | `mlb_populate_statcast_averages.py` | Statcast rolling averages for pitching (contact quality, velo/spin, plate discipline, pitch mix, batted ball distribution). Windows: L3/L5/SZN. PK: `(player_id, game_date)`. |
 | `mlb_matchup_features.py` | Opposing team batting tendencies for pitcher K predictions. Computes team-level L10 strikeout rate and batting average via window functions. Also provides `get_pitcher_handedness()` and `compute_matchup_features_bulk()` for training efficiency. |
+
+#### NCAAB Processing (`src/processing/ncaab/`)
+
+| Module | Purpose |
+|--------|---------|
+| `ncaab_config.py` | Shared constants: rolling windows (`l5/l10/l20/szn`), stat lists (`TEAM_BOX_STATS`, `TEAM_OPP_STATS`), team alias dicts (`BARTTORVIK_TO_ESPN`, `ODDS_API_TEAM_ALIASES`). |
+| `ncaab_linker.py` | Game-level linking of Odds API game lines to `ncaab_game_schedule`. Normalizes team names via alias dict + fuzzy matching (`SequenceMatcher >= 0.72`). Simpler than MLB/NBA linkers — no player matching needed. |
+| `ncaab_populate_averages.py` | Shift(1) rolling team averages at L5/L10/L20/SZN windows. Box score stats + Four Factors + opponent stats. Computes rest_days, games_last_7d. Full backfill (TRUNCATE) or incremental (DELETE stale + re-insert). |
+| `ncaab_barttorvik_linker.py` | Links Barttorvik team_name to `ncaab_teams.team_id`. 3-step: manual mapping → direct name match → fuzzy (SequenceMatcher >= 0.72). |
+
+#### NCAAB Models (`src/models/`)
+
+| Module | Purpose |
+|--------|---------|
+| `ncaab_feature_store.py` | Game-level matchup features (~30 features). LATERAL JOIN SQL pattern for point-in-time Barttorvik ratings (`snapshot_date < game_date`). Features are team differentials (home - away). |
+| `ncaab_trainer.py` | Two XGBoost quantile models (spread + total). Reuses `QuantileModelSuite` from `quantile_trainer.py`. Config: max_depth=4, 800 estimators, lr=0.04. Derives moneyline from spread distribution. |
+| `ncaab_backtest.py` | Time-travel backtester. Iterates dates, generates predictions using only pre-game data. Tracks ATS record, O/U record, spread/total MAE, edge metrics. |
+
+**Key Differences from NBA/MLB Pipeline:**
+- **Game-level, not player-level** — Each training row is one game with home team as reference. Features are team differentials (home - away).
+- **No minutes decomposition** — Targets are `home_margin` and `total_score` directly.
+- **Barttorvik for adjusted efficiency** — Free alternative to KenPom. Point-in-time via `snapshot_date < game_date` prevents lookahead bias.
+- **Neutral site handling** — `is_neutral_site` flag zeroes out home court advantage (~3.5 pts in NCAAB). Critical for March Madness games.
+- **363 D1 teams** — Much larger team namespace than NBA (30) or MLB (30). Team alias dictionaries are the biggest manual effort.
 
 #### MLB Models (`src/models/mlb/`)
 
@@ -478,6 +515,9 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 - **Automatic retry (2026-03-02):** 9:30 AM ET retry job (`run_daily_stats_retry()`) checks if the 9 AM daily stats succeeded — if not, re-runs it. Gives the system a second chance before inference at 12:15 PM.
 - **Dependency gate (2026-03-02):** `run_inference()` checks `check_dependency("daily_stats_job.py", max_age_hours=8)`. If stale, still runs inference but passes `--stale-warning` flag and sends Discord alert about stale rolling averages.
 - **5-minute refresh cadence (2026-03-03):** Props-only and edge refresh increased from every 10 min to every 5 min (~156 runs/day each). Full scrapes at noon/4pm use `--parallel` for concurrent props + injury paths. Enabled by fuzzy cache optimization reducing linker overhead to <1s.
+- **NCAAB jobs (2026-03-03):** Three new cron jobs with `month="11-12,1-4"` guard (college basketball season):
+  - `ncaab_daily_stats_job.py` — 14:05 UTC / 9:05 AM ET: CBBpy scrape → rolling averages → Barttorvik download → Barttorvik linker
+  - `ncaab_lines_job.py` — 17:30 UTC (12:30 PM ET) and 21:30 UTC (4:30 PM ET): Game lines scrape → linker
 - **Silent alerts (2026-02-28):** The every-5-min props and edge refresh jobs use `silent_on_success=True` — Discord alerts only sent on failure to avoid notification spam. Full scrape and inference jobs still alert on success.
 - **Discord job status alerts (2026-02-15):** Scheduler sends success/failure notifications to `#alerts` channel after each job completes. Includes job name, duration, metrics (when available), and error details for failures. Non-fatal — alert failures don't affect job execution.
 - **Subprocess Python path (2026-02-18):** All orchestration job scripts use `sys.executable` instead of hardcoded `python` when spawning subprocesses, ensuring the venv Python (with all installed packages) is used consistently.
@@ -813,6 +853,14 @@ DISCORD_CHANNEL_PERFORMANCE=...
 - `mlb_raw_player_props`: MLB player prop lines from The Odds API. Linked to entities via `mlb_linker.py`.
 - `mlb_raw_game_lines`: MLB game lines (moneyline, spreads, totals).
 
+### NCAAB Data
+- `ncaab_teams`: 363 D1 programs (team_id SERIAL, espn_team_id UNIQUE, team_name, abbreviation, conference).
+- `ncaab_game_schedule`: One row per game (game_id BIGINT PK from ESPN, game_date, home/away_team_id, scores, neutral_site, season_type). Supports regular season, conference tournament, and NCAA tournament.
+- `ncaab_team_box_scores`: Team-level aggregated stats per game (game_id + team_id UNIQUE). Raw box score stats + computed possessions + Four Factors (eFG%, TOV%, ORB%, FT Rate) + opponent Four Factors.
+- `ncaab_raw_game_lines`: Odds API game lines ingest. Same schema as `mlb_raw_game_lines` with linked columns (game_id, home_team_id, away_team_id).
+- `ncaab_barttorvik_ratings`: Point-in-time efficiency snapshots (UNIQUE on team_name, season, snapshot_date). AdjOE, AdjDE, AdjEM, AdjTempo, Barthag, Four Factors (offense + defense), ranks.
+- `ncaab_team_rolling_averages`: Pre-game team features (UNIQUE on team_id, game_id). Rolling averages at L5/L10/L20/SZN windows for all box score stats and Four Factors. Includes rest_days, games_last_7d.
+
 ### Predictions
 - `daily_predictions`: Stored daily prediction quantiles, edges, and implied probabilities. Unique on `(prediction_date, player_id, game_id, stat)`. Supports upsert for re-runs.
 - `daily_prediction_samples`: Gzip-compressed MC sample arrays (10K float64 values per prediction, ~20-40KB). Unique on `(prediction_date, player_id, game_id, stat)`.
@@ -943,6 +991,34 @@ python -m src.scrapers.mlb.mlb_fangraphs_scraper --all-seasons
 # Props & game lines (The Odds API)
 python -m src.scrapers.mlb.mlb_player_props_scraper --start-date 2024-04-01 --end-date 2024-09-30
 python -m src.scrapers.mlb.mlb_daily_game_lines_scraper --live
+```
+
+### NCAAB Scrapers
+```bash
+# Game lines (The Odds API)
+python -m src.scrapers.ncaab.ncaab_game_lines_scraper --live
+python -m src.scrapers.ncaab.ncaab_game_lines_scraper --date 2025-01-15
+
+# Box scores (CBBpy / ESPN)
+python -m src.scrapers.ncaab.ncaab_cbbpy_scraper --season 2025
+
+# Barttorvik ratings
+python -m src.scrapers.ncaab.ncaab_barttorvik_scraper --season 2025
+python -m src.scrapers.ncaab.ncaab_barttorvik_scraper --backfill 2022 2023 2024 2025
+```
+
+### NCAAB Processing
+```bash
+python -m src.processing.ncaab.ncaab_linker                           # Link game lines to schedule
+python -m src.processing.ncaab.ncaab_populate_averages --season 2025  # Full backfill
+python -m src.processing.ncaab.ncaab_populate_averages --incremental  # Daily update
+python -m src.processing.ncaab.ncaab_barttorvik_linker                # Link Barttorvik names to teams
+```
+
+### NCAAB Orchestration
+```bash
+python src/orchestration/ncaab_daily_stats_job.py [--dry-run]         # 9:05 AM ET (Nov-Apr)
+python src/orchestration/ncaab_lines_job.py --live [--dry-run]        # 12:30/4:30 PM ET (Nov-Apr)
 ```
 
 ### Processing
@@ -1084,7 +1160,7 @@ python src/paper_trading/resolve_bets.py --date 2026-02-04 --dry-run
 
 **Framework:** Pytest with pytest-cov (60% coverage target).
 
-**Test Organization:** 34 test modules in `tests/` mirroring `src/` structure. Each source module has a corresponding `test_*.py`.
+**Test Organization:** 38 test modules in `tests/` mirroring `src/` structure. Each source module has a corresponding `test_*.py`. Includes 4 NCAAB test modules (game lines scraper, barttorvik scraper, linker, feature store).
 
 **Test Categories (markers):**
 - `unit` — Isolated logic tests with mocks.

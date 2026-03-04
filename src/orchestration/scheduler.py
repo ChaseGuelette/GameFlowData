@@ -63,6 +63,8 @@ JOB_NAMES = {
     "inference_job.py": "Inference",
     "edge_refresh_job.py": "Edge Refresh",
     "test_job.py": "System Test",
+    "ncaab_daily_stats_job.py": "NCAAB Daily Stats",
+    "ncaab_lines_job.py": "NCAAB Lines",
 }
 
 # In-memory job status tracking for dependency checks.
@@ -472,6 +474,16 @@ def run_edge_refresh_silent():
     run_job("edge_refresh_job.py", silent_on_success=True)
 
 
+def run_ncaab_daily_stats():
+    """NCAAB daily stats: CBBpy scrape + averages + Barttorvik. Nov-Apr only."""
+    run_job("ncaab_daily_stats_job.py")
+
+
+def run_ncaab_lines():
+    """NCAAB game lines scrape + linker. Nov-Apr only."""
+    run_job("ncaab_lines_job.py", extra_args="--live")
+
+
 def main():
     import argparse
 
@@ -568,6 +580,32 @@ def main():
         CronTrigger(hour=21, minute=15),
         id="inference_4pm",
         name="Inference (4:15 PM ET)",
+    )
+
+    # --- NCAAB: Nov-Apr season only ---
+
+    # 9:05 AM ET (14:05 UTC) - NCAAB daily stats (5 min after NBA)
+    scheduler.add_job(
+        run_ncaab_daily_stats,
+        CronTrigger(hour=14, minute=5, month="11-12,1-4"),
+        id="ncaab_daily_stats",
+        name="NCAAB Daily Stats (9:05 AM ET, Nov-Apr)",
+    )
+
+    # 12:30 PM ET (17:30 UTC) - NCAAB lines scrape
+    scheduler.add_job(
+        run_ncaab_lines,
+        CronTrigger(hour=17, minute=30, month="11-12,1-4"),
+        id="ncaab_lines_noon",
+        name="NCAAB Lines (12:30 PM ET, Nov-Apr)",
+    )
+
+    # 4:30 PM ET (21:30 UTC) - NCAAB lines scrape second window
+    scheduler.add_job(
+        run_ncaab_lines,
+        CronTrigger(hour=21, minute=30, month="11-12,1-4"),
+        id="ncaab_lines_4pm",
+        name="NCAAB Lines (4:30 PM ET, Nov-Apr)",
     )
 
     # Log scheduled jobs

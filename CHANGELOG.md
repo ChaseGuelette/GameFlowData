@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-03 Session 63] — NCAAB Game-Level Prediction Pipeline
+
+### Added
+
+- **`database/migrations/009_ncaab_foundation.sql`** — Core tables: `ncaab_teams` (363 D1 programs), `ncaab_game_schedule`, `ncaab_team_box_scores` (with Four Factors + possessions), `ncaab_raw_game_lines`.
+- **`database/migrations/010_ncaab_barttorvik.sql`** — `ncaab_barttorvik_ratings` table with UNIQUE(team_name, season, snapshot_date) for point-in-time efficiency snapshots.
+- **`database/migrations/011_ncaab_averages.sql`** — `ncaab_team_rolling_averages` table with L5/L10/L20/SZN windows.
+- **`src/scrapers/ncaab/ncaab_game_lines_scraper.py`** — Odds API port for `basketball_ncaab`. Snapshot hours: 18, 21, 0 UTC.
+- **`src/scrapers/ncaab/ncaab_cbbpy_scraper.py`** — ESPN box scores via CBBpy. Aggregates player stats to team level, computes possessions and Four Factors.
+- **`src/scrapers/ncaab/ncaab_barttorvik_scraper.py`** — Bulk CSV download from barttorvik.com with flexible column mapping.
+- **`src/processing/ncaab/ncaab_config.py`** — Rolling windows, 16 box score stats, 4 opponent stats, team alias dicts.
+- **`src/processing/ncaab/ncaab_linker.py`** — Game-level linking with fuzzy matching (SequenceMatcher >= 0.72).
+- **`src/processing/ncaab/ncaab_populate_averages.py`** — Shift(1) rolling team averages with rest_days and games_last_7d.
+- **`src/processing/ncaab/ncaab_barttorvik_linker.py`** — 3-step name matching (manual → exact → fuzzy).
+- **`src/models/ncaab_feature_store.py`** — ~30 matchup features. LATERAL JOIN for point-in-time Barttorvik. Team differentials (home - away).
+- **`src/models/ncaab_trainer.py`** — Two XGBoost quantile models (spread + total). Reuses `QuantileModelSuite`. Derives moneyline from spread distribution.
+- **`src/models/ncaab_backtest.py`** — Time-travel backtester tracking ATS record, O/U record, MAE, edge metrics.
+- **`src/orchestration/ncaab_daily_stats_job.py`** — Daily: CBBpy → averages → Barttorvik → linker.
+- **`src/orchestration/ncaab_lines_job.py`** — Game lines scrape + linker.
+- **`tests/test_ncaab_game_lines_scraper.py`** — 5 tests for game lines scraper (live/historical/empty responses, sport key, batch insert).
+- **`tests/test_ncaab_barttorvik_scraper.py`** — 6 tests for Barttorvik scraper (normalize, adj_em, four factors, dedup, fetch).
+- **`tests/test_ncaab_linker.py`** — 9 tests for linker (normalize, closest game, fuzzy match, batch).
+- **`tests/test_ncaab_feature_store.py`** — 10 tests for feature store (differentials, feature lists, no duplicates).
+
+### Changed
+
+- **`src/orchestration/scheduler.py`** — Added 3 NCAAB cron jobs with `month="11-12,1-4"` guard: daily stats (14:05 UTC), lines noon (17:30 UTC), lines afternoon (21:30 UTC).
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `database/migrations/009_ncaab_foundation.sql` | Created |
+| `database/migrations/010_ncaab_barttorvik.sql` | Created |
+| `database/migrations/011_ncaab_averages.sql` | Created |
+| `src/scrapers/ncaab/__init__.py` | Created |
+| `src/scrapers/ncaab/ncaab_game_lines_scraper.py` | Created |
+| `src/scrapers/ncaab/ncaab_cbbpy_scraper.py` | Created |
+| `src/scrapers/ncaab/ncaab_barttorvik_scraper.py` | Created |
+| `src/processing/ncaab/__init__.py` | Created |
+| `src/processing/ncaab/ncaab_config.py` | Created |
+| `src/processing/ncaab/ncaab_linker.py` | Created |
+| `src/processing/ncaab/ncaab_populate_averages.py` | Created |
+| `src/processing/ncaab/ncaab_barttorvik_linker.py` | Created |
+| `src/models/ncaab_feature_store.py` | Created |
+| `src/models/ncaab_trainer.py` | Created |
+| `src/models/ncaab_backtest.py` | Created |
+| `src/orchestration/ncaab_daily_stats_job.py` | Created |
+| `src/orchestration/ncaab_lines_job.py` | Created |
+| `src/orchestration/scheduler.py` | Modified — 3 NCAAB cron jobs |
+| `tests/test_ncaab_*.py` (4 files) | Created — 34 tests |
+| `ARCHITECTURE.md` | Updated — NCAAB sections |
+| `ACTIONITEMS.md` | Updated — Session 63 summary |
+| `CHANGELOG.md` | Updated — Session 63 entry |
+
+### Verified
+
+- 663 Python tests pass, 0 failures (34 new NCAAB + 629 existing)
+- Ruff: all checks passed
+- No regressions to existing NBA/MLB pipelines
+
+---
+
 ## [2026-03-03 Session 62] — MLB Model Architecture: Feature Store + Pitcher K Model
 
 ### Added
