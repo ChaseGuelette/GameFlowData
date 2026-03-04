@@ -1,5 +1,49 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-03 — Session 62)
+
+### What We Did
+
+**MLB Model Architecture — Feature Store + Pitcher K Quantile Model + Monte Carlo Sampler**
+
+Built the complete model layer for MLB pitcher strikeout predictions (6 new files, 0 existing files modified):
+
+**New Files:**
+- `src/models/mlb/__init__.py` — Package init
+- `src/models/mlb/mlb_stat_config.py` — MLB stat types and edge thresholds (quantile/negbin/binary, 8-10%)
+- `src/processing/mlb/mlb_matchup_features.py` — Opposing team batting tendencies (L10 K rate + batting avg) via window functions, bulk computation for training
+- `src/models/mlb/mlb_feature_store.py` — 28-feature pitcher K feature store with LATERAL JOIN SQL, training/inference/backtest modes, time-travel safe
+- `src/models/mlb/mlb_quantile_trainer.py` — `MLBPitcherKPipeline` wrapping `QuantileModelSuite`, direct SO prediction (no minutes decomposition)
+- `src/models/mlb/mlb_monte_carlo.py` — `MLBMonteCarloPredictor` with inverse CDF sampling, integer rounding, batch prediction, reuses `PropPrediction`
+
+**Key Design Decisions:**
+- No minutes-rate decomposition (MLB stats predicted directly)
+- No copula (single stat, no correlation to model)
+- Reuses QuantileModelSuite, QuantileModelConfig, PropPrediction from NBA code
+- Higher edge thresholds (8-10% vs NBA 5%) due to higher MLB prop juice
+- 28 features from 6 data sources (pitching avgs, Statcast, FanGraphs, park factors, opposing team batting, prop/game lines)
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Monitor first few 5-min cycles** — verify fuzzy cache creates on first run, hits on subsequent runs
+3. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+4. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id, 500K missing team_id, 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **~~MLB model architecture~~** ✅ — Feature store, quantile trainer, and MC sampler built (Session 62)
+11. **Train pitcher K model on 2024 data** — run end-to-end training pipeline, validate calibration, evaluate backtesting performance
+12. **Build MLB daily runner** — inference pipeline mirroring NBA `daily_runner.py` for production predictions
+13. **Build MLB backtesting harness** — historical replay for pitcher K predictions
+14. **Stripe integration** — subscribe page, customer portal, webhook
+15. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+16. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-03-03 — Session 61)
 
 ### What We Did

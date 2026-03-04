@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-03 Session 62] — MLB Model Architecture: Feature Store + Pitcher K Model
+
+### Added
+
+- **`src/models/mlb/mlb_stat_config.py`** — MLB stat configuration with model types (quantile, negbin, binary) and edge thresholds (8-10%, higher than NBA's 5% due to MLB prop juice).
+- **`src/processing/mlb/mlb_matchup_features.py`** — Opposing team batting tendencies for pitcher K predictions. `compute_matchup_features_bulk()` uses SQL window functions for training efficiency. `get_opposing_team_batting_stats()` for single-game inference. Team-level L10 K rate and batting average.
+- **`src/models/mlb/mlb_feature_store.py`** — Central 28-feature pitcher K feature store. LATERAL JOIN SQL pattern mirroring NBA `feature_store.py`. Data sources: pitching rolling averages, Statcast metrics (whiff%, CSW%, chase%, zone%, fastball velo), FanGraphs season stats (FIP, K%), park K factors, opposing team batting, game total lines, pitcher K prop lines, momentum trend. Methods: `get_training_dataset()`, `get_player_game_features()`, `get_features_for_date()`. Time-travel safe.
+- **`src/models/mlb/mlb_quantile_trainer.py`** — `MLBPitcherKPipeline` wrapping `QuantileModelSuite` for direct SO count prediction (no minutes decomposition). XGBoost quantile regression Q10-Q90. Save/load via joblib.
+- **`src/models/mlb/mlb_monte_carlo.py`** — `MLBMonteCarloPredictor` with inverse CDF sampling from quantile predictions. No copula (single stat). Integer rounding, floor at 0. Batch prediction support. Reuses `PropPrediction` dataclass from NBA `monte_carlo.py`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/models/mlb/__init__.py` | Created — package init |
+| `src/models/mlb/mlb_stat_config.py` | Created — stat configuration |
+| `src/processing/mlb/mlb_matchup_features.py` | Created — opposing team batting features |
+| `src/models/mlb/mlb_feature_store.py` | Created — 28-feature pitcher K feature store |
+| `src/models/mlb/mlb_quantile_trainer.py` | Created — quantile model pipeline |
+| `src/models/mlb/mlb_monte_carlo.py` | Created — Monte Carlo sampler |
+| `ARCHITECTURE.md` | Updated — added MLB Models section with module table and key differences |
+| `ACTIONITEMS.md` | Updated — Session 62 summary, marked MLB model architecture complete, added next steps |
+| `CHANGELOG.md` | Updated — Session 62 entry |
+| `docs/mlb_processing_pipeline_documentation.md` | Updated — added matchup features and model layer docs |
+
+### Verified
+
+- 629 Python tests pass, 0 failures
+- Ruff: 0 remaining issues
+- All imports resolve correctly
+- No existing files modified (pure additions)
+
+---
+
 ## [2026-03-03 Session 61] — MLB Linker Deep Debug: Team Alias Fix + Re-link Pass
 
 ### Fixed

@@ -174,6 +174,25 @@ Serves as the bridge between NBA and sportsbook data:
 | `mlb_linker_local.py` | Local CSV-based linker with checkpoint/resume. Downloads 6 tables to `mlb_linker_data/`, processes matching in pandas, uploads via chunked temp tables. 5 processing sub-stages: game_lines, props→games, props→players, props→teams, re-link (fixes wrong player_ids + team_id backfill from nearby games). Checkpoint file (`_checkpoint.json`) tracks per-stage and per-chunk progress for resume after interruption. Retry/backoff (20 attempts, 60s cap) survives laptop sleep. Reuses matching functions from `mlb_linker.py`. As of Session 61: 96.8% linking coverage (21.97M/22.71M rows). |
 | `mlb_populate_averages.py` | Full backfill of `mlb_player_average_batting` and `mlb_player_average_pitching`. Shift(1) rolling averages (no data leakage), rate stats from rolling sums (BA, OBP, SLG, OPS, ERA, WHIP, K/9, BB/9), std devs, context metrics (rest days, pitch count). |
 | `mlb_populate_averages_incremental.py` | Daily incremental — processes only players active on target date. Per-player rolling calculation, UPSERT via `ON CONFLICT DO UPDATE`. |
+| `mlb_populate_statcast_averages.py` | Statcast rolling averages for pitching (contact quality, velo/spin, plate discipline, pitch mix, batted ball distribution). Windows: L3/L5/SZN. PK: `(player_id, game_date)`. |
+| `mlb_matchup_features.py` | Opposing team batting tendencies for pitcher K predictions. Computes team-level L10 strikeout rate and batting average via window functions. Also provides `get_pitcher_handedness()` and `compute_matchup_features_bulk()` for training efficiency. |
+
+#### MLB Models (`src/models/mlb/`)
+
+MLB-specific modeling layer. Pitcher strikeouts first (semi-continuous, quantile regression). No minutes-rate decomposition — MLB stats predicted directly.
+
+| Module | Purpose |
+|--------|---------|
+| `mlb_stat_config.py` | Per-stat model type and edge threshold configuration. Quantile (pitcher K/outs, 8% edge), NegBin (batter counts, 10%), Binary (HR, 10%). Higher thresholds than NBA due to higher MLB prop juice. |
+| `mlb_feature_store.py` | Central feature engineering for pitcher K model. 28 features across 6 data sources (pitching rolling avgs, Statcast, FanGraphs, park factors, opposing team batting, prop/game lines). LATERAL JOIN SQL pattern mirroring NBA `feature_store.py`. Methods: `get_training_dataset()`, `get_player_game_features()`, `get_features_for_date()`. Time-travel safe (shift(1) averages, `<=` game_date). |
+| `mlb_quantile_trainer.py` | `MLBPitcherKPipeline` — wraps `QuantileModelSuite` from NBA code. Trains XGBoost quantile regression (Q10-Q90) directly on SO counts. No minutes model needed. Config: 1000 estimators, depth 5, lr 0.03. Save/load via joblib. |
+| `mlb_monte_carlo.py` | `MLBMonteCarloPredictor` — inverse CDF sampling from quantile predictions. No copula (single stat). Integer rounding, floor at 0. Batch prediction for efficiency. Reuses `PropPrediction` dataclass from NBA `monte_carlo.py`. |
+
+**Key Differences from NBA Pipeline:**
+- **No minutes decomposition:** Pitcher K predicted directly (not minutes × K-rate)
+- **No copula:** Single stat per model, no correlation to capture
+- **Integer targets:** Strikeouts are whole numbers, samples rounded after MC sampling
+- **Higher edge thresholds:** 8-10% vs NBA's 5% due to wider MLB prop spreads
 
 ### 4. Diagnostics (`src/diagnostics/`)
 

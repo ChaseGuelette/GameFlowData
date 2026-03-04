@@ -251,14 +251,157 @@ python -m src.processing.mlb.mlb_populate_averages_incremental --date 2024-09-15
 
 ---
 
+### `mlb_matchup_features.py` — Opposing Team Batting Tendencies
+
+Computes team-level batting tendencies for pitcher K predictions. For pitcher K, we need the team-level opposing batting stats (K rate, batting avg), not individual batter matchups.
+
+#### Functions
+
+| Function | Description |
+|----------|-------------|
+| `get_opposing_team_batting_stats(engine, team_id, game_date, season)` | Single-game inference: aggregates `mlb_player_game_stats_batting` for the opposing team's L10 games before game_date. Returns `opp_team_avg_so_l10` and `opp_team_avg_batting_avg_l10`. |
+| `get_pitcher_handedness(engine, player_id)` | Returns pitcher's throwing hand from `mlb_players.throws`. |
+| `compute_matchup_features_bulk(engine, season)` | Training bulk mode: for each (game_id, pitcher_player_id), computes opposing team's L10 batting stats using SQL window functions (`ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING`). Much faster than per-game queries. |
+
+#### Output Columns
+
+| Column | Description |
+|--------|-------------|
+| `opp_team_avg_so_l10` | Average team strikeouts per game over last 10 team games |
+| `opp_team_avg_batting_avg_l10` | Team batting average (SUM(h)/SUM(ab)) over last 10 team games |
+
+---
+
+## MLB Model Layer (`src/models/mlb/`)
+
+### `mlb_stat_config.py` — Stat Configuration
+
+Maps each MLB stat to its model type and edge threshold:
+
+| Stat | Model Type | Edge Threshold |
+|------|-----------|----------------|
+| `pitcher_strikeouts` | quantile | 8% |
+| `pitcher_outs` | quantile | 8% |
+| `batter_hits` | negbin | 10% |
+| `batter_total_bases` | negbin | 10% |
+| `batter_rbis` | negbin | 10% |
+| `batter_runs_scored` | negbin | 10% |
+| `batter_home_runs` | binary | 10% |
+
+Higher thresholds than NBA (8-10% vs 5%) because MLB prop juice is higher.
+
+---
+
+### `mlb_feature_store.py` — Pitcher K Feature Store
+
+Central feature engineering class mirroring `src/models/feature_store.py` (NBA).
+
+#### Feature List (28 features)
+
+**Pitcher Rolling Averages (10):** `pitcher_avg_so_l3/l5/szn`, `pitcher_avg_k_per_9_l5`, `pitcher_avg_ip_l3/l5/szn`, `pitcher_avg_pitches_thrown_l3`, `pitcher_avg_bb_l5`, `pitcher_std_so_l3`
+
+**Statcast (6):** `pitcher_avg_whiff_pct_l5`, `pitcher_avg_csw_pct_l5`, `pitcher_avg_chase_pct_l5`, `pitcher_avg_zone_pct_l5`, `pitcher_avg_fastball_velo_l5`, `pitcher_std_whiff_pct_l3`
+
+**FanGraphs (2):** `pitcher_fip_szn`, `pitcher_k_pct_szn`
+
+**Context (3):** `pitcher_days_rest`, `pitcher_pitch_count_last_start`, `pitcher_starts_szn`
+
+**Opposing Team (2):** `opp_team_avg_so_l10`, `opp_team_avg_batting_avg_l10`
+
+**Game Context (3):** `park_so_factor`, `is_home`, `line_total`
+
+**Betting Signal (1):** `prop_line_pitcher_strikeouts`
+
+**Trend (1):** `pitcher_so_l3_l5_ratio`
+
+#### API Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_training_dataset(seasons)` | Bulk load via SQL LATERAL JOINs + matchup enrichment. Returns DataFrame with features + `actual_so` target. |
+| `get_player_game_features(player_id, game_id, ...)` | Single-pitcher inference. Returns flat dict. |
+| `get_features_for_date(game_date)` | All starting pitchers on a date (backtesting). |
+| `enrich_with_matchup_features(df)` | Merges opposing team batting stats into training DataFrame. |
+
+#### SQL Pattern
+
+Training query joins 8 sources via LATERAL JOINs:
+1. `mlb_player_game_stats_pitching` — base table + target (`so`)
+2. `mlb_game_schedule` — game context (venue, home/away)
+3. `mlb_player_average_pitching` — pitcher rolling averages
+4. `mlb_player_average_statcast_pitching` — Statcast metrics
+5. `mlb_player_season_advanced` — FanGraphs season stats
+6. `mlb_park_factors` — park K factor
+7. `mlb_raw_game_lines` — game total line
+8. `mlb_raw_player_props` — pitcher K prop line
+
+**Filters:** `is_starter = TRUE`, `did_not_play = FALSE`, `game_type = 'R'`
+
+**Time-travel safety:** Same `shift(1)` + `<= game_date` pattern as NBA.
+
+---
+
+### `mlb_quantile_trainer.py` — Pitcher K Pipeline
+
+`MLBPitcherKPipeline` — wraps `QuantileModelSuite` from NBA code.
+
+**Key difference from NBA:** No minutes-rate decomposition. Trains directly on SO counts.
+
+#### Default Config
+
+| Parameter | Value |
+|-----------|-------|
+| Quantiles | (0.10, 0.25, 0.50, 0.75, 0.90) |
+| n_estimators | 1000 |
+| max_depth | 5 |
+| learning_rate | 0.03 |
+| early_stopping_rounds | 50 |
+| val_fraction | 0.15 |
+
+#### Methods
+
+| Method | Description |
+|--------|-------------|
+| `train(df, feature_names_per_quantile, sample_weight)` | Train XGBoost quantile models on `actual_so` target |
+| `predict(features_df)` | Returns DataFrame with q10-q90 columns |
+| `save(directory)` / `load(directory)` | Joblib serialization |
+
+---
+
+### `mlb_monte_carlo.py` — Monte Carlo Sampler
+
+`MLBMonteCarloPredictor` — generates probability distributions for pitcher K.
+
+**Simplified vs NBA:** No copula, no minutes-rate decomposition, no blowout factor.
+
+#### Sampling Process
+
+1. Get quantile predictions (Q10-Q90) from pitcher K model
+2. Extrapolate tails to p=0.001/0.999 with configurable multipliers
+3. Build inverse CDF via linear interpolation
+4. Draw 10,000 uniform samples, map through inverse CDF
+5. Floor at 0, round to integers (strikeouts are whole numbers)
+6. Return `PropPrediction` (same dataclass as NBA)
+
+#### Methods
+
+| Method | Description |
+|--------|-------------|
+| `predict(player_id, game_id, features)` | Single-pitcher MC prediction → `PropPrediction` |
+| `predict_batch(player_games)` | Batched XGBoost + per-player sampling |
+
+---
+
 ## Pipeline Order
 
 ```
-1. Scrapers (Phase 1)     → Raw data in DB
-2. MLB Linker             → Props linked to game_id/player_id/team_id
+1. Scrapers (Phase 1)       → Raw data in DB
+2. MLB Linker               → Props linked to game_id/player_id/team_id
    - Daily: mlb_linker incremental (direct DB)
    - Bulk:  mlb_linker_local all (offline CSV with checkpoint/resume)
-3. MLB Rolling Averages   → Pre-game feature tables populated
-4. Feature Store (Phase 3) → Model-ready feature vectors
-5. Training (Phase 3)     → XGBoost quantile regression models
+3. MLB Rolling Averages     → Pre-game feature tables populated
+4. MLB Matchup Features     → Opposing team batting tendencies
+5. MLB Feature Store        → Model-ready feature vectors (28 features)
+6. MLB Quantile Trainer     → XGBoost quantile regression (Q10-Q90)
+7. MLB Monte Carlo Sampler  → Probability distributions for betting
 ```
