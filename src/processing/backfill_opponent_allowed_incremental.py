@@ -20,6 +20,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import pandas as pd
+from psycopg2.extras import execute_values
 from sqlalchemy import text
 from tqdm import tqdm
 
@@ -188,7 +189,7 @@ def compute_rolling_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return df_full
 
 
-def batch_insert_to_db(engine, df: pd.DataFrame, batch_size: int = 2000):
+def batch_insert_to_db(engine, df: pd.DataFrame, batch_size: int = 100):
     """
     Insert/update rows using UPSERT.
 
@@ -279,19 +280,30 @@ def batch_insert_to_db(engine, df: pd.DataFrame, batch_size: int = 2000):
     df = df.rename(columns=rename_map)[valid_cols].replace({np.nan: None})
 
     cols = ", ".join(valid_cols)
-    vals = ", ".join([f":{c}" for c in valid_cols])
-    upsert = text(
-        f"INSERT INTO team_allowed_by_position ({cols}) VALUES ({vals}) ON CONFLICT (team_id, game_id, position_group) DO UPDATE SET "  # nosec
-        + ", ".join([f"{c} = EXCLUDED.{c}" for c in valid_cols if c not in ["team_id", "game_id", "position_group"]])
-        + ";"
+    placeholders = ", ".join([f"%s" for _ in valid_cols])
+    conflict_cols = ["team_id", "game_id", "position_group"]
+    update_cols = [c for c in valid_cols if c not in conflict_cols]
+    upsert_sql = (
+        f"INSERT INTO team_allowed_by_position ({cols}) VALUES %s "  # nosec
+        f"ON CONFLICT ({', '.join(conflict_cols)}) DO UPDATE SET "
+        + ", ".join([f"{c} = EXCLUDED.{c}" for c in update_cols])
     )
 
-    records = df.to_dict(orient="records")
-    with engine.begin() as conn:
-        for i in tqdm(range(0, len(records), batch_size)):
-            batch = records[i : i + batch_size]
-            if batch:
-                conn.execute(upsert, batch)
+    # Convert to list of tuples for execute_values
+    rows = [tuple(row[c] for c in valid_cols) for row in df.to_dict(orient="records")]
+    for i in tqdm(range(0, len(rows), batch_size)):
+        batch = rows[i : i + batch_size]
+        if batch:
+            raw_conn = engine.raw_connection()
+            try:
+                cur = raw_conn.cursor()
+                execute_values(cur, upsert_sql, batch, page_size=batch_size)
+                raw_conn.commit()
+            except Exception:
+                raw_conn.rollback()
+                raise
+            finally:
+                raw_conn.close()
 
 
 def main():

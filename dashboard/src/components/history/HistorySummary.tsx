@@ -8,6 +8,7 @@ interface HistorySummaryProps {
 }
 
 export function HistorySummary({ bets }: HistorySummaryProps) {
+  const pendingBets = bets.filter(b => b.status === 'pending')
   const resolvedBets = bets.filter(b => b.status !== 'pending' && b.status !== 'cancelled')
   const wins = resolvedBets.filter(b => b.status === 'won').length
   const losses = resolvedBets.filter(b => b.status === 'lost').length
@@ -17,6 +18,7 @@ export function HistorySummary({ bets }: HistorySummaryProps) {
 
   const stats = [
     { label: 'Total Bets', value: resolvedBets.length.toString() },
+    ...(pendingBets.length > 0 ? [{ label: 'Pending', value: pendingBets.length.toString(), color: 'text-blue-400' }] : []),
     { label: 'Wins', value: wins.toString(), color: 'text-green-400' },
     { label: 'Losses', value: losses.toString(), color: 'text-red-400' },
     { label: 'Pushes', value: pushes.toString(), color: 'text-yellow-400' },

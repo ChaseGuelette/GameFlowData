@@ -468,7 +468,7 @@ A simulation environment to validate betting strategies.
 | `lines_job.py --live --parallel` | 12 PM, 4 PM ET | Full lines scrape with parallel execution (props + injuries concurrent) |
 | `inference_job.py` | 12:15 PM, 4:15 PM ET | Full inference (MC predictions + edges + BL) |
 | `lines_job.py --live --props-only` | Every 5 min, 11 AM–11 PM ET | Props-only scrape (~156 runs/day, silent Discord) |
-| `edge_refresh_job.py` | Every 5 min +2 min offset, 11 AM–11 PM ET | Recalculate edges + resolve past bets + place new bets (~156 runs/day, silent Discord) |
+| `edge_refresh_job.py` | Every 5 min +2 min offset, 11 AM–11 PM ET | Recalculate edges (~156 runs/day, silent Discord, `--skip-paper` on cron runs) |
 
 **`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~3-5 minutes (optimized from ~30 minutes via incremental scripts).
 
@@ -486,7 +486,7 @@ A simulation environment to validate betting strategies.
 
 **Stale data handling (2026-03-02):** Inference never hard-fails on stale data — running with slightly stale rolling averages (L5 has 4/5 overlap, L15 has 14/15 overlap) is better than producing zero predictions. When stale data is detected (via DB check or `--stale-warning` flag from scheduler dependency gate), the job sets a `data_stale` flag, logs prominent warnings, sends a separate "Stale Data Warning" Discord alert, and completes normally.
 
-**`edge_refresh_job.py`** — Lightweight edge recalculation (~2-3 minutes). Loads stored predictions from `daily_predictions` and MC samples from `daily_prediction_samples` via `PredictionStore.get_all_samples_for_date()`, fetches fresh prop lines from `raw_player_props_combined` (24-hour snapshot_time cutoff for performance on multi-million row table), recalculates edges (empirical CDF) and Black-Litterman recommendations, upserts updated predictions. Self-contained — does NOT instantiate model pipeline or feature store. Exits gracefully with info-level "NO-OP" message if no samples exist (inference hasn't run yet — expected before first run of the day). **MC sample staleness check (2026-03-02):** If MC samples are >6 hours old, logs a warning and sends a Discord alert. **DFS paper trading runs as step 0 (before MC sample check)** — this ensures DFS entry resolution and placement runs every 10 minutes independently of whether model inference has occurred. Supports `--date`, `--dry-run`, `--stats`, `--skip-discord`. Runs after each intra-day props scrape.
+**`edge_refresh_job.py`** — Lightweight edge recalculation (~2-3 minutes). Loads stored predictions from `daily_predictions` and MC samples from `daily_prediction_samples` via `PredictionStore.get_all_samples_for_date()`, fetches fresh prop lines from `raw_player_props_combined` (24-hour snapshot_time cutoff for performance on multi-million row table), recalculates edges (empirical CDF) and Black-Litterman recommendations, upserts updated predictions. Self-contained — does NOT instantiate model pipeline or feature store. Exits gracefully with info-level "NO-OP" message if no samples exist (inference hasn't run yet — expected before first run of the day). **MC sample staleness check (2026-03-02):** If MC samples are >6 hours old, logs a warning and sends a Discord alert. **DFS paper trading runs as step 0 (before MC sample check)** — this ensures DFS entry resolution and placement runs every 10 minutes independently of whether model inference has occurred. **Line preservation (2026-03-05):** When fresh lines aren't available for a prediction (e.g., props pulled from the API), old line/odds/bookmaker values are preserved via `fillna()` fallback instead of being nulled out by the LEFT merge. **Skip paper trading (2026-03-05):** `--skip-paper` flag skips the paper trading step (bet selection + placement via `PaperTrader`). Used by the 5-minute silent cron runs to avoid timeouts — loading MC samples and running BL blending for every prediction was causing 45-minute hangs during game hours. Paper trading still runs during full inference jobs. Supports `--date`, `--dry-run`, `--stats`, `--skip-discord`, `--skip-paper`. Runs after each intra-day props scrape.
 
 **Line selection (2026-03-01 fix):** `fetch_fresh_lines()` partitions by `(player_id, game_id, market_key, bookmaker, line, outcome_label)` — the `line` in the partition ensures alt lines from the same bookmaker are treated as separate rows, preventing `MAX(line)` from conflating different line values. A `HAVING` clause requires both Over and Under odds to exist, eliminating orphan alt-line rows. The sharpest-book selection (`idxmin` on booksum) then naturally picks the primary line (lowest vig). Same fix applied to `daily_runner.py._get_current_lines()`.
 
@@ -504,7 +504,7 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 **Railway Cloud Deployment (2026-02-14):** Production deployment uses Railway with APScheduler for job orchestration:
 - `nixpacks.toml` — Nixpacks build config: Python venv with system-site-packages, explicit `LD_LIBRARY_PATH` for Nix-installed shared libraries (libz, libstdc++), zlib and stdenv.cc.cc.lib nixPkgs for numpy/scipy/xgboost C extensions
 - `railway.toml` — Railway-specific build and deploy settings (nixpacks builder, restart policy)
-- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 8 job definitions on cron schedule (UTC times):
+- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 7 job definitions on cron schedule (UTC times):
   - `daily_stats_job.py` — 9 AM ET (scrapes NBA game results)
   - `daily_stats_job.py` (retry) — 9:30 AM ET (auto-retry if 9 AM run failed)
   - `lines_job.py --live --parallel` — 12 PM, 4 PM ET (full live scrape with parallel props + injury paths)
@@ -515,9 +515,7 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 - **Automatic retry (2026-03-02):** 9:30 AM ET retry job (`run_daily_stats_retry()`) checks if the 9 AM daily stats succeeded — if not, re-runs it. Gives the system a second chance before inference at 12:15 PM.
 - **Dependency gate (2026-03-02):** `run_inference()` checks `check_dependency("daily_stats_job.py", max_age_hours=8)`. If stale, still runs inference but passes `--stale-warning` flag and sends Discord alert about stale rolling averages.
 - **5-minute refresh cadence (2026-03-03):** Props-only and edge refresh increased from every 10 min to every 5 min (~156 runs/day each). Full scrapes at noon/4pm use `--parallel` for concurrent props + injury paths. Enabled by fuzzy cache optimization reducing linker overhead to <1s.
-- **NCAAB jobs (2026-03-03):** Three new cron jobs with `month="11-12,1-4"` guard (college basketball season):
-  - `ncaab_daily_stats_job.py` — 14:05 UTC / 9:05 AM ET: CBBpy scrape → rolling averages → Barttorvik download → Barttorvik linker
-  - `ncaab_lines_job.py` — 17:30 UTC (12:30 PM ET) and 21:30 UTC (4:30 PM ET): Game lines scrape → linker
+- **NCAAB jobs (2026-03-03, removed 2026-03-05):** Three NCAAB cron jobs were added in Session 63 but removed in Session 65 because migrations 009-011 aren't applied, no historical data is backfilled, and `cbbpy` isn't in `requirements.txt` on Railway. Will be re-added after backfill is complete (see ACTIONITEMS.md #21).
 - **Silent alerts (2026-02-28):** The every-5-min props and edge refresh jobs use `silent_on_success=True` — Discord alerts only sent on failure to avoid notification spam. Full scrape and inference jobs still alert on success.
 - **Discord job status alerts (2026-02-15):** Scheduler sends success/failure notifications to `#alerts` channel after each job completes. Includes job name, duration, metrics (when available), and error details for failures. Non-fatal — alert failures don't affect job execution.
 - **Subprocess Python path (2026-02-18):** All orchestration job scripts use `sys.executable` instead of hardcoded `python` when spawning subprocesses, ensuring the venv Python (with all installed packages) is used consistently.
@@ -579,7 +577,7 @@ dashboard/
 │   ├── components/
 │   │   ├── landing/            # HeroSection, FeatureGrid
 │   │   ├── layout/             # Navbar, PublicNavbar, Footer
-│   │   ├── predictions/        # PropCard, PropGrid, FilterTabs, PlayOfTheDay
+│   │   ├── predictions/        # PropCard, PropGrid, FilterTabs, PlayOfTheDay, BookFilterDropdown
 │   │   ├── dfs/                # DfsTable, DfsFilters — DFS edge comparison
 │   │   ├── stats/              # HeatmapTable, StatTabs, CategoryTabs, WindowToggle, PositionFilter, OffDefToggle
 │   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
@@ -617,6 +615,7 @@ dashboard/
   - **Date Selector:** View predictions from any date in the last 30 days (uses `get_prediction_dates()` RPC function for efficient distinct query)
   - **Edge Threshold Filter:** Filter picks by minimum edge (All, ≥3%, ≥5%, ≥7%, ≥10%, ≥15%, ≥20%)
   - **Black-Litterman Blending Filter:** Optionally apply BL blending to edges (Off, τ=0.03, τ=0.05, τ=0.10, τ=0.15, τ=0.25). BL calculation implemented client-side using `calculateBLConfidence()` and `blendProbability()` utility functions.
+  - **Sportsbook Filter:** Multi-select checkbox dropdown (`BookFilterDropdown`) — all state-legal books checked by default. Unchecking a book excludes predictions only available at that book. Uses `excludedBooks: Set<string>` state; when any books are excluded, queries `raw_player_props_combined` with `.in('bookmaker', activeBooks)` to build availability set. "Select All" / "Clear All" toggle, closes on outside click or Escape. Button shows "All Books" or "Books (N)".
 - **Analysis Modal:** Click any prop card to see:
   - Last 5 games chart with performance history
   - Quantile distribution summary with visual bar
@@ -627,7 +626,7 @@ dashboard/
 - **Line Shopping:** Shows all available bookmaker lines for each prop (filtered by state if set). For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line. Lines are clickable — selecting a line recalculates the bet sizing section using that line's odds and model probability. Defaults to the best-edge line.
 - **Kelly Sizing:** Bankroll persisted cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
 - **User Bet Tracking:** Clicking the green checkmark on a PropCard records the bet in `user_bets` table with full context (direction, odds, book, model probability, edge). Syncs across devices via `useUserBets` hook with optimistic UI updates (instant toggle, async DB write, rollback on error). Bets auto-resolve against actual game results via `UserBetResolver` in the daily stats job.
-- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Won/Lost/Push), summary stats bar, and individual bet cards.
+- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only.
 - **Performance View (`/performance`):** Three tabs — **My Bets**, **Props**, and **DFS**. My Bets tab: personal KPI cards (bankroll, P&L, ROI, win rate), bankroll chart from cumulative user bet P&L, and stat breakdown. Props tab: model paper trading KPIs with bet source filter (Model Picks/All Bets). DFS tab: KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
@@ -1102,7 +1101,7 @@ python src/orchestration/lines_job.py --live --parallel [--dry-run]             
 python src/orchestration/lines_job.py --live --props-only [--dry-run]             # Every 5 min - Props only
 python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker] [--parallel]  # Historical mode
 python src/orchestration/inference_job.py [--date YYYY-MM-DD] [--dry-run] [--model-dir PATH] [--stats pts reb ast] [--skip-bets] [--skip-discord]  # 12:15/4:15 PM ET
-python src/orchestration/edge_refresh_job.py [--date YYYY-MM-DD] [--dry-run] [--stats pts reb ast] [--skip-discord]  # After each props scrape
+python src/orchestration/edge_refresh_job.py [--date YYYY-MM-DD] [--dry-run] [--stats pts reb ast] [--skip-discord] [--skip-paper]  # After each props scrape
 ```
 
 The `--scrape-injuries` flag:
@@ -1274,5 +1273,5 @@ See `ACTIONITEMS.md` for full details.
 **Dashboard Vercel deployment (2026-02-14):** Dashboard deployed to Vercel at `game-flow-data.vercel.app`. Configuration: root directory `dashboard`, environment variables `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Vercel MCP available via `claude mcp add --transport http vercel https://mcp.vercel.com`.
 
 **Dashboard live toggle + DFS 2-pick (2026-02-28):** Two dashboard enhancements:
-1. **Live Betting Toggle:** Added "Pre-Game / + Live" pill toggle to the main predictions dashboard. Default state (Pre-Game) hides predictions for games that have already started by comparing `game_time` against current time client-side. Orange "+ Live" pill reveals all predictions including in-progress games. State variable `showLive` (default `false`) controls filter in `filteredPredictions`.
+1. **Live Betting Toggle:** Added "Pre-Game / + Live" pill toggle to the main predictions dashboard. Default state (Pre-Game) hides predictions for games that have already started by comparing `game_time` against current time client-side. Orange "+ Live" pill reveals all predictions including in-progress games. State variable `showLive` (default `false`) controls filter in `filteredPredictions`. **Historical date fix (2026-03-05):** The `isGameDone()` and `showLive` filters are now only applied when `selectedDate === getToday()`. Previously, viewing a past date would filter out ALL predictions because every game from that date had already ended.
 2. **DFS PP 2-Pick Slip Type:** Added PrizePicks 2-Pick Power (3x payout) to `DFS_SLIP_TYPES` in `dashboard/src/types/dfs.ts`. Break-even per leg = 57.7% (`1/√3`). This is the most conservative slip type — highest per-leg threshold — suitable for high-conviction plays.

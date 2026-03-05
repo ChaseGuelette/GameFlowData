@@ -50,6 +50,7 @@ dashboard/
 │   │   │   ├── PublicNavbar.tsx # Public nav with Picks + Discord links
 │   │   │   └── Footer.tsx      # Footer with Discord link
 │   │   ├── predictions/        # Prediction display components
+│   │   │   ├── BookFilterDropdown.tsx # Multi-select sportsbook checkbox dropdown
 │   │   │   ├── FilterTabs.tsx  # Stat type filtering
 │   │   │   ├── PlayOfTheDay.tsx# Featured top pick card
 │   │   │   ├── PropCard.tsx    # Individual prediction card
@@ -254,6 +255,27 @@ Displays navigation and current bankroll.
 <Navbar bankroll={1250.00} />
 ```
 
+### BookFilterDropdown
+
+Multi-select checkbox dropdown for sportsbook filtering (added Session 66). Replaces the old single-select `<select>` dropdown.
+
+```tsx
+<BookFilterDropdown
+  excludedBooks={excludedBooks}       // Set<string> — empty = all included
+  onChange={setExcludedBooks}          // (excluded: Set<string>) => void
+  userState={userState}               // filters to state-legal books
+/>
+```
+
+**Behavior:**
+- Button shows "All Books" when all checked, "Books (N)" when some unchecked
+- Floating panel with checkboxes for each state-legal sportsbook
+- "Select All" / "Clear All" toggle at top
+- Closes on outside click or Escape key
+- Books filtered by `STATE_SPORTSBOOKS[userState]` from `sportsbook-availability.ts`
+
+**Dashboard state:** `excludedBooks: Set<string>` (empty = no filtering). When non-empty, queries `raw_player_props_combined` with `.in('bookmaker', activeBooks)` to build availability set. State changes clean up stale exclusions.
+
 ### FilterTabs
 
 Stat type filtering with All/PTS/REB/AST options (THREES removed in Session 22).
@@ -372,10 +394,13 @@ Pill-style toggle that controls visibility of predictions for games that have al
 
 **State:** `const [showLive, setShowLive] = useState<boolean>(false)`
 
-**Filter logic:** Applied before all other filters in `filteredPredictions`:
+**Filter logic:** Applied only when viewing today's date (Session 65 fix). Previously applied to all dates, which hid ALL predictions for past dates since every game had ended:
 ```typescript
-if (!showLive && p.game_time) {
-  if (new Date(p.game_time) <= new Date()) return false
+if (selectedDate === getToday()) {
+  if (isGameDone(p.game_time)) return false
+  if (!showLive && p.game_time) {
+    if (new Date(p.game_time) <= new Date()) return false
+  }
 }
 ```
 

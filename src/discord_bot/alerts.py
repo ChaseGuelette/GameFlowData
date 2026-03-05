@@ -596,3 +596,187 @@ def send_pnl_summary_sync(
     except Exception as e:
         logger.exception(f"Failed to send P&L summary synchronously: {e}")
         return False
+
+
+# =============================================================================
+# Calibration Drift Alerts (Performance Channel)
+# =============================================================================
+
+
+def _build_calibration_embed(metrics) -> dict:
+    """Build Discord embed for calibration drift report.
+
+    Args:
+        metrics: CalibrationMetrics instance from calibration_monitor.
+
+    Returns:
+        Discord embed dict
+    """
+    severity = metrics.severity
+    if severity == "healthy":
+        color = 0x2ECC71  # Green
+        title = "Calibration Check — Healthy"
+    elif severity == "warning":
+        color = 0xF39C12  # Amber
+        title = "Calibration Check — Drift Detected"
+    else:
+        color = 0xE74C3C  # Red
+        title = "Calibration Check — Significant Drift"
+
+    embed = {
+        "title": title,
+        "color": color,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [],
+        "footer": {
+            "text": f"Paper Trading | {metrics.n_bets} bets ({metrics.date_range[0]} to {metrics.date_range[1]})",
+        },
+    }
+
+    # Quantile coverage summary
+    global_cov = metrics.quantile_coverage.get("GLOBAL", {})
+    if global_cov:
+        parts = [f"Q{int(q*100)}: {c:.0%}" for q, c in sorted(global_cov.items())]
+        embed["fields"].append({
+            "name": "Quantile Coverage",
+            "value": " | ".join(parts),
+            "inline": False,
+        })
+
+    # Prob calibration
+    embed["fields"].append({
+        "name": "ECE",
+        "value": f"{metrics.ece:.3f}",
+        "inline": True,
+    })
+    embed["fields"].append({
+        "name": "Brier Score",
+        "value": f"{metrics.brier_score:.3f}",
+        "inline": True,
+    })
+
+    # Bias by stat (compact)
+    bias_parts = []
+    for stat, b in metrics.bias_by_stat.items():
+        if stat == "GLOBAL":
+            continue
+        bias_parts.append(f"{stat.upper()}: {b['rel_bias_pct']:+.1f}%")
+    if bias_parts:
+        embed["fields"].append({
+            "name": "Bias by Stat",
+            "value": " | ".join(bias_parts),
+            "inline": False,
+        })
+
+    # Edge accuracy
+    if metrics.edge_accuracy:
+        edge_parts = []
+        for ea in metrics.edge_accuracy:
+            edge_parts.append(
+                f"{ea['bucket']}: {ea['actual_win_rate']:.0%} "
+                f"(exp {ea['expected_win_rate']:.0%}, n={ea['n']})"
+            )
+        embed["fields"].append({
+            "name": "Edge Accuracy",
+            "value": "\n".join(edge_parts),
+            "inline": False,
+        })
+
+    # Drift alerts
+    if metrics.all_alerts:
+        alert_text = "\n".join(f"- {a}" for a in metrics.all_alerts[:5])
+        if len(metrics.all_alerts) > 5:
+            alert_text += f"\n... and {len(metrics.all_alerts) - 5} more"
+        embed["fields"].append({
+            "name": "Drift Alerts",
+            "value": alert_text,
+            "inline": False,
+        })
+
+    return embed
+
+
+async def send_calibration_alert(
+    metrics,
+    channel_id: str | None = None,
+) -> bool:
+    """Send calibration drift alert to Discord performance channel.
+
+    Args:
+        metrics: CalibrationMetrics instance from calibration_monitor.
+        channel_id: Discord channel ID (defaults to DISCORD_CHANNEL_PERFORMANCE)
+
+    Returns:
+        True if alert was sent successfully, False otherwise
+    """
+    load_dotenv()
+
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping calibration alert")
+        return False
+
+    channel_id = channel_id or os.getenv("DISCORD_CHANNEL_PERFORMANCE")
+    if not channel_id:
+        logger.warning("DISCORD_CHANNEL_PERFORMANCE not configured, skipping calibration alert")
+        return False
+
+    embed = _build_calibration_embed(metrics)
+
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status in (200, 201):
+                    logger.info(
+                        f"Sent calibration alert (severity={metrics.severity}, "
+                        f"{len(metrics.all_alerts)} alerts)"
+                    )
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+
+    except Exception as e:
+        logger.exception(f"Failed to send calibration alert: {e}")
+        return False
+
+
+def send_calibration_alert_sync(
+    metrics,
+    channel_id: str | None = None,
+) -> bool:
+    """Synchronous wrapper for send_calibration_alert.
+
+    Args:
+        metrics: CalibrationMetrics instance from calibration_monitor.
+        channel_id: Discord channel ID
+
+    Returns:
+        True if alert was sent successfully, False otherwise
+    """
+    import asyncio
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                send_calibration_alert(metrics, channel_id),
+                loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(
+                send_calibration_alert(metrics, channel_id)
+            )
+
+    except Exception as e:
+        logger.exception(f"Failed to send calibration alert synchronously: {e}")
+        return False

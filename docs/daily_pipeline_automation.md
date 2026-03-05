@@ -13,7 +13,7 @@ The daily pipeline is split into four jobs based on execution frequency:
 | `lines_job.py --live --parallel` | 12 PM, 4 PM | Full live scrape with parallel props + injury paths | ~45-55 sec |
 | `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation (checks daily stats dependency) | ~16 sec |
 | `lines_job.py --live --props-only` | Every 5 min, 11 AM – 11 PM | Props-only live scrape + linker | ~25-30 sec |
-| `edge_refresh_job.py` | Every 5 min (+2 min offset), 11 AM – 11 PM | Recalculate edges + resolve bets + place bets | ~2-3 min |
+| `edge_refresh_job.py` | Every 5 min (+2 min offset), 11 AM – 11 PM | Recalculate edges (--skip-paper on cron runs) | ~2-3 min |
 
 **Note:** Inference job optimized from ~3 min to ~16 sec in Session 27 via parallel feature building and prop lines query optimization.
 
@@ -213,6 +213,7 @@ python src/orchestration/edge_refresh_job.py --stats pts reb
 | `--dry-run` | Compute edges but don't upsert to database |
 | `--stats STAT [STAT ...]` | Stats to refresh (defaults to `pts reb ast`) |
 | `--skip-discord` | Skip Discord alert |
+| `--skip-paper` | Skip paper trading step (bet selection + placement). Used by 5-min cron runs to avoid timeouts |
 
 ### Pipeline Steps
 
@@ -235,6 +236,8 @@ python src/orchestration/edge_refresh_job.py --stats pts reb
 - **Graceful exit:** If no MC samples exist for the target date (inference hasn't run yet), exits with info-level "NO-OP" message and code 0 (expected before first inference of the day).
 - **MC sample staleness (2026-03-02):** If MC samples are >6 hours old, logs a warning and sends a Discord alert so operators know edge calculations use stale inference data.
 - **Feature preservation:** Loads existing predictions and only updates line/edge/BL columns. All `feat_*` columns and quantile predictions are preserved.
+- **Line preservation (2026-03-05 fix):** When fresh lines aren't available for a prediction (props no longer on the API), old line/odds/bookmaker values are preserved via `fillna()` fallback instead of being nulled out by the LEFT merge.
+- **Skip paper trading (2026-03-05):** `--skip-paper` flag skips paper bet selection and placement. The 5-minute silent cron runs use this to avoid 45-minute timeouts caused by loading MC samples and running BL blending for every prediction during game hours.
 - **Line selection (2026-03-01 fix):** `fetch_fresh_lines()` partitions by `(player_id, game_id, market_key, bookmaker, line, outcome_label)` — including `line` in the partition ensures alt lines from the same bookmaker are separate rows. A `HAVING` clause requires both Over and Under odds. The sharpest-book selection (lowest booksum) naturally picks primary lines with matched odds. Previously, `MAX(line)` conflated alt lines, causing mismatched odds and stale line selection.
 
 ### Logs

@@ -468,8 +468,8 @@ def run_lines_props_only_silent():
 
 
 def run_edge_refresh_silent():
-    """Edge refresh, Discord alerts only on failure."""
-    run_job("edge_refresh_job.py", silent_on_success=True)
+    """Edge refresh, Discord alerts only on failure. Skips paper trading."""
+    run_job("edge_refresh_job.py", extra_args="--skip-paper", silent_on_success=True)
 
 
 def main():

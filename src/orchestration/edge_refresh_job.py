@@ -481,6 +481,11 @@ def main():
         help="Stats to refresh (default: pts reb ast)",
     )
     parser.add_argument(
+        "--skip-paper",
+        action="store_true",
+        help="Skip paper trading step (bet selection + placement)",
+    )
+    parser.add_argument(
         "--skip-discord",
         action="store_true",
         help="Skip Discord alert",
@@ -631,7 +636,7 @@ def main():
             logger.info("[DRY RUN] Skipping database upsert")
 
         # 7b. Resolve past pending bets, then place new bets
-        if not args.dry_run:
+        if not args.dry_run and not args.skip_paper:
             try:
                 from src.paper_trading.paper_trader import PaperTrader
 

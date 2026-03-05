@@ -131,6 +131,59 @@ def resolve_pending_bets(dry_run: bool = False) -> bool:
         return True  # Don't fail the job for resolution errors (stats are more important)
 
 
+def run_calibration_check(dry_run: bool = False) -> None:
+    """Run calibration drift check on resolved paper bets.
+
+    Non-fatal: failures are logged but don't affect job status.
+    Only sends Discord alert if drift is detected OR it's Monday (weekly visibility).
+    """
+    logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: Calibration Drift Check")
+
+    if dry_run:
+        logger.info("  Would call: compute_calibration_drift()")
+        return
+
+    start_time = time.time()
+    try:
+        from src.paper_trading.calibration_monitor import compute_calibration_drift
+
+        metrics = compute_calibration_drift()
+        elapsed = time.time() - start_time
+
+        if metrics is None:
+            logger.info(f"COMPLETED: Calibration check — insufficient data ({elapsed:.1f}s)")
+            return
+
+        logger.info(
+            f"COMPLETED: Calibration check — {metrics.n_bets} bets, "
+            f"severity={metrics.severity}, {len(metrics.all_alerts)} alert(s) ({elapsed:.1f}s)"
+        )
+
+        # Send Discord alert if drift detected or it's Monday (weekly report)
+        is_monday = datetime.now().weekday() == 0
+        should_alert = metrics.has_drift or is_monday
+
+        if should_alert:
+            try:
+                from src.discord_bot.alerts import send_calibration_alert_sync
+
+                send_calibration_alert_sync(metrics)
+            except Exception as e:
+                logger.warning(f"Failed to send calibration alert to Discord: {e}")
+        else:
+            logger.info("  No drift detected and not Monday — skipping Discord alert")
+
+    except ImportError as e:
+        elapsed = time.time() - start_time
+        logger.warning(f"SKIPPED: Calibration check — module not found ({elapsed:.1f}s)")
+        logger.warning(f"  Import error: {e}")
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.warning(f"FAILED: Calibration check ({elapsed:.1f}s)")
+        logger.warning(f"  Exception: {e}")
+
+
 def resolve_pending_user_bets(dry_run: bool = False) -> bool:
     """Resolve all pending user bets (from dashboard checkmark feature).
 
@@ -356,6 +409,10 @@ def main():
     # Resolve pending user bets (from dashboard checkmark feature)
     if not args.skip_resolution:
         resolve_pending_user_bets(args.dry_run)
+
+    # Run calibration drift check (after bet resolution)
+    if not args.skip_resolution:
+        run_calibration_check(args.dry_run)
 
     elapsed = time.time() - start_time
     logger.info("=" * 60)

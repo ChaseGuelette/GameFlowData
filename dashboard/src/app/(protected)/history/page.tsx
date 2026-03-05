@@ -143,9 +143,9 @@ export default function HistoryPage() {
     ? sourcedBets.filter(b => b.status !== 'pending' && b.status !== 'cancelled')
     : sourcedBets.filter(b => b.status === filter)
 
-  // Filter my bets by status
+  // Filter my bets by status (show pending in "All" view)
   const filteredMyBets = myBetsFilter === 'all'
-    ? myBets
+    ? myBets.filter(b => b.status !== 'cancelled')
     : myBets.filter(b => b.status === myBetsFilter)
 
   return (

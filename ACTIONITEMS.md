@@ -1,16 +1,47 @@
 # GameFlowData — Roadmap
 
-## Session Summary (2026-03-04 — Session 65)
+## Session Summary (2026-03-04 — Session 66)
 
 ### What We Did
 
-**Removed NCAAB Cron Jobs from Scheduler (1 file)**
+**Multi-Select Sportsbook Filter + Pending Bets in History (5 files)**
 
-Removed 3 NCAAB cron job registrations (`ncaab_daily_stats`, `ncaab_lines_noon`, `ncaab_lines_4pm`), their wrapper functions (`run_ncaab_daily_stats`, `run_ncaab_lines`), and JOB_NAMES entries from `scheduler.py`. These jobs were failing on Railway because migrations 009-011 haven't been applied, no historical data has been backfilled, and `cbbpy` isn't in `requirements.txt`.
+Replaced the single-select sportsbook dropdown with a multi-select checkbox dropdown. All state-legal books start checked; unchecking a book excludes its predictions. Added pending (outstanding) bets visibility to the History page — users can now see bets awaiting resolution.
 
-**Modified:** `src/orchestration/scheduler.py`
+**New Files (1):**
+- `dashboard/src/components/predictions/BookFilterDropdown.tsx` — Multi-select checkbox dropdown with Select All / Clear All, outside-click and Escape to close
 
-NCAAB jobs should be re-added once items 15-18 from the action items are completed (migrations applied, cbbpy added, data backfilled, models trained).
+**Modified (4):**
+- `dashboard/src/app/(protected)/dashboard/page.tsx` — Replaced `bookFilter: string` with `excludedBooks: Set<string>`, updated availability query to use `.in('bookmaker', activeBooks)`, state-change cleanup for stale exclusions
+- `dashboard/src/app/(protected)/history/page.tsx` — My Bets "All" view now includes pending bets (only excludes cancelled)
+- `dashboard/src/components/history/HistoryFilters.tsx` — Added "Pending" filter tab
+- `dashboard/src/components/history/HistorySummary.tsx` — Shows pending count (blue) when outstanding bets exist
+
+**Also created:** `nba_scraper_portable.zip` — portable package for running the NBA unified scraper on a separate machine (to bypass stats.nba.com IP ban)
+
+---
+
+## Session Summary (2026-03-05 — Session 65)
+
+### What We Did
+
+**Bug Fixes, Edge Refresh Hardening, Model Promotion (5 files)**
+
+1. **Removed NCAAB cron jobs** — 3 NCAAB job registrations, wrapper functions, and JOB_NAMES entries removed from `scheduler.py`. Jobs were failing on Railway (migrations not applied, no data, cbbpy missing).
+
+2. **Fixed dashboard showing no data for past dates** — `isGameDone()` filter in `dashboard/page.tsx` was hiding ALL predictions when viewing historical dates. Fixed by only applying game-time filters when `selectedDate === getToday()`.
+
+3. **Fixed edge refresh nulling old lines** — LEFT merge in `edge_refresh_job.py` was overwriting line/odds/bookmaker with NULL when fresh props weren't available. Added `fillna()` fallback to preserve previous values.
+
+4. **Fixed edge refresh 45-minute timeouts** — Paper trading step (loading MC samples + BL blending) was causing hangs during game hours. Added `--skip-paper` flag; scheduler's 5-minute silent cron runs now pass it.
+
+5. **Promoted retrained model to production** — Archived old production to `production_archived_20260305/`. New model has worst calibration gap of 3.5% (down from 27.4%). Excluded `combined_calibration_offsets.json` (hurts ROI per Session 42). Carried over `threes_multiclass_model.joblib`.
+
+6. **Investigated model under-bias** — 90% of recommended picks are unders. Root cause: PTS rate model only uses 7 features at Q50 (missing opponent defense, pace, teammate injury features). Feature selector prunes matchup features because they don't improve pinball loss enough. Recommendation: selective PTS retrain with force-included matchup features.
+
+**Modified:** `src/orchestration/scheduler.py`, `src/orchestration/edge_refresh_job.py`, `dashboard/src/app/(protected)/dashboard/page.tsx`
+**Created:** `database/scripts/recover_nulled_lines.sql`
+**Promoted:** `src/models/artifacts/production/` (new model from `run_20260304_214009/`)
 
 ---
 
@@ -60,6 +91,8 @@ Built full-stack user bet tracking: database migration, React hooks, dashboard i
 19. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
 20. **Add stake calculation to useUserBets** — currently records bets without stake; could use Kelly from preferences
 21. **Re-add NCAAB cron jobs to scheduler** — removed in Session 65 (failing on Railway); re-add after items 15-18 are complete
+22. **Selective PTS retrain with force-included matchup features** — PTS Q50 only uses 7 features (no opp defense, pace, teammate injuries). Force-include matchup features and compare betting edge vs current model
+23. **Deploy Session 65 changes to Railway + Vercel** — scheduler (NCAAB removal + --skip-paper), edge_refresh (line preservation + --skip-paper), dashboard (past date fix)
 
 ---
 

@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-05 Session 65] — Bug Fixes, Edge Refresh Hardening, Model Promotion
+
+### Fixed
+
+- **Dashboard showing no data for past dates** — `isGameDone()` filter in `dashboard/page.tsx` was hiding ALL predictions when viewing historical dates. Fixed by only applying game-time filters when `selectedDate === getToday()`.
+- **Edge refresh nulling old lines** — LEFT merge in `edge_refresh_job.py` was overwriting line/odds/bookmaker with NULL when fresh props weren't available. Added `fillna()` fallback to preserve previous values.
+- **Edge refresh 45-minute timeouts** — Paper trading step (loading MC samples + BL blending for every prediction) was causing hangs during game hours. Added `--skip-paper` flag; scheduler's 5-minute silent cron runs now pass it.
+
+### Changed
+
+- **`src/orchestration/scheduler.py`** — Removed 3 NCAAB cron jobs (failing on Railway; migrations not applied, no data backfilled). Updated `run_edge_refresh_silent()` to pass `--skip-paper`.
+- **`src/orchestration/edge_refresh_job.py`** — Added `--skip-paper` CLI flag. Added line preservation logic (saves old values before LEFT merge, fills back with `fillna()`).
+- **`dashboard/src/app/(protected)/dashboard/page.tsx`** — Wrapped `isGameDone()` and `showLive` filters in `selectedDate === getToday()` check so past dates show all predictions.
+- **`src/models/artifacts/production/`** — Promoted retrained model from `run_20260304_214009/`. Worst calibration gap: 3.5% (was 27.4%). Archived old production to `production_archived_20260305/`. Excluded `combined_calibration_offsets.json` (hurts ROI per Session 42).
+
+### Added
+
+- **`database/scripts/recover_nulled_lines.sql`** — Recovery script for restoring nulled-out lines from `raw_player_props_combined`. Created for diagnostics; not needed in practice since affected predictions never had props data.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/scheduler.py` | Modified — removed NCAAB jobs, added --skip-paper to silent edge refresh |
+| `src/orchestration/edge_refresh_job.py` | Modified — line preservation, --skip-paper flag |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — past date filter fix |
+| `database/scripts/recover_nulled_lines.sql` | Created |
+| `src/models/artifacts/production/` | Promoted new model |
+| `src/models/artifacts/production_archived_20260305/` | Archived old model |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean
+
+---
+
+## [2026-03-04 Session 66] — Multi-Select Sportsbook Filter + Pending Bets
+
+### Added
+
+- **`dashboard/src/components/predictions/BookFilterDropdown.tsx`** — Multi-select checkbox dropdown for sportsbook filtering. Button shows "All Books" (all checked) or "Books (N)" (some excluded). Floating panel with one checkbox per state-legal sportsbook, "Select All" / "Clear All" toggle, closes on outside click or Escape. Uses `SPORTSBOOK_OPTIONS` and `STATE_SPORTSBOOKS` from `sportsbook-availability.ts`.
+- **Pending bets in History** — "Pending" filter tab added to HistoryFilters. My Bets "All" view now includes pending/outstanding bets. Summary bar shows pending count in blue when outstanding bets exist.
+- **`nba_scraper_portable.zip`** — Portable package for running NBA unified scraper on a separate machine to bypass stats.nba.com IP ban. Contains scraper, CDN fallback, DB client, requirements.txt, and README.
+
+### Changed
+
+- **`dashboard/src/app/(protected)/dashboard/page.tsx`** — Replaced single-select `bookFilter: string` state with multi-select `excludedBooks: Set<string>`. Availability query uses `.in('bookmaker', activeBooks)` where activeBooks = allowed minus excluded. When nothing excluded, skips query entirely. State-change cleanup removes stale exclusions for books not legal in new state.
+- **`dashboard/src/app/(protected)/history/page.tsx`** — My Bets tab "All" filter now includes pending bets (only excludes cancelled), enabling users to see outstanding bets awaiting resolution.
+- **`dashboard/src/components/history/HistoryFilters.tsx`** — Added "Pending" option to status filter tabs.
+- **`dashboard/src/components/history/HistorySummary.tsx`** — Conditionally shows "Pending" count (blue) in summary stats bar. Win rate and P&L still computed from resolved bets only.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/components/predictions/BookFilterDropdown.tsx` | Created |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — multi-select book filter |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — pending bets visible |
+| `dashboard/src/components/history/HistoryFilters.tsx` | Modified — Pending tab |
+| `dashboard/src/components/history/HistorySummary.tsx` | Modified — pending count |
+| `nba_scraper_portable.zip` | Created |
+| `ARCHITECTURE.md` | Updated — sportsbook filter + history docs |
+| `ACTIONITEMS.md` | Updated — Session 66 summary |
+| `CHANGELOG.md` | Updated — Session 66 entry |
+
+### Verified
+
+- TypeScript compiles cleanly (`tsc --noEmit`)
+- Python tests: pre-existing local env issue (Python 3.9-32bit missing numpy), not related to changes
+
+---
+
 ## [2026-03-03 Session 64] — User Bet Tracking: Cross-Device Sync + Auto-Resolution
 
 ### Added
