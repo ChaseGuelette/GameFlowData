@@ -38,9 +38,11 @@ class TrainingOrchestrator:
         tuning_timeout: int | None = None,
         tuning_per_quantile: bool = False,
         hyperparams_path: str | None = None,
+        feature_tolerance: float = 0.005,
     ):
         self.engine = get_engine()
         self.feature_store = FeatureStore(self.engine)
+        self.feature_tolerance = feature_tolerance
 
         # Tuning settings
         self.tune_hyperparams = tune_hyperparams
@@ -461,7 +463,7 @@ class TrainingOrchestrator:
     def _run_feature_selection(self, df: pd.DataFrame) -> dict:
         """Run per-quantile feature selection on the training dataframe."""
         logger.info("Running Per-Quantile Feature Selection Pipeline (Training Data Only)...")
-        selector = FeatureSelector(n_splits=3)
+        selector = FeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
         features = {}
 
         # Minutes
@@ -492,7 +494,7 @@ class TrainingOrchestrator:
     ) -> dict:
         """Run feature selection only for specified components."""
         logger.info("Running Partial Feature Selection (retrained components only)...")
-        selector = FeatureSelector(n_splits=3)
+        selector = FeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
         features = {}
 
         if retrain_minutes:
@@ -1057,6 +1059,13 @@ if __name__ == "__main__":
         action="store_true",
         help="Re-run feature selection for retrained components (default: keep existing features).",
     )
+    parser.add_argument(
+        "--feature-tolerance",
+        type=float,
+        default=0.005,
+        help="Feature selection tolerance (0.005 = keep features within 0.5%% of best pinball loss). "
+             "Higher values = more features selected. 0 = strict minimum loss only.",
+    )
 
     args = parser.parse_args()
 
@@ -1138,6 +1147,7 @@ if __name__ == "__main__":
             tuning_timeout=args.tuning_timeout,
             tuning_per_quantile=args.tuning_per_quantile,
             hyperparams_path=args.hyperparams_path,
+            feature_tolerance=args.feature_tolerance,
         )
 
         if is_partial:
