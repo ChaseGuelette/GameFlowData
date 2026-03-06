@@ -217,8 +217,13 @@ class MLBStatsScraper:
                     position = player_data.get("position", {})
                     position_abbrev = position.get("abbreviation", "")
 
+                    # Extract handedness from boxscore player data
+                    bat_side = person.get("batSide", {}).get("code")
+                    pitch_hand = person.get("pitchHand", {}).get("code")
+
                     # Ensure player exists
-                    self._ensure_player(conn, player_id, player_name, position_abbrev)
+                    self._ensure_player(conn, player_id, player_name, position_abbrev,
+                                        bats=bat_side, throws=pitch_hand)
 
                     stats = player_data.get("stats", {})
 
@@ -364,17 +369,26 @@ class MLBStatsScraper:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _ensure_player(self, conn, player_id: int, player_name: str, position: str = ""):
-        """Insert or update player in mlb_players."""
+    def _ensure_player(self, conn, player_id: int, player_name: str, position: str = "",
+                        bats: str | None = None, throws: str | None = None):
+        """Insert or update player in mlb_players (including handedness)."""
         conn.execute(
             text("""
-                INSERT INTO mlb_players (player_id, player_name, primary_position)
-                VALUES (:pid, :name, :pos)
+                INSERT INTO mlb_players (player_id, player_name, primary_position, bats, throws)
+                VALUES (:pid, :name, :pos, :bats, :throws)
                 ON CONFLICT (player_id) DO UPDATE
                     SET player_name = EXCLUDED.player_name,
-                        primary_position = COALESCE(EXCLUDED.primary_position, mlb_players.primary_position)
+                        primary_position = COALESCE(EXCLUDED.primary_position, mlb_players.primary_position),
+                        bats = COALESCE(EXCLUDED.bats, mlb_players.bats),
+                        throws = COALESCE(EXCLUDED.throws, mlb_players.throws)
             """),
-            {"pid": player_id, "name": player_name, "pos": position or None},
+            {
+                "pid": player_id,
+                "name": player_name,
+                "pos": position or None,
+                "bats": bats if bats in ("L", "R", "S") else None,
+                "throws": throws if throws in ("L", "R") else None,
+            },
         )
 
     def _get_existing_game_ids(self) -> set[int]:

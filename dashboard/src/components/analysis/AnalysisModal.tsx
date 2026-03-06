@@ -705,6 +705,8 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                     direction: isOverBet ? 'over' : 'under',
                   })
                   setBetPlaced(true)
+                  // Auto-close modal after brief delay so user sees confirmation
+                  setTimeout(() => onClose(), 1500)
                 }}
                 disabled={betPlaced || !customStake || parseFloat(customStake) <= 0}
                 className={`py-2 px-4 rounded-md font-medium text-sm transition-colors ${

@@ -461,10 +461,16 @@ Detailed analysis popup with:
 <AnalysisModal
   prediction={selectedPrediction}
   onClose={() => setSelected(null)}
+  onTakeBet={handleTakeBet}  // Optional — enables "Take Bet" button
 />
 ```
 
-**Features (as of Session 24):**
+**Props:**
+- `prediction: Prediction` — The prediction to analyze
+- `onClose: () => void` — Close handler
+- `onTakeBet?: (prediction: Prediction, data: TakeBetData) => void` — Called when user clicks "Take Bet" with the selected book/odds/line/stake
+
+**Features (as of Session 68):**
 
 1. **Line Shopping** — Displays all available bookmaker lines for the prop:
    - Fetches from `raw_player_props_combined` table
@@ -485,6 +491,13 @@ Detailed analysis popup with:
    - Linear interpolation between adjacent points
    - Extrapolation above q90 for Under bets (higher lines = higher Under probability)
    - Capped between 0.90 and 0.99 for lines beyond q90
+
+4. **"Take Bet" Button (Session 68)** — Footer action for recording bets with specific sportsbook selection:
+   - Appears when `onTakeBet` prop is provided and a sportsbook line is selected
+   - Stake input pre-filled from Kelly recommendation via `sizingData` useMemo, editable
+   - Calls `onTakeBet(prediction, { book, odds, line, stake, modelProb, edge, direction })`
+   - Button disables after placement, shows "Bet Taken!"
+   - Dashboard wires this to `placeBetCustom()` + `markBetTaken()` to record in `user_bets` and sync PropCard checkmark
 
 ### PlayerAvatar
 
@@ -765,11 +778,13 @@ Individual bet result display.
 
 Shows:
 - Player name and avatar
+- Matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` available (Session 68), with date
 - Stat badge
 - Over/Under direction with line
+- Sportsbook badge (when bookmaker recorded)
 - Actual value
 - Result badge (Won/Lost/Push)
-- P&L amount
+- Stake and P&L amount
 
 #### HistoryFilters
 
@@ -792,7 +807,9 @@ Summary statistics bar.
 <HistorySummary bets={bets} />
 ```
 
-Shows: Total bets, Wins, Losses, Win Rate, Total P&L
+Shows: Total bets, Pending (when present), Wins, Losses, Pushes, Win Rate, Total P&L.
+
+**Per-stat win rate cards (Session 68):** Below the summary grid, displays up to 3 cards (PTS/REB/AST) showing win rate % and W-L record for each stat type with resolved bet data. Uses `STAT_LABELS` and `STAT_COLORS` from predictions types.
 
 ### Performance Components
 
@@ -1337,12 +1354,15 @@ Cross-device sync for user-placed bets and preferences, replacing per-device loc
 
 **`dashboard/src/lib/hooks/useUserBets.ts`** — Bet tracking hook.
 - Fetches user's bets for `selectedDate` from `user_bets` table on mount/date change
-- Returns `{ takenBets: Set<string>, toggleBet: (prediction) => void, loading }`
-- `toggleBet`: optimistic UI update → async Supabase upsert/delete → rollback on error
-- On insert: auto-captures direction, odds, book, model_prob, edge from the Prediction object
+- Returns `{ takenBets: Set<string>, toggleBet: (prediction) => void, markBetTaken: (playerId, stat, rowId) => void, loading }`
+- `toggleBet`: optimistic UI update → async Supabase upsert/delete → rollback on error. Now includes `team_abbrev` and `opponent_abbrev` in upsert.
+- `markBetTaken(playerId, stat, rowId)`: Adds a bet to local `takenBets` set and `betRowsRef` after `placeBetCustom()` succeeds (so PropCard checkmark turns green without a refetch).
+- On insert: auto-captures direction, odds, book, model_prob, edge, team_abbrev, opponent_abbrev from the Prediction object
 - Key format: `${player_id}-${stat}` (same as PropCard/PropGrid)
 - Uses `betRowsRef` (Map) to track row IDs for efficient deletes
 - Unique constraint: `(user_id, game_date, player_id, stat_type)` — one bet per player/stat/date
+
+**`placeBetCustom(params)` (exported standalone function, Session 68)** — Places a bet with caller-provided book/odds/line/stake/direction. Used by AnalysisModal's "Take Bet" button. Returns `{ id }` on success or `null` on failure. Includes `team_abbrev`/`opponent_abbrev` from the prediction.
 
 **`dashboard/src/lib/hooks/useUserPreferences.ts`** — Preferences sync hook.
 - Loads instantly from localStorage (SSR-safe), then syncs from `user_profiles` table
@@ -1357,8 +1377,8 @@ Cross-device sync for user-placed bets and preferences, replacing per-device loc
 - `user_id` (uuid PK, FK auth.users), `user_state`, `bankroll` (default 1000), `kelly_fraction` (default 0.25), `use_custom_kelly`, `created_at`, `updated_at`
 - RLS: users access only their own row
 
-**`user_bets`** — User-placed bets from PropCard checkmark.
-- `id` (bigserial PK), `user_id`, `prediction_id`, `game_date`, `player_id`, `player_name`, `stat_type`, `line`, `bet_direction`, `odds_at_bet`, `book_at_bet`, `model_prob`, `edge`, `stake`, `status` (default 'pending'), `actual_value`, `pnl`, `placed_at`, `resolved_at`
+**`user_bets`** — User-placed bets from PropCard checkmark or AnalysisModal "Take Bet".
+- `id` (bigserial PK), `user_id`, `prediction_id`, `game_date`, `player_id`, `player_name`, `stat_type`, `line`, `bet_direction`, `odds_at_bet`, `book_at_bet`, `model_prob`, `edge`, `stake`, `status` (default 'pending'), `actual_value`, `pnl`, `placed_at`, `resolved_at`, `team_abbrev`, `opponent_abbrev`
 - Unique: `(user_id, game_date, player_id, stat_type)`
 - Indexes: `(user_id, game_date DESC)`, partial on `status='pending'`
 - RLS: users access only their own rows
@@ -1375,8 +1395,8 @@ Cross-device sync for user-placed bets and preferences, replacing per-device loc
 ### Dashboard Changes
 
 - **Dashboard page** — `useUserBets(selectedDate)` replaces localStorage `takenBets`. `useUserPreferences()` replaces localStorage `userState`.
-- **AnalysisModal** — `useUserPreferences()` replaces 6 localStorage reads for bankroll/kelly/state.
-- **History page** — Two tabs: "My Bets" (default, green) queries `user_bets`, "Model History" preserves existing paper_bets view.
+- **AnalysisModal** — `useUserPreferences()` replaces 6 localStorage reads for bankroll/kelly/state. `onTakeBet` prop enables "Take Bet" button (Session 68). Sizing computation lifted to `useMemo`.
+- **History page** — Two tabs: "My Bets" (default, green) queries `user_bets`, "Model History" preserves existing paper_bets view. Maps `team_abbrev`/`opponent_abbrev` for matchup display on BetCards (Session 68).
 - **Performance page** — Three tabs: "My Bets" (green), "Props", "DFS". My Bets shows KPIs, bankroll chart, and stat breakdown from `user_bets`.
 
 ## Future Enhancements
@@ -1385,4 +1405,4 @@ Cross-device sync for user-placed bets and preferences, replacing per-device loc
 2. **Vercel Analytics** — Add `@vercel/analytics` for page view tracking
 3. **Error monitoring** — Add Sentry for error tracking
 4. **Health check endpoint** — `/api/health` for uptime monitoring
-5. **Stake calculation in useUserBets** — Use Kelly from preferences to auto-calculate stake on bet placement
+5. ~~**Stake calculation in useUserBets**~~ — **DONE (Session 68)**: PropCard uses Kelly; AnalysisModal "Take Bet" lets user input custom stake

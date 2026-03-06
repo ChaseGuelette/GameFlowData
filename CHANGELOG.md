@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-06 Session 69] — MLB Training Pipeline + New Features + Feature Catalogs
+
+### Added
+
+- **`src/models/mlb/mlb_train_pipeline.py`** — 10-step CLI orchestrator for end-to-end MLB pitcher K model training. Steps: load train/cal data, per-quantile feature selection, optional Optuna HP tuning, train quantile models (Q10-Q90), calibrate on holdout, calibration report, Monte Carlo sanity check, save artifacts (atomic `_incomplete` pattern), finalize. Mirrors NBA `train_pipeline.py`.
+- **3 new MLB features** — `opp_team_k_pct_l10` (opposing team K rate = SO/PA), `opp_team_whiff_pct_l10` (swing-weighted team whiff% from Statcast batting), `pitcher_est_bf_l5` (estimated batters faced = 3×IP + H + BB). Total pitcher K features now 31.
+- **`docs/nba_feature_catalog.md`** — Complete catalog of all 66 unique NBA features across 5 model lists with source tables, windows, computations, and signals.
+- **`docs/mlb_feature_catalog.md`** — Complete catalog of all 31 MLB pitcher K features with same detail.
+
+### Changed
+
+- **`mlb_feature_store.py`** — Added 3 features to `PITCHER_K_FEATURES`, `avg_h_allowed_l5` support column for BF derivation, `_add_derived_features()` for `pitcher_est_bf_l5`.
+- **`mlb_matchup_features.py`** — Added K% (SO/PA) and swing-weighted whiff% to both `get_opposing_team_batting_stats()` and `compute_matchup_features_bulk()`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/models/mlb/mlb_train_pipeline.py` | Created |
+| `src/models/mlb/mlb_feature_store.py` | Modified — 3 new features, derived BF |
+| `src/processing/mlb/mlb_matchup_features.py` | Modified — K%, whiff% |
+| `docs/nba_feature_catalog.md` | Created |
+| `docs/mlb_feature_catalog.md` | Created |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean
+
+---
+
+## [2026-03-06 Session 68] — AnalysisModal "Take Bet" + History Improvements
+
+### Added
+
+- **AnalysisModal "Take Bet" button** — Select a specific sportsbook line and input custom stake (pre-filled from Kelly). Records bet with exact book/odds/line/stake to `user_bets`. Button disables after placement, PropCard checkmark turns green.
+- **`placeBetCustom()` export** in `useUserBets.ts` — Standalone async function for placing bets with caller-provided book/odds/line/stake. `markBetTaken()` syncs local checkmark state.
+- **Matchup info on BetCards** — History page now shows "LAL vs SAS" below player name. New `team_abbrev`, `opponent_abbrev` columns in `user_bets` (migration 013). Graceful fallback for older bets.
+- **Per-stat win rate cards** — HistorySummary displays PTS/REB/AST breakdown with win rate % and W-L record below the main summary grid.
+- **`database/migrations/013_user_bets_team_opponent.sql`** — Adds `team_abbrev`, `opponent_abbrev` to `user_bets` table.
+
+### Changed
+
+- **AnalysisModal sizing** — Lifted bet sizing IIFE to `useMemo` (`sizingData`) for reuse in Take Bet footer.
+- **`useUserBets` toggleBet upsert** — Now includes `team_abbrev` and `opponent_abbrev` from prediction.
+- **`PaperBet` type** — Added optional `team_abbrev` and `opponent_abbrev` fields.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `database/migrations/013_user_bets_team_opponent.sql` | Created |
+| `dashboard/src/types/predictions.ts` | Modified — PaperBet team/opponent fields |
+| `dashboard/src/lib/hooks/useUserBets.ts` | Modified — placeBetCustom, markBetTaken, team/opponent |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — Take Bet UI, sizingData useMemo |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — handleTakeBet wiring |
+| `dashboard/src/components/history/BetCard.tsx` | Modified — matchup display |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — team/opponent mapping |
+| `dashboard/src/components/history/HistorySummary.tsx` | Modified — per-stat win rate cards |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean
+- TypeScript compiles clean (tsc --noEmit)
+
+---
+
 ## [2026-03-06 Session 67] — Model Comparison Tool + Under-Prediction Research
 
 ### Added

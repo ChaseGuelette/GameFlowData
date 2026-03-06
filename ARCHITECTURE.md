@@ -188,7 +188,7 @@ Serves as the bridge between NBA and sportsbook data:
 | `mlb_populate_averages.py` | Full backfill of `mlb_player_average_batting` and `mlb_player_average_pitching`. Shift(1) rolling averages (no data leakage), rate stats from rolling sums (BA, OBP, SLG, OPS, ERA, WHIP, K/9, BB/9), std devs, context metrics (rest days, pitch count). |
 | `mlb_populate_averages_incremental.py` | Daily incremental — processes only players active on target date. Per-player rolling calculation, UPSERT via `ON CONFLICT DO UPDATE`. |
 | `mlb_populate_statcast_averages.py` | Statcast rolling averages for pitching (contact quality, velo/spin, plate discipline, pitch mix, batted ball distribution). Windows: L3/L5/SZN. PK: `(player_id, game_date)`. |
-| `mlb_matchup_features.py` | Opposing team batting tendencies for pitcher K predictions. Computes team-level L10 strikeout rate and batting average via window functions. Also provides `get_pitcher_handedness()` and `compute_matchup_features_bulk()` for training efficiency. |
+| `mlb_matchup_features.py` | Opposing team batting tendencies for pitcher K predictions. Computes team-level L10 strikeout rate, batting average, K% (SO/PA), and swing-weighted whiff% from Statcast batting data via window functions. Also provides `get_pitcher_handedness()` and `compute_matchup_features_bulk()` for training efficiency. |
 
 #### NCAAB Processing (`src/processing/ncaab/`)
 
@@ -221,9 +221,10 @@ MLB-specific modeling layer. Pitcher strikeouts first (semi-continuous, quantile
 | Module | Purpose |
 |--------|---------|
 | `mlb_stat_config.py` | Per-stat model type and edge threshold configuration. Quantile (pitcher K/outs, 8% edge), NegBin (batter counts, 10%), Binary (HR, 10%). Higher thresholds than NBA due to higher MLB prop juice. |
-| `mlb_feature_store.py` | Central feature engineering for pitcher K model. 28 features across 6 data sources (pitching rolling avgs, Statcast, FanGraphs, park factors, opposing team batting, prop/game lines). LATERAL JOIN SQL pattern mirroring NBA `feature_store.py`. Methods: `get_training_dataset()`, `get_player_game_features()`, `get_features_for_date()`. Time-travel safe (shift(1) averages, `<=` game_date). |
+| `mlb_feature_store.py` | Central feature engineering for pitcher K model. 31 features across 6 data sources (pitching rolling avgs, Statcast, FanGraphs, park factors, opposing team batting, prop/game lines). Includes derived features (`pitcher_est_bf_l5` = 3×IP + H + BB, `pitcher_so_l3_l5_ratio`). LATERAL JOIN SQL pattern mirroring NBA `feature_store.py`. Methods: `get_training_dataset()`, `get_player_game_features()`, `get_features_for_date()`, `enrich_with_matchup_features()`. Time-travel safe (shift(1) averages, `<=` game_date). |
 | `mlb_quantile_trainer.py` | `MLBPitcherKPipeline` — wraps `QuantileModelSuite` from NBA code. Trains XGBoost quantile regression (Q10-Q90) directly on SO counts. No minutes model needed. Config: 1000 estimators, depth 5, lr 0.03. Save/load via joblib. |
 | `mlb_monte_carlo.py` | `MLBMonteCarloPredictor` — inverse CDF sampling from quantile predictions. No copula (single stat). Integer rounding, floor at 0. Batch prediction for efficiency. Reuses `PropPrediction` dataclass from NBA `monte_carlo.py`. |
+| `mlb_train_pipeline.py` | `MLBTrainingOrchestrator` — 10-step CLI for end-to-end model training. Steps: load train/cal data, per-quantile feature selection, optional Optuna HP tuning, train quantile models, calibrate on holdout, calibration report, Monte Carlo sanity check, save artifacts (atomic `_incomplete` pattern), finalize. CLI: `--train-seasons`, `--cal-season`, `--cal-end-date`, `--tune`, `--tuning-trials`, `--feature-tolerance`, `--n-simulations`, `--output-dir`. |
 
 **Key Differences from NBA Pipeline:**
 - **No minutes decomposition:** Pitcher K predicted directly (not minutes × K-rate)
@@ -623,11 +624,12 @@ dashboard/
   - Sportsbook line shopping with actual edge calculations
   - Kelly bet sizing calculator with bankroll input and fraction selection
   - Model probabilities, market implied probabilities, and edge breakdown
+  - **"Take Bet" button** (footer) — appears when a sportsbook line is selected. Stake input pre-filled from Kelly recommendation, editable. Clicking "Take Bet" records the bet with the selected book/odds/line/stake to `user_bets`, turns button to "Bet Taken!", and marks the PropCard checkmark green.
 - **State Selector:** Dropdown filter synced cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Filters AnalysisModal sportsbook lines to only show bookmakers legal in the selected state. Offshore books (Pinnacle, Novig, ProphetX, Bovada) excluded from all states. Mapping in `sportsbook-availability.ts` covers ~26 legal sports betting states.
 - **Line Shopping:** Shows all available bookmaker lines for each prop (filtered by state if set). For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line. Lines are clickable — selecting a line recalculates the bet sizing section using that line's odds and model probability. Defaults to the best-edge line.
 - **Kelly Sizing:** Bankroll persisted cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
-- **User Bet Tracking:** Clicking the green checkmark on a PropCard records the bet in `user_bets` table with full context (direction, odds, book, model probability, edge). Syncs across devices via `useUserBets` hook with optimistic UI updates (instant toggle, async DB write, rollback on error). Bets auto-resolve against actual game results via `UserBetResolver` in the daily stats job.
-- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only.
+- **User Bet Tracking:** Two paths to record a bet: (1) Quick-take via PropCard checkmark — auto-selects best odds/book. (2) AnalysisModal "Take Bet" button — user selects a specific sportsbook line and edits the stake (pre-filled from Kelly recommendation). Both write to `user_bets` table with full context (direction, odds, book, model probability, edge, team_abbrev, opponent_abbrev). `placeBetCustom()` standalone function handles AnalysisModal path; `markBetTaken()` syncs the PropCard checkmark state. Syncs across devices via `useUserBets` hook with optimistic UI updates. Bets auto-resolve against actual game results via `UserBetResolver` in the daily stats job.
+- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. BetCards display matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` are available (graceful fallback for older bets). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only. **Per-stat win rate cards** (PTS/REB/AST) displayed below the summary grid when resolved bet data exists.
 - **Performance View (`/performance`):** Three tabs — **My Bets**, **Props**, and **DFS**. My Bets tab: personal KPI cards (bankroll, P&L, ROI, win rate), bankroll chart from cumulative user bet P&L, and stat breakdown. Props tab: model paper trading KPIs with bet source filter (Model Picks/All Bets). DFS tab: KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
@@ -880,7 +882,7 @@ DISCORD_CHANNEL_PERFORMANCE=...
 
 ### User Bet Tracking (Cross-Device)
 - `user_profiles`: Per-user preferences (state, bankroll, kelly_fraction, use_custom_kelly). PK on `user_id` (FK to `auth.users`). RLS: users access only their own row. `updated_at` auto-trigger.
-- `user_bets`: User-placed bets from dashboard checkmark. Unique on `(user_id, game_date, player_id, stat_type)`. Tracks prediction context (direction, odds, book, model_prob, edge), resolution status (pending/won/lost/push/cancelled), actual_value, and P&L. RLS: users access only their own rows. Resolved by `UserBetResolver` in `daily_stats_job.py`.
+- `user_bets`: User-placed bets from dashboard checkmark or AnalysisModal "Take Bet" button. Unique on `(user_id, game_date, player_id, stat_type)`. Tracks prediction context (direction, odds, book, model_prob, edge), resolution status (pending/won/lost/push/cancelled), actual_value, P&L, `team_abbrev`, and `opponent_abbrev` (for matchup display in history). RLS: users access only their own rows. Resolved by `UserBetResolver` in `daily_stats_job.py`.
 
 ### DFS Paper Trading (Market-Edge)
 - `dfs_paper_entries`: Multi-leg DFS entries (slips). One row per slip type per day. Unique on `(entry_date, slip_type)`. Tracks legs won/lost/push/cancelled, payout multiplier, P&L. Supports 4 slip types: ud_3_standard, ud_5_standard, pp_5_flex, pp_6_flex.
@@ -1058,8 +1060,14 @@ python -m src.processing.mlb.mlb_populate_averages_incremental --date 2024-09-15
 
 ### Training
 ```bash
+# NBA
 python -m src.models.train_pipeline [--tune-hyperparams] [--tuning-trials N]
 python -m src.models.hyperparameter_tuner [--n-trials 50] [--timeout 3600]
+
+# MLB
+python -m src.models.mlb.mlb_train_pipeline --train-seasons 2023 2024 --cal-season 2025
+python -m src.models.mlb.mlb_train_pipeline --train-seasons 2023 2024 --cal-season 2025 --tune --tuning-trials 50
+python -m src.models.mlb.mlb_train_pipeline --train-seasons 2024 --cal-season 2025 --cal-end-date 2025-07-01
 ```
 
 ### Backtesting

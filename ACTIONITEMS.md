@@ -1,5 +1,59 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-06 — Session 69)
+
+### What We Did
+
+**MLB Training Pipeline + New Features + Feature Catalogs (5 files, 2 docs)**
+
+1. **Built `src/models/mlb/mlb_train_pipeline.py`** — 10-step CLI orchestrator for end-to-end MLB pitcher K model training. Steps: load train/cal data, per-quantile feature selection (via `ImprovedFeatureSelector`), optional Optuna HP tuning, train XGBoost quantile models (Q10-Q90), calibrate on holdout, calibration report, Monte Carlo sanity check, save artifacts (atomic `_incomplete` pattern), finalize. Mirrors NBA `train_pipeline.py` structure. Calls `enrich_with_matchup_features()` explicitly (not included by default in `get_training_dataset()`).
+
+2. **Added 3 new MLB features** — `opp_team_k_pct_l10` (opposing team K rate = SO/PA, normalized unlike raw SO count), `opp_team_whiff_pct_l10` (swing-weighted team whiff% from Statcast batting), `pitcher_est_bf_l5` (estimated batters faced = 3×IP + H + BB, a K opportunity volume proxy). Total features now 31.
+
+3. **Created feature catalogs** — `docs/nba_feature_catalog.md` (66 unique NBA features across 5 model lists) and `docs/mlb_feature_catalog.md` (31 MLB pitcher K features). Each feature documented with source table, window, computation, and signal.
+
+4. **Verified NBA feature count** — Confirmed 66 unique features (121 total list entries, many shared across models).
+
+**New Files (2):**
+- `src/models/mlb/mlb_train_pipeline.py` — MLB training orchestrator
+- `docs/nba_feature_catalog.md`, `docs/mlb_feature_catalog.md` — Feature catalogs
+
+**Modified (2):**
+- `src/models/mlb/mlb_feature_store.py` — Added 3 features, `avg_h_allowed_l5` support column, `_add_derived_features()` for BF estimation
+- `src/processing/mlb/mlb_matchup_features.py` — Added K%, whiff% to both single-game and bulk queries
+
+---
+
+## Session Summary (2026-03-06 — Session 68)
+
+### What We Did
+
+**AnalysisModal "Take Bet" + History Page Improvements (8 files, 1 migration)**
+
+1. **AnalysisModal "Take Bet" button** — Users can now select a specific sportsbook line and input their actual stake (pre-filled from Kelly recommendation), then click "Take Bet" to record the bet with that exact book/odds/line/stake. Button disables after placement and shows "Bet Taken!". PropCard checkmark turns green.
+
+2. **`placeBetCustom()` standalone function** — New exported async function in `useUserBets.ts` for placing bets with caller-provided parameters (used by AnalysisModal). `markBetTaken()` method syncs local state.
+
+3. **Team/opponent matchup in history** — BetCards now show "LAL vs SAS" below the player name. New `team_abbrev` and `opponent_abbrev` columns in `user_bets` table (migration 013). Graceful fallback for older bets without this data.
+
+4. **Per-stat win rate cards** — HistorySummary now shows PTS/REB/AST win rate breakdown below the main summary grid. Each card displays the stat badge, win rate %, and W-L record.
+
+5. **Sizing computation lifted to `useMemo`** — AnalysisModal's bet sizing IIFE refactored to a `useMemo` (`sizingData`) for reuse in the Take Bet footer.
+
+**New Files (1):**
+- `database/migrations/013_user_bets_team_opponent.sql` — adds `team_abbrev`, `opponent_abbrev` to `user_bets`
+
+**Modified (7):**
+- `dashboard/src/types/predictions.ts` — `team_abbrev?`, `opponent_abbrev?` on PaperBet
+- `dashboard/src/lib/hooks/useUserBets.ts` — `placeBetCustom()`, `markBetTaken()`, team/opponent in upsert
+- `dashboard/src/components/analysis/AnalysisModal.tsx` — `onTakeBet` prop, Take Bet UI, sizingData useMemo
+- `dashboard/src/app/(protected)/dashboard/page.tsx` — `handleTakeBet` callback wiring
+- `dashboard/src/components/history/BetCard.tsx` — matchup display
+- `dashboard/src/app/(protected)/history/page.tsx` — team/opponent mapping
+- `dashboard/src/components/history/HistorySummary.tsx` — per-stat win rate cards
+
+---
+
 ## Session Summary (2026-03-06 — Session 67)
 
 ### What We Did
@@ -36,7 +90,7 @@
 7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
 8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
 9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
-10. **Train pitcher K model on 2024 data** — run end-to-end training pipeline, validate calibration
+10. **Train pitcher K model on 2024 data** — Training pipeline ready (`mlb_train_pipeline.py`, Session 69). Run: `python -m src.models.mlb.mlb_train_pipeline --train-seasons 2023 2024 --cal-season 2025`. Requires averages backfill first (item #7).
 11. **Build MLB daily runner** — inference pipeline mirroring NBA `daily_runner.py`
 12. **Build MLB backtesting harness** — historical replay for pitcher K predictions
 13. **Stripe integration** — subscribe page, customer portal, webhook
@@ -46,7 +100,7 @@
 17. **Add `cbbpy` to requirements.txt** — NCAAB dependency
 18. **Backfill NCAAB historical data** — CBBpy box scores, Barttorvik snapshots, game lines
 19. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
-20. **Add stake calculation to useUserBets** — currently records bets without stake; could use Kelly from preferences
+20. ~~**Add stake calculation to useUserBets**~~ — **DONE (Session 68)**: PropCard checkmark uses Kelly from preferences; AnalysisModal "Take Bet" lets user input custom stake
 21. **Re-add NCAAB cron jobs to scheduler** — removed in Session 65 (failing on Railway); re-add after items 15-18 are complete
 22. **Selective PTS retrain with force-included matchup features** — PTS Q50 only uses 7 features (no opp defense, pace, teammate injuries). Force-include matchup features and compare betting edge vs current model. NOTE: Research suggests this may NOT improve ROI — the under-prediction is where the edge lives (see Session 67 research). Proceed with caution.
 23. **Deploy Session 65 changes to Railway + Vercel** — scheduler (NCAAB removal + --skip-paper), edge_refresh (line preservation + --skip-paper), dashboard (past date fix)
@@ -143,7 +197,7 @@ Built full-stack user bet tracking: database migration, React hooks, dashboard i
 17. **Add `cbbpy` to requirements.txt** — NCAAB dependency
 18. **Backfill NCAAB historical data** — CBBpy box scores, Barttorvik snapshots, game lines
 19. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
-20. **Add stake calculation to useUserBets** — currently records bets without stake; could use Kelly from preferences
+20. ~~**Add stake calculation to useUserBets**~~ — **DONE (Session 68)**: PropCard checkmark uses Kelly from preferences; AnalysisModal "Take Bet" lets user input custom stake
 21. **Re-add NCAAB cron jobs to scheduler** — removed in Session 65 (failing on Railway); re-add after items 15-18 are complete
 22. **Selective PTS retrain with force-included matchup features** — PTS Q50 only uses 7 features (no opp defense, pace, teammate injuries). Force-include matchup features and compare betting edge vs current model
 23. **Deploy Session 65 changes to Railway + Vercel** — scheduler (NCAAB removal + --skip-paper), edge_refresh (line preservation + --skip-paper), dashboard (past date fix)

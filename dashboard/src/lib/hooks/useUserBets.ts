@@ -24,22 +24,27 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
 
   const { prediction, book, odds, line, stake, direction, modelProb, edge } = params
 
-  const { data, error } = await supabase
+  const baseRow = {
+    user_id: user.id,
+    prediction_id: prediction.id,
+    game_date: prediction.prediction_date,
+    player_id: prediction.player_id,
+    player_name: prediction.player_name || `Player ${prediction.player_id}`,
+    stat_type: prediction.stat,
+    line,
+    bet_direction: direction,
+    odds_at_bet: odds,
+    book_at_bet: book,
+    model_prob: modelProb,
+    edge,
+    stake,
+  }
+
+  // Try with team/opponent columns first, fall back without if migration not applied
+  let { data, error } = await supabase
     .from('user_bets')
     .upsert({
-      user_id: user.id,
-      prediction_id: prediction.id,
-      game_date: prediction.prediction_date,
-      player_id: prediction.player_id,
-      player_name: prediction.player_name || `Player ${prediction.player_id}`,
-      stat_type: prediction.stat,
-      line,
-      bet_direction: direction,
-      odds_at_bet: odds,
-      book_at_bet: book,
-      model_prob: modelProb,
-      edge,
-      stake,
+      ...baseRow,
       team_abbrev: prediction.team_abbrev ?? null,
       opponent_abbrev: prediction.opponent_abbrev ?? null,
     }, {
@@ -49,8 +54,20 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
     .single()
 
   if (error) {
-    console.error('Failed to place custom bet:', error)
-    return null
+    // Retry without new columns (migration may not be applied yet)
+    const retry = await supabase
+      .from('user_bets')
+      .upsert(baseRow, {
+        onConflict: 'user_id,game_date,player_id,stat_type',
+      })
+      .select('id')
+      .single()
+
+    if (retry.error) {
+      console.error('Failed to place custom bet:', retry.error)
+      return null
+    }
+    data = retry.data
   }
   return data
 }
@@ -169,9 +186,7 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
           }
         }
 
-        const { data, error } = await supabase
-          .from('user_bets')
-          .upsert({
+        const toggleBaseRow = {
             user_id: user.id,
             prediction_id: prediction.id,
             game_date: prediction.prediction_date,
@@ -185,6 +200,12 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
             model_prob: modelProb ?? null,
             edge: edge ?? null,
             stake,
+        }
+
+        let { data, error } = await supabase
+          .from('user_bets')
+          .upsert({
+            ...toggleBaseRow,
             team_abbrev: prediction.team_abbrev ?? null,
             opponent_abbrev: prediction.opponent_abbrev ?? null,
           }, {
@@ -192,6 +213,19 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
           })
           .select('id')
           .single()
+
+        // Retry without new columns if migration not applied
+        if (error) {
+          const retry = await supabase
+            .from('user_bets')
+            .upsert(toggleBaseRow, {
+              onConflict: 'user_id,game_date,player_id,stat_type',
+            })
+            .select('id')
+            .single()
+          data = retry.data
+          error = retry.error
+        }
 
         if (error) {
           console.error('Failed to insert user bet:', error)
