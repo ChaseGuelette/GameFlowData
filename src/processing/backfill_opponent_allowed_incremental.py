@@ -280,7 +280,6 @@ def batch_insert_to_db(engine, df: pd.DataFrame, batch_size: int = 100):
     df = df.rename(columns=rename_map)[valid_cols].replace({np.nan: None})
 
     cols = ", ".join(valid_cols)
-    placeholders = ", ".join([f"%s" for _ in valid_cols])
     conflict_cols = ["team_id", "game_id", "position_group"]
     update_cols = [c for c in valid_cols if c not in conflict_cols]
     upsert_sql = (
