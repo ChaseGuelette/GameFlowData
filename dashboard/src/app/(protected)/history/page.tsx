@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { HistoryFilters, type StatusFilter } from '@/components/history/HistoryFilters'
 import { HistorySummary } from '@/components/history/HistorySummary'
@@ -123,6 +123,8 @@ export default function HistoryPage() {
           actual_value: row.actual_value != null ? Number(row.actual_value) : null,
           pnl: row.pnl != null ? Number(row.pnl) : null,
           bookmaker: row.book_at_bet,
+          team_abbrev: row.team_abbrev ?? undefined,
+          opponent_abbrev: row.opponent_abbrev ?? undefined,
         }))
         setMyBets(mapped)
       }
@@ -147,6 +149,22 @@ export default function HistoryPage() {
   const filteredMyBets = myBetsFilter === 'all'
     ? myBets.filter(b => b.status !== 'cancelled')
     : myBets.filter(b => b.status === myBetsFilter)
+
+  // Remove a pending bet
+  const handleRemoveBet = useCallback(async (betId: number) => {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('user_bets')
+      .delete()
+      .eq('id', betId)
+
+    if (error) {
+      console.error('Failed to remove bet:', error)
+      return
+    }
+
+    setMyBets(prev => prev.filter(b => b.id !== betId))
+  }, [])
 
   return (
     <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
@@ -216,7 +234,7 @@ export default function HistoryPage() {
           ) : (
             <>
               <HistorySummary bets={myBets} />
-              <BetList bets={filteredMyBets} />
+              <BetList bets={filteredMyBets} onRemove={handleRemoveBet} />
             </>
           )}
         </>

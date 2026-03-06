@@ -14,7 +14,8 @@ import { TEAM_ABBREV, TEAM_NAME_TO_ABBREV } from '@/lib/constants'
 import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS } from '@/lib/sportsbook-availability'
 import { BookFilterDropdown } from '@/components/predictions/BookFilterDropdown'
 import { STAT_TO_MARKET } from '@/types/dfs'
-import { useUserBets } from '@/lib/hooks/useUserBets'
+import { useUserBets, placeBetCustom } from '@/lib/hooks/useUserBets'
+import { type TakeBetData } from '@/components/analysis/AnalysisModal'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 
 export default function DashboardPage() {
@@ -33,7 +34,7 @@ export default function DashboardPage() {
   // Cross-device synced preferences & bets
   const { prefs, updatePref } = useUserPreferences()
   const userState = prefs.userState
-  const { takenBets, toggleBet: handleToggleTaken } = useUserBets(selectedDate, prefs.bankroll, prefs.kellyFraction)
+  const { takenBets, toggleBet: handleToggleTaken, markBetTaken } = useUserBets(selectedDate, prefs.bankroll, prefs.kellyFraction)
 
   const [excludedBooks, setExcludedBooks] = useState<Set<string>>(new Set())
   const [bookAvailability, setBookAvailability] = useState<Set<string> | null>(null)
@@ -141,6 +142,23 @@ export default function DashboardPage() {
       setFallbackGames([])
     }
   }, [])
+
+  // Handle "Take Bet" from AnalysisModal
+  const handleTakeBet = useCallback(async (prediction: Prediction, data: TakeBetData) => {
+    const result = await placeBetCustom({
+      prediction,
+      book: data.book,
+      odds: data.odds,
+      line: data.line,
+      stake: data.stake,
+      direction: data.direction,
+      modelProb: data.modelProb,
+      edge: data.edge,
+    })
+    if (result) {
+      markBetTaken(prediction.player_id, prediction.stat, result.id)
+    }
+  }, [markBetTaken])
 
   // Fetch predictions for a specific date
   const fetchPredictions = useCallback(async (date: string) => {
@@ -689,6 +707,7 @@ export default function DashboardPage() {
         <AnalysisModal
           prediction={selectedPrediction}
           onClose={() => setSelectedPrediction(null)}
+          onTakeBet={handleTakeBet}
         />
       )}
     </main>

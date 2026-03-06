@@ -55,12 +55,16 @@ PITCHER_K_FEATURES: list[str] = [
     # Opposing team batting context
     "opp_team_avg_so_l10",
     "opp_team_avg_batting_avg_l10",
+    "opp_team_k_pct_l10",
+    "opp_team_whiff_pct_l10",
     # Game context
     "park_so_factor",
     "is_home",
     "line_total",
     # Betting signal
     "prop_line_pitcher_strikeouts",
+    # Derived
+    "pitcher_est_bf_l5",
     # Trend
     "pitcher_so_l3_l5_ratio",
 ]
@@ -143,6 +147,7 @@ class MLBFeatureStore:
                 COALESCE(p_avg.avg_pitches_thrown_l3, 0) AS pitcher_avg_pitches_thrown_l3,
                 COALESCE(p_avg.avg_bb_l5, 0) AS pitcher_avg_bb_l5,
                 COALESCE(p_avg.std_so_l3, 0) AS pitcher_std_so_l3,
+                COALESCE(p_avg.avg_h_allowed_l5, 0) AS pitcher_avg_h_allowed_l5,
 
                 -- Pitcher context
                 LEAST(COALESCE(p_avg.days_rest, 5), 14) AS pitcher_days_rest,
@@ -183,7 +188,7 @@ class MLBFeatureStore:
                        avg_k_per_9_l5,
                        avg_ip_l3, avg_ip_l5, avg_ip_szn,
                        avg_pitches_thrown_l3,
-                       avg_bb_l5,
+                       avg_bb_l5, avg_h_allowed_l5,
                        std_so_l3,
                        days_rest, pitch_count_last_start, starts_szn
                 FROM mlb_player_average_pitching pa
@@ -254,11 +259,13 @@ class MLBFeatureStore:
         """Add Python-computed derived features after SQL load."""
         # Momentum ratio: L3/L5 strikeout trend
         df["pitcher_so_l3_l5_ratio"] = df.apply(
-            lambda r: (r["pitcher_avg_so_l3"] / r["pitcher_avg_so_l5"])
-            if r["pitcher_avg_so_l5"] > 0
-            else 1.0,
+            lambda r: (r["pitcher_avg_so_l3"] / r["pitcher_avg_so_l5"]) if r["pitcher_avg_so_l5"] > 0 else 1.0,
             axis=1,
         )
+
+        # Estimated batters faced per game (L5 avg): BF ≈ 3*IP + H + BB
+        df["pitcher_est_bf_l5"] = 3 * df["pitcher_avg_ip_l5"] + df["pitcher_avg_h_allowed_l5"] + df["pitcher_avg_bb_l5"]
+
         return df
 
     def enrich_with_matchup_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -279,6 +286,8 @@ class MLBFeatureStore:
         if not matchup_frames:
             df["opp_team_avg_so_l10"] = 0
             df["opp_team_avg_batting_avg_l10"] = 0
+            df["opp_team_k_pct_l10"] = 0
+            df["opp_team_whiff_pct_l10"] = 0
             return df
 
         matchup_df = pd.concat(matchup_frames, ignore_index=True)
@@ -292,6 +301,8 @@ class MLBFeatureStore:
         # Fill missing matchup features with defaults
         df["opp_team_avg_so_l10"] = df["opp_team_avg_so_l10"].fillna(0)
         df["opp_team_avg_batting_avg_l10"] = df["opp_team_avg_batting_avg_l10"].fillna(0)
+        df["opp_team_k_pct_l10"] = df["opp_team_k_pct_l10"].fillna(0)
+        df["opp_team_whiff_pct_l10"] = df["opp_team_whiff_pct_l10"].fillna(0)
 
         return df
 
@@ -338,28 +349,29 @@ class MLBFeatureStore:
         features["line_total"] = self._get_game_total(game_id)
 
         # 7. Prop line
-        features["prop_line_pitcher_strikeouts"] = self._get_prop_line(
-            player_id, game_id
-        )
+        features["prop_line_pitcher_strikeouts"] = self._get_prop_line(player_id, game_id)
 
         # 8. Opposing team batting
         from src.processing.mlb.mlb_matchup_features import (
             get_opposing_team_batting_stats,
         )
 
-        opp_stats = get_opposing_team_batting_stats(
-            self.engine, opp_team_id, game_date, season
-        )
+        opp_stats = get_opposing_team_batting_stats(self.engine, opp_team_id, game_date, season)
         features["opp_team_avg_so_l10"] = opp_stats.get("opp_team_avg_so_l10") or 0
-        features["opp_team_avg_batting_avg_l10"] = (
-            opp_stats.get("opp_team_avg_batting_avg_l10") or 0
-        )
+        features["opp_team_avg_batting_avg_l10"] = opp_stats.get("opp_team_avg_batting_avg_l10") or 0
+        features["opp_team_k_pct_l10"] = opp_stats.get("opp_team_k_pct_l10") or 0
+        features["opp_team_whiff_pct_l10"] = opp_stats.get("opp_team_whiff_pct_l10") or 0
 
         # 9. Derived features
         features["pitcher_so_l3_l5_ratio"] = (
             features["pitcher_avg_so_l3"] / features["pitcher_avg_so_l5"]
             if features.get("pitcher_avg_so_l5", 0) > 0
             else 1.0
+        )
+        features["pitcher_est_bf_l5"] = (
+            3 * features.get("pitcher_avg_ip_l5", 0)
+            + features.get("pitcher_avg_h_allowed_l5", 0)
+            + features.get("pitcher_avg_bb_l5", 0)
         )
 
         return features
@@ -403,6 +415,7 @@ class MLBFeatureStore:
                 COALESCE(p_avg.avg_pitches_thrown_l3, 0) AS pitcher_avg_pitches_thrown_l3,
                 COALESCE(p_avg.avg_bb_l5, 0) AS pitcher_avg_bb_l5,
                 COALESCE(p_avg.std_so_l3, 0) AS pitcher_std_so_l3,
+                COALESCE(p_avg.avg_h_allowed_l5, 0) AS pitcher_avg_h_allowed_l5,
 
                 -- Pitcher context
                 LEAST(COALESCE(p_avg.days_rest, 5), 14) AS pitcher_days_rest,
@@ -440,7 +453,7 @@ class MLBFeatureStore:
                        avg_k_per_9_l5,
                        avg_ip_l3, avg_ip_l5, avg_ip_szn,
                        avg_pitches_thrown_l3,
-                       avg_bb_l5,
+                       avg_bb_l5, avg_h_allowed_l5,
                        std_so_l3,
                        days_rest, pitch_count_last_start, starts_szn
                 FROM mlb_player_average_pitching pa
@@ -522,7 +535,7 @@ class MLBFeatureStore:
                    avg_k_per_9_l5,
                    avg_ip_l3, avg_ip_l5, avg_ip_szn,
                    avg_pitches_thrown_l3,
-                   avg_bb_l5,
+                   avg_bb_l5, avg_h_allowed_l5,
                    std_so_l3,
                    days_rest, pitch_count_last_start, starts_szn
             FROM mlb_player_average_pitching
@@ -531,9 +544,7 @@ class MLBFeatureStore:
             ORDER BY game_date DESC LIMIT 1
         """)
         with self.engine.connect() as conn:
-            row = conn.execute(
-                query, {"player_id": player_id, "game_date": game_date}
-            ).fetchone()
+            row = conn.execute(query, {"player_id": player_id, "game_date": game_date}).fetchone()
 
         if row is None:
             return {f: 0 for f in PITCHER_K_FEATURES if f.startswith("pitcher_avg_") or f.startswith("pitcher_std_")}
@@ -548,6 +559,7 @@ class MLBFeatureStore:
             "pitcher_avg_ip_szn": float(row.avg_ip_szn or 0),
             "pitcher_avg_pitches_thrown_l3": float(row.avg_pitches_thrown_l3 or 0),
             "pitcher_avg_bb_l5": float(row.avg_bb_l5 or 0),
+            "pitcher_avg_h_allowed_l5": float(row.avg_h_allowed_l5 or 0),
             "pitcher_std_so_l3": float(row.std_so_l3 or 0),
             "pitcher_days_rest": min(int(row.days_rest or 5), 14),
             "pitcher_pitch_count_last_start": int(row.pitch_count_last_start or 0),
@@ -567,9 +579,7 @@ class MLBFeatureStore:
             ORDER BY game_date DESC LIMIT 1
         """)
         with self.engine.connect() as conn:
-            row = conn.execute(
-                query, {"player_id": player_id, "game_date": game_date}
-            ).fetchone()
+            row = conn.execute(query, {"player_id": player_id, "game_date": game_date}).fetchone()
 
         if row is None:
             return {
@@ -600,9 +610,7 @@ class MLBFeatureStore:
               AND player_type = 'pitcher'
         """)
         with self.engine.connect() as conn:
-            row = conn.execute(
-                query, {"player_id": player_id, "season": season}
-            ).fetchone()
+            row = conn.execute(query, {"player_id": player_id, "season": season}).fetchone()
 
         if row is None:
             return {"pitcher_fip_szn": 0, "pitcher_k_pct_szn": 0}
@@ -620,9 +628,7 @@ class MLBFeatureStore:
             WHERE venue_id = :venue_id AND season = :season
         """)
         with self.engine.connect() as conn:
-            row = conn.execute(
-                query, {"venue_id": venue_id, "season": season}
-            ).fetchone()
+            row = conn.execute(query, {"venue_id": venue_id, "season": season}).fetchone()
         return float(row.so_factor) if row and row.so_factor else 1.0
 
     def _get_game_total(self, game_id: int) -> float:
@@ -650,7 +656,5 @@ class MLBFeatureStore:
             LIMIT 1
         """)
         with self.engine.connect() as conn:
-            row = conn.execute(
-                query, {"player_id": player_id, "game_id": game_id}
-            ).fetchone()
+            row = conn.execute(query, {"player_id": player_id, "game_id": game_id}).fetchone()
         return float(row.line) if row and row.line else 0

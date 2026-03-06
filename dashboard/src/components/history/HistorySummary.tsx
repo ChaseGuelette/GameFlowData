@@ -1,6 +1,6 @@
 'use client'
 
-import { type PaperBet } from '@/types/predictions'
+import { type PaperBet, type StatType, STAT_LABELS, STAT_COLORS } from '@/types/predictions'
 import { cn } from '@/lib/utils'
 
 interface HistorySummaryProps {
@@ -30,16 +30,46 @@ export function HistorySummary({ bets }: HistorySummaryProps) {
     },
   ]
 
+  // Per-stat win rates
+  const statTypes: StatType[] = ['pts', 'reb', 'ast']
+  const perStatData = statTypes
+    .map(stat => {
+      const statBets = resolvedBets.filter(b => b.stat_type === stat)
+      if (statBets.length === 0) return null
+      const statWins = statBets.filter(b => b.status === 'won').length
+      const statLosses = statBets.filter(b => b.status === 'lost').length
+      const rate = statWins + statLosses > 0 ? (statWins / (statWins + statLosses)) * 100 : 0
+      return { stat, wins: statWins, losses: statLosses, total: statBets.length, rate }
+    })
+    .filter(Boolean) as { stat: StatType; wins: number; losses: number; total: number; rate: number }[]
+
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-      {stats.map((stat) => (
-        <div key={stat.label} className="bg-slate-800 rounded-lg border border-slate-700 p-4">
-          <div className="text-xs text-slate-400 mb-1">{stat.label}</div>
-          <div className={cn('text-xl font-semibold', stat.color || 'text-slate-50')}>
-            {stat.value}
+    <div className="space-y-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+        {stats.map((stat) => (
+          <div key={stat.label} className="bg-slate-800 rounded-lg border border-slate-700 p-4">
+            <div className="text-xs text-slate-400 mb-1">{stat.label}</div>
+            <div className={cn('text-xl font-semibold', stat.color || 'text-slate-50')}>
+              {stat.value}
+            </div>
           </div>
+        ))}
+      </div>
+      {perStatData.length > 0 && (
+        <div className="grid grid-cols-3 gap-4">
+          {perStatData.map(({ stat, wins: w, losses: l, rate }) => (
+            <div key={stat} className="bg-slate-800 rounded-lg border border-slate-700 p-4 flex items-center gap-3">
+              <span className={cn('text-xs px-2 py-0.5 rounded text-white', STAT_COLORS[stat])}>
+                {STAT_LABELS[stat]}
+              </span>
+              <div className="flex-1">
+                <div className="text-lg font-semibold text-slate-50">{rate.toFixed(1)}%</div>
+                <div className="text-xs text-slate-400">{w}W - {l}L</div>
+              </div>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   )
 }

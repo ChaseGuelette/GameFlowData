@@ -2,6 +2,59 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { type Prediction } from '@/types/predictions'
 
+export interface PlaceBetCustomParams {
+  prediction: Prediction
+  book: string
+  odds: number
+  line: number
+  stake: number
+  direction: 'over' | 'under'
+  modelProb: number
+  edge: number
+}
+
+/**
+ * Standalone function to place a bet with caller-provided book/odds/line/stake.
+ * Used by AnalysisModal's "Take Bet" button.
+ */
+export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id: number } | null> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const { prediction, book, odds, line, stake, direction, modelProb, edge } = params
+
+  const { data, error } = await supabase
+    .from('user_bets')
+    .upsert({
+      user_id: user.id,
+      prediction_id: prediction.id,
+      game_date: prediction.prediction_date,
+      player_id: prediction.player_id,
+      player_name: prediction.player_name || `Player ${prediction.player_id}`,
+      stat_type: prediction.stat,
+      line,
+      bet_direction: direction,
+      odds_at_bet: odds,
+      book_at_bet: book,
+      model_prob: modelProb,
+      edge,
+      stake,
+      team_abbrev: prediction.team_abbrev ?? null,
+      opponent_abbrev: prediction.opponent_abbrev ?? null,
+    }, {
+      onConflict: 'user_id,game_date,player_id,stat_type',
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to place custom bet:', error)
+    return null
+  }
+  return data
+}
+
 // Calculate Kelly stake as fraction of bankroll (same logic as AnalysisModal)
 function calculateKelly(modelProb: number, odds: number, kellyFraction: number): number {
   if (odds === 0 || modelProb <= 0 || modelProb >= 1) return 0
@@ -132,6 +185,8 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
             model_prob: modelProb ?? null,
             edge: edge ?? null,
             stake,
+            team_abbrev: prediction.team_abbrev ?? null,
+            opponent_abbrev: prediction.opponent_abbrev ?? null,
           }, {
             onConflict: 'user_id,game_date,player_id,stat_type',
           })
@@ -153,5 +208,12 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
     })()
   }, [takenBets, bankroll, kellyFraction])
 
-  return { takenBets, toggleBet, loading }
+  // Mark a bet as taken (updates local state after placeBetCustom succeeds)
+  const markBetTaken = useCallback((playerId: number, stat: string, rowId: number) => {
+    const key = `${playerId}-${stat}`
+    setTakenBets(prev => new Set(prev).add(key))
+    betRowsRef.current.set(key, { id: rowId })
+  }, [])
+
+  return { takenBets, toggleBet, markBetTaken, loading }
 }

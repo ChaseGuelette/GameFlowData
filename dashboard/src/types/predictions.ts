@@ -114,6 +114,8 @@ export interface PaperBet {
   actual_value: number | null
   pnl: number | null
   bookmaker?: string  // Which sportsbook had the line
+  team_abbrev?: string
+  opponent_abbrev?: string
 }
 
 export interface DailyPerformance {
