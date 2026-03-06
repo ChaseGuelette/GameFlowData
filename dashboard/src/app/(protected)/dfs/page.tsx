@@ -14,6 +14,9 @@ import { TEAM_ABBREV } from '@/lib/constants'
 import { getToday, formatDate } from '@/lib/utils'
 import { estimateOverProb, estimateUnderProb, calcAllSlipEvs, devig, computeVig } from '@/lib/dfs-utils'
 
+// Normalize game_id to 10-digit zero-padded format to match RPC LPAD output
+const padGameId = (id: string) => id.padStart(10, '0')
+
 export default function DfsPage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [dfsLines, setDfsLines] = useState<DfsLine[]>([])
@@ -135,14 +138,14 @@ export default function DfsPage() {
 
     const predMap = new Map<string, Prediction>()
     for (const p of predictions) {
-      predMap.set(`${p.player_id}-${p.game_id}-${p.stat}`, p)
+      predMap.set(`${p.player_id}-${padGameId(p.game_id)}-${p.stat}`, p)
     }
 
     const dfsGrouped = new Map<string, DfsLine[]>()
     for (const dl of dfsLines) {
       const stat = MARKET_TO_STAT[dl.market_key]
       if (!stat) continue
-      const key = `${dl.player_id}-${dl.game_id}-${stat}`
+      const key = `${dl.player_id}-${padGameId(dl.game_id)}-${stat}`
       if (!dfsGrouped.has(key)) dfsGrouped.set(key, [])
       dfsGrouped.get(key)!.push(dl)
     }
@@ -215,7 +218,7 @@ export default function DfsPage() {
     for (const sb of sportsbookLines) {
       const stat = MARKET_TO_STAT[sb.market_key]
       if (!stat) continue
-      const key = `${sb.player_id}-${sb.game_id}-${stat}`
+      const key = `${sb.player_id}-${padGameId(sb.game_id)}-${stat}`
       if (!idx.has(key)) idx.set(key, [])
       idx.get(key)!.push(sb)
     }
@@ -229,14 +232,14 @@ export default function DfsPage() {
     // Build prediction lookup (may be empty before inference)
     const predMap = new Map<string, Prediction>()
     for (const p of predictions) {
-      predMap.set(`${p.player_id}-${p.game_id}-${p.stat}`, p)
+      predMap.set(`${p.player_id}-${padGameId(p.game_id)}-${p.stat}`, p)
     }
 
     const dfsGrouped = new Map<string, DfsLine[]>()
     for (const dl of dfsLines) {
       const stat = MARKET_TO_STAT[dl.market_key]
       if (!stat) continue
-      const key = `${dl.player_id}-${dl.game_id}-${stat}`
+      const key = `${dl.player_id}-${padGameId(dl.game_id)}-${stat}`
       if (!dfsGrouped.has(key)) dfsGrouped.set(key, [])
       dfsGrouped.get(key)!.push(dl)
     }
@@ -400,7 +403,7 @@ export default function DfsPage() {
         if (platformFilter !== 'all' && modelPl.bookmaker !== platformFilter) continue
 
         // Find matching market data
-        const key = `${comp.player_id}-${comp.game_id}-${comp.stat}`
+        const key = `${comp.player_id}-${padGameId(comp.game_id)}-${comp.stat}`
         const marketData = marketComparisons.get(key)
         if (!marketData) continue
 
