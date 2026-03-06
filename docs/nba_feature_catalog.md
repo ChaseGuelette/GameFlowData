@@ -16,7 +16,8 @@ Complete reference for all features used across the NBA prediction models. Featu
 | Assists Rate | `ast_per_min` | `RATE_FEATURES_AST` | 23 |
 | Threes Rate | `fg3m_per_min` | `RATE_FEATURES_THREES` | 26 |
 
-**Total unique features across all models: ~55** (many are shared across lists)
+**Total entries across all lists: 121** (many shared — injury/rest features appear in every list)
+**Total unique features: 66**
 
 ---
 
