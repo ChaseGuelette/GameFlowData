@@ -33,7 +33,7 @@ export default function DashboardPage() {
   // Cross-device synced preferences & bets
   const { prefs, updatePref } = useUserPreferences()
   const userState = prefs.userState
-  const { takenBets, toggleBet: handleToggleTaken } = useUserBets(selectedDate)
+  const { takenBets, toggleBet: handleToggleTaken } = useUserBets(selectedDate, prefs.bankroll, prefs.kellyFraction)
 
   const [excludedBooks, setExcludedBooks] = useState<Set<string>>(new Set())
   const [bookAvailability, setBookAvailability] = useState<Set<string> | null>(null)

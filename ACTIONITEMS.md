@@ -1,5 +1,59 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-06 — Session 67)
+
+### What We Did
+
+**Model Comparison Tool + Under-Prediction Research (1 new file, 3 docs)**
+
+1. **Built `src/tools/compare_models.py`** — CLI tool that loads two model directories, runs fresh inference on the same features/date, and prints a side-by-side comparison. Shows: summary by stat, player detail (Q10-Q90), top 10 largest Q50 differences, market accuracy (which model's Q50 is closer to the line). Supports partial player name matching with diacritical-insensitive search (e.g., "Doncic" matches "Doncic").
+
+2. **Compared legacy vs production model** — Ran both models on 2026-03-05 lines. Key findings:
+   - Model B (production/copula) is closer to market lines 54.9% vs 45.1% overall
+   - PTS predictions are systematically lower with copula (rho=0.336 amplifies under-prediction)
+   - REB barely changed between models (rho=-0.003, effectively zero)
+
+3. **Verified recalibration did NOT fix systematic under-prediction** — Re-ran inference with current production model against yesterday's stored predictions. Results nearly identical: 70-80% of Q50s below line across all stats.
+
+4. **Researched whether under-prediction is harmful** — Extensive academic literature review (4 parallel research agents). Conclusion: **the under-prediction is a feature, not a bug.**
+
+### Key Research Findings
+
+- **Hubacek et al. (2022)** — "Beating the Market with a Bad Predictive Model" — proves decorrelation from market errors matters more than accuracy
+- **Dmochowski (2023, PLOS ONE)** — optimal betting estimators may possess large bias
+- **Sportsbooks inflate prop lines** — public over-bias is well-documented; lines shade upward 0.5-2 stat points
+- **Calibration offsets hurt ROI** — 7.44% → 6.01% when offsets applied (Session 42). This is predicted by decorrelation theory: pushing predictions toward truth also pushes them toward the inflated market
+- **Sharp bettors systematically target unders** — our model's under-bias aligns with professional betting strategy
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Deploy dashboard to Vercel** — user bet tracking features need frontend deployment
+3. **Monitor cross-device sync** — verify checkmark state syncs between phone and laptop
+4. **Monitor user bet auto-resolution** — verify bets resolve correctly after daily_stats_job runs
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id, 500K missing team_id, 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **Train pitcher K model on 2024 data** — run end-to-end training pipeline, validate calibration
+11. **Build MLB daily runner** — inference pipeline mirroring NBA `daily_runner.py`
+12. **Build MLB backtesting harness** — historical replay for pitcher K predictions
+13. **Stripe integration** — subscribe page, customer portal, webhook
+14. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+15. **Apply NCAAB migrations 009-011 to Supabase** — NCAAB tables
+16. **Fix ncaab_teams UNIQUE constraint** — add UNIQUE(team_name) to migration 009
+17. **Add `cbbpy` to requirements.txt** — NCAAB dependency
+18. **Backfill NCAAB historical data** — CBBpy box scores, Barttorvik snapshots, game lines
+19. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
+20. **Add stake calculation to useUserBets** — currently records bets without stake; could use Kelly from preferences
+21. **Re-add NCAAB cron jobs to scheduler** — removed in Session 65 (failing on Railway); re-add after items 15-18 are complete
+22. **Selective PTS retrain with force-included matchup features** — PTS Q50 only uses 7 features (no opp defense, pace, teammate injuries). Force-include matchup features and compare betting edge vs current model. NOTE: Research suggests this may NOT improve ROI — the under-prediction is where the edge lives (see Session 67 research). Proceed with caution.
+23. **Deploy Session 65 changes to Railway + Vercel** — scheduler (NCAAB removal + --skip-paper), edge_refresh (line preservation + --skip-paper), dashboard (past date fix)
+24. **Backtest copula rho sweep for PTS** — Current rho=0.336 amplifies PTS under-prediction. Run backtest comparing rho=0 vs 0.1 vs 0.2 vs 0.336 to find optimal value for ROI
+
+---
+
 ## Session Summary (2026-03-04 — Session 66)
 
 ### What We Did

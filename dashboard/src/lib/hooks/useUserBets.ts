@@ -2,6 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { type Prediction } from '@/types/predictions'
 
+// Calculate Kelly stake as fraction of bankroll (same logic as AnalysisModal)
+function calculateKelly(modelProb: number, odds: number, kellyFraction: number): number {
+  if (odds === 0 || modelProb <= 0 || modelProb >= 1) return 0
+  const b = odds > 0 ? odds / 100 : 100 / Math.abs(odds)
+  const f = (modelProb * (b + 1) - 1) / b
+  if (f <= 0) return 0
+  return Math.min(f * kellyFraction, 0.25)
+}
+
 /**
  * Hook for user bet tracking with cross-device sync via Supabase.
  * Replaces the old per-date localStorage approach.
@@ -9,7 +18,7 @@ import { type Prediction } from '@/types/predictions'
  * Returns a Set<string> of taken bet keys (`${player_id}-${stat}`)
  * and a toggle function that does optimistic UI updates + async DB writes.
  */
-export function useUserBets(selectedDate: string) {
+export function useUserBets(selectedDate: string, bankroll?: number, kellyFraction?: number) {
   const [takenBets, setTakenBets] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   // Track the full bet rows so we can delete by id
@@ -98,6 +107,15 @@ export function useUserBets(selectedDate: string) {
         }
       } else {
         // Insert bet
+        // Calculate Kelly stake if bankroll & kelly settings are available
+        let stake: number | null = null
+        if (bankroll && kellyFraction && modelProb && bestOdds) {
+          const kellyPct = calculateKelly(modelProb, bestOdds, kellyFraction)
+          if (kellyPct > 0) {
+            stake = Math.round(bankroll * kellyPct * 100) / 100
+          }
+        }
+
         const { data, error } = await supabase
           .from('user_bets')
           .upsert({
@@ -113,6 +131,7 @@ export function useUserBets(selectedDate: string) {
             book_at_bet: bestBook ?? null,
             model_prob: modelProb ?? null,
             edge: edge ?? null,
+            stake,
           }, {
             onConflict: 'user_id,game_date,player_id,stat_type',
           })
@@ -132,7 +151,7 @@ export function useUserBets(selectedDate: string) {
         }
       }
     })()
-  }, [takenBets])
+  }, [takenBets, bankroll, kellyFraction])
 
   return { takenBets, toggleBet, loading }
 }

@@ -455,6 +455,7 @@ A simulation environment to validate betting strategies.
 | Module | Purpose |
 |--------|---------|
 | `query_player.py` | CLI tool for querying stored predictions. Modes: line probability, player overview, top edges. |
+| `compare_models.py` | CLI tool for comparing predictions from two model directories side-by-side. Loads both models, runs inference on the same features, prints Q50 differences, market accuracy comparison, and player-level detail. No DB writes. |
 
 ### 9. Orchestration (`src/orchestration/`)
 
@@ -1125,6 +1126,23 @@ python src/tools/query_player.py --top 20
 
 # Top edges for a specific date
 python src/tools/query_player.py --date 2026-01-29 --top 10
+```
+
+### Compare Models
+```bash
+# Compare old vs new model predictions for a date
+python src/tools/compare_models.py \
+  --model-a src/models/artifacts/production_archived_20260305 \
+  --model-b src/models/artifacts/production \
+  --date 2026-03-05
+
+# Filter to specific player (supports partial match, diacritical-insensitive)
+python src/tools/compare_models.py \
+  --model-a src/models/artifacts/production_archived_20260305 \
+  --model-b src/models/artifacts/production \
+  --date 2026-03-05 \
+  --player "Luka Doncic" \
+  --stats pts reb ast
 ```
 
 ### Social Media Images

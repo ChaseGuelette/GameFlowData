@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-06 Session 67] — Model Comparison Tool + Under-Prediction Research
+
+### Added
+
+- **`src/tools/compare_models.py`** — CLI tool for comparing predictions from two model directories side-by-side. Loads both model artifacts, generates predictions using the same features for a given date, and prints a formatted comparison. Four output sections: summary by stat, player detail (Q10-Q90 with market lines), top 10 largest Q50 differences, and market accuracy (which model is closer to the line). Supports partial player name matching with Unicode normalization (e.g., "Doncic" matches "Doncic"). No DB writes.
+
+### Investigated
+
+- **Systematic under-prediction analysis** — Compared legacy (Model A) vs production copula (Model B) predictions against 2026-03-05 market lines. Both models predict Q50 below the line for 70-85% of players across PTS/REB/AST. Confirmed this is a known property, not a regression.
+- **Academic research on biased betting models** — Four parallel research agents reviewed academic literature (Hubacek 2022, Dmochowski 2023, Walsh & Joshi 2024). Conclusion: systematic under-prediction is beneficial for betting ROI because (a) sportsbook lines are inflated due to public over-bias, (b) the model's downward bias creates decorrelation from market errors, and (c) calibration offsets that "fix" the bias re-correlate with the market and reduce ROI (7.44% to 6.01%, confirmed in Session 42).
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/tools/compare_models.py` | Created |
+| `ARCHITECTURE.md` | Updated — added compare_models docs |
+| `ACTIONITEMS.md` | Updated — Session 67 summary, updated action item #22 with research caveat |
+| `CHANGELOG.md` | Updated — Session 67 entry |
+| `docs/development_docs/2026-03-06_session67.md` | Created |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean (5 auto-fixed, 0 remaining)
+
+---
+
 ## [2026-03-05 Session 65] — Bug Fixes, Edge Refresh Hardening, Model Promotion
 
 ### Fixed

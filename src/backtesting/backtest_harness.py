@@ -76,6 +76,7 @@ class BacktestHarness:
     starting_bankroll: float = 10000.0
     kelly_fraction: float = 0.125
     max_bet_pct: float | None = None  # Cap bet size as % of bankroll (e.g., 0.025 = 2.5%)
+    flat_bet_size: float | None = None  # Fixed dollar amount per bet (overrides Kelly)
     bookmakers: list[str] = field(default_factory=lambda: [
         # US market (original)
         "draftkings", "fanduel", "betmgm", "betrivers", "bovada",
@@ -104,6 +105,7 @@ class BacktestHarness:
             starting_bankroll=self.starting_bankroll,
             kelly_fraction=self.kelly_fraction,
             max_bet_pct=self.max_bet_pct,
+            flat_bet_size=self.flat_bet_size,
             allowed_bets=set(self.allowed_bets) if self.allowed_bets else None,
             use_bl_for_sizing=self.bl_sizing_blender is not None,
             stat_config=self.stat_config,
