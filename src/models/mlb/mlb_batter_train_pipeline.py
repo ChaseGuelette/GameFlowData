@@ -32,7 +32,6 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 from src.db.client import get_engine
 from src.models.mlb.mlb_batter_feature_store import (
     BATTER_FEATURE_MAP,
-    BATTER_STAT_TARGET,
     MLBBatterFeatureStore,
     get_features_for_stat,
 )
@@ -137,10 +136,9 @@ class MLBBatterTrainingOrchestrator:
         valid_df = train_df[train_df["actual"].notna()].copy()
         valid_df["target_binary"] = (valid_df["actual"] >= 1).astype(int)
 
-        selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
         candidates = [c for c in available if c in valid_df.columns
                       and valid_df[c].dtype in ("float64", "float32", "int64", "int32")]
-        # Use all candidates for binary (feature selection is simpler)
+        # Use all numeric candidates for binary
         selected = candidates
         logger.info("Using %d features for HR binary model", len(selected))
 
