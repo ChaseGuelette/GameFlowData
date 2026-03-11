@@ -180,9 +180,7 @@ def main():
             yesterday = target_date - timedelta(days=1)
             with engine.connect() as conn:
                 latest_game_date = conn.execute(text(
-                    "SELECT MAX(game_date)::date FROM player_average_game_stats WHERE season_id = ("
-                    "  SELECT MAX(season_id) FROM player_average_game_stats"
-                    ")"
+                    "SELECT MAX(game_date)::date FROM player_average_game_stats"
                 )).scalar()
                 if latest_game_date:
                     if latest_game_date < yesterday:
