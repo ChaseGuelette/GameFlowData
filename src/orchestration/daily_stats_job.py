@@ -2,7 +2,7 @@
 """
 Daily Stats Job - NBA Game Results & Processing
 ================================================
-Run once daily (recommended: 9 AM ET) after previous night's games are final.
+Run once daily (recommended: 11 AM ET on Railway) after previous night's games are final.
 
 This job:
 1. Scrapes latest NBA game results from NBA API

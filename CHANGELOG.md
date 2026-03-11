@@ -5,6 +5,109 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-11 Session 72] — Real-Time Game Status from NBA Scoreboard
+
+### Added
+
+- **`/api/scoreboard` API route** (`dashboard/src/app/api/scoreboard/route.ts`) — Fetches NBA CDN live scoreboard (`todaysScoreboard_00.json`), returns `Record<gameId, GameStatusInfo>` map. 30s ISR cache. Returns `{}` on error (client falls back to time-based).
+- **`useGameStatus` hook** (`dashboard/src/lib/hooks/useGameStatus.ts`) — Polls `/api/scoreboard` every 30s when `isToday=true`. Returns empty Map for historical dates. Follows existing hook patterns.
+- **`GameStatusInfo` type** (`dashboard/src/types/predictions.ts`) — `{ gameStatus: 1|2|3, gameStatusText: string, period: number, gameClock: string }`.
+- **`getGameStatus()` helper** (`dashboard/src/lib/utils.ts`) — Centralized live-vs-fallback logic. Checks scoreboard map first, falls back to existing `isGameLive()`/`isGameDone()` time-based estimation.
+- **`gameId` on `GameInfo` interface** — TonightsGames game pills now carry `gameId` for scoreboard lookup.
+
+### Changed
+
+- **Live/Final badges** — TonightsGames, PropCard, PlayOfTheDay now show real NBA status text (e.g., "Q3 5:42", "Halftime") instead of just "Live". "Final" appears immediately when the NBA marks the game as final (not after a 3-hour timer).
+- **Dashboard filter logic** — `page.tsx` uses `getGameStatus()` instead of `isGameDone()` for today's game filtering. Live/Pre-Game toggle works with real game status.
+- **PropGrid** — Passes `gameStatusMap` through to PropCard.
+
+### Removed
+
+- **Duplicated game status functions** in `TonightsGames.tsx` — local `isLive()`, `isDone()`, `GAME_DURATION_MS` replaced by shared `getGameStatus()`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/app/api/scoreboard/route.ts` | Created |
+| `dashboard/src/lib/hooks/useGameStatus.ts` | Created |
+| `dashboard/src/types/predictions.ts` | Modified — added `GameStatusInfo` |
+| `dashboard/src/lib/utils.ts` | Modified — added `getGameStatus()` |
+| `dashboard/src/components/predictions/TonightsGames.tsx` | Modified — `gameId` on GameInfo, `gameStatusMap` prop, removed local status funcs |
+| `dashboard/src/components/predictions/PropCard.tsx` | Modified — uses `getGameStatus()` |
+| `dashboard/src/components/predictions/PlayOfTheDay.tsx` | Modified — uses `getGameStatus()` |
+| `dashboard/src/components/predictions/PropGrid.tsx` | Modified — `gameStatusMap` pass-through |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — `useGameStatus` hook, filter logic, prop forwarding |
+
+### Verified
+
+- 693 Python tests pass, 0 failures
+- Ruff clean
+- Dashboard build clean (`npm run build`)
+
+---
+
+## [2026-03-11 Session 71] — Bet Direction Filter + Railway Schedule Change
+
+### Added
+
+- **`DirectionFilter` shared component** (`dashboard/src/components/shared/DirectionFilter.tsx`) — Pill-button filter (Both/Over/Under) following `BetSourceFilter` pattern. Active state `bg-blue-600`.
+- **Direction filter on dashboard** — `directionFilter` state in dashboard page. Filter logic compares `over_edge` vs `under_edge` (with `Number.isFinite()` guards, ties classified as Under). Renders between Model Picks toggle and Build Slate button. Composes with all existing filters.
+- **Direction filter on history page** — Independent `directionFilter` and `myBetsDirectionFilter` states (one per tab). Filters by `bet_direction` column directly. Direction-filtered bets (before status filter) passed to `HistorySummary`.
+- **Over/Under breakdown cards in HistorySummary** — New row below per-stat win rate cards. Shows per-direction win rate, W-L record, and P&L. Emerald badge for Over, orange for Under. Only renders when direction data exists.
+- **Advanced scraper in setup_windows_tasks.ps1** — `GameFlowData_AdvancedScraper` task entry (9 AM ET, 2-hour default ExecutionTimeLimit).
+
+### Changed
+
+- **Railway daily_stats schedule** — Moved from 9:00 AM to 11:00 AM ET so rolling averages always include previous night's games. Retry moved from 9:30 to 11:30. Still finishes well before 12:15 PM inference.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/components/shared/DirectionFilter.tsx` | Created |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — direction state, filter logic, UI |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — direction state (per tab), filter logic, UI |
+| `dashboard/src/components/history/HistorySummary.tsx` | Modified — over/under breakdown cards |
+| `src/orchestration/scheduler.py` | Modified — daily_stats 9→11 AM, retry 9:30→11:30 |
+| `scripts/setup_windows_tasks.ps1` | Modified — added AdvancedScraper task entry |
+
+### Verified
+
+- 660 Python tests pass, 0 failures
+- Ruff clean
+- Dashboard build clean (`npm run build`)
+
+---
+
+## [2026-03-11 Session 70] — Scheduler Timezone Bug Fix + Calibration Drift Alert Tuning
+
+### Fixed
+
+- **Scheduler timezone double-conversion** — `scheduler.py` uses `BlockingScheduler(timezone="America/New_York")`, so CronTrigger hours are interpreted as ET. Four jobs had UTC-converted hours causing double-conversion: `daily_stats_retry` fired at 2:30 PM instead of 9:30 AM, 5-min props/edge jobs ran 4 PM–5 AM instead of 11 AM–11 PM, 4 PM lines scrape fired at 9 PM instead of 4 PM. All corrected to use ET hours directly.
+- **Calibration drift false alarms** — `calibration_monitor.py` bias alerts (pred_q50 vs actual) excluded from severity calculation. The model's systematic under-prediction vs market is intentional (source of edge), so bias alerts were flagging a feature as a bug. Bias data still displays in the Discord embed for visibility, just no longer inflates severity to "warning"/"critical".
+
+### Changed
+
+- **`scheduler.py` docstring** — Removed misleading `(HH:MM UTC)` annotations; schedule table now reflects actual ET fire times.
+- **`docs/railway_deployment.md`** — Updated schedule table to remove UTC column, corrected cadence from 10-min to 5-min, added daily_stats_retry row.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/scheduler.py` | Fixed — 4 CronTrigger hour values, updated docstring |
+| `src/paper_trading/calibration_monitor.py` | Fixed — excluded bias_alerts from severity |
+| `docs/railway_deployment.md` | Updated — schedule table |
+| `ARCHITECTURE.md` | Updated — scheduler description |
+
+### Verified
+
+- 660 Python tests pass, 0 failures
+- Ruff clean
+
+---
+
 ## [2026-03-06 Session 69] — MLB Training Pipeline + New Features + Feature Catalogs
 
 ### Added

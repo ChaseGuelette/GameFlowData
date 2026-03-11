@@ -2,6 +2,7 @@
 
 import { PropCard } from './PropCard'
 import { type Prediction } from '@/types/predictions'
+import { type GameStatusMap } from '@/lib/hooks/useGameStatus'
 
 interface PropGridProps {
   predictions: Prediction[]
@@ -11,9 +12,10 @@ interface PropGridProps {
   onToggleSelect?: (prediction: Prediction) => void
   takenIds?: Set<string>
   onToggleTaken?: (prediction: Prediction) => void
+  gameStatusMap?: GameStatusMap
 }
 
-export function PropGrid({ predictions, onAnalyze, selectable, selectedIds, onToggleSelect, takenIds, onToggleTaken }: PropGridProps) {
+export function PropGrid({ predictions, onAnalyze, selectable, selectedIds, onToggleSelect, takenIds, onToggleTaken, gameStatusMap }: PropGridProps) {
   if (predictions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 px-4">
@@ -41,6 +43,7 @@ export function PropGrid({ predictions, onAnalyze, selectable, selectedIds, onTo
           onToggleSelect={onToggleSelect}
           taken={takenIds?.has(`${prediction.player_id}-${prediction.stat}`)}
           onToggleTaken={onToggleTaken}
+          gameStatusMap={gameStatusMap}
         />
       ))}
     </div>

@@ -39,6 +39,7 @@ dashboard/
 │   │   │   ├── account/page.tsx    # Profile + community card
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
 │   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback games)
+│   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s cache)
 │   │   ├── auth/callback/route.ts # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
@@ -82,7 +83,12 @@ dashboard/
 │   │   └── shared/             # Shared components
 │   │       ├── PlayerAvatar.tsx     # NBA headshots
 │   │       ├── Badge.tsx            # Stat and edge badges
-│   │       └── BetSourceFilter.tsx  # Model Picks vs All Bets toggle
+│   │       ├── BetSourceFilter.tsx  # Model Picks vs All Bets toggle
+│   │       └── DirectionFilter.tsx  # Both/Over/Under pill-button filter
+│   ├── lib/hooks/
+│   │   ├── useGameStatus.ts       # Live NBA scoreboard polling (30s, today only)
+│   │   ├── useUserBets.ts         # Cross-device bet tracking
+│   │   └── useUserPreferences.ts  # Cross-device preferences
 │   ├── lib/
 │   │   ├── supabase/           # Supabase client configuration
 │   │   │   ├── client.ts       # Browser client
@@ -93,7 +99,7 @@ dashboard/
 │   │   ├── insights.ts         # Template-based insight generator
 │   │   ├── stats/columns.ts    # Column definitions for Data Vault tables
 │   │   ├── subscription.ts     # Subscription utils (dormant)
-│   │   └── utils.ts            # Utility functions
+│   │   └── utils.ts            # Utility functions (formatting, edge tiers, game status)
 │   ├── types/
 │   │   ├── predictions.ts      # TypeScript interfaces
 │   │   ├── dfs.ts              # DFS line types, slip types, platform constants

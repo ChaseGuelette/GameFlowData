@@ -7,8 +7,8 @@ All times are in America/New_York (ET). DST transitions are handled
 automatically by APScheduler + pytz.
 
 Schedule (ET):
-    9:00 AM  - daily_stats_job
-    9:30 AM  - daily_stats_retry (if 9 AM failed)
+    11:00 AM - daily_stats_job
+    11:30 AM - daily_stats_retry (if 11 AM failed)
 
     11 AM - 11 PM ET every 5 min:
         :00,:05,...,:55  - lines_job --live --props-only  (silent)
@@ -293,7 +293,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=2700,  # 45 minute global timeout (was 30m)
+            timeout=2700,  # 45 minute global timeout
         )
 
         stdout = result.stdout or ""
@@ -407,18 +407,18 @@ def run_daily_stats():
 
 
 def run_daily_stats_retry():
-    """Re-run daily stats if the 9 AM run failed or didn't run."""
+    """Re-run daily stats if the 11 AM run failed or didn't run."""
     status = JOB_STATUS.get("daily_stats_job.py", {})
     if status.get("status") == "success":
-        logger.info("Daily stats already succeeded today, skipping 9:30 retry.")
+        logger.info("Daily stats already succeeded today, skipping 11:30 retry.")
         return
-    logger.warning("Daily stats failed or did not run at 9 AM — retrying now...")
+    logger.warning("Daily stats failed or did not run at 11 AM — retrying now...")
     _send_job_alert(
         "daily_stats_job.py",
         success=False,
         duration=0,
         stdout="",
-        stderr="9 AM daily stats job failed or missing — automatic retry at 9:30 AM ET",
+        stderr="11 AM daily stats job failed or missing — automatic retry at 11:30 AM ET",
     )
     run_job("daily_stats_job.py")
 
@@ -504,20 +504,20 @@ def main():
     # Schedule jobs (all times in America/New_York ET)
     # ==============================================================
 
-    # 9:00 AM ET - Daily stats
+    # 11:00 AM ET - Daily stats (moved from 9 AM so last night's games are in DB)
     scheduler.add_job(
         run_daily_stats,
-        CronTrigger(hour=9, minute=0),
+        CronTrigger(hour=11, minute=0),
         id="daily_stats",
-        name="Daily Stats (9 AM ET)",
+        name="Daily Stats (11 AM ET)",
     )
 
-    # 9:30 AM ET - Retry daily stats if 9 AM run failed
+    # 11:30 AM ET - Retry daily stats if 11 AM run failed
     scheduler.add_job(
         run_daily_stats_retry,
-        CronTrigger(hour=9, minute=30),
+        CronTrigger(hour=11, minute=30),
         id="daily_stats_retry",
-        name="Daily Stats Retry (9:30 AM ET)",
+        name="Daily Stats Retry (11:30 AM ET)",
     )
 
     # --- First window: noon full scrape + inference ---

@@ -3,7 +3,9 @@
 import { PlayerAvatar } from '@/components/shared/PlayerAvatar'
 import { Badge, EdgeBadge } from '@/components/shared/Badge'
 import { type Prediction } from '@/types/predictions'
-import { cn, getEdgeTier, formatProb, formatGameTime, isGameLive, isGameDone } from '@/lib/utils'
+import { cn, getEdgeTier, formatProb, formatGameTime, getGameStatus } from '@/lib/utils'
+import { type GameStatusInfo } from '@/types/predictions'
+import { type GameStatusMap } from '@/lib/hooks/useGameStatus'
 
 interface PropCardProps {
   prediction: Prediction
@@ -13,9 +15,11 @@ interface PropCardProps {
   onToggleSelect?: (prediction: Prediction) => void
   taken?: boolean
   onToggleTaken?: (prediction: Prediction) => void
+  gameStatusMap?: GameStatusMap
 }
 
-export function PropCard({ prediction, onAnalyze, selectable, selected, onToggleSelect, taken, onToggleTaken }: PropCardProps) {
+export function PropCard({ prediction, onAnalyze, selectable, selected, onToggleSelect, taken, onToggleTaken, gameStatusMap }: PropCardProps) {
+  const status = getGameStatus(prediction.game_id, prediction.game_time, gameStatusMap ?? new Map<string, GameStatusInfo>())
   // Determine which direction has positive edge (with NaN safety)
   const overEdge = Number.isFinite(prediction.over_edge) ? prediction.over_edge : 0
   const underEdge = Number.isFinite(prediction.under_edge) ? prediction.under_edge : 0
@@ -81,15 +85,15 @@ export function PropCard({ prediction, onAnalyze, selectable, selected, onToggle
           <p className="text-slate-400 text-sm">
             {prediction.team_abbrev || '???'} vs {prediction.opponent_abbrev || '???'}
             <span className="ml-2 text-slate-500">• {formatGameTime(prediction.game_time)}</span>
-            {isGameLive(prediction.game_time) && (
+            {status.isLive && (
               <span className="ml-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-500/20 text-red-400 border border-red-500/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
-                Live
+                {status.statusText || 'Live'}
               </span>
             )}
-            {isGameDone(prediction.game_time) && (
+            {status.isDone && (
               <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-600/30 text-slate-400 border border-slate-600/30">
-                Final
+                {status.statusText || 'Final'}
               </span>
             )}
           </p>

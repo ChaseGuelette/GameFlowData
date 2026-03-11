@@ -466,7 +466,7 @@ A simulation environment to validate betting strategies.
 
 | Script | Schedule | Purpose |
 |--------|----------|---------|
-| `daily_stats_job.py` | 9:00 AM ET (once) | NBA game results + full processing pipeline |
+| `daily_stats_job.py` | 11:00 AM ET (once) | NBA game results + full processing pipeline |
 | `lines_job.py --live --parallel` | 12 PM, 4 PM ET | Full lines scrape with parallel execution (props + injuries concurrent) |
 | `inference_job.py` | 12:15 PM, 4:15 PM ET | Full inference (MC predictions + edges + BL) |
 | `lines_job.py --live --props-only` | Every 5 min, 11 AM–11 PM ET | Props-only scrape (~156 runs/day, silent Discord) |
@@ -500,21 +500,22 @@ A simulation environment to validate betting strategies.
 - `scripts/run_daily_stats.bat` — Runs daily stats job
 - `scripts/run_lines.bat` — Runs lines job
 - `scripts/run_inference.bat` — Runs inference job
+- `scripts/run_advanced_scraper.bat` — Scrapes advanced box scores from stats.nba.com (local only, 9 AM ET, `--no-proxy --skip-team --skip-traditional`)
 
-Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, GameFlow-Lines-6PM, GameFlow-Inference) execute these batch scripts at configured times. See `scripts/` directory for implementation. **Note:** Local tasks disabled as of 2026-02-14 in favor of Railway deployment.
+Scheduled tasks registered via `scripts/setup_windows_tasks.ps1` (run as Administrator). Default `ExecutionTimeLimit` is 2 hours per task. **Note:** Only `run_advanced_scraper.bat` runs locally (advanced stats require direct stats.nba.com access — NEVER run on Railway, NEVER use a proxy). All other tasks run on Railway.
 
 **Railway Cloud Deployment (2026-02-14):** Production deployment uses Railway with APScheduler for job orchestration:
 - `nixpacks.toml` — Nixpacks build config: Python venv with system-site-packages, explicit `LD_LIBRARY_PATH` for Nix-installed shared libraries (libz, libstdc++), zlib and stdenv.cc.cc.lib nixPkgs for numpy/scipy/xgboost C extensions
 - `railway.toml` — Railway-specific build and deploy settings (nixpacks builder, restart policy)
-- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 7 job definitions on cron schedule (UTC times):
-  - `daily_stats_job.py` — 9 AM ET (scrapes NBA game results)
-  - `daily_stats_job.py` (retry) — 9:30 AM ET (auto-retry if 9 AM run failed)
+- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 7 job definitions on cron schedule (all times ET, DST-aware via `BlockingScheduler(timezone="America/New_York")`):
+  - `daily_stats_job.py` — 11 AM ET (scrapes NBA game results via CDN, rolling averages)
+  - `daily_stats_job.py` (retry) — 11:30 AM ET (auto-retry if 11 AM run failed)
   - `lines_job.py --live --parallel` — 12 PM, 4 PM ET (full live scrape with parallel props + injury paths)
   - `inference_job.py` — 12:15 PM, 4:15 PM ET (full MC inference, with dependency check on daily stats)
   - `lines_job.py --live --props-only` — Every 5 min, 11 AM–11 PM ET (props-only scrape, ~156 runs/day)
   - `edge_refresh_job.py` — Every 5 min offset by 2 min, 11 AM–11 PM ET (recalculates edges, ~156 runs/day)
 - **Job status tracking (2026-03-02):** `JOB_STATUS` in-memory dict tracks every job's status, end time, and duration. `record_job_execution()` writes to `job_executions` Supabase table for persistent history and debugging. `check_dependency()` queries `JOB_STATUS` before running dependent jobs (e.g., inference checks daily stats succeeded in last 8 hours).
-- **Automatic retry (2026-03-02):** 9:30 AM ET retry job (`run_daily_stats_retry()`) checks if the 9 AM daily stats succeeded — if not, re-runs it. Gives the system a second chance before inference at 12:15 PM.
+- **Automatic retry (2026-03-02):** 11:30 AM ET retry job (`run_daily_stats_retry()`) checks if the 11 AM daily stats succeeded — if not, re-runs it. Gives the system a second chance before inference at 12:15 PM.
 - **Dependency gate (2026-03-02):** `run_inference()` checks `check_dependency("daily_stats_job.py", max_age_hours=8)`. If stale, still runs inference but passes `--stale-warning` flag and sends Discord alert about stale rolling averages.
 - **5-minute refresh cadence (2026-03-03):** Props-only and edge refresh increased from every 10 min to every 5 min (~156 runs/day each). Full scrapes at noon/4pm use `--parallel` for concurrent props + injury paths. Enabled by fuzzy cache optimization reducing linker overhead to <1s.
 - **NCAAB jobs (2026-03-03, removed 2026-03-05):** Three NCAAB cron jobs were added in Session 63 but removed in Session 65 because migrations 009-011 aren't applied, no historical data is backfilled, and `cbbpy` isn't in `requirements.txt` on Railway. Will be re-added after backfill is complete (see ACTIONITEMS.md #21).
@@ -574,6 +575,7 @@ dashboard/
 │   │   │   ├── stats/page.tsx        # Data Vault — heatmap stat tables
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
 │   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback game list)
+│   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s ISR cache)
 │   │   ├── auth/callback/route.ts  # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
@@ -586,10 +588,11 @@ dashboard/
 │   │   ├── history/            # BetCard, BetList, HistoryFilters, HistorySummary
 │   │   ├── performance/        # KPICard, BankrollChart, StatBreakdown
 │   │   ├── subscription/       # PricingCard (dormant, for future Stripe)
-│   │   └── shared/             # PlayerAvatar, Badge, BetSourceFilter components
+│   │   └── shared/             # PlayerAvatar, Badge, BetSourceFilter, DirectionFilter components
 │   ├── lib/
 │   │   ├── supabase/           # Client, server, and middleware helpers
 │   │   ├── hooks/              # Custom React hooks
+│   │   │   ├── useGameStatus.ts # Live NBA scoreboard polling (30s, today only)
 │   │   │   ├── useUserBets.ts  # Cross-device bet tracking (optimistic UI + Supabase sync)
 │   │   │   └── useUserPreferences.ts # Cross-device preferences (localStorage cache + DB sync)
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
@@ -599,7 +602,7 @@ dashboard/
 │   │   ├── stats/columns.ts    # Column definitions for Data Vault heatmap tables
 │   │   ├── stats/pivotPlayTypes.ts # Client-side pivot for play type long→wide format
 │   │   ├── subscription.ts     # Subscription types/utils (dormant)
-│   │   └── utils.ts            # Formatting, edge tiers, headshot URLs
+│   │   └── utils.ts            # Formatting, edge tiers, headshot URLs, game status helpers
 │   ├── types/
 │   │   ├── predictions.ts      # TypeScript interfaces for predictions, bets, performance
 │   │   ├── dfs.ts              # DFS line types, slip types, platform constants
@@ -613,8 +616,9 @@ dashboard/
 **Key Features:**
 - **Play of the Day:** Featured card at the top of the dashboard highlighting the model's highest-edge pick. Amber/gold visual treatment with trophy badge, large player avatar, star rating, and prominent edge display. Respects current filter settings (date, edge threshold, BL blending). Clicking "Analyze Pick" opens the analysis modal.
 - **Predictions View (`/`):** Displays predictions filtered by stat type (pts/reb/ast), sorted by edge magnitude. Matchup filter allows viewing predictions for specific games (e.g., "LAL vs SAS"). Includes:
-  - **Live Betting Toggle:** Pill-style "Pre-Game / + Live" toggle. Default (Pre-Game) hides predictions whose `game_time` has passed (game started or finished). "+ Live" (orange pill) shows all predictions including live games. Comparison is client-side: `new Date(p.game_time) <= new Date()`. **LIVE tags** appear on PropCard, PlayOfTheDay, and TonightsGames game pills when a game has started (pulsing red dot + "Live" badge). Game times always display (show "TBD" when unknown). Client-side game_time backfill propagates times from same-game predictions.
+  - **Live Betting Toggle:** Pill-style "Pre-Game / + Live" toggle. Default (Pre-Game) hides predictions for games that have started or finished. "+ Live" (orange pill) shows all predictions including in-progress games. **Real-time game status** via `useGameStatus` hook polls `/api/scoreboard` every 30s when viewing today — status badges show actual NBA data (e.g., "Q3 5:42", "Halftime", "Final") instead of time-based estimates. Falls back to time-based estimation (`start + 3hrs = Final`) for historical dates or API errors. Filter logic uses `getGameStatus()` helper which checks the live scoreboard map first, then falls back to `isGameLive()`/`isGameDone()`. Game times always display (show "TBD" when unknown). Client-side game_time backfill propagates times from same-game predictions.
   - **Date Selector:** View predictions from any date in the last 30 days (uses `get_prediction_dates()` RPC function for efficient distinct query)
+  - **Direction Filter:** Pill-button filter (Both/Over/Under) to isolate over or under picks. On dashboard, determines direction by comparing `over_edge` vs `under_edge` (with `Number.isFinite()` guards, ties classified as under). On history page, filters directly by `bet_direction` column.
   - **Edge Threshold Filter:** Filter picks by minimum edge (All, ≥3%, ≥5%, ≥7%, ≥10%, ≥15%, ≥20%)
   - **Black-Litterman Blending Filter:** Optionally apply BL blending to edges (Off, τ=0.03, τ=0.05, τ=0.10, τ=0.15, τ=0.25). BL calculation implemented client-side using `calculateBLConfidence()` and `blendProbability()` utility functions.
   - **Sportsbook Filter:** Multi-select checkbox dropdown (`BookFilterDropdown`) — all state-legal books checked by default. Unchecking a book excludes predictions only available at that book. Uses `excludedBooks: Set<string>` state; when any books are excluded, queries `raw_player_props_combined` with `.in('bookmaker', activeBooks)` to build availability set. "Select All" / "Clear All" toggle, closes on outside click or Escape. Button shows "All Books" or "Books (N)".
@@ -629,7 +633,7 @@ dashboard/
 - **Line Shopping:** Shows all available bookmaker lines for each prop (filtered by state if set). For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line. Lines are clickable — selecting a line recalculates the bet sizing section using that line's odds and model probability. Defaults to the best-edge line.
 - **Kelly Sizing:** Bankroll persisted cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
 - **User Bet Tracking:** Two paths to record a bet: (1) Quick-take via PropCard checkmark — auto-selects best odds/book. (2) AnalysisModal "Take Bet" button — user selects a specific sportsbook line and edits the stake (pre-filled from Kelly recommendation). Both write to `user_bets` table with full context (direction, odds, book, model probability, edge, team_abbrev, opponent_abbrev). `placeBetCustom()` standalone function handles AnalysisModal path; `markBetTaken()` syncs the PropCard checkmark state. Syncs across devices via `useUserBets` hook with optimistic UI updates. Bets auto-resolve against actual game results via `UserBetResolver` in the daily stats job.
-- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. BetCards display matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` are available (graceful fallback for older bets). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only. **Per-stat win rate cards** (PTS/REB/AST) displayed below the summary grid when resolved bet data exists.
+- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. BetCards display matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` are available (graceful fallback for older bets). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push) and **direction filters** (Both/Over/Under — independent per tab, filters by `bet_direction`). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only. **Per-stat win rate cards** (PTS/REB/AST) displayed below the summary grid when resolved bet data exists. **Over/Under breakdown cards** show per-direction win rate, W-L record, and P&L (emerald badge for Over, orange for Under).
 - **Performance View (`/performance`):** Three tabs — **My Bets**, **Props**, and **DFS**. My Bets tab: personal KPI cards (bankroll, P&L, ROI, win rate), bankroll chart from cumulative user bet P&L, and stat breakdown. Props tab: model paper trading KPIs with bet source filter (Model Picks/All Bets). DFS tab: KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
@@ -660,6 +664,7 @@ dashboard/
 - SQL view definitions version-controlled in `sql/views/` (player_stats_latest.sql, team_stats_latest.sql, defense_by_position_latest.sql). All views use deterministic `DISTINCT ON` with `game_id DESC` tiebreaker.
 - **RPC Functions:** `get_dfs_lines` scopes by `commence_time` range (not `::date` cast, not `daily_predictions`), enabling data availability before inference runs. Joins with `players` table for `player_name` and returns `game_time` (commence_time). Migration `004_fix_rpc_prediction_dependency.sql`. `get_sportsbook_lines_by_games(text[])` accepts game_id array with 24-hour snapshot_time cutoff for sub-second performance on the multi-million row `raw_player_props_combined` table. Dashboard fetches sportsbook lines in batches of 3 game_ids in parallel. Migration `005_fast_sportsbook_rpc.sql`.
 - **NBA CDN Schedule API** — `/api/games` server-side route fetches today's games from `cdn.nba.com/static/json/staticData/scheduleLeagueV2.json`. Used as fallback when predictions haven't been generated yet (e.g., before inference runs). Maps tri-codes to full team names. 1-hour revalidation cache. Replaces previous `get_games_for_date` RPC which depended on the odds scraper having run.
+- **NBA CDN Live Scoreboard** — `/api/scoreboard` server-side route fetches `cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json`. Returns `Record<gameId, GameStatusInfo>` map with `gameStatus` (1=Pre, 2=Live, 3=Final), `gameStatusText` (e.g., "Q3 5:42"), `period`, and `gameClock`. 30-second ISR cache. Consumed by `useGameStatus` hook which polls every 30s when viewing today. Components fall back to time-based estimation when the scoreboard is unavailable or viewing historical dates.
 
 **Run Commands:**
 ```bash
@@ -1105,7 +1110,7 @@ python src/backtesting/run_sweep.py \
 python src/orchestration/run_daily.py [--date YYYY-MM-DD] [--skip-scraping] [--skip-processing] [--skip-inference] [--skip-storage] [--scrape-injuries]
 
 # Frequency-separated jobs (E6)
-python src/orchestration/daily_stats_job.py [--dry-run]                           # 9 AM ET - Stats + processing
+python src/orchestration/daily_stats_job.py [--dry-run]                           # 11 AM ET - Stats + processing
 python src/orchestration/lines_job.py --live --parallel [--dry-run]               # 12/4 PM ET - Full live scrape (parallel)
 python src/orchestration/lines_job.py --live --props-only [--dry-run]             # Every 5 min - Props only
 python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker] [--parallel]  # Historical mode

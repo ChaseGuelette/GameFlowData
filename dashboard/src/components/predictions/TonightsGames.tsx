@@ -1,5 +1,8 @@
 import { useRef, useCallback, useEffect } from 'react'
 import Image from 'next/image'
+import { getGameStatus } from '@/lib/utils'
+import { type GameStatusInfo } from '@/types/predictions'
+import { type GameStatusMap } from '@/lib/hooks/useGameStatus'
 
 // Reverse map: abbreviation → NBA team ID (for logo URLs)
 const ABBREV_TO_ID: Record<string, number> = {
@@ -25,6 +28,7 @@ export interface GameInfo {
   matchupKey: string
   teams: [string, string]
   gameTime: string | null
+  gameId: string | null
   predictionCount: number
 }
 
@@ -33,33 +37,18 @@ interface TonightsGamesProps {
   activeMatchup: string
   onSelectMatchup: (matchup: string) => void
   isToday: boolean
+  gameStatusMap?: GameStatusMap
 }
 
-function formatGameTime(gameTime: string | null): string {
+function formatGameTimeLocal(gameTime: string | null): string {
   if (!gameTime) return 'TBD'
   const d = new Date(gameTime)
   if (isNaN(d.getTime())) return 'TBD'
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
-const GAME_DURATION_MS = 3 * 60 * 60 * 1000
-
-function isLive(gameTime: string | null): boolean {
-  if (!gameTime) return false
-  const d = new Date(gameTime)
-  if (isNaN(d.getTime())) return false
-  const now = Date.now()
-  return d.getTime() <= now && now < d.getTime() + GAME_DURATION_MS
-}
-
-function isDone(gameTime: string | null): boolean {
-  if (!gameTime) return false
-  const d = new Date(gameTime)
-  if (isNaN(d.getTime())) return false
-  return Date.now() >= d.getTime() + GAME_DURATION_MS
-}
-
-export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday }: TonightsGamesProps) {
+export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday, gameStatusMap }: TonightsGamesProps) {
+  const statusMap = gameStatusMap ?? new Map<string, GameStatusInfo>()
   const scrollRef = useRef<HTMLDivElement>(null)
   const isDragging = useRef(false)
   const startX = useRef(0)
@@ -133,10 +122,11 @@ export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday }
         </button>
 
         {games.map((g) => {
-          const time = formatGameTime(g.gameTime)
+          const time = formatGameTimeLocal(g.gameTime)
           const isActive = activeMatchup === g.matchupKey
           const logo1 = teamLogoUrl(g.teams[0])
           const logo2 = teamLogoUrl(g.teams[1])
+          const status = getGameStatus(g.gameId ?? undefined, g.gameTime, statusMap)
 
           return (
             <button
@@ -166,15 +156,15 @@ export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday }
                   <span className={`text-xs ${isActive ? 'text-blue-200' : 'text-slate-500'}`}>
                     {time}
                   </span>
-                  {isLive(g.gameTime) && (
+                  {status.isLive && (
                     <span className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-red-500/20 text-red-400 border border-red-500/30">
                       <span className="w-1 h-1 rounded-full bg-red-400 animate-pulse" />
-                      Live
+                      {status.statusText || 'Live'}
                     </span>
                   )}
-                  {isDone(g.gameTime) && (
+                  {status.isDone && (
                     <span className="inline-flex items-center px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-slate-600/30 text-slate-400 border border-slate-600/30">
-                      Final
+                      {status.statusText || 'Final'}
                     </span>
                   )}
                 </div>

@@ -43,6 +43,19 @@ export function HistorySummary({ bets }: HistorySummaryProps) {
     })
     .filter(Boolean) as { stat: StatType; wins: number; losses: number; total: number; rate: number }[]
 
+  // Per-direction breakdown (over/under)
+  const perDirectionData = (['over', 'under'] as const)
+    .map(dir => {
+      const dirBets = resolvedBets.filter(b => b.bet_direction === dir)
+      if (dirBets.length === 0) return null
+      const dirWins = dirBets.filter(b => b.status === 'won').length
+      const dirLosses = dirBets.filter(b => b.status === 'lost').length
+      const rate = dirWins + dirLosses > 0 ? (dirWins / (dirWins + dirLosses)) * 100 : 0
+      const pnl = dirBets.reduce((sum, b) => sum + (b.pnl || 0), 0)
+      return { direction: dir, wins: dirWins, losses: dirLosses, total: dirBets.length, rate, pnl }
+    })
+    .filter(Boolean) as { direction: 'over' | 'under'; wins: number; losses: number; total: number; rate: number; pnl: number }[]
+
   return (
     <div className="space-y-4 mb-6">
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -65,6 +78,27 @@ export function HistorySummary({ bets }: HistorySummaryProps) {
               <div className="flex-1">
                 <div className="text-lg font-semibold text-slate-50">{rate.toFixed(1)}%</div>
                 <div className="text-xs text-slate-400">{w}W - {l}L</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {perDirectionData.length > 0 && (
+        <div className="grid grid-cols-2 gap-4">
+          {perDirectionData.map(({ direction, wins: w, losses: l, rate, pnl }) => (
+            <div key={direction} className="bg-slate-800 rounded-lg border border-slate-700 p-4 flex items-center gap-3">
+              <span className={cn(
+                'text-xs px-2 py-0.5 rounded text-white',
+                direction === 'over' ? 'bg-emerald-600' : 'bg-orange-600'
+              )}>
+                {direction === 'over' ? 'Over' : 'Under'}
+              </span>
+              <div className="flex-1">
+                <div className="text-lg font-semibold text-slate-50">{rate.toFixed(1)}%</div>
+                <div className="text-xs text-slate-400">{w}W - {l}L</div>
+              </div>
+              <div className={cn('text-sm font-medium', pnl >= 0 ? 'text-green-400' : 'text-red-400')}>
+                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
               </div>
             </div>
           ))}

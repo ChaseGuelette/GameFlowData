@@ -6,6 +6,7 @@ import { HistoryFilters, type StatusFilter } from '@/components/history/HistoryF
 import { HistorySummary } from '@/components/history/HistorySummary'
 import { BetList } from '@/components/history/BetList'
 import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFilter'
+import { DirectionFilter, type DirectionFilterValue } from '@/components/shared/DirectionFilter'
 import { type PaperBet } from '@/types/predictions'
 import { cn } from '@/lib/utils'
 
@@ -28,6 +29,8 @@ export default function HistoryPage() {
   const [myBets, setMyBets] = useState<PaperBet[]>([])
   const [myBetsLoading, setMyBetsLoading] = useState(false)
   const [myBetsFilter, setMyBetsFilter] = useState<StatusFilter>('all')
+  const [directionFilter, setDirectionFilter] = useState<DirectionFilterValue>('both')
+  const [myBetsDirectionFilter, setMyBetsDirectionFilter] = useState<DirectionFilterValue>('both')
 
   // Fetch model history (paper_bets)
   useEffect(() => {
@@ -140,15 +143,25 @@ export default function HistoryPage() {
     ? bets.filter(b => b.is_recommended === true)
     : bets
 
+  // Apply direction filter (before status filter, so summary reflects direction)
+  const directionFilteredBets = directionFilter === 'both'
+    ? sourcedBets
+    : sourcedBets.filter(b => b.bet_direction === directionFilter)
+
   // Filter bets by status
   const filteredBets = filter === 'all'
-    ? sourcedBets.filter(b => b.status !== 'pending' && b.status !== 'cancelled')
-    : sourcedBets.filter(b => b.status === filter)
+    ? directionFilteredBets.filter(b => b.status !== 'pending' && b.status !== 'cancelled')
+    : directionFilteredBets.filter(b => b.status === filter)
+
+  // Apply direction filter to my bets (before status filter)
+  const directionFilteredMyBets = myBetsDirectionFilter === 'both'
+    ? myBets
+    : myBets.filter(b => b.bet_direction === myBetsDirectionFilter)
 
   // Filter my bets by status (show pending in "All" view)
   const filteredMyBets = myBetsFilter === 'all'
-    ? myBets.filter(b => b.status !== 'cancelled')
-    : myBets.filter(b => b.status === myBetsFilter)
+    ? directionFilteredMyBets.filter(b => b.status !== 'cancelled')
+    : directionFilteredMyBets.filter(b => b.status === myBetsFilter)
 
   // Remove a pending bet
   const handleRemoveBet = useCallback(async (betId: number) => {
@@ -206,7 +219,12 @@ export default function HistoryPage() {
             )}
           </div>
         </div>
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between">
+          {activeTab === 'my_bets' ? (
+            <DirectionFilter activeDirection={myBetsDirectionFilter} onDirectionChange={setMyBetsDirectionFilter} />
+          ) : (
+            <DirectionFilter activeDirection={directionFilter} onDirectionChange={setDirectionFilter} />
+          )}
           {activeTab === 'my_bets' ? (
             <HistoryFilters activeFilter={myBetsFilter} onFilterChange={setMyBetsFilter} />
           ) : (
@@ -233,7 +251,7 @@ export default function HistoryPage() {
             </div>
           ) : (
             <>
-              <HistorySummary bets={myBets} />
+              <HistorySummary bets={directionFilteredMyBets} />
               <BetList bets={filteredMyBets} onRemove={handleRemoveBet} />
             </>
           )}
@@ -249,7 +267,7 @@ export default function HistoryPage() {
             </div>
           ) : (
             <>
-              <HistorySummary bets={sourcedBets} />
+              <HistorySummary bets={directionFilteredBets} />
               <BetList bets={filteredBets} />
             </>
           )}

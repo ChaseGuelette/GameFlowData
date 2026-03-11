@@ -47,6 +47,13 @@ $Tasks = @(
         Script = "$ScriptsDir\run_inference.bat"
         Time = "18:30"  # 6:30 PM ET
         Repeat = $false
+    },
+    @{
+        Name = "GameFlowData_AdvancedScraper"
+        Description = "Advanced Stats Scraper - Scrapes advanced box scores from stats.nba.com (local only)"
+        Script = "$ScriptsDir\run_advanced_scraper.bat"
+        Time = "09:00"  # 9 AM ET
+        Repeat = $false
     }
 )
 

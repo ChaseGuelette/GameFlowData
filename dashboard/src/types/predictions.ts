@@ -69,6 +69,13 @@ export interface Prediction {
   feat_player_season_avg_vs_line?: number
 }
 
+export interface GameStatusInfo {
+  gameStatus: 1 | 2 | 3  // 1=Pre, 2=Live, 3=Final
+  gameStatusText: string
+  period: number
+  gameClock: string
+}
+
 export interface PlayerGameStats {
   game_date: string
   pts: number

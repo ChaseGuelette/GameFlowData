@@ -130,6 +130,34 @@ export function isGameDone(gameTime: string | undefined | null): boolean {
   }
 }
 
+// Centralized game status: uses live NBA data when available, falls back to time-based
+import { type GameStatusInfo } from '@/types/predictions'
+
+export function getGameStatus(
+  gameId: string | undefined,
+  gameTime: string | undefined | null,
+  statusMap: Map<string, GameStatusInfo>
+): { isLive: boolean; isDone: boolean; statusText: string } {
+  // Check live scoreboard data first
+  if (gameId && statusMap.size > 0) {
+    const info = statusMap.get(gameId)
+    if (info) {
+      return {
+        isLive: info.gameStatus === 2,
+        isDone: info.gameStatus === 3,
+        statusText: info.gameStatusText,
+      }
+    }
+  }
+
+  // Fall back to time-based estimation
+  return {
+    isLive: isGameLive(gameTime),
+    isDone: isGameDone(gameTime),
+    statusText: isGameLive(gameTime) ? 'Live' : isGameDone(gameTime) ? 'Final' : '',
+  }
+}
+
 // =============================================================================
 // Black-Litterman Blending Functions
 // =============================================================================

@@ -9,7 +9,8 @@ import { AnalysisModal } from '@/components/analysis/AnalysisModal'
 import { SlateModal } from '@/components/predictions/SlateModal'
 import { TonightsGames, type GameInfo } from '@/components/predictions/TonightsGames'
 import { type Prediction } from '@/types/predictions'
-import { getToday, formatDate, calculateBLConfidence, blendProbability, isGameDone } from '@/lib/utils'
+import { getToday, formatDate, calculateBLConfidence, blendProbability, getGameStatus } from '@/lib/utils'
+import { useGameStatus } from '@/lib/hooks/useGameStatus'
 import { TEAM_ABBREV, TEAM_NAME_TO_ABBREV } from '@/lib/constants'
 import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS } from '@/lib/sportsbook-availability'
 import { BookFilterDropdown } from '@/components/predictions/BookFilterDropdown'
@@ -17,6 +18,7 @@ import { STAT_TO_MARKET } from '@/types/dfs'
 import { useUserBets, placeBetCustom } from '@/lib/hooks/useUserBets'
 import { type TakeBetData } from '@/components/analysis/AnalysisModal'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
+import { DirectionFilter, type DirectionFilterValue } from '@/components/shared/DirectionFilter'
 
 export default function DashboardPage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
@@ -30,11 +32,16 @@ export default function DashboardPage() {
   const [blTau, setBlTau] = useState<number | null>(null)  // null = no BL blending
   const [showModelPicks, setShowModelPicks] = useState<boolean>(false)  // Model Picks toggle
   const [showLive, setShowLive] = useState<boolean>(false)  // Live betting toggle
+  const [directionFilter, setDirectionFilter] = useState<DirectionFilterValue>('both')
 
   // Cross-device synced preferences & bets
   const { prefs, updatePref } = useUserPreferences()
   const userState = prefs.userState
   const { takenBets, toggleBet: handleToggleTaken, markBetTaken } = useUserBets(selectedDate, prefs.bankroll, prefs.kellyFraction)
+
+  // Live game status from NBA CDN scoreboard (polls every 30s when viewing today)
+  const isToday = selectedDate === getToday()
+  const gameStatusMap = useGameStatus(isToday)
 
   const [excludedBooks, setExcludedBooks] = useState<Set<string>>(new Set())
   const [bookAvailability, setBookAvailability] = useState<Set<string> | null>(null)
@@ -237,23 +244,18 @@ export default function DashboardPage() {
       }
 
       // Secondary fallback: if any predictions still have missing game_time,
-      // query raw_player_props_combined for commence_time (props scrape runs
-      // every 5-10 min and includes commence_time even when game_lines_staging doesn't)
+      // use RPC function to efficiently get commence_time from raw_player_props_combined
       const stillMissing = mappedPredictions.filter(p => !p.game_time && p.game_id)
       if (stillMissing.length > 0) {
         try {
           const missingGameIds = [...new Set(stillMissing.map(p => p.game_id))]
           const { data: propsTimeData } = await supabase
-            .from('raw_player_props_combined')
-            .select('game_id, commence_time')
-            .in('game_id', missingGameIds)
-            .not('commence_time', 'is', null)
-            .limit(1000)
+            .rpc('get_game_commence_times', { p_game_ids: missingGameIds })
 
           if (propsTimeData && propsTimeData.length > 0) {
             const propsTimeMap = new Map<string, string>()
             for (const row of propsTimeData) {
-              if (row.commence_time && row.game_id && !propsTimeMap.has(row.game_id)) {
+              if (row.commence_time && row.game_id) {
                 propsTimeMap.set(row.game_id, row.commence_time)
               }
             }
@@ -265,7 +267,7 @@ export default function DashboardPage() {
             }
           }
         } catch {
-          // Non-fatal: props table may not have times or RLS may restrict access
+          // Non-fatal: RPC may not be available yet
         }
       }
 
@@ -381,8 +383,9 @@ export default function DashboardPage() {
         if (existing) {
           existing.predictionCount++
           if (!existing.gameTime && p.game_time) existing.gameTime = p.game_time
+          if (!existing.gameId && p.game_id) existing.gameId = p.game_id
         } else {
-          gameMap.set(key, { matchupKey: key, teams, gameTime: p.game_time || null, predictionCount: 1 })
+          gameMap.set(key, { matchupKey: key, teams, gameTime: p.game_time || null, gameId: p.game_id || null, predictionCount: 1 })
         }
       }
       return [...gameMap.values()].sort((a, b) => {
@@ -400,7 +403,7 @@ export default function DashboardPage() {
         const away = TEAM_NAME_TO_ABBREV[g.away_team] || g.away_team
         const teams = [home, away].sort() as [string, string]
         const key = `${teams[0]} vs ${teams[1]}`
-        return { matchupKey: key, teams, gameTime: g.commence_time || null, predictionCount: 0 }
+        return { matchupKey: key, teams, gameTime: g.commence_time || null, gameId: null, predictionCount: 0 }
       }).sort((a, b) => {
         if (a.gameTime && b.gameTime) return a.gameTime.localeCompare(b.gameTime)
         if (a.gameTime) return -1
@@ -442,12 +445,13 @@ export default function DashboardPage() {
   // Filter predictions by stat type, matchup, edge threshold, book availability, and Model Picks toggle
   const filteredPredictions = enrichedPredictions.filter(p => {
     // For today: exclude finished games and optionally in-progress games
-    if (selectedDate === getToday()) {
-      if (isGameDone(p.game_time)) return false
-      // Pre-Game mode: also exclude games that have started
-      if (!showLive && p.game_time) {
-        if (new Date(p.game_time) <= new Date()) return false
-      }
+    if (isToday) {
+      const gs = getGameStatus(p.game_id, p.game_time, gameStatusMap)
+      if (gs.isDone) return false
+      // Pre-Game mode: also exclude live games
+      if (!showLive && gs.isLive) return false
+      // Pre-Game mode: also exclude games that have started (time-based fallback when no status map)
+      if (!showLive && !gs.isLive && p.game_time && new Date(p.game_time) <= new Date()) return false
     }
     if (showModelPicks && !p.is_recommended) return false
     if (filter !== 'all' && p.stat !== filter) return false
@@ -460,6 +464,14 @@ export default function DashboardPage() {
     if (bookAvailability) {
       const key = `${p.player_id}_${STAT_TO_MARKET[p.stat]}`
       if (!bookAvailability.has(key)) return false
+    }
+    // Direction filter
+    if (directionFilter !== 'both') {
+      const overEdge = Number.isFinite(p.over_edge) ? p.over_edge : 0
+      const underEdge = Number.isFinite(p.under_edge) ? p.under_edge : 0
+      const isOver = overEdge > underEdge
+      if (directionFilter === 'over' && !isOver) return false
+      if (directionFilter === 'under' && isOver) return false
     }
     // Skip edge threshold for Model Picks (is_recommended already guarantees BL edge >= 9%)
     if (showModelPicks) return true
@@ -566,6 +578,8 @@ export default function DashboardPage() {
               Model Picks
             </button>
           </div>
+          {/* Direction Filter */}
+          <DirectionFilter activeDirection={directionFilter} onDirectionChange={setDirectionFilter} />
           {/* Build Slate Toggle */}
           <button
             onClick={() => {
@@ -631,7 +645,8 @@ export default function DashboardPage() {
           games={tonightsGames}
           activeMatchup={teamFilter}
           onSelectMatchup={setTeamFilter}
-          isToday={selectedDate === getToday()}
+          isToday={isToday}
+          gameStatusMap={gameStatusMap}
         />
       )}
 
@@ -640,6 +655,7 @@ export default function DashboardPage() {
         <PlayOfTheDay
           prediction={sortedPredictions[0]}
           onAnalyze={setSelectedPrediction}
+          gameStatusMap={gameStatusMap}
         />
       )}
 
@@ -681,6 +697,7 @@ export default function DashboardPage() {
           onToggleSelect={handleToggleSelect}
           takenIds={takenBets}
           onToggleTaken={handleToggleTaken}
+          gameStatusMap={gameStatusMap}
         />
       )}
 

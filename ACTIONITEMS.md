@@ -1,5 +1,43 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-11 — Session 72)
+
+### What We Did
+
+**Real-Time Game Status from NBA Scoreboard (2 new files, 7 modified)**
+
+1. **`/api/scoreboard` API route** — New server-side route fetching NBA CDN live scoreboard (`todaysScoreboard_00.json`). Returns `Record<gameId, GameStatusInfo>` map with `gameStatus` (1=Pre, 2=Live, 3=Final), `gameStatusText` (e.g., "Q3 5:42"), `period`, `gameClock`. 30s ISR cache. Returns `{}` on error.
+
+2. **`useGameStatus` polling hook** — Polls `/api/scoreboard` every 30s when viewing today. Returns empty Map for historical dates. No polling in Network tab when viewing past dates.
+
+3. **`getGameStatus()` centralized helper** — Checks scoreboard map first, falls back to time-based `isGameLive()`/`isGameDone()`. Used by all components and the dashboard filter logic.
+
+4. **Live/Final badges show real NBA status** — TonightsGames, PropCard, PlayOfTheDay now display "Q3 5:42", "Halftime", "Final" etc. instead of time-based guesses. "Final" appears immediately when NBA marks game complete (not after 3-hour timer).
+
+5. **Dashboard filter uses real status** — `page.tsx` filter logic uses `getGameStatus()` instead of `isGameDone()`. Pre-Game/Live toggle works with real game status data.
+
+**New Files (2):**
+- `dashboard/src/app/api/scoreboard/route.ts`
+- `dashboard/src/lib/hooks/useGameStatus.ts`
+
+**Modified (7):**
+- `dashboard/src/types/predictions.ts` — `GameStatusInfo` interface
+- `dashboard/src/lib/utils.ts` — `getGameStatus()` helper
+- `dashboard/src/components/predictions/TonightsGames.tsx` — `gameId` on GameInfo, `gameStatusMap` prop, removed local status funcs
+- `dashboard/src/components/predictions/PropCard.tsx` — uses `getGameStatus()`
+- `dashboard/src/components/predictions/PlayOfTheDay.tsx` — uses `getGameStatus()`
+- `dashboard/src/components/predictions/PropGrid.tsx` — `gameStatusMap` pass-through
+- `dashboard/src/app/(protected)/dashboard/page.tsx` — `useGameStatus` hook, filter logic, prop forwarding
+
+### Remaining Action Items
+
+1. **Deploy to Vercel** — push dashboard changes so real-time game status is live
+2. **Deploy to Railway** — push scheduler changes so 11 AM time is active (from Session 71)
+3. **Verify during live games** — confirm "Q3 5:42" style badges appear during NBA games
+4. **Verify historical dates** — confirm no polling in Network tab when viewing past dates
+
+---
+
 ## Session Summary (2026-03-06 — Session 69)
 
 ### What We Did

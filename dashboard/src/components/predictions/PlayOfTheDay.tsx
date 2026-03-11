@@ -3,14 +3,18 @@
 import { PlayerAvatar } from '@/components/shared/PlayerAvatar'
 import { Badge, EdgeBadge } from '@/components/shared/Badge'
 import { type Prediction } from '@/types/predictions'
-import { formatProb, formatGameTime, isGameLive, isGameDone } from '@/lib/utils'
+import { formatProb, formatGameTime, getGameStatus } from '@/lib/utils'
+import { type GameStatusInfo } from '@/types/predictions'
+import { type GameStatusMap } from '@/lib/hooks/useGameStatus'
 
 interface PlayOfTheDayProps {
   prediction: Prediction
   onAnalyze: (p: Prediction) => void
+  gameStatusMap?: GameStatusMap
 }
 
-export function PlayOfTheDay({ prediction, onAnalyze }: PlayOfTheDayProps) {
+export function PlayOfTheDay({ prediction, onAnalyze, gameStatusMap }: PlayOfTheDayProps) {
+  const status = getGameStatus(prediction.game_id, prediction.game_time, gameStatusMap ?? new Map<string, GameStatusInfo>())
   // Determine bet direction (NaN-safe)
   const overEdge = Number.isFinite(prediction.over_edge) ? prediction.over_edge : 0
   const underEdge = Number.isFinite(prediction.under_edge) ? prediction.under_edge : 0
@@ -50,15 +54,15 @@ export function PlayOfTheDay({ prediction, onAnalyze }: PlayOfTheDayProps) {
             <p className="text-slate-400">
               {prediction.team_abbrev || '???'} vs {prediction.opponent_abbrev || '???'}
               {' '}• {formatGameTime(prediction.game_time)}
-              {isGameLive(prediction.game_time) && (
+              {status.isLive && (
                 <span className="ml-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-500/20 text-red-400 border border-red-500/30">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
-                  Live
+                  {status.statusText || 'Live'}
                 </span>
               )}
-              {isGameDone(prediction.game_time) && (
+              {status.isDone && (
                 <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-600/30 text-slate-400 border border-slate-600/30">
-                  Final
+                  {status.statusText || 'Final'}
                 </span>
               )}
             </p>
