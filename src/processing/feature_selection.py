@@ -20,9 +20,10 @@ class ImprovedFeatureSelector:
     feature ranking and optimal feature count.
     """
 
-    def __init__(self, n_splits: int = 3, quantiles: list = None):
+    def __init__(self, n_splits: int = 3, quantiles: list = None, tolerance: float = 0.005):
         self.n_splits = n_splits
         self.quantiles = quantiles or [0.10, 0.25, 0.50, 0.75, 0.90]
+        self.tolerance = tolerance
 
     def select_features_per_quantile(
         self, df: pd.DataFrame, target_col: str, candidate_cols: list[str], model_name: str = "Model"
@@ -167,7 +168,38 @@ class ImprovedFeatureSelector:
                 best_score = avg_score
                 best_k = k
 
-        logger.info(f"    Optimal K={best_k} (Pinball Loss: {best_score:.4f})")
+        # Prefer more features when loss is within tolerance of the best.
+        # This allows matchup/contextual features that don't improve raw
+        # pinball loss but may carry useful signal for betting edges.
+        if self.tolerance > 0:
+            threshold = best_score * (1 + self.tolerance)
+            for k in counts_to_test:
+                if k <= best_k:
+                    continue
+                current_features = ranked_candidates[:k]
+                cv_scores = []
+                for train_idx, val_idx in splits:
+                    X_train = X.iloc[train_idx][current_features]
+                    X_val = X.iloc[val_idx][current_features]
+                    y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+                    model = xgb.XGBRegressor(
+                        objective="reg:quantileerror",
+                        quantile_alpha=quantile,
+                        n_estimators=50,
+                        max_depth=3,
+                        learning_rate=0.1,
+                        n_jobs=-1,
+                        random_state=42,
+                    )
+                    model.fit(X_train, y_train)
+                    preds = model.predict(X_val)
+                    loss = mean_pinball_loss(y_val, preds, alpha=quantile)
+                    cv_scores.append(loss)
+                avg_score = np.mean(cv_scores)
+                if avg_score <= threshold:
+                    best_k = k
+
+        logger.info(f"    Optimal K={best_k} (Pinball Loss: {best_score:.4f}, tolerance={self.tolerance:.3f})")
         return ranked_candidates[:best_k]
 
 

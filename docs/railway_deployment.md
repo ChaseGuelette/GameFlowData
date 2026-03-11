@@ -4,15 +4,17 @@ This guide explains how to deploy GameFlowData cron jobs to Railway.
 
 ## Overview
 
-Railway runs 5 scheduled services:
+Railway runs a single always-on worker (`scheduler.py`) with 7 APScheduler job definitions:
 
-| Service | Schedule (ET) | Schedule (UTC) | Purpose |
-|---------|---------------|----------------|---------|
-| `daily-stats` | 9:00 AM | 14:00 | Scrape NBA results, update stats |
-| `lines-noon` | 12:00 PM | 17:00 | Scrape props/injuries |
-| `lines-4pm` | 4:00 PM | 21:00 | Scrape props/injuries |
-| `lines-6pm` | 6:00 PM | 23:00 | Scrape props/injuries |
-| `inference` | 6:30 PM | 23:30 | Generate predictions |
+| Job | Schedule (ET) | Schedule (UTC) | Purpose | Discord |
+|-----|---------------|----------------|---------|---------|
+| Daily Stats | 9:00 AM | 14:00 | Scrape NBA results, update stats | Always |
+| Props Only | Every 10 min, 11 AM – 11 PM | 16:00-04:00 `*/10` | Props-only scrape + linker | Failures only |
+| Edge Refresh | Every 10 min (+2 min), 11 AM – 11 PM | 16:02-04:02 | Recalc edges, resolve bets, place bets | Failures only |
+| Full Lines (Noon) | 12:00 PM | 17:00 | Full scrape (game lines + props + injuries) | Always |
+| Inference (Noon) | 12:15 PM | 17:15 | Full MC inference + paper bets | Always |
+| Full Lines (4 PM) | 4:00 PM | 21:00 | Full scrape (catches new props) | Always |
+| Inference (4 PM) | 4:15 PM | 21:15 | Full MC inference + paper bets | Always |
 
 ## Quick Start
 

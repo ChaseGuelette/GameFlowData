@@ -225,6 +225,7 @@ def run_single_config(
     start_date: date,
     end_date: date,
     max_bet_pct: float | None = None,
+    flat_bet_size: float | None = None,
 ) -> SweepResult:
     """Run edge calculation + simulation + metrics for one sweep config."""
     t0 = time.time()
@@ -250,6 +251,7 @@ def run_single_config(
         starting_bankroll=starting_bankroll,
         kelly_fraction=config.kelly_fraction,
         max_bet_pct=max_bet_pct,
+        flat_bet_size=flat_bet_size,
         bookmakers=bookmakers,
         stats=stats,
         allowed_bets=allowed_bets,
@@ -296,6 +298,7 @@ def run_single_config(
         starting_bankroll=starting_bankroll,
         kelly_fraction=config.kelly_fraction,
         max_bet_pct=max_bet_pct,
+        flat_bet_size=flat_bet_size,
         allowed_bets=set(allowed_bets) if allowed_bets else None,
         stat_config=stat_config,
     )
@@ -665,6 +668,12 @@ Examples:
         help="Maximum bet size as %% of bankroll (e.g., 0.025 = 2.5%%). Caps Kelly sizing. Default: no cap.",
     )
     parser.add_argument(
+        "--flat-bet",
+        type=float,
+        default=None,
+        help="Fixed dollar amount per bet (overrides Kelly sizing). E.g., --flat-bet 100 for $100/bet.",
+    )
+    parser.add_argument(
         "--bookmakers", nargs="+",
         default=[
             # US market (original)
@@ -805,6 +814,7 @@ Examples:
             start_date=start_date,
             end_date=end_date,
             max_bet_pct=args.max_bet_pct,
+            flat_bet_size=args.flat_bet,
         )
 
         results.append(result)

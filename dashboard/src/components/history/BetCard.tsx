@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 
 interface BetCardProps {
   bet: PaperBet
+  onRemove?: (id: number) => void
 }
 
 const STATUS_STYLES = {
@@ -24,7 +25,7 @@ const STATUS_LABELS = {
   cancelled: 'Cancelled',
 }
 
-export function BetCard({ bet }: BetCardProps) {
+export function BetCard({ bet, onRemove }: BetCardProps) {
   const statusStyle = STATUS_STYLES[bet.status]
   const pnlColor = bet.pnl && bet.pnl > 0 ? 'text-green-400' : bet.pnl && bet.pnl < 0 ? 'text-red-400' : 'text-slate-400'
 
@@ -51,12 +52,29 @@ export function BetCard({ bet }: BetCardProps) {
           <PlayerAvatar playerId={bet.player_id} playerName={bet.player_name} size="sm" />
           <div>
             <div className="font-medium text-slate-50">{bet.player_name}</div>
-            <div className="text-xs text-slate-400">{bet.game_date}</div>
+            <div className="text-xs text-slate-400">
+              {bet.team_abbrev && bet.opponent_abbrev
+                ? `${bet.team_abbrev} vs ${bet.opponent_abbrev} • ${bet.game_date}`
+                : bet.game_date}
+            </div>
           </div>
         </div>
-        <span className={cn('text-xs px-2 py-1 rounded border', statusStyle)}>
-          {STATUS_LABELS[bet.status]}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className={cn('text-xs px-2 py-1 rounded border', statusStyle)}>
+            {STATUS_LABELS[bet.status]}
+          </span>
+          {bet.status === 'pending' && onRemove && (
+            <button
+              onClick={() => onRemove(bet.id)}
+              className="text-slate-500 hover:text-red-400 transition-colors p-1"
+              title="Remove bet"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z" clipRule="evenodd" />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Bet Details */}

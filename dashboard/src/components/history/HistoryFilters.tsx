@@ -12,6 +12,7 @@ interface HistoryFiltersProps {
 
 const FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'all', label: 'All' },
+  { value: 'pending', label: 'Pending' },
   { value: 'won', label: 'Won' },
   { value: 'lost', label: 'Lost' },
   { value: 'push', label: 'Push' },

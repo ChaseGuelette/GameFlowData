@@ -377,8 +377,9 @@ def test_build_features_df(runner):
     result = runner._build_features_df(players, target_date)
 
     assert len(result) == 2
-    assert list(result["player_id"]) == [1, 2]
-    assert list(result["feature_a"]) == [1.0, 3.0]
+    result_sorted = result.sort_values("player_id").reset_index(drop=True)
+    assert list(result_sorted["player_id"]) == [1, 2]
+    assert list(result_sorted["feature_a"]) == [1.0, 3.0]
 
 
 def test_enrich_predictions(runner):

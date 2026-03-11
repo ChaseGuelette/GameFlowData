@@ -12,7 +12,7 @@ This job:
 
 Usage:
     python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries]
-    python src/orchestration/lines_job.py --live [--props-only] [--dry-run]
+    python src/orchestration/lines_job.py --live [--props-only] [--parallel] [--dry-run]
 
 Examples:
     # Historical scrape for today (default)
@@ -20,6 +20,9 @@ Examples:
 
     # Live scrape — full (game lines + props + injuries + linker)
     python src/orchestration/lines_job.py --live
+
+    # Live scrape — full with parallel (props + injuries run concurrently)
+    python src/orchestration/lines_job.py --live --parallel
 
     # Live scrape — props only (props + linker, skip game lines/injuries)
     python src/orchestration/lines_job.py --live --props-only
@@ -33,6 +36,7 @@ import logging
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -104,6 +108,36 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
         return False
 
 
+def run_step_group(steps: list[tuple[str, str]], dry_run: bool = False) -> bool:
+    """Run a list of (command, description) steps serially. Returns True if all succeeded."""
+    success = True
+    for command, description in steps:
+        if not run_command(command, description, dry_run):
+            success = False
+            logger.error(f"Job failed at step: {description}")
+            # Continue with remaining steps even if one fails
+    return success
+
+
+def run_parallel_groups(groups: list[list[tuple[str, str]]], dry_run: bool = False) -> bool:
+    """Run step groups concurrently via threads. Each group runs its steps serially."""
+    results = [None] * len(groups)
+
+    def _worker(idx, steps):
+        results[idx] = run_step_group(steps, dry_run)
+
+    threads = []
+    for i, group in enumerate(groups):
+        t = threading.Thread(target=_worker, args=(i, group), name=f"group-{i}")
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+
+    return all(results)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Lines Job - Player Props & Injuries Scraping",
@@ -140,63 +174,73 @@ def main():
         action="store_true",
         help="Only scrape props + run linker (skip game lines and injuries)",
     )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run independent step groups concurrently (props path + injury path)",
+    )
     args = parser.parse_args()
 
     start_time = time.time()
     mode_label = "LIVE" if args.live else "HISTORICAL"
     scope_label = "PROPS-ONLY" if args.props_only else "FULL"
+    parallel_label = " | Parallel: ON" if args.parallel else ""
     logger.info("=" * 60)
     logger.info(f"LINES JOB START: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"Mode: {mode_label} | Scope: {scope_label} | Date: {args.date}")
+    logger.info(f"Mode: {mode_label} | Scope: {scope_label} | Date: {args.date}{parallel_label}")
     logger.info("=" * 60)
 
-    success = True
-    steps = []
     exe = sys.executable
 
-    # Step 1: Scrape daily game lines (skip if --props-only)
+    # Build step groups
+    # Group A: Props path (game lines → props scraper → nba linker)
+    group_a = []
+
     if not args.props_only:
-        steps.append((
+        group_a.append((
             f"{exe} src/scrapers/daily_game_lines_scraper.py --date {args.date}",
             "Scraping Daily Game Lines (Odds)",
         ))
 
-    # Step 2: Scrape player props
     if args.live:
-        steps.append((
+        group_a.append((
             f"{exe} src/scrapers/daily_player_props_scraper.py --live --target-table raw_player_props_combined",
             "Scraping Player Props (Live)",
         ))
     else:
-        steps.append((
+        group_a.append((
             f"{exe} src/scrapers/daily_player_props_scraper.py --date {args.date}",
             "Scraping Player Props (Historical)",
         ))
 
-    # Step 3: Scrape injuries (skip if --props-only or --skip-injuries)
-    if not args.props_only and not args.skip_injuries:
-        steps.append((
-            f"{exe} src/scrapers/rapidapi_injury_backfill.py --start {args.date} --end {args.date}",
-            "Scraping Injuries (RapidAPI)",
-        ))
-        steps.append((
-            f"{exe} src/processing/link_injury_data.py",
-            "Linking Injury Player IDs",
-        ))
-
-    # Step 4: Run incremental linker (optional)
     if not args.skip_linker:
-        steps.append((
+        group_a.append((
             f"{exe} src/processing/nba_linker_local.py incremental",
             "Linking Props (Incremental)",
         ))
 
-    for command, description in steps:
-        if not run_command(command, description, args.dry_run):
-            success = False
-            logger.error(f"Job failed at step: {description}")
-            # Continue with other steps even if one fails
-            # (injuries failing shouldn't block props)
+    # Group B: Injury path (injury scraper → injury linker)
+    group_b = []
+    if not args.props_only and not args.skip_injuries:
+        group_b.append((
+            f"{exe} src/scrapers/rapidapi_injury_backfill.py --start {args.date} --end {args.date}",
+            "Scraping Injuries (RapidAPI)",
+        ))
+        group_b.append((
+            f"{exe} src/processing/link_injury_data.py",
+            "Linking Injury Player IDs",
+        ))
+
+    # Execute
+    if args.parallel and group_b:
+        logger.info("Running step groups in parallel:")
+        logger.info(f"  Group A (props):    {len(group_a)} steps")
+        logger.info(f"  Group B (injuries): {len(group_b)} steps")
+        success = run_parallel_groups([group_a, group_b], args.dry_run)
+    else:
+        # Sequential: all steps in one flat list (original behavior)
+        all_steps = group_a + group_b
+        success = run_step_group(all_steps, args.dry_run)
 
     elapsed = time.time() - start_time
     logger.info("=" * 60)

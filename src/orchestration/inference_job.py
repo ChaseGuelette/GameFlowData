@@ -92,6 +92,11 @@ def main():
         action="store_true",
         help="Skip automatic paper bet placement",
     )
+    parser.add_argument(
+        "--stale-warning",
+        action="store_true",
+        help="Flag that upstream daily stats may be stale (set by scheduler dependency check)",
+    )
     args = parser.parse_args()
 
     target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
@@ -168,23 +173,35 @@ def main():
         )
 
         # Check upstream data freshness — warn if rolling averages are stale
+        data_stale = args.stale_warning  # scheduler may have already flagged this
         try:
+            from datetime import timedelta
+
+            yesterday = target_date - timedelta(days=1)
             with engine.connect() as conn:
-                result = conn.execute(text(
-                    "SELECT MAX(game_date)::date FROM player_average_game_stats"
+                latest_game_date = conn.execute(text(
+                    "SELECT MAX(game_date)::date FROM player_average_game_stats WHERE season_id = ("
+                    "  SELECT MAX(season_id) FROM player_average_game_stats"
+                    ")"
                 )).scalar()
-                if result:
-                    days_stale = (target_date - result).days
-                    if days_stale > 2:
+                if latest_game_date:
+                    if latest_game_date < yesterday:
+                        data_stale = True
+                        days_behind = (target_date - latest_game_date).days
                         logger.warning(
-                            f"Rolling averages may be stale! Latest game_date in "
-                            f"player_average_game_stats: {result} ({days_stale} days ago). "
-                            f"Check if daily_stats_job ran successfully."
+                            f"WARNING: Rolling averages are STALE — latest game_date in "
+                            f"player_average_game_stats: {latest_game_date} ({days_behind} days ago). "
+                            f"Daily stats job likely failed or timed out. "
+                            f"Predictions will proceed with stale data."
                         )
                     else:
-                        logger.info(f"Rolling averages up to date (latest: {result})")
+                        logger.info(f"Rolling averages up to date (latest: {latest_game_date})")
                 else:
-                    logger.warning("No data found in player_average_game_stats — daily_stats_job may not have run")
+                    data_stale = True
+                    logger.warning(
+                        "WARNING: No data in player_average_game_stats — "
+                        "daily_stats_job may not have run. Proceeding with stale data."
+                    )
         except Exception as e:
             logger.warning(f"Could not check data freshness: {e}")
 
@@ -246,22 +263,50 @@ def main():
                 import os
                 if os.getenv("DISCORD_BOT_TOKEN"):
                     from src.discord_bot.alerts import send_predictions_alert_sync
+
+                    if data_stale:
+                        # Add stale warning to predictions DataFrame for the alert
+                        logger.warning(
+                            "Predictions generated with STALE rolling averages "
+                            "(daily stats job failed/timed out)"
+                        )
                     logger.info("Sending Discord alert...")
                     success = send_predictions_alert_sync(preds, target_date)
                     if success:
                         logger.info("Discord alert sent successfully")
                     else:
                         logger.warning("Discord alert failed (non-fatal)")
+
+                    # Send separate stale-data warning alert
+                    if data_stale:
+                        try:
+                            from src.discord_bot.alerts import send_job_alert_sync
+                            send_job_alert_sync(
+                                job_name="Inference (Stale Data Warning)",
+                                success=True,
+                                duration_seconds=time.time() - start_time,
+                                metrics={"predictions": len(preds), "stale_data": "yes"},
+                                error_message=(
+                                    "Predictions generated with stale rolling averages. "
+                                    "The 9 AM daily stats job failed or timed out. "
+                                    "L5/L15 averages may be 1 game behind."
+                                ),
+                            )
+                        except Exception as e:
+                            logger.warning(f"Stale data Discord alert failed: {e} (non-fatal)")
                 else:
                     logger.debug("Discord not configured, skipping alert")
             except Exception as e:
                 logger.warning(f"Discord alert failed: {e} (non-fatal)")
 
         elapsed = time.time() - start_time
+        stale_suffix = " (STALE DATA)" if data_stale else ""
         logger.info("=" * 60)
-        logger.info(f"INFERENCE JOB COMPLETED SUCCESSFULLY ({elapsed:.1f}s)")
+        logger.info(f"INFERENCE JOB COMPLETED SUCCESSFULLY{stale_suffix} ({elapsed:.1f}s)")
         logger.info(f"  Predictions: {len(preds)}")
         logger.info(f"  Output: {output_file}")
+        if data_stale:
+            logger.info("  WARNING: Predictions used stale rolling averages")
         logger.info("=" * 60)
 
     except Exception as e:

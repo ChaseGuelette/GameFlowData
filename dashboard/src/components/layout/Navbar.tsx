@@ -10,6 +10,7 @@ export function Navbar() {
   const pathname = usePathname()
   const supabase = createClient()
   const [bankroll, setBankroll] = useState<number | undefined>(undefined)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   useEffect(() => {
     async function fetchBankroll() {
@@ -27,6 +28,10 @@ export function Navbar() {
     fetchBankroll()
   }, [supabase])
 
+  useEffect(() => {
+    setMobileMenuOpen(false)
+  }, [pathname])
+
   const handleLogout = async () => {
     await supabase.auth.signOut()
     router.push('/login')
@@ -40,6 +45,14 @@ export function Navbar() {
 
   const navLinkClasses = (path: string) => {
     const base = 'px-3 py-2 rounded-md text-sm font-medium transition-colors'
+    if (isActive(path)) {
+      return `${base} bg-blue-600 text-white`
+    }
+    return `${base} text-slate-400 hover:text-slate-100 hover:bg-slate-700`
+  }
+
+  const mobileNavLinkClasses = (path: string) => {
+    const base = 'block w-full px-3 py-2 rounded-md text-sm font-medium transition-colors'
     if (isActive(path)) {
       return `${base} bg-blue-600 text-white`
     }
@@ -76,8 +89,8 @@ export function Navbar() {
             </div>
           </div>
 
-          {/* Bankroll and Logout */}
-          <div className="flex items-center space-x-4">
+          {/* Desktop: Bankroll and Logout */}
+          <div className="hidden md:flex items-center space-x-4">
             {bankroll !== undefined && (
               <div className="text-right">
                 <div className="text-xs text-slate-400">Balance</div>
@@ -99,8 +112,67 @@ export function Navbar() {
               Logout
             </button>
           </div>
+
+          {/* Mobile: Hamburger button */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="md:hidden p-2 rounded-md text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors"
+            aria-label="Toggle menu"
+          >
+            {mobileMenuOpen ? (
+              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            )}
+          </button>
         </div>
       </div>
+
+      {/* Mobile menu panel */}
+      {mobileMenuOpen && (
+        <div className="md:hidden border-t border-slate-700 px-4 py-3 space-y-1">
+          <Link href="/dashboard" className={mobileNavLinkClasses('/dashboard')}>
+            Props
+          </Link>
+          <Link href="/dfs" className={mobileNavLinkClasses('/dfs')}>
+            DFS
+          </Link>
+          <Link href="/history" className={mobileNavLinkClasses('/history')}>
+            History
+          </Link>
+          <Link href="/performance" className={mobileNavLinkClasses('/performance')}>
+            Performance
+          </Link>
+          <Link href="/stats" className={mobileNavLinkClasses('/stats')}>
+            Data Vault
+          </Link>
+
+          {bankroll !== undefined && (
+            <div className="px-3 py-2 border-t border-slate-700 mt-2 pt-2">
+              <div className="text-xs text-slate-400">Balance</div>
+              <div className="text-lg font-semibold text-green-500">
+                ${bankroll.toLocaleString()}
+              </div>
+            </div>
+          )}
+
+          <div className="border-t border-slate-700 mt-2 pt-2 space-y-1">
+            <Link href="/account" className={mobileNavLinkClasses('/account')}>
+              Account
+            </Link>
+            <button
+              onClick={handleLogout}
+              className="block w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      )}
     </nav>
   )
 }

@@ -25,11 +25,13 @@ Written under `linker_data/`:
 - `unmatched_games.csv`
 - `unmatched_players.csv`
 - `player_mappings.csv` (manual mapping input)
+- `_fuzzy_cache.json` (persistent fuzzy match cache — auto-managed)
 
 ## Key Logic
 - **Team name normalization:** Uses `TEAM_NAME_ALIASES` to convert all team names to 3-letter abbreviations (e.g., "Atlanta Hawks" → "ATL", "Los Angeles Lakers" → "LAL"). This enables matching between Odds API (full names) and NBA API (abbreviations).
 - **Fuzzy date matching:** Searches within `FUZZY_DATE_WINDOW_DAYS` (default 90) to handle incorrect commence times.
-- **Player matching:** Manual mappings → exact normalized match → SequenceMatcher fuzzy (0.80 threshold, +0.15 last name bonus).
+- **Player matching (batch pipeline):** 3-step process: (1) manual mappings via `.map()`, (2) exact normalized match via `.map(player_lookup)` (vectorized), (3) fuzzy cache lookup for remaining unmatched. Only truly new names trigger `_resolve_fuzzy_names()` with SequenceMatcher (0.80 threshold, +0.15 last name bonus). Both `process_local()` and `link_incremental()` use this pipeline.
+- **Persistent fuzzy cache:** `linker_data/_fuzzy_cache.json` stores `{cache: {normalized_name: player_id_or_null}, player_count: N}`. Auto-invalidates when player count changes (new player added). Typical runs see 95%+ cache hits (0 new fuzzy lookups), reducing linker time from ~15s to <1s.
 - **Team ID backfill:** Uses `(player_id, game_id)` from `player_game_stats`.
 - **Game ID format:** All game_ids are stored as 10-digit strings with leading zeros (e.g., "0022500589") using `.zfill(10)` to ensure compatibility with `player_game_stats.game_id` format.
 

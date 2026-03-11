@@ -5,9 +5,10 @@ import { BetCard } from './BetCard'
 
 interface BetListProps {
   bets: PaperBet[]
+  onRemove?: (id: number) => void
 }
 
-export function BetList({ bets }: BetListProps) {
+export function BetList({ bets, onRemove }: BetListProps) {
   if (bets.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -23,7 +24,7 @@ export function BetList({ bets }: BetListProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {bets.map((bet) => (
-        <BetCard key={bet.id} bet={bet} />
+        <BetCard key={bet.id} bet={bet} onRemove={onRemove} />
       ))}
     </div>
   )

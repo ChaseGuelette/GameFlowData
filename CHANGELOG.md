@@ -5,6 +5,678 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-06 Session 69] — MLB Training Pipeline + New Features + Feature Catalogs
+
+### Added
+
+- **`src/models/mlb/mlb_train_pipeline.py`** — 10-step CLI orchestrator for end-to-end MLB pitcher K model training. Steps: load train/cal data, per-quantile feature selection, optional Optuna HP tuning, train quantile models (Q10-Q90), calibrate on holdout, calibration report, Monte Carlo sanity check, save artifacts (atomic `_incomplete` pattern), finalize. Mirrors NBA `train_pipeline.py`.
+- **3 new MLB features** — `opp_team_k_pct_l10` (opposing team K rate = SO/PA), `opp_team_whiff_pct_l10` (swing-weighted team whiff% from Statcast batting), `pitcher_est_bf_l5` (estimated batters faced = 3×IP + H + BB). Total pitcher K features now 31.
+- **`docs/nba_feature_catalog.md`** — Complete catalog of all 66 unique NBA features across 5 model lists with source tables, windows, computations, and signals.
+- **`docs/mlb_feature_catalog.md`** — Complete catalog of all 31 MLB pitcher K features with same detail.
+
+### Changed
+
+- **`mlb_feature_store.py`** — Added 3 features to `PITCHER_K_FEATURES`, `avg_h_allowed_l5` support column for BF derivation, `_add_derived_features()` for `pitcher_est_bf_l5`.
+- **`mlb_matchup_features.py`** — Added K% (SO/PA) and swing-weighted whiff% to both `get_opposing_team_batting_stats()` and `compute_matchup_features_bulk()`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/models/mlb/mlb_train_pipeline.py` | Created |
+| `src/models/mlb/mlb_feature_store.py` | Modified — 3 new features, derived BF |
+| `src/processing/mlb/mlb_matchup_features.py` | Modified — K%, whiff% |
+| `docs/nba_feature_catalog.md` | Created |
+| `docs/mlb_feature_catalog.md` | Created |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean
+
+---
+
+## [2026-03-06 Session 68] — AnalysisModal "Take Bet" + History Improvements
+
+### Added
+
+- **AnalysisModal "Take Bet" button** — Select a specific sportsbook line and input custom stake (pre-filled from Kelly). Records bet with exact book/odds/line/stake to `user_bets`. Button disables after placement, PropCard checkmark turns green.
+- **`placeBetCustom()` export** in `useUserBets.ts` — Standalone async function for placing bets with caller-provided book/odds/line/stake. `markBetTaken()` syncs local checkmark state.
+- **Matchup info on BetCards** — History page now shows "LAL vs SAS" below player name. New `team_abbrev`, `opponent_abbrev` columns in `user_bets` (migration 013). Graceful fallback for older bets.
+- **Per-stat win rate cards** — HistorySummary displays PTS/REB/AST breakdown with win rate % and W-L record below the main summary grid.
+- **`database/migrations/013_user_bets_team_opponent.sql`** — Adds `team_abbrev`, `opponent_abbrev` to `user_bets` table.
+
+### Changed
+
+- **AnalysisModal sizing** — Lifted bet sizing IIFE to `useMemo` (`sizingData`) for reuse in Take Bet footer.
+- **`useUserBets` toggleBet upsert** — Now includes `team_abbrev` and `opponent_abbrev` from prediction.
+- **`PaperBet` type** — Added optional `team_abbrev` and `opponent_abbrev` fields.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `database/migrations/013_user_bets_team_opponent.sql` | Created |
+| `dashboard/src/types/predictions.ts` | Modified — PaperBet team/opponent fields |
+| `dashboard/src/lib/hooks/useUserBets.ts` | Modified — placeBetCustom, markBetTaken, team/opponent |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — Take Bet UI, sizingData useMemo |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — handleTakeBet wiring |
+| `dashboard/src/components/history/BetCard.tsx` | Modified — matchup display |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — team/opponent mapping |
+| `dashboard/src/components/history/HistorySummary.tsx` | Modified — per-stat win rate cards |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean
+- TypeScript compiles clean (tsc --noEmit)
+
+---
+
+## [2026-03-06 Session 67] — Model Comparison Tool + Under-Prediction Research
+
+### Added
+
+- **`src/tools/compare_models.py`** — CLI tool for comparing predictions from two model directories side-by-side. Loads both model artifacts, generates predictions using the same features for a given date, and prints a formatted comparison. Four output sections: summary by stat, player detail (Q10-Q90 with market lines), top 10 largest Q50 differences, and market accuracy (which model is closer to the line). Supports partial player name matching with Unicode normalization (e.g., "Doncic" matches "Doncic"). No DB writes.
+
+### Investigated
+
+- **Systematic under-prediction analysis** — Compared legacy (Model A) vs production copula (Model B) predictions against 2026-03-05 market lines. Both models predict Q50 below the line for 70-85% of players across PTS/REB/AST. Confirmed this is a known property, not a regression.
+- **Academic research on biased betting models** — Four parallel research agents reviewed academic literature (Hubacek 2022, Dmochowski 2023, Walsh & Joshi 2024). Conclusion: systematic under-prediction is beneficial for betting ROI because (a) sportsbook lines are inflated due to public over-bias, (b) the model's downward bias creates decorrelation from market errors, and (c) calibration offsets that "fix" the bias re-correlate with the market and reduce ROI (7.44% to 6.01%, confirmed in Session 42).
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/tools/compare_models.py` | Created |
+| `ARCHITECTURE.md` | Updated — added compare_models docs |
+| `ACTIONITEMS.md` | Updated — Session 67 summary, updated action item #22 with research caveat |
+| `CHANGELOG.md` | Updated — Session 67 entry |
+| `docs/development_docs/2026-03-06_session67.md` | Created |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean (5 auto-fixed, 0 remaining)
+
+---
+
+## [2026-03-05 Session 65] — Bug Fixes, Edge Refresh Hardening, Model Promotion
+
+### Fixed
+
+- **Dashboard showing no data for past dates** — `isGameDone()` filter in `dashboard/page.tsx` was hiding ALL predictions when viewing historical dates. Fixed by only applying game-time filters when `selectedDate === getToday()`.
+- **Edge refresh nulling old lines** — LEFT merge in `edge_refresh_job.py` was overwriting line/odds/bookmaker with NULL when fresh props weren't available. Added `fillna()` fallback to preserve previous values.
+- **Edge refresh 45-minute timeouts** — Paper trading step (loading MC samples + BL blending for every prediction) was causing hangs during game hours. Added `--skip-paper` flag; scheduler's 5-minute silent cron runs now pass it.
+
+### Changed
+
+- **`src/orchestration/scheduler.py`** — Removed 3 NCAAB cron jobs (failing on Railway; migrations not applied, no data backfilled). Updated `run_edge_refresh_silent()` to pass `--skip-paper`.
+- **`src/orchestration/edge_refresh_job.py`** — Added `--skip-paper` CLI flag. Added line preservation logic (saves old values before LEFT merge, fills back with `fillna()`).
+- **`dashboard/src/app/(protected)/dashboard/page.tsx`** — Wrapped `isGameDone()` and `showLive` filters in `selectedDate === getToday()` check so past dates show all predictions.
+- **`src/models/artifacts/production/`** — Promoted retrained model from `run_20260304_214009/`. Worst calibration gap: 3.5% (was 27.4%). Archived old production to `production_archived_20260305/`. Excluded `combined_calibration_offsets.json` (hurts ROI per Session 42).
+
+### Added
+
+- **`database/scripts/recover_nulled_lines.sql`** — Recovery script for restoring nulled-out lines from `raw_player_props_combined`. Created for diagnostics; not needed in practice since affected predictions never had props data.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/scheduler.py` | Modified — removed NCAAB jobs, added --skip-paper to silent edge refresh |
+| `src/orchestration/edge_refresh_job.py` | Modified — line preservation, --skip-paper flag |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — past date filter fix |
+| `database/scripts/recover_nulled_lines.sql` | Created |
+| `src/models/artifacts/production/` | Promoted new model |
+| `src/models/artifacts/production_archived_20260305/` | Archived old model |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean
+
+---
+
+## [2026-03-04 Session 66] — Multi-Select Sportsbook Filter + Pending Bets
+
+### Added
+
+- **`dashboard/src/components/predictions/BookFilterDropdown.tsx`** — Multi-select checkbox dropdown for sportsbook filtering. Button shows "All Books" (all checked) or "Books (N)" (some excluded). Floating panel with one checkbox per state-legal sportsbook, "Select All" / "Clear All" toggle, closes on outside click or Escape. Uses `SPORTSBOOK_OPTIONS` and `STATE_SPORTSBOOKS` from `sportsbook-availability.ts`.
+- **Pending bets in History** — "Pending" filter tab added to HistoryFilters. My Bets "All" view now includes pending/outstanding bets. Summary bar shows pending count in blue when outstanding bets exist.
+- **`nba_scraper_portable.zip`** — Portable package for running NBA unified scraper on a separate machine to bypass stats.nba.com IP ban. Contains scraper, CDN fallback, DB client, requirements.txt, and README.
+
+### Changed
+
+- **`dashboard/src/app/(protected)/dashboard/page.tsx`** — Replaced single-select `bookFilter: string` state with multi-select `excludedBooks: Set<string>`. Availability query uses `.in('bookmaker', activeBooks)` where activeBooks = allowed minus excluded. When nothing excluded, skips query entirely. State-change cleanup removes stale exclusions for books not legal in new state.
+- **`dashboard/src/app/(protected)/history/page.tsx`** — My Bets tab "All" filter now includes pending bets (only excludes cancelled), enabling users to see outstanding bets awaiting resolution.
+- **`dashboard/src/components/history/HistoryFilters.tsx`** — Added "Pending" option to status filter tabs.
+- **`dashboard/src/components/history/HistorySummary.tsx`** — Conditionally shows "Pending" count (blue) in summary stats bar. Win rate and P&L still computed from resolved bets only.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/components/predictions/BookFilterDropdown.tsx` | Created |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — multi-select book filter |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — pending bets visible |
+| `dashboard/src/components/history/HistoryFilters.tsx` | Modified — Pending tab |
+| `dashboard/src/components/history/HistorySummary.tsx` | Modified — pending count |
+| `nba_scraper_portable.zip` | Created |
+| `ARCHITECTURE.md` | Updated — sportsbook filter + history docs |
+| `ACTIONITEMS.md` | Updated — Session 66 summary |
+| `CHANGELOG.md` | Updated — Session 66 entry |
+
+### Verified
+
+- TypeScript compiles cleanly (`tsc --noEmit`)
+- Python tests: pre-existing local env issue (Python 3.9-32bit missing numpy), not related to changes
+
+---
+
+## [2026-03-03 Session 64] — User Bet Tracking: Cross-Device Sync + Auto-Resolution
+
+### Added
+
+- **`database/migrations/012_user_bet_tracking.sql`** — `user_profiles` table (bankroll, kelly, state preferences) and `user_bets` table (taken bets from PropCard checkmark). Both with RLS policies, indexes, and `updated_at` trigger.
+- **`dashboard/src/lib/hooks/useUserBets.ts`** — React hook for cross-device bet tracking. Optimistic UI toggle (instant response), async Supabase upsert/delete, auto-rollback on error. Fetches per-date bets on mount. Auto-captures direction, odds, book, model_prob, edge from Prediction object.
+- **`dashboard/src/lib/hooks/useUserPreferences.ts`** — React hook for cross-device user preferences. localStorage-first (instant load) + debounced (500ms) Supabase DB sync. Covers: userState, bankroll, kellyFraction, useCustomKelly.
+- **`src/paper_trading/user_bet_resolver.py`** — `UserBetResolver` class that resolves user-placed bets against actual game stats. Mirrors `PaperTrader.resolve_bets()` resolution logic (over/under comparison, DNP void, push handling). Multi-day catchup via `resolve_all_pending()`.
+
+### Changed
+
+- **`dashboard/src/app/(protected)/dashboard/page.tsx`** — Replaced localStorage-based `takenBets` state and `userState` with `useUserBets` and `useUserPreferences` hooks. Removed ~30 lines of localStorage read/write logic.
+- **`dashboard/src/components/analysis/AnalysisModal.tsx`** — Replaced 6 localStorage reads/writes (bankroll, kelly, state) with `useUserPreferences` hook. Input fields sync when preferences load from DB.
+- **`src/orchestration/daily_stats_job.py`** — Added `resolve_pending_user_bets()` function + call after existing paper bet resolution. Non-fatal: errors logged but don't fail the job.
+- **`dashboard/src/app/(protected)/history/page.tsx`** — Added "My Bets" / "Model History" tab toggle. My Bets (default, green) queries `user_bets` table. Model History preserves existing paper_bets view with BetSourceFilter.
+- **`dashboard/src/app/(protected)/performance/page.tsx`** — Added "My Bets" tab alongside existing "Props" and "DFS" tabs. My Bets shows personal KPIs, bankroll chart (cumulative PnL), and stat breakdown computed from `user_bets`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `database/migrations/012_user_bet_tracking.sql` | Created |
+| `dashboard/src/lib/hooks/useUserBets.ts` | Created |
+| `dashboard/src/lib/hooks/useUserPreferences.ts` | Created |
+| `src/paper_trading/user_bet_resolver.py` | Created |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — hooks replace localStorage |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — preferences hook |
+| `src/orchestration/daily_stats_job.py` | Modified — user bet resolution step |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — My Bets tab |
+| `dashboard/src/app/(protected)/performance/page.tsx` | Modified — My Bets tab |
+| `ARCHITECTURE.md` | Updated — user bet tracking sections |
+| `ACTIONITEMS.md` | Updated — Session 64 summary |
+| `CHANGELOG.md` | Updated — Session 64 entry |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- TypeScript compiles cleanly (`tsc --noEmit`)
+- Ruff: 1 auto-fixed issue (unused import), 0 remaining
+- Migration applied to Supabase: tables + RLS confirmed
+
+---
+
+## [2026-03-03 Session 63] — NCAAB Game-Level Prediction Pipeline
+
+### Added
+
+- **`database/migrations/009_ncaab_foundation.sql`** — Core tables: `ncaab_teams` (363 D1 programs), `ncaab_game_schedule`, `ncaab_team_box_scores` (with Four Factors + possessions), `ncaab_raw_game_lines`.
+- **`database/migrations/010_ncaab_barttorvik.sql`** — `ncaab_barttorvik_ratings` table with UNIQUE(team_name, season, snapshot_date) for point-in-time efficiency snapshots.
+- **`database/migrations/011_ncaab_averages.sql`** — `ncaab_team_rolling_averages` table with L5/L10/L20/SZN windows.
+- **`src/scrapers/ncaab/ncaab_game_lines_scraper.py`** — Odds API port for `basketball_ncaab`. Snapshot hours: 18, 21, 0 UTC.
+- **`src/scrapers/ncaab/ncaab_cbbpy_scraper.py`** — ESPN box scores via CBBpy. Aggregates player stats to team level, computes possessions and Four Factors.
+- **`src/scrapers/ncaab/ncaab_barttorvik_scraper.py`** — Bulk CSV download from barttorvik.com with flexible column mapping.
+- **`src/processing/ncaab/ncaab_config.py`** — Rolling windows, 16 box score stats, 4 opponent stats, team alias dicts.
+- **`src/processing/ncaab/ncaab_linker.py`** — Game-level linking with fuzzy matching (SequenceMatcher >= 0.72).
+- **`src/processing/ncaab/ncaab_populate_averages.py`** — Shift(1) rolling team averages with rest_days and games_last_7d.
+- **`src/processing/ncaab/ncaab_barttorvik_linker.py`** — 3-step name matching (manual → exact → fuzzy).
+- **`src/models/ncaab_feature_store.py`** — ~30 matchup features. LATERAL JOIN for point-in-time Barttorvik. Team differentials (home - away).
+- **`src/models/ncaab_trainer.py`** — Two XGBoost quantile models (spread + total). Reuses `QuantileModelSuite`. Derives moneyline from spread distribution.
+- **`src/models/ncaab_backtest.py`** — Time-travel backtester tracking ATS record, O/U record, MAE, edge metrics.
+- **`src/orchestration/ncaab_daily_stats_job.py`** — Daily: CBBpy → averages → Barttorvik → linker.
+- **`src/orchestration/ncaab_lines_job.py`** — Game lines scrape + linker.
+- **`tests/test_ncaab_game_lines_scraper.py`** — 5 tests for game lines scraper (live/historical/empty responses, sport key, batch insert).
+- **`tests/test_ncaab_barttorvik_scraper.py`** — 6 tests for Barttorvik scraper (normalize, adj_em, four factors, dedup, fetch).
+- **`tests/test_ncaab_linker.py`** — 9 tests for linker (normalize, closest game, fuzzy match, batch).
+- **`tests/test_ncaab_feature_store.py`** — 10 tests for feature store (differentials, feature lists, no duplicates).
+
+### Changed
+
+- **`src/orchestration/scheduler.py`** — Added 3 NCAAB cron jobs with `month="11-12,1-4"` guard: daily stats (14:05 UTC), lines noon (17:30 UTC), lines afternoon (21:30 UTC).
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `database/migrations/009_ncaab_foundation.sql` | Created |
+| `database/migrations/010_ncaab_barttorvik.sql` | Created |
+| `database/migrations/011_ncaab_averages.sql` | Created |
+| `src/scrapers/ncaab/__init__.py` | Created |
+| `src/scrapers/ncaab/ncaab_game_lines_scraper.py` | Created |
+| `src/scrapers/ncaab/ncaab_cbbpy_scraper.py` | Created |
+| `src/scrapers/ncaab/ncaab_barttorvik_scraper.py` | Created |
+| `src/processing/ncaab/__init__.py` | Created |
+| `src/processing/ncaab/ncaab_config.py` | Created |
+| `src/processing/ncaab/ncaab_linker.py` | Created |
+| `src/processing/ncaab/ncaab_populate_averages.py` | Created |
+| `src/processing/ncaab/ncaab_barttorvik_linker.py` | Created |
+| `src/models/ncaab_feature_store.py` | Created |
+| `src/models/ncaab_trainer.py` | Created |
+| `src/models/ncaab_backtest.py` | Created |
+| `src/orchestration/ncaab_daily_stats_job.py` | Created |
+| `src/orchestration/ncaab_lines_job.py` | Created |
+| `src/orchestration/scheduler.py` | Modified — 3 NCAAB cron jobs |
+| `tests/test_ncaab_*.py` (4 files) | Created — 34 tests |
+| `ARCHITECTURE.md` | Updated — NCAAB sections |
+| `ACTIONITEMS.md` | Updated — Session 63 summary |
+| `CHANGELOG.md` | Updated — Session 63 entry |
+
+### Verified
+
+- 663 Python tests pass, 0 failures (34 new NCAAB + 629 existing)
+- Ruff: all checks passed
+- No regressions to existing NBA/MLB pipelines
+
+---
+
+## [2026-03-03 Session 62] — MLB Model Architecture: Feature Store + Pitcher K Model
+
+### Added
+
+- **`src/models/mlb/mlb_stat_config.py`** — MLB stat configuration with model types (quantile, negbin, binary) and edge thresholds (8-10%, higher than NBA's 5% due to MLB prop juice).
+- **`src/processing/mlb/mlb_matchup_features.py`** — Opposing team batting tendencies for pitcher K predictions. `compute_matchup_features_bulk()` uses SQL window functions for training efficiency. `get_opposing_team_batting_stats()` for single-game inference. Team-level L10 K rate and batting average.
+- **`src/models/mlb/mlb_feature_store.py`** — Central 28-feature pitcher K feature store. LATERAL JOIN SQL pattern mirroring NBA `feature_store.py`. Data sources: pitching rolling averages, Statcast metrics (whiff%, CSW%, chase%, zone%, fastball velo), FanGraphs season stats (FIP, K%), park K factors, opposing team batting, game total lines, pitcher K prop lines, momentum trend. Methods: `get_training_dataset()`, `get_player_game_features()`, `get_features_for_date()`. Time-travel safe.
+- **`src/models/mlb/mlb_quantile_trainer.py`** — `MLBPitcherKPipeline` wrapping `QuantileModelSuite` for direct SO count prediction (no minutes decomposition). XGBoost quantile regression Q10-Q90. Save/load via joblib.
+- **`src/models/mlb/mlb_monte_carlo.py`** — `MLBMonteCarloPredictor` with inverse CDF sampling from quantile predictions. No copula (single stat). Integer rounding, floor at 0. Batch prediction support. Reuses `PropPrediction` dataclass from NBA `monte_carlo.py`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/models/mlb/__init__.py` | Created — package init |
+| `src/models/mlb/mlb_stat_config.py` | Created — stat configuration |
+| `src/processing/mlb/mlb_matchup_features.py` | Created — opposing team batting features |
+| `src/models/mlb/mlb_feature_store.py` | Created — 28-feature pitcher K feature store |
+| `src/models/mlb/mlb_quantile_trainer.py` | Created — quantile model pipeline |
+| `src/models/mlb/mlb_monte_carlo.py` | Created — Monte Carlo sampler |
+| `ARCHITECTURE.md` | Updated — added MLB Models section with module table and key differences |
+| `ACTIONITEMS.md` | Updated — Session 62 summary, marked MLB model architecture complete, added next steps |
+| `CHANGELOG.md` | Updated — Session 62 entry |
+| `docs/mlb_processing_pipeline_documentation.md` | Updated — added matchup features and model layer docs |
+
+### Verified
+
+- 629 Python tests pass, 0 failures
+- Ruff: 0 remaining issues
+- All imports resolve correctly
+- No existing files modified (pure additions)
+
+---
+
+## [2026-03-03 Session 61] — MLB Linker Deep Debug: Team Alias Fix + Re-link Pass
+
+### Fixed
+
+- **ARI→AZ / OAK→ATH team abbreviation mismatch (`mlb_config.py`):** `MLB_TEAM_ALIASES` mapped Arizona → "ARI" and Oakland → "OAK", but the `mlb_teams` database table uses "AZ" and "ATH". Every game involving Arizona or Oakland failed game matching (~3M+ affected prop rows). Fixed all 6 alias entries (full names, variants, abbreviation pass-through).
+
+### Added
+
+- **Re-link pass (`mlb_linker_local.py`):** New `process_player_props_relink()` function — Sub-stage 5 that finds rows with game_id + player_id set but team_id NULL. Categorizes root cause (wrong player_id, correct player not in boxscore, no boxscore, name not found). Fixes wrong player_ids where correct player IS in game's boxscore. Resolves team_id from nearby games (within 30 days) for rows where player wasn't in that specific game's boxscore.
+- **Upload stages for re-link data:** `upload_props_relink_with_team` (player_id corrections) and `upload_props_teams_backfill` (team_id from nearby games) with chunked retry.
+- **Status display enhancements:** Summary now shows all 5 processing sub-stages and all upload stages with row counts.
+
+### Results
+
+- Fully linked: 14,075,000 → **21,974,799** (+7.9M rows, **96.8%** of 22.71M total)
+- Missing game_id: 7,111,625 → 231,687 (-96.7%)
+- Player_id corrections: 79,074 + 14,844 rows fixed
+- Team_id backfill: 1,348,841 + 2,402,353 rows resolved
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/processing/mlb/mlb_config.py` | Fixed — ARI→AZ, OAK→ATH in `MLB_TEAM_ALIASES` (6 entries) |
+| `src/processing/mlb/mlb_linker_local.py` | Modified — added `process_player_props_relink()`, upload stages, status tracking |
+| `ARCHITECTURE.md` | Updated — mlb_linker_local.py description with re-link pass and coverage stats |
+| `ACTIONITEMS.md` | Updated — Session 61 summary and revised action items |
+| `docs/mlb_processing_pipeline_documentation.md` | Updated — added Sub-stage 5 documentation |
+
+### Verified
+
+- 629 Python tests pass, 0 failures
+- Ruff: 0 remaining issues
+
+---
+
+## [2026-03-03 Session 60] — Faster Lines Pipeline: Fuzzy Cache + Parallel Steps
+
+### Added
+
+- **Persistent fuzzy cache (`nba_linker_local.py`):** File-based cache at `linker_data/_fuzzy_cache.json` stores `{normalized_name: player_id_or_null}` with player count for auto-invalidation. `_load_fuzzy_cache()`, `_save_fuzzy_cache()`, and `_resolve_fuzzy_names()` helpers ported from MLB linker pattern. Both `link_incremental()` and `process_local()` refactored from per-row `match_player()` to 3-step batch pipeline: manual `.map()` → exact `.map(player_lookup)` → fuzzy cache. Typical runs: 95%+ cache hits, linker step ~15s → <1s.
+- **Parallel step execution (`lines_job.py`):** New `--parallel` flag runs props path (game lines → props → linker) and injury path (scraper → linker) concurrently via `threading.Thread`. `run_step_group()` and `run_parallel_groups()` helpers. Full mode runtime: ~90s → ~45-55s. Without `--parallel`: unchanged sequential behavior.
+- **`run_lines_full_parallel()` (`scheduler.py`):** New wrapper for noon/4pm full runs using `--live --parallel`.
+
+### Changed
+
+- **Props-only cron:** `*/10` → `*/5` (every 5 minutes, ~156 runs/day, up from ~78)
+- **Edge refresh cron:** Updated to 5-minute cadence matching props schedule
+- **Full run schedule:** Noon/4pm now use `run_lines_full_parallel()` with `--parallel`
+- **API credit impact:** ~6,400 credits/day (up from ~3,200) — 4% of 5M monthly quota
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/processing/nba_linker_local.py` | Modified — fuzzy cache helpers, batch player matching in both `link_incremental()` and `process_local()` |
+| `src/orchestration/lines_job.py` | Modified — `--parallel` flag, `run_step_group()`, `run_parallel_groups()` |
+| `src/orchestration/scheduler.py` | Modified — 5-min crons, `run_lines_full_parallel()`, updated noon/4pm jobs |
+
+### Verified
+
+- 629 Python tests pass, 0 failures
+- Ruff: 0 remaining issues
+- All 3 files compile without syntax errors
+
+---
+
+## [2026-03-02 Session 59] — MLB Local Linker with Checkpoint/Resume
+
+### Added
+
+- **`mlb_linker_local.py`** — Local CSV-based MLB linker with checkpoint/resume, mirroring the NBA local linker pattern. Downloads 6 tables to `mlb_linker_data/`, processes matching in pandas, uploads via chunked temp tables with retry/backoff.
+- **Checkpoint system** — `_checkpoint.json` tracks per-stage and per-chunk progress. Completed stages skip on resume, in-progress uploads resume from last completed chunk.
+- **4 processing sub-stages** — game_lines matching, props→games (±1 day fuzzy), props→players (exact + fuzzy + manual mappings), props→teams (boxscore cross-ref).
+- **Upload retry/backoff** — 20 retries with linear backoff capped at 60s, `engine.dispose()` on error (survives laptop sleep/wake).
+- **CLI commands** — download, process, upload, all, status, init, reset with `--force` and `--batch-delay` flags.
+- **Player diagnostics** — `unmatched_players.csv` with fuzzy suggestions and confidence scores, `player_mappings.csv` for manual overrides.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/processing/mlb/mlb_linker_local.py` | Created — ~550 lines, full download/process/upload pipeline |
+| `ARCHITECTURE.md` | Updated — added mlb_linker_local.py to module table and CLI reference |
+| `docs/mlb_processing_pipeline_documentation.md` | Updated — added mlb_linker_local.py section |
+
+### Verified
+
+- 629 Python tests pass, 0 failures
+- Ruff: 0 remaining issues (7 auto-fixed)
+- CLI `--help`, `status`, and `reset` commands verified working
+- All imports resolve correctly
+
+---
+
+## [2026-03-02 Session 58] — Pipeline Resilience Overhaul
+
+### Added
+
+- **Job status tracking (`scheduler.py`):** In-memory `JOB_STATUS` dict tracks every job's status, end time, and duration. `record_job_execution()` persists history to `job_executions` Supabase table for debugging and observability.
+- **Dependency gate (`scheduler.py`):** `check_dependency()` verifies upstream jobs succeeded within a configurable time window. `run_inference()` checks daily stats succeeded in last 8 hours — if not, passes `--stale-warning` flag and sends Discord alert.
+- **9:30 AM automatic retry (`scheduler.py`):** New `run_daily_stats_retry()` scheduled at 14:30 UTC. Checks if 9 AM run succeeded, re-runs if not. Gives the system a second chance before inference at 12:15 PM.
+- **Per-step retries with backoff (`daily_stats_job.py`):** `run_command()` accepts `max_retries` and `retry_delay` params. Critical steps get 2 retries with exponential backoff (15s, 30s). Non-critical steps get 0 retries.
+- **`--stale-warning` flag (`inference_job.py`):** Scheduler passes this when daily stats dependency check fails. Triggers stale-data Discord alert after predictions are generated.
+- **MC sample staleness check (`edge_refresh_job.py`):** Warns via Discord if MC samples are >6 hours old.
+- **`job_executions` table (`007_job_executions.sql`):** Persistent job execution history with index on `(job_name, started_at DESC)`.
+- **21 unit tests (`test_pipeline_resilience.py`):** Coverage for `check_dependency()`, `run_command()` retries, `JOB_STATUS` tracking, and 9:30 retry logic.
+
+### Changed
+
+- **Global job timeout:** Increased from 30m → 45m in `scheduler.py:run_job()` to accommodate retry attempts.
+- **Per-step timeouts:** Step 6 (rolling averages) 10m→20m, Step 7 (opponent stats) 10m→15m, Steps 3-5 (non-critical) 10m→5m.
+- **Staleness check in inference:** Changed from `days_stale > 2` to checking if latest `game_date < yesterday`. Inference never hard-fails — stale data is better than zero predictions.
+- **Edge refresh no-op message:** Changed "No MC samples" from warning to info-level "NO-OP" message (expected before first inference).
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/scheduler.py` | Modified — JOB_STATUS, check_dependency(), record_job_execution(), 9:30 retry, 45m timeout |
+| `src/orchestration/daily_stats_job.py` | Modified — per-step retries with backoff, timeout tuning |
+| `src/orchestration/inference_job.py` | Modified — --stale-warning flag, improved staleness check, stale data Discord alert |
+| `src/orchestration/edge_refresh_job.py` | Modified — MC sample staleness warning, improved no-op logging |
+| `database/migrations/007_job_executions.sql` | Created — persistent job execution history table |
+| `tests/test_pipeline_resilience.py` | Created — 21 unit tests for resilience features |
+
+### Verified
+
+- 629 Python tests pass, 0 failures (21 new tests)
+- Ruff: 0 remaining issues (18 auto-fixed)
+- `--dry-run` confirms all 7 steps with correct timeout/retry params
+- `--stale-warning` flag accepted by inference_job CLI
+- Scheduler module imports cleanly, dependency check returns False when no status exists
+
+---
+
+## [2026-03-01 Session 57] — Fix DFS Dashboard, Sportsbook Timeouts, Edge Refresh Timeout
+
+### Fixed
+
+- **DFS dashboard showing no data on production:** Migration 004 (RPC independence from `daily_predictions`) was not applied. Applied via SQLAlchemy. Both `get_dfs_lines` and `get_sportsbook_lines` RPCs updated from `commence_time::date` cast to range conditions for index-friendly queries.
+- **Sportsbook RPC statement timeout:** `get_sportsbook_lines(date)` timed out on multi-million row `raw_player_props_combined` table (8s Supabase limit). Created new `get_sportsbook_lines_by_games(text[])` RPC with game_id parameter and 24h snapshot_time cutoff. Dashboard updated to two-step batched fetch (3 games per parallel call, 0.3s each).
+- **Edge refresh 30-minute timeout:** `fetch_fresh_lines()` had no `snapshot_time` cutoff, scanning all historical snapshots. During evening games, query degraded past 30-min timeout causing 3 consecutive skipped runs. Added `snapshot_time > now() - interval '24 hours'` cutoff.
+- **DFS paper trader slow queries:** `_fetch_dfs_lines()` and `_fetch_sportsbook_lines()` used `commence_time::date` cast and had no snapshot_time cutoff. Updated to range conditions + 24h cutoff.
+- **MLB rolling averages pgBouncer crash:** `mlb_populate_averages.py` crashed with "lost synchronization with server" fetching entire batting stats table. Added season-by-season fetch with `_get_seasons()` helper.
+
+### Added
+
+- **`get_sportsbook_lines_by_games(text[])` RPC:** Pure SQL function accepting game_id array, 24h snapshot_time cutoff. Migration `005_fast_sportsbook_rpc.sql`.
+- **`idx_props_commence_time` index:** On `raw_player_props_combined(commence_time)` for range query performance.
+- **`allGamesStarted` UX on DFS page:** Shows helpful message with clickable "+ Live" button when Pre-Game filter hides all started games.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/edge_refresh_job.py` | Modified — 24h snapshot_time cutoff in `fetch_fresh_lines()` |
+| `src/paper_trading/dfs_paper_trader.py` | Modified — range conditions + 24h cutoff in both fetch methods |
+| `src/processing/mlb/mlb_populate_averages.py` | Modified — season-by-season fetch |
+| `database/migrations/004_fix_rpc_prediction_dependency.sql` | Modified — range conditions, index |
+| `database/migrations/005_fast_sportsbook_rpc.sql` | Created — batched sportsbook RPC |
+| `dashboard/src/app/(protected)/dfs/page.tsx` | Modified — batched sportsbook fetch, allGamesStarted UX |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- Ruff: no new issues (pre-existing E402 only)
+- Railway logs confirm edge refresh completing in ~2 min after fix (was timing out at 30 min)
+- Sportsbook RPC batch of 3 games returns in 0.3s (was timing out at 8s+)
+
+---
+
+## [2026-03-01 Session 56] — Fix Stale Prediction Lines (MAX(line) Alt-Line Bug)
+
+### Fixed
+
+- **Critical: `MAX(line)` alt-line conflation in `fetch_fresh_lines()` SQL** — Bookmakers offering multiple alt lines (e.g., novig at 7.5/9.5/11.5/13.5/15.5) caused `MAX(line)` to pick the highest alt line. Over/Under odds from different line values got paired together, producing artificially low booksums that made broken data appear "sharpest." Result: Wembanyama stored at line=15.5 (market=11.5), Dort at line=7.5 (market=3.5).
+- **Fix:** Added `line` to `ROW_NUMBER PARTITION BY` and `GROUP BY` so each bookmaker×line is its own row. Added `HAVING` clause requiring both Over and Under odds. Applied to both `edge_refresh_job.py` and `daily_runner.py`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/edge_refresh_job.py` | Modified — `fetch_fresh_lines()` SQL: line in partition, HAVING clause |
+| `src/models/daily_runner.py` | Modified — `_get_current_lines()` SQL: same fix |
+| `ARCHITECTURE.md` | Updated — line selection documentation |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- Ruff: no new issues (pre-existing E402 only)
+- DB queries confirmed: Wembanyama line=15.5 stored (should be 11.5), Dort line=7.5 (should be 3.5) — fix will correct on next edge refresh
+
+---
+
+## [2026-03-01 Session 55] — MLB Processing Pipeline + Game Time TBD Fix
+
+### Added
+
+- **MLB Processing Module (`src/processing/mlb/`):** Complete Phase 2 processing pipeline:
+  - `mlb_config.py` — Shared constants: rolling windows (batting L5/L10/L20/SZN, pitching L3/L5/SZN), 12 batting stats, 8 pitching stats, team aliases, batch sizes.
+  - `mlb_linker.py` — Links `mlb_raw_player_props` by populating `game_id`, `player_id`, `team_id`. Temp table UPDATE pattern, fuzzy player matching (cached), ±1 day date window. Modes: `incremental` (daily) and `backfill` (one-time). Retry logic (20 attempts, escalating waits) survives connection drops and laptop sleep/wake.
+  - `mlb_populate_averages.py` — Full backfill of `mlb_player_average_batting` (71 columns) and `mlb_player_average_pitching` (41 columns). Shift(1) rolling averages, rate stats from rolling sums, std devs, context metrics.
+  - `mlb_populate_averages_incremental.py` — Daily incremental per-player rolling calculation with UPSERT.
+- **MLB Average Tables (`database/migrations/002_mlb_averages.sql`):** Two new tables for model consumption with indexes and RLS.
+
+### Fixed
+
+- **995 placeholder player names in `mlb_players`:** Batch-fetched real names from MLB Stats API. All 995 resolved. Linker match rate jumped from ~1% to 100%.
+- **`_ensure_player` in `mlb_stats_scraper.py`:** Changed from `ON CONFLICT DO NOTHING` to `DO UPDATE` to prevent future placeholder name stagnation.
+- **Dashboard game times showing "TBD" (`daily_runner.py`):** `_enrich_game_times()` assumed all NBA games are evening (UTC date = target+1). Matinee/afternoon games fall on same UTC date and were missed. Fixed to search 2-day UTC window filtered by ET date. Backfilled 2,073 predictions — all dates now 100% coverage.
+- **Ruff lint:** Removed unused `starter_float` variable in `mlb_populate_averages.py`, fixed undefined `utc_date` reference in `daily_runner.py`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/processing/mlb/__init__.py` | Created — module marker |
+| `src/processing/mlb/mlb_config.py` | Created — shared constants |
+| `src/processing/mlb/mlb_linker.py` | Created — MLB props linker (~580 lines) |
+| `src/processing/mlb/mlb_populate_averages.py` | Created — full backfill averages (~400 lines) |
+| `src/processing/mlb/mlb_populate_averages_incremental.py` | Created — daily incremental averages (~350 lines) |
+| `database/migrations/002_mlb_averages.sql` | Created — batting + pitching average tables |
+| `src/scrapers/mlb/mlb_stats_scraper.py` | Modified — `_ensure_player` DO UPDATE |
+| `src/models/daily_runner.py` | Modified — game time enrichment UTC fix |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- Ruff: all checks pass for modified files
+- MLB averages backfill completed: 201,306 batting + 82,979 pitching rows
+- MLB linker backfill in progress (~2.2M/22.7M linked, running in terminal)
+- Game time backfill: 2,073 predictions updated, 100% coverage across all dates
+
+---
+
+## [2026-03-01 Session 54] — DFS Fixes, LIVE Tags, Performance DFS Tab, RPC Independence
+
+### Fixed
+
+- **Edge refresh early exit blocking DFS paper trading (`edge_refresh_job.py`):** `sys.exit(0)` at line 496-501 (when no MC samples exist before inference) killed the process before DFS step 7c could run. Moved DFS paper trading to **step 0** (before MC sample check) so it runs every 10 minutes independently of model inference.
+- **RPCs dependent on `daily_predictions` (`004_fix_rpc_prediction_dependency.sql`):** Both `get_dfs_lines` and `get_sportsbook_lines` RPC functions joined on `daily_predictions` for game scoping — returned no data before inference. Updated both to scope by `commence_time::date` directly. `get_dfs_lines` now also joins `players` table for `player_name` and returns `game_time` (commence_time).
+- **DFS page blank in market mode before inference (`dfs/page.tsx`):** `marketComparisons` useMemo required a matching prediction to build comparisons. Now constructs comparisons from DFS line data as fallback when no predictions exist.
+- **Stale prediction lines (Danny Wolf 13.5 → 10.5):** Edge refresh mechanism properly re-evaluates MC samples at new lines, but wasn't running due to the sys.exit(0) bug above. Now fixed — edges update within 10 minutes of line movement.
+
+### Added
+
+- **LIVE tags on game cards:** PropCard, PlayOfTheDay, and TonightsGames game pills now show a pulsing red dot + "Live" badge when `game_time <= now()`. Added `isGameLive()` utility to `utils.ts`. Game times always display ("TBD" when unknown instead of blank).
+- **Game time backfill (`dashboard/page.tsx`):** Client-side propagation of `game_time` from predictions that have it to same-game predictions that don't (570/783 were missing game_time).
+- **DFS Performance tab (`performance/page.tsx`):** New "Props / DFS" tab toggle. DFS tab shows KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table with per-type stats.
+- **`DfsLine` type updates (`dfs.ts`):** Added `player_name` and `game_time` optional fields to match updated RPC return type.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/edge_refresh_job.py` | Modified — moved DFS block from step 7c to step 0 |
+| `database/migrations/004_fix_rpc_prediction_dependency.sql` | Created — updates both RPCs to remove prediction dependency |
+| `sql/functions/get_sportsbook_lines.sql` | Modified — updated to match deployed RPC |
+| `dashboard/src/app/(protected)/dfs/page.tsx` | Modified — market comparisons without predictions |
+| `dashboard/src/app/(protected)/performance/page.tsx` | Modified — DFS performance tab |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — game_time backfill |
+| `dashboard/src/lib/utils.ts` | Modified — formatGameTime returns "TBD", added isGameLive() |
+| `dashboard/src/types/dfs.ts` | Modified — player_name, game_time fields |
+| `dashboard/src/components/predictions/PropCard.tsx` | Modified — always show time, LIVE tag |
+| `dashboard/src/components/predictions/PlayOfTheDay.tsx` | Modified — always show time, LIVE tag |
+| `dashboard/src/components/predictions/TonightsGames.tsx` | Modified — always show time, LIVE tag |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- Ruff: only pre-existing warnings (E402, F841 in MLB/linker files)
+- Migration 004 ran successfully — 2,098 DFS lines and 5,490 sportsbook lines returned for today before inference
+
+---
+
+## [2026-02-28 Session 53] — DFS Paper Trading Engine + Live Toggle
+
+### Added
+
+- **DFS Paper Trading Engine (`dfs_paper_trader.py`):** Backend paper trading engine for multi-leg DFS entries using devigged sportsbook consensus (market edge, no model dependency). Builds 4 entries/day across slip types: UD 3-pick (6x), UD 5-pick (20x), PP 5-flex (10x/2x/0.4x), PP 6-flex (25x/2x/0.4x). Port of TypeScript market edge logic (exact-line-match devigging, multiplicative consensus averaging) to Python. Entry selection: positive edge filter, platform preference tiebreaker, one-leg-per-player dedup, started game exclusion. Resolution handles push/cancel (reduce effective entry), flex partial payouts. $500 bankroll, $10/entry.
+- **Database Migration (`003_dfs_paper_trading.sql`):** Three new tables — `dfs_paper_entries` (unique on entry_date/slip_type), `dfs_paper_legs` (FK cascade, unique on entry_id/player_id), `dfs_paper_daily_log` (unique on entry_date). Indices on date/status, entry_id, date.
+- **Edge Refresh Step 7c (`edge_refresh_job.py`):** DFS paper trading integrated into 10-minute edge refresh cycle. Resolves previous-day entries, then builds and places new ones. Non-fatal try/except wrapper.
+- **DFS Audit (`audit_and_resolve.py`):** `--dfs` flag shows entry/leg status breakdown, per-slip-type W/L/P stats, leg details, daily log with cumulative P&L and bankroll.
+- **DFS Live Toggle (`DfsFilters.tsx`, `dfs/page.tsx`):** "Pre-Game / + Live" toggle on DFS Edge Finder page. Default hides started-game picks. Orange "+ Live" mode shows all picks. Same pattern as main dashboard live toggle.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/paper_trading/dfs_paper_trader.py` | Created — DFS paper trading engine (~900 lines) |
+| `database/migrations/003_dfs_paper_trading.sql` | Created — 3 new tables + indices |
+| `src/orchestration/edge_refresh_job.py` | Modified — added step 7c DFS paper trading |
+| `src/paper_trading/audit_and_resolve.py` | Modified — added `--dfs` flag |
+| `dashboard/src/app/(protected)/dfs/page.tsx` | Modified — `showLive` state + filtering |
+| `dashboard/src/components/dfs/DfsFilters.tsx` | Modified — live toggle UI |
+
+### Verified
+
+- 575 Python tests pass, 0 failures
+- TypeScript compiles with zero errors
+- Migration ran successfully — all 3 tables verified in Supabase
+- `build_entries(date.today())` successfully built 4 entries (824 DFS lines, 2781 sportsbook lines)
+- First entries placed: entry_ids 1-4 for 2026-02-28
+
+---
+
+## [2026-02-28 Session 52] — Dashboard Live Toggle + DFS 2-Pick
+
+### Added
+
+- **Live Betting Toggle (`dashboard/page.tsx`):** "Pre-Game / + Live" pill toggle in dashboard header controls. Default (Pre-Game) hides predictions whose `game_time` has passed. "+ Live" (orange pill) shows all predictions including in-progress games. Client-side comparison: `new Date(p.game_time) <= new Date()`.
+- **DFS PP 2-Pick Slip Type (`dfs.ts`):** Added `pp_2_power` to `DFS_SLIP_TYPES` — PrizePicks 2-Pick Power with 3x payout, 57.7% break-even per leg. Most conservative slip type for high-conviction plays.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — `showLive` state, filter logic, toggle UI |
+| `dashboard/src/types/dfs.ts` | Modified — added `pp_2_power` slip type |
+
+### Verified
+
+- TypeScript compiles successfully (`npx next build`)
+- 575 Python tests pass, ruff auto-fixed 5 issues (pre-existing)
+
+---
+
+## [2026-02-28 Session 51] — 10-Minute Scheduler + Bet Resolution + Live Game Filter
+
+### Changed
+
+- **`scheduler.py`:** Replaced 21 hardcoded job definitions (hourly 1-3 PM, half-hourly 4:30-6:30 PM) with 2 APScheduler `CronTrigger` jobs covering 11 AM – 11 PM ET every 10 minutes. Props scrape at `:00/:10/:20/:30/:40/:50`, edge refresh at `:02/:12/:22/:32/:42/:52`. Added `silent_on_success` flag to `run_job()` — high-frequency jobs only send Discord alerts on failure (~78 runs/day each, down from 8/day previously). Total job definitions: 21 → 7.
+- **`edge_refresh_job.py`:** Step 7b now calls `PaperTrader.resolve_all_pending(exclude_today=True)` before placing new bets. Previous-day bets get resolved every 10 minutes instead of only once daily.
+- **`paper_trader.py`:** Added `exclude_today` parameter to `resolve_all_pending()` — filters `game_date < today` to prevent same-day false resolution. Added `_get_started_game_ids()` method checking `commence_time` from `raw_player_props_combined`. `select_bets()` now skips in-progress games to prevent false edges from mid-game line comparisons.
+
+### Added
+
+- **`audit_and_resolve.py`:** Diagnostic script for paper bet state. Supports `--audit` (show status breakdown), `--resolve` (resolve pending bets with available stats), `--backfill` (re-place missed bets from historical predictions), and `--dry-run` flags.
+
+### Fixed
+
+- **Paper bet resolution gap:** Bets placed after old schedule cutoff (6:30 PM) were never resolved. Backfilled 14 missed bets across 5 dates; corrected P&L from $1,841.68 → $2,231.14 (+$389.46).
+- **Live game false edges:** 16 of 36 pending bets were for games already in progress (pre-game MC samples vs mid-game lines). Live game filter prevents this going forward; existing 16 live bets were deleted.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/scheduler.py` | Modified — 10-min cron schedule, silent_on_success |
+| `src/orchestration/edge_refresh_job.py` | Modified — resolve pending bets before placing new ones |
+| `src/paper_trading/paper_trader.py` | Modified — exclude_today, live game filter |
+| `src/paper_trading/audit_and_resolve.py` | Created — diagnostic/fix script |
+
+### Verified
+
+- 575 Python tests pass, 1 skipped, ruff clean
+- Backfill resolved 18 additional bets correctly
+- Live game filter correctly identified 16 in-progress game bets
+- Deployed to Railway, 10-minute cadence confirmed
+
+---
+
 ## [2026-02-26 Session 50] — MLB Statcast & FanGraphs Advanced Stats Scrapers
 
 ### Added

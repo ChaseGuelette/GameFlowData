@@ -11,6 +11,12 @@ Schedule (ET):
 
     12:00 PM - lines_job --live (full)
     12:15 PM - inference_job (full MC)
+    11 AM-11 PM ET (16:00-04:00 UTC) every 5 min:
+        :00,:05,...,:55         - lines_job --live --props-only  (silent)
+        :02,:07,...,:57         - edge_refresh_job               (silent)
+
+    12:00 PM ET (17:00 UTC) - lines_job --live --parallel (full)
+    12:15 PM ET (17:15 UTC) - inference_job (full MC)
 
     1:00 PM  - lines_job --live --props-only + edge_refresh
     2:00 PM  - lines_job --live --props-only + edge_refresh
@@ -18,12 +24,15 @@ Schedule (ET):
 
     4:00 PM  - lines_job --live (full)
     4:15 PM  - inference_job (full MC)
+    4:00 PM ET  (21:00 UTC) - lines_job --live --parallel (full)
+    4:15 PM ET  (21:15 UTC) - inference_job (full MC)
 
     4:30 PM  - lines_job --live --props-only + edge_refresh
     5:00 PM  - lines_job --live --props-only + edge_refresh
     5:30 PM  - lines_job --live --props-only + edge_refresh
     6:00 PM  - lines_job --live --props-only + edge_refresh
     6:30 PM  - lines_job --live --props-only + edge_refresh (final)
+    "silent" = Discord alerts only on failure (~156 runs/day each).
 
 Usage:
     python src/orchestration/scheduler.py              # Start scheduler loop
@@ -32,6 +41,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shlex
@@ -39,6 +49,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -68,6 +79,98 @@ JOB_NAMES = {
     "edge_refresh_job.py": "Edge Refresh",
     "test_job.py": "System Test",
 }
+
+# In-memory job status tracking for dependency checks.
+# Updated by run_job() after every execution.
+# Format: {"daily_stats_job.py": {"status": "success", "end_time": datetime, "duration": float}}
+JOB_STATUS: dict[str, dict] = {}
+
+
+def record_job_execution(
+    job_name: str,
+    started_at: datetime,
+    status: str,
+    duration: float,
+    error_message: str | None = None,
+    metrics: dict | None = None,
+) -> None:
+    """Record a job execution to the job_executions table in Supabase.
+
+    Non-fatal: failures are logged but don't affect job status.
+    """
+    try:
+        from src.db.client import get_engine
+
+        engine = get_engine()
+        from sqlalchemy import text
+
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO job_executions
+                        (job_name, started_at, ended_at, status, duration_seconds, error_message, metrics)
+                    VALUES
+                        (:job_name, :started_at, :ended_at, :status, :duration, :error_message, :metrics)
+                """),
+                {
+                    "job_name": job_name,
+                    "started_at": started_at,
+                    "ended_at": datetime.now(UTC),
+                    "status": status,
+                    "duration": duration,
+                    "error_message": error_message,
+                    "metrics": json.dumps(metrics) if metrics else None,
+                },
+            )
+        logger.debug(f"Recorded job execution: {job_name} ({status})")
+    except Exception as e:
+        logger.warning(f"Failed to record job execution for {job_name}: {e}")
+
+
+def check_dependency(upstream_job: str, max_age_hours: float = 8) -> bool:
+    """Return True if upstream job succeeded within max_age_hours.
+
+    Checks in-memory JOB_STATUS first, then falls back to the
+    job_executions table so dependency checks survive redeployments.
+    """
+    # 1. Fast path: in-memory check
+    status = JOB_STATUS.get(upstream_job, {})
+    if status.get("status") == "success":
+        end_time = status.get("end_time")
+        if end_time is not None:
+            age_hours = (datetime.now(UTC) - end_time).total_seconds() / 3600
+            if age_hours <= max_age_hours:
+                return True
+
+    # 2. Fallback: query job_executions table (survives redeployments)
+    try:
+        from src.db.client import get_engine
+
+        engine = get_engine()
+        from sqlalchemy import text
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT ended_at FROM job_executions
+                    WHERE job_name = :job_name
+                      AND status = 'success'
+                      AND ended_at > now() - make_interval(hours => :max_age)
+                    ORDER BY ended_at DESC
+                    LIMIT 1
+                """),
+                {"job_name": upstream_job, "max_age": max_age_hours},
+            ).fetchone()
+        if row is not None:
+            logger.info(
+                f"Dependency '{upstream_job}' satisfied via job_executions table "
+                f"(ended_at={row[0]})"
+            )
+            return True
+    except Exception as e:
+        logger.warning(f"Failed to check job_executions for {upstream_job}: {e}")
+
+    return False
 
 
 def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> dict | None:
@@ -177,16 +280,24 @@ def _send_job_alert(
         logger.warning(f"Failed to send Discord alert for {script_name}: {e}")
 
 
-def run_job(script_name: str, extra_args: str = ""):
-    """Run a job script as a subprocess and send alert on completion."""
+def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = False):
+    """Run a job script as a subprocess and send alert on completion.
+
+    Args:
+        script_name: The script to run.
+        extra_args: Additional CLI arguments.
+        silent_on_success: If True, skip Discord alerts on success (still alert on failure).
+    """
     script_path = PROJECT_ROOT / "src" / "orchestration" / script_name
     cmd = [sys.executable, str(script_path)] + (shlex.split(extra_args) if extra_args else [])
     logger.info(f"Starting job: {script_name}{' ' + extra_args if extra_args else ''}")
 
     start_time = time.time()
+    started_at = datetime.now(UTC)
     success = False
     stdout = ""
     stderr = ""
+    job_status = "failed"
 
     try:
         result = subprocess.run(
@@ -194,7 +305,7 @@ def run_job(script_name: str, extra_args: str = ""):
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=1800,  # 30 minute timeout
+            timeout=2700,  # 45 minute global timeout (was 30m)
         )
 
         stdout = result.stdout or ""
@@ -204,22 +315,32 @@ def run_job(script_name: str, extra_args: str = ""):
         if result.returncode == 0:
             logger.info(f"Job completed successfully: {script_name}")
             success = True
+            job_status = "success"
         else:
             logger.error(f"Job failed: {script_name}")
             logger.error(f"STDERR: {stderr[-2000:] if stderr else 'None'}")
 
-        # Send alert
-        _send_job_alert(script_name, success, duration, stdout, stderr)
+        # Send alert (skip success alerts if silent_on_success)
+        if not (silent_on_success and success):
+            _send_job_alert(script_name, success, duration, stdout, stderr)
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         duration = time.time() - start_time
-        logger.error(f"Job timed out after 30 minutes: {script_name}")
+        job_status = "timeout"
+        logger.error(f"Job timed out after 45 minutes: {script_name}")
+        partial_stdout = ""
+        partial_stderr = "Job timed out after 45 minutes"
+        if e.stdout:
+            partial_stdout = e.stdout if isinstance(e.stdout, str) else e.stdout.decode(errors="replace")
+        if e.stderr:
+            partial_stderr = (e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace"))
+            partial_stderr += "\n\nJob timed out after 45 minutes"
         _send_job_alert(
             script_name,
             success=False,
             duration=duration,
-            stdout="",
-            stderr="Job timed out after 30 minutes",
+            stdout=partial_stdout,
+            stderr=partial_stderr,
         )
 
     except Exception as e:
@@ -232,6 +353,25 @@ def run_job(script_name: str, extra_args: str = ""):
             stdout="",
             stderr=str(e),
         )
+
+    # Update in-memory status for dependency checks
+    JOB_STATUS[script_name] = {
+        "status": job_status,
+        "end_time": datetime.now(UTC),
+        "duration": duration,
+    }
+
+    # Record to persistent DB (non-fatal)
+    metrics = _parse_metrics_from_output(script_name, stdout, stderr)
+    error_msg = stderr.strip()[-500:] if not success and stderr else None
+    record_job_execution(
+        job_name=script_name,
+        started_at=started_at,
+        status=job_status,
+        duration=duration,
+        error_message=error_msg,
+        metrics=metrics,
+    )
 
 
 def _validate_environment():
@@ -278,9 +418,31 @@ def run_daily_stats():
     run_job("daily_stats_job.py")
 
 
+def run_daily_stats_retry():
+    """Re-run daily stats if the 9 AM run failed or didn't run."""
+    status = JOB_STATUS.get("daily_stats_job.py", {})
+    if status.get("status") == "success":
+        logger.info("Daily stats already succeeded today, skipping 9:30 retry.")
+        return
+    logger.warning("Daily stats failed or did not run at 9 AM — retrying now...")
+    _send_job_alert(
+        "daily_stats_job.py",
+        success=False,
+        duration=0,
+        stdout="",
+        stderr="9 AM daily stats job failed or missing — automatic retry at 9:30 AM ET",
+    )
+    run_job("daily_stats_job.py")
+
+
 def run_lines_full():
     """Full lines scrape: game lines + props (live) + injuries + linker."""
     run_job("lines_job.py", extra_args="--live")
+
+
+def run_lines_full_parallel():
+    """Full lines scrape with parallel execution (props + injuries concurrently)."""
+    run_job("lines_job.py", extra_args="--live --parallel")
 
 
 def run_lines_props_only():
@@ -289,12 +451,40 @@ def run_lines_props_only():
 
 
 def run_inference():
-    run_job("inference_job.py")
+    """Run inference, checking if daily stats succeeded first."""
+    if not check_dependency("daily_stats_job.py", max_age_hours=8):
+        logger.warning(
+            "Daily stats job has not succeeded in the last 8 hours — "
+            "inference will run with potentially stale rolling averages."
+        )
+        _send_job_alert(
+            "daily_stats_job.py",
+            success=False,
+            duration=0,
+            stdout="",
+            stderr=(
+                "Daily stats job has not succeeded today — "
+                "inference will run with stale rolling averages"
+            ),
+        )
+        run_job("inference_job.py", extra_args="--stale-warning")
+    else:
+        run_job("inference_job.py")
 
 
 def run_edge_refresh():
     """Lightweight edge recalculation using stored samples + fresh lines."""
     run_job("edge_refresh_job.py")
+
+
+def run_lines_props_only_silent():
+    """Props-only scrape, Discord alerts only on failure."""
+    run_job("lines_job.py", extra_args="--live --props-only", silent_on_success=True)
+
+
+def run_edge_refresh_silent():
+    """Edge refresh, Discord alerts only on failure. Skips paper trading."""
+    run_job("edge_refresh_job.py", extra_args="--skip-paper", silent_on_success=True)
 
 
 def main():
@@ -334,6 +524,14 @@ def main():
         name="Daily Stats (9 AM ET)",
     )
 
+    # 9:30 AM ET (14:30 UTC) - Retry daily stats if 9 AM run failed
+    scheduler.add_job(
+        run_daily_stats_retry,
+        CronTrigger(hour=14, minute=30),
+        id="daily_stats_retry",
+        name="Daily Stats Retry (9:30 AM ET)",
+    )
+
     # --- First window: noon full scrape + inference ---
 
     # 12:00 PM ET - Full lines scrape (live)
@@ -341,7 +539,7 @@ def main():
         run_lines_full,
         CronTrigger(hour=12, minute=0),
         id="lines_noon_full",
-        name="Lines Full (12 PM ET)",
+        name="Lines Full Parallel (12 PM ET)",
     )
 
     # 12:15 PM ET - Full inference
@@ -352,30 +550,31 @@ def main():
         name="Inference (12:15 PM ET)",
     )
 
-    # --- Hourly props-only + edge refresh: 1-3 PM ET ---
+    # --- Every 5 min props-only + edge refresh: 11 AM - 11 PM ET ---
+    # UTC: hour 16-23 and 0-4 (EST = UTC-5)
 
-    for et_hour, et_label in [(13, "1 PM"), (14, "2 PM"), (15, "3 PM")]:
-        scheduler.add_job(
-            run_lines_props_only,
-            CronTrigger(hour=et_hour, minute=0),
-            id=f"props_{et_hour}",
-            name=f"Props Only ({et_label} ET)",
-        )
-        scheduler.add_job(
-            run_edge_refresh,
-            CronTrigger(hour=et_hour, minute=2),
-            id=f"edge_refresh_{et_hour}",
-            name=f"Edge Refresh ({et_label}:02 ET)",
-        )
+    scheduler.add_job(
+        run_lines_props_only_silent,
+        CronTrigger(hour='16-23,0-4', minute='*/5'),
+        id="props_every_5",
+        name="Props Only (every 5 min, 11AM-11PM ET)",
+    )
+
+    scheduler.add_job(
+        run_edge_refresh_silent,
+        CronTrigger(hour='16-23,0-4', minute='2,7,12,17,22,27,32,37,42,47,52,57'),
+        id="edge_refresh_every_5",
+        name="Edge Refresh (every 5 min, 11AM-11PM ET)",
+    )
 
     # --- Second window: 4 PM full scrape + inference ---
 
-    # 4:00 PM ET - Full lines scrape (live)
+    # 4:00 PM ET (21:00 UTC) - Full lines scrape (live, parallel)
     scheduler.add_job(
-        run_lines_full,
-        CronTrigger(hour=16, minute=0),
+        run_lines_full_parallel,
+        CronTrigger(hour=21, minute=0),
         id="lines_4pm_full",
-        name="Lines Full (4 PM ET)",
+        name="Lines Full Parallel (4 PM ET)",
     )
 
     # 4:15 PM ET - Full inference
@@ -385,26 +584,6 @@ def main():
         id="inference_4pm",
         name="Inference (4:15 PM ET)",
     )
-
-    # --- Half-hourly props-only + edge refresh: 4:30-6:30 PM ET ---
-
-    half_hourly = [
-        (16, 30, "4:30 PM"), (17, 0, "5 PM"), (17, 30, "5:30 PM"),
-        (18, 0, "6 PM"), (18, 30, "6:30 PM"),
-    ]
-    for et_h, et_m, et_label in half_hourly:
-        scheduler.add_job(
-            run_lines_props_only,
-            CronTrigger(hour=et_h, minute=et_m),
-            id=f"props_{et_h}_{et_m:02d}",
-            name=f"Props Only ({et_label} ET)",
-        )
-        scheduler.add_job(
-            run_edge_refresh,
-            CronTrigger(hour=et_h, minute=et_m + 2),
-            id=f"edge_refresh_{et_h}_{et_m:02d}",
-            name=f"Edge Refresh ({et_label}:02 ET)",
-        )
 
     # Log scheduled jobs
     logger.info("Scheduled jobs:")

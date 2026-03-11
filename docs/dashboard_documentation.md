@@ -50,6 +50,7 @@ dashboard/
 │   │   │   ├── PublicNavbar.tsx # Public nav with Picks + Discord links
 │   │   │   └── Footer.tsx      # Footer with Discord link
 │   │   ├── predictions/        # Prediction display components
+│   │   │   ├── BookFilterDropdown.tsx # Multi-select sportsbook checkbox dropdown
 │   │   │   ├── FilterTabs.tsx  # Stat type filtering
 │   │   │   ├── PlayOfTheDay.tsx# Featured top pick card
 │   │   │   ├── PropCard.tsx    # Individual prediction card
@@ -211,6 +212,20 @@ Paper trading results for bankroll display and performance tracking.
 - `total_staked` — Total amount staked
 - `total_pnl` — Profit/loss for the day
 
+### `dfs_paper_entries`
+
+DFS multi-leg entry records for DFS performance tab.
+
+**Columns used:**
+- `entry_date`, `slip_type`, `status`, `legs_won`, `legs_lost`, `legs_push`, `legs_cancelled`, `payout_multiplier`, `pnl`, `avg_edge`, `stake`
+
+### `dfs_paper_daily_log`
+
+DFS daily aggregates for bankroll chart in DFS performance tab.
+
+**Columns used:**
+- `entry_date`, `entries_placed`, `entries_won`, `entries_lost`, `entries_partial`, `total_staked`, `total_pnl`, `cumulative_pnl`, `bankroll_after`
+
 ### `paper_bets`
 
 Individual bet records for history view.
@@ -239,6 +254,27 @@ Displays navigation and current bankroll.
 ```tsx
 <Navbar bankroll={1250.00} />
 ```
+
+### BookFilterDropdown
+
+Multi-select checkbox dropdown for sportsbook filtering (added Session 66). Replaces the old single-select `<select>` dropdown.
+
+```tsx
+<BookFilterDropdown
+  excludedBooks={excludedBooks}       // Set<string> — empty = all included
+  onChange={setExcludedBooks}          // (excluded: Set<string>) => void
+  userState={userState}               // filters to state-legal books
+/>
+```
+
+**Behavior:**
+- Button shows "All Books" when all checked, "Books (N)" when some unchecked
+- Floating panel with checkboxes for each state-legal sportsbook
+- "Select All" / "Clear All" toggle at top
+- Closes on outside click or Escape key
+- Books filtered by `STATE_SPORTSBOOKS[userState]` from `sportsbook-availability.ts`
+
+**Dashboard state:** `excludedBooks: Set<string>` (empty = no filtering). When non-empty, queries `raw_player_props_combined` with `.in('bookmaker', activeBooks)` to build availability set. State changes clean up stale exclusions.
 
 ### FilterTabs
 
@@ -347,13 +383,53 @@ if (blTau !== null && p.pred_mean && p.pred_std) {
 }
 ```
 
-**UI Layout (Session 26):**
+### Live Betting Toggle (Session 52)
+
+Pill-style toggle that controls visibility of predictions for games that have already started.
+
+| Button | Active Style | Behavior |
+|--------|-------------|----------|
+| **Pre-Game** (default) | `bg-slate-700` | Hides predictions where `game_time ≤ now()` |
+| **+ Live** | `bg-orange-600` | Shows all predictions including live/started games |
+
+**State:** `const [showLive, setShowLive] = useState<boolean>(false)`
+
+**Filter logic:** Applied only when viewing today's date (Session 65 fix). Previously applied to all dates, which hid ALL predictions for past dates since every game had ended:
+```typescript
+if (selectedDate === getToday()) {
+  if (isGameDone(p.game_time)) return false
+  if (!showLive && p.game_time) {
+    if (new Date(p.game_time) <= new Date()) return false
+  }
+}
 ```
-┌──────────┐ ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌───────────┐
-│ Feb 13 ▼ │ │All Games▼│ │Edge: ≥5% ▼│ │BL: τ=0.10 ▼│ │All│PTS│...│
-└──────────┘ └──────────┘ └───────────┘ └────────────┘ └───────────┘
- Date        Matchup       Edge Filter   BL Blending   Stat Filter
+
+**UI Layout (Session 52):**
 ```
+┌──────────┐ ┌──────────┐ ┌────────────────┐ ┌──────────────────┐ ┌──────────┐ ...
+│ State  ▼ │ │  Book  ▼ │ │Pre-Game│+ Live │ │All Bets│Model    │ │ Date   ▼ │
+└──────────┘ └──────────┘ └────────────────┘ └──────────────────┘ └──────────┘
+ State        Sportsbook   Live Toggle        Model Picks         Date
+```
+
+### LIVE Tags & Game Times (Session 54)
+
+All game-related components display game times and a live indicator when games have started:
+
+**Components affected:** PropCard, PlayOfTheDay, TonightsGames
+
+**Game time display:**
+- Always visible — shows "TBD" when game_time is null/undefined via `formatGameTime()` in `utils.ts`
+- Client-side backfill in `dashboard/page.tsx` propagates game_time from predictions that have it to same-game predictions that don't
+
+**LIVE badge:**
+- Pulsing red dot + "Live" text (uppercase, 10px bold)
+- Appears when `isGameLive(game_time)` returns true (`game_time <= now()`)
+- Styling: `bg-red-500/20 text-red-400 border border-red-500/30` with `animate-pulse` dot
+
+**Utility functions (`utils.ts`):**
+- `formatGameTime(gameTime)` — Returns time string (e.g., "7:30 PM") or "TBD"
+- `isGameLive(gameTime)` — Returns true if game has started
 
 ### PropCard
 
@@ -363,6 +439,7 @@ Individual prediction card with:
 - Over/under probabilities
 - Edge badge (high/medium/low)
 - Prop line
+- Game time and LIVE tag
 
 ```tsx
 <PropCard
@@ -384,10 +461,16 @@ Detailed analysis popup with:
 <AnalysisModal
   prediction={selectedPrediction}
   onClose={() => setSelected(null)}
+  onTakeBet={handleTakeBet}  // Optional — enables "Take Bet" button
 />
 ```
 
-**Features (as of Session 24):**
+**Props:**
+- `prediction: Prediction` — The prediction to analyze
+- `onClose: () => void` — Close handler
+- `onTakeBet?: (prediction: Prediction, data: TakeBetData) => void` — Called when user clicks "Take Bet" with the selected book/odds/line/stake
+
+**Features (as of Session 68):**
 
 1. **Line Shopping** — Displays all available bookmaker lines for the prop:
    - Fetches from `raw_player_props_combined` table
@@ -408,6 +491,13 @@ Detailed analysis popup with:
    - Linear interpolation between adjacent points
    - Extrapolation above q90 for Under bets (higher lines = higher Under probability)
    - Capped between 0.90 and 0.99 for lines beyond q90
+
+4. **"Take Bet" Button (Session 68)** — Footer action for recording bets with specific sportsbook selection:
+   - Appears when `onTakeBet` prop is provided and a sportsbook line is selected
+   - Stake input pre-filled from Kelly recommendation via `sizingData` useMemo, editable
+   - Calls `onTakeBet(prediction, { book, odds, line, stake, modelProb, edge, direction })`
+   - Button disables after placement, shows "Bet Taken!"
+   - Dashboard wires this to `placeBetCustom()` + `markBetTaken()` to record in `user_bets` and sync PropCard checkmark
 
 ### PlayerAvatar
 
@@ -688,11 +778,13 @@ Individual bet result display.
 
 Shows:
 - Player name and avatar
+- Matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` available (Session 68), with date
 - Stat badge
 - Over/Under direction with line
+- Sportsbook badge (when bookmaker recorded)
 - Actual value
 - Result badge (Won/Lost/Push)
-- P&L amount
+- Stake and P&L amount
 
 #### HistoryFilters
 
@@ -715,7 +807,9 @@ Summary statistics bar.
 <HistorySummary bets={bets} />
 ```
 
-Shows: Total bets, Wins, Losses, Win Rate, Total P&L
+Shows: Total bets, Pending (when present), Wins, Losses, Pushes, Win Rate, Total P&L.
+
+**Per-stat win rate cards (Session 68):** Below the summary grid, displays up to 3 cards (PTS/REB/AST) showing win rate % and W-L record for each stat type with resolved bet data. Uses `STAT_LABELS` and `STAT_COLORS` from predictions types.
 
 ### Performance Components
 
@@ -1067,20 +1161,15 @@ Dropdown filter that restricts AnalysisModal sportsbook lines to only show bookm
 
 ### Dashboard Integration
 
-State stored in `localStorage` under key `user_state`. Set on the dashboard page, read in the AnalysisModal.
+State synced cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Both the dashboard page and AnalysisModal consume the same hook.
 
 ```typescript
-// Dashboard page — read + write
-const [userState, setUserState] = useState<string>(() => {
-  if (typeof window === 'undefined') return ''
-  return localStorage.getItem('user_state') || ''
-})
+// Both dashboard/page.tsx and AnalysisModal.tsx
+const { prefs, updatePref } = useUserPreferences()
+const userState = prefs.userState
 
-// AnalysisModal — read-only
-const [userState] = useState<string>(() => {
-  if (typeof window === 'undefined') return ''
-  return localStorage.getItem('user_state') || ''
-})
+// Update (dashboard page state selector)
+onChange={(e) => updatePref('userState', e.target.value)}
 ```
 
 ### AnalysisModal Filtering
@@ -1167,7 +1256,7 @@ Three-mode edge analysis comparing DFS platform lines (PrizePicks, Underdog, Pic
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `DfsFilters` | `components/dfs/DfsFilters.tsx` | Edge mode toggle, platform tabs, slip type dropdown, stat filter, +EV toggle |
+| `DfsFilters` | `components/dfs/DfsFilters.tsx` | Edge mode toggle, platform tabs, slip type dropdown, stat filter, +EV toggle, live toggle |
 | `DfsTable` | `components/dfs/DfsTable.tsx` | Mode-specific column layouts, sortable, color-coded edges |
 
 ### Filter State
@@ -1179,11 +1268,13 @@ Three-mode edge analysis comparing DFS platform lines (PrizePicks, Underdog, Pic
 | `slipType` | string | `'pp_6_flex'` | Break-even threshold for EV calc |
 | `statFilter` | string | `'all'` | Filter by stat type |
 | `evOnly` | boolean | `true` | Only show +EV picks |
+| `showLive` | boolean | `false` | Include picks from started games |
 
 ### Slip Types
 
 | Key | Label | Break-Even | Payout |
 |-----|-------|-----------|--------|
+| `pp_2_power` | PP 2-Pick | 57.7% | 3x |
 | `ud_3_standard` | UD 3-Pick | 55.0% | 6x |
 | `ud_5_standard` | UD 5-Pick | 54.9% | 20x |
 | `pp_5_flex` | PP 5-Pick Flex | 54.25% | 10x |
@@ -1255,9 +1346,63 @@ Fetches `https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json` — t
 
 `dashboard/src/app/api/games/route.ts`
 
+## User Bet Tracking (Session 64)
+
+Cross-device sync for user-placed bets and preferences, replacing per-device localStorage.
+
+### Custom Hooks
+
+**`dashboard/src/lib/hooks/useUserBets.ts`** — Bet tracking hook.
+- Fetches user's bets for `selectedDate` from `user_bets` table on mount/date change
+- Returns `{ takenBets: Set<string>, toggleBet: (prediction) => void, markBetTaken: (playerId, stat, rowId) => void, loading }`
+- `toggleBet`: optimistic UI update → async Supabase upsert/delete → rollback on error. Now includes `team_abbrev` and `opponent_abbrev` in upsert.
+- `markBetTaken(playerId, stat, rowId)`: Adds a bet to local `takenBets` set and `betRowsRef` after `placeBetCustom()` succeeds (so PropCard checkmark turns green without a refetch).
+- On insert: auto-captures direction, odds, book, model_prob, edge, team_abbrev, opponent_abbrev from the Prediction object
+- Key format: `${player_id}-${stat}` (same as PropCard/PropGrid)
+- Uses `betRowsRef` (Map) to track row IDs for efficient deletes
+- Unique constraint: `(user_id, game_date, player_id, stat_type)` — one bet per player/stat/date
+
+**`placeBetCustom(params)` (exported standalone function, Session 68)** — Places a bet with caller-provided book/odds/line/stake/direction. Used by AnalysisModal's "Take Bet" button. Returns `{ id }` on success or `null` on failure. Includes `team_abbrev`/`opponent_abbrev` from the prediction.
+
+**`dashboard/src/lib/hooks/useUserPreferences.ts`** — Preferences sync hook.
+- Loads instantly from localStorage (SSR-safe), then syncs from `user_profiles` table
+- On change: writes to localStorage (instant) and DB (500ms debounced)
+- Covers: `userState`, `bankroll`, `kellyFraction`, `useCustomKelly`
+- Auto-creates profile row on first use via upsert
+- Returns `{ prefs, updatePref, loading }`
+
+### Database Tables
+
+**`user_profiles`** — Per-user preferences.
+- `user_id` (uuid PK, FK auth.users), `user_state`, `bankroll` (default 1000), `kelly_fraction` (default 0.25), `use_custom_kelly`, `created_at`, `updated_at`
+- RLS: users access only their own row
+
+**`user_bets`** — User-placed bets from PropCard checkmark or AnalysisModal "Take Bet".
+- `id` (bigserial PK), `user_id`, `prediction_id`, `game_date`, `player_id`, `player_name`, `stat_type`, `line`, `bet_direction`, `odds_at_bet`, `book_at_bet`, `model_prob`, `edge`, `stake`, `status` (default 'pending'), `actual_value`, `pnl`, `placed_at`, `resolved_at`, `team_abbrev`, `opponent_abbrev`
+- Unique: `(user_id, game_date, player_id, stat_type)`
+- Indexes: `(user_id, game_date DESC)`, partial on `status='pending'`
+- RLS: users access only their own rows
+
+### Auto-Resolution
+
+**`src/paper_trading/user_bet_resolver.py`** — Backend resolution.
+- `UserBetResolver.resolve_all_pending()` called from `daily_stats_job.py` after paper bet resolution
+- Queries `user_bets WHERE status='pending' AND game_date < today`
+- Gets actuals from `player_game_stats` via `team_game_stats` join
+- Resolution logic mirrors `PaperTrader.resolve_bets()`: over/under comparison, DNP void, push handling
+- Non-fatal: failures logged but don't fail the daily stats job
+
+### Dashboard Changes
+
+- **Dashboard page** — `useUserBets(selectedDate)` replaces localStorage `takenBets`. `useUserPreferences()` replaces localStorage `userState`.
+- **AnalysisModal** — `useUserPreferences()` replaces 6 localStorage reads for bankroll/kelly/state. `onTakeBet` prop enables "Take Bet" button (Session 68). Sizing computation lifted to `useMemo`.
+- **History page** — Two tabs: "My Bets" (default, green) queries `user_bets`, "Model History" preserves existing paper_bets view. Maps `team_abbrev`/`opponent_abbrev` for matchup display on BetCards (Session 68).
+- **Performance page** — Three tabs: "My Bets" (green), "Props", "DFS". My Bets shows KPIs, bankroll chart, and stat breakdown from `user_bets`.
+
 ## Future Enhancements
 
 1. **Date range selector** — Allow selecting custom date ranges for history/performance
 2. **Vercel Analytics** — Add `@vercel/analytics` for page view tracking
 3. **Error monitoring** — Add Sentry for error tracking
 4. **Health check endpoint** — `/api/health` for uptime monitoring
+5. ~~**Stake calculation in useUserBets**~~ — **DONE (Session 68)**: PropCard uses Kelly; AnalysisModal "Take Bet" lets user input custom stake

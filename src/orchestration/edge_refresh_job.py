@@ -34,11 +34,11 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT))
 
-from dotenv import load_dotenv
-from sqlalchemy import bindparam, create_engine, text
+from dotenv import load_dotenv  # noqa: E402
+from sqlalchemy import bindparam, create_engine, text  # noqa: E402
 
-from src.models.black_litterman import BlackLittermanBlender, BLConfig
-from src.models.prediction_store import PredictionStore
+from src.models.black_litterman import BlackLittermanBlender, BLConfig  # noqa: E402
+from src.models.prediction_store import PredictionStore  # noqa: E402
 
 # Configure logging
 LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
@@ -113,6 +113,7 @@ def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataF
             WHERE game_id IN :game_ids
               AND market_key IN :markets
               AND player_id IS NOT NULL
+              AND snapshot_time > now() - interval '24 hours'
         )
         SELECT
             player_id,
@@ -125,6 +126,8 @@ def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataF
         FROM ranked_lines
         WHERE rn = 1
         GROUP BY player_id, game_id, bookmaker, market_key, line
+        HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
+           AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
     """).bindparams(
         bindparam("game_ids", expanding=True),
         bindparam("markets", expanding=True),
@@ -164,6 +167,13 @@ def recalculate_edges(
     """
     df = predictions_df.copy()
 
+    # Preserve old line columns so we can fall back when fresh lines are missing
+    line_preserve_cols = ["line", "over_odds", "under_odds", "bookmaker"]
+    old_lines = {}
+    for c in line_preserve_cols:
+        if c in df.columns:
+            old_lines[c] = df[c].copy()
+
     # Drop old line/edge/BL columns — we'll recalculate them
     edge_cols = [
         "line", "over_odds", "under_odds", "bookmaker",
@@ -179,6 +189,12 @@ def recalculate_edges(
     line_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds", "bookmaker"]
     available_line_cols = [c for c in line_cols if c in lines_df.columns]
     df = df.merge(lines_df[available_line_cols], on=merge_cols, how="left")
+
+    # Fill missing lines with previous values (preserves old predictions
+    # when fresh lines aren't available, e.g. after games finish)
+    for c, old_series in old_lines.items():
+        if c in df.columns:
+            df[c] = df[c].fillna(old_series)
 
     # Calculate over_prob from MC samples
     def estimate_over_prob(row):
@@ -327,28 +343,61 @@ def refresh_injuries(engine, target_date: date) -> None:
 def get_out_player_ids(engine, target_date: date) -> set[int]:
     """Get player IDs whose most recent injury status (last 7 days) is 'Out'.
 
-    Replicates the same query used in daily_runner._filter_injured_players().
+    Two-pass approach:
+      1. Primary: match by player_id for linked injuries.
+      2. Fallback: join unlinked injuries (player_id IS NULL) against the players
+         table by name to catch the ~0.7% the linker couldn't resolve.
     """
-    query = text("""
-        WITH recent_injuries AS (
-            SELECT
-                player_id,
-                status,
-                ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY report_date DESC) as rn
-            FROM rapidapi_injuries
-            WHERE report_date >= :cutoff_date
-              AND report_date <= :target_date
-              AND player_id IS NOT NULL
-        )
-        SELECT DISTINCT player_id
-        FROM recent_injuries
-        WHERE rn = 1 AND status = 'Out'
-    """)
     cutoff_date = target_date - timedelta(days=7)
 
     with engine.connect() as conn:
+        # Pass 1: linked injuries (player_id IS NOT NULL)
+        query = text("""
+            WITH recent_injuries AS (
+                SELECT
+                    player_id,
+                    status,
+                    ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY report_date DESC) as rn
+                FROM rapidapi_injuries
+                WHERE report_date >= :cutoff_date
+                  AND report_date <= :target_date
+                  AND player_id IS NOT NULL
+            )
+            SELECT DISTINCT player_id
+            FROM recent_injuries
+            WHERE rn = 1 AND status = 'Out'
+        """)
         result = conn.execute(query, {"target_date": target_date, "cutoff_date": cutoff_date})
-        return {row[0] for row in result}
+        out_ids = {row[0] for row in result}
+
+        # Pass 2: unlinked injuries matched by name against the players table
+        name_query = text("""
+            WITH recent_unlinked AS (
+                SELECT
+                    player,
+                    status,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY LOWER(TRIM(player))
+                        ORDER BY report_date DESC
+                    ) as rn
+                FROM rapidapi_injuries
+                WHERE report_date >= :cutoff_date
+                  AND report_date <= :target_date
+                  AND player_id IS NULL
+            )
+            SELECT DISTINCT p.player_id
+            FROM recent_unlinked ru
+            JOIN players p ON LOWER(TRIM(p.player_name)) = LOWER(TRIM(ru.player))
+            WHERE ru.rn = 1 AND ru.status = 'Out'
+        """)
+        result = conn.execute(name_query, {"target_date": target_date, "cutoff_date": cutoff_date})
+        name_matched = {row[0] for row in result}
+
+        if name_matched:
+            logger.info(f"Found {len(name_matched)} additional Out players via name matching")
+            out_ids.update(name_matched)
+
+        return out_ids
 
 
 def filter_out_players(
@@ -432,6 +481,11 @@ def main():
         help="Stats to refresh (default: pts reb ast)",
     )
     parser.add_argument(
+        "--skip-paper",
+        action="store_true",
+        help="Skip paper trading step (bet selection + placement)",
+    )
+    parser.add_argument(
         "--skip-discord",
         action="store_true",
         help="Skip Discord alert",
@@ -456,16 +510,77 @@ def main():
         engine = create_engine(DATABASE_URL)
         store = PredictionStore(engine)
 
+        # 0. DFS paper trading (market-edge — runs independently of model inference)
+        if not args.dry_run:
+            try:
+                from src.paper_trading.dfs_paper_trader import DfsPaperTrader
+
+                dfs_trader = DfsPaperTrader()
+
+                logger.info("Resolving pending DFS entries from previous days...")
+                dfs_res = dfs_trader.resolve_all_pending(exclude_today=True)
+                if dfs_res["total_resolved"] > 0:
+                    logger.info(
+                        f"Resolved {dfs_res['total_resolved']} DFS entries across "
+                        f"{dfs_res['dates_processed']} days "
+                        f"({dfs_res['total_won']}W {dfs_res['total_lost']}L "
+                        f"{dfs_res['total_partial']}P)"
+                    )
+
+                logger.info("Building DFS entries for today...")
+                entries = dfs_trader.build_entries(target_date)
+                if entries:
+                    count = dfs_trader.place_entries(entries)
+                    logger.info(f"Placed {count} DFS entries for {target_date}")
+                else:
+                    logger.info("No DFS entries meet edge criteria")
+            except Exception as e:
+                logger.warning(f"DFS paper trading step failed: {e} (non-fatal)")
+
         # 1. Load stored MC samples
         logger.info("Loading stored MC samples...")
         samples_dict = store.get_all_samples_for_date(target_date)
 
         if not samples_dict:
-            logger.warning(
-                f"No MC samples found for {target_date}. "
-                "Inference must run before edge refresh. Exiting gracefully."
+            logger.info(
+                f"EDGE REFRESH NO-OP: No MC samples found for {target_date}. "
+                "Inference must run before edge refresh can recalculate. "
+                "This is expected before the first inference run of the day."
             )
             sys.exit(0)
+
+        # Check MC sample staleness (warn if >6 hours old)
+        try:
+            with engine.connect() as conn:
+                sample_age = conn.execute(text(
+                    "SELECT EXTRACT(EPOCH FROM (NOW() - MAX(created_at))) / 3600.0 "
+                    "FROM mc_samples WHERE prediction_date = :target_date"
+                ), {"target_date": target_date}).scalar()
+
+                if sample_age is not None and sample_age > 6:
+                    logger.warning(
+                        f"MC samples are {sample_age:.1f} hours old — "
+                        "edge calculations may be based on stale inference."
+                    )
+                    # Send Discord warning for stale MC samples
+                    try:
+                        if os.getenv("DISCORD_BOT_TOKEN"):
+                            from src.discord_bot.alerts import send_job_alert_sync
+                            send_job_alert_sync(
+                                job_name="Edge Refresh (Stale Samples Warning)",
+                                success=True,
+                                duration_seconds=0,
+                                error_message=(
+                                    f"MC samples are {sample_age:.1f} hours old. "
+                                    "Edge recalculations use stale inference data."
+                                ),
+                            )
+                    except Exception as e:
+                        logger.warning(f"Stale samples Discord alert failed: {e} (non-fatal)")
+                elif sample_age is not None:
+                    logger.info(f"MC samples are {sample_age:.1f} hours old")
+        except Exception as e:
+            logger.warning(f"Could not check MC sample age: {e} (non-fatal)")
 
         # 2. Load stored predictions
         logger.info("Loading stored predictions...")
@@ -519,6 +634,34 @@ def main():
             store.store_predictions(updated, target_date)
         else:
             logger.info("[DRY RUN] Skipping database upsert")
+
+        # 7b. Resolve past pending bets, then place new bets
+        if not args.dry_run and not args.skip_paper:
+            try:
+                from src.paper_trading.paper_trader import PaperTrader
+
+                trader = PaperTrader()
+
+                # Resolve any pending bets from PREVIOUS days (exclude_today=True
+                # so we never falsely resolve today's games that haven't finished)
+                logger.info("Resolving pending bets from previous days...")
+                res = trader.resolve_all_pending(exclude_today=True)
+                if res["total_resolved"] > 0:
+                    logger.info(
+                        f"Resolved {res['total_resolved']} bets across {res['dates_processed']} days "
+                        f"({res['total_won']}W {res['total_lost']}L {res['total_push']}P)"
+                    )
+
+                # Place / update paper bets for today's predictions
+                logger.info("Placing paper bets on recommended predictions...")
+                bets = trader.select_bets(target_date)
+                if bets:
+                    count = trader.place_bets(bets)
+                    logger.info(f"Placed {count} paper bets for {target_date}")
+                else:
+                    logger.info("No predictions meet edge threshold for paper bets")
+            except Exception as e:
+                logger.warning(f"Paper trading step failed: {e} (non-fatal)")
 
         # 8. Export CSV backup
         output_dir = Path("predictions")

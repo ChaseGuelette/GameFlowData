@@ -64,6 +64,21 @@ export const STATE_SPORTSBOOKS: Record<string, string[]> = {
   WY: ['draftkings', 'fanduel'],
 }
 
+export const SPORTSBOOK_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'All Books' },
+  { value: 'draftkings', label: 'DraftKings' },
+  { value: 'fanduel', label: 'FanDuel' },
+  { value: 'betmgm', label: 'BetMGM' },
+  { value: 'caesars', label: 'Caesars' },
+  { value: 'williamhill_us', label: 'William Hill' },
+  { value: 'betrivers', label: 'BetRivers' },
+  { value: 'espnbet', label: 'ESPN Bet' },
+  { value: 'fanatics', label: 'Fanatics' },
+  { value: 'pointsbet', label: 'PointsBet' },
+  { value: 'hardrockbet', label: 'Hard Rock' },
+  { value: 'bet365', label: 'Bet365' },
+]
+
 export function getAllowedBookmakers(stateCode: string): string[] | null {
   if (!stateCode) return null // "All States" = no filtering
   return STATE_SPORTSBOOKS[stateCode] ?? null

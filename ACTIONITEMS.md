@@ -1,5 +1,557 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-06 — Session 69)
+
+### What We Did
+
+**MLB Training Pipeline + New Features + Feature Catalogs (5 files, 2 docs)**
+
+1. **Built `src/models/mlb/mlb_train_pipeline.py`** — 10-step CLI orchestrator for end-to-end MLB pitcher K model training. Steps: load train/cal data, per-quantile feature selection (via `ImprovedFeatureSelector`), optional Optuna HP tuning, train XGBoost quantile models (Q10-Q90), calibrate on holdout, calibration report, Monte Carlo sanity check, save artifacts (atomic `_incomplete` pattern), finalize. Mirrors NBA `train_pipeline.py` structure. Calls `enrich_with_matchup_features()` explicitly (not included by default in `get_training_dataset()`).
+
+2. **Added 3 new MLB features** — `opp_team_k_pct_l10` (opposing team K rate = SO/PA, normalized unlike raw SO count), `opp_team_whiff_pct_l10` (swing-weighted team whiff% from Statcast batting), `pitcher_est_bf_l5` (estimated batters faced = 3×IP + H + BB, a K opportunity volume proxy). Total features now 31.
+
+3. **Created feature catalogs** — `docs/nba_feature_catalog.md` (66 unique NBA features across 5 model lists) and `docs/mlb_feature_catalog.md` (31 MLB pitcher K features). Each feature documented with source table, window, computation, and signal.
+
+4. **Verified NBA feature count** — Confirmed 66 unique features (121 total list entries, many shared across models).
+
+**New Files (2):**
+- `src/models/mlb/mlb_train_pipeline.py` — MLB training orchestrator
+- `docs/nba_feature_catalog.md`, `docs/mlb_feature_catalog.md` — Feature catalogs
+
+**Modified (2):**
+- `src/models/mlb/mlb_feature_store.py` — Added 3 features, `avg_h_allowed_l5` support column, `_add_derived_features()` for BF estimation
+- `src/processing/mlb/mlb_matchup_features.py` — Added K%, whiff% to both single-game and bulk queries
+
+---
+
+## Session Summary (2026-03-06 — Session 68)
+
+### What We Did
+
+**AnalysisModal "Take Bet" + History Page Improvements (8 files, 1 migration)**
+
+1. **AnalysisModal "Take Bet" button** — Users can now select a specific sportsbook line and input their actual stake (pre-filled from Kelly recommendation), then click "Take Bet" to record the bet with that exact book/odds/line/stake. Button disables after placement and shows "Bet Taken!". PropCard checkmark turns green.
+
+2. **`placeBetCustom()` standalone function** — New exported async function in `useUserBets.ts` for placing bets with caller-provided parameters (used by AnalysisModal). `markBetTaken()` method syncs local state.
+
+3. **Team/opponent matchup in history** — BetCards now show "LAL vs SAS" below the player name. New `team_abbrev` and `opponent_abbrev` columns in `user_bets` table (migration 013). Graceful fallback for older bets without this data.
+
+4. **Per-stat win rate cards** — HistorySummary now shows PTS/REB/AST win rate breakdown below the main summary grid. Each card displays the stat badge, win rate %, and W-L record.
+
+5. **Sizing computation lifted to `useMemo`** — AnalysisModal's bet sizing IIFE refactored to a `useMemo` (`sizingData`) for reuse in the Take Bet footer.
+
+**New Files (1):**
+- `database/migrations/013_user_bets_team_opponent.sql` — adds `team_abbrev`, `opponent_abbrev` to `user_bets`
+
+**Modified (7):**
+- `dashboard/src/types/predictions.ts` — `team_abbrev?`, `opponent_abbrev?` on PaperBet
+- `dashboard/src/lib/hooks/useUserBets.ts` — `placeBetCustom()`, `markBetTaken()`, team/opponent in upsert
+- `dashboard/src/components/analysis/AnalysisModal.tsx` — `onTakeBet` prop, Take Bet UI, sizingData useMemo
+- `dashboard/src/app/(protected)/dashboard/page.tsx` — `handleTakeBet` callback wiring
+- `dashboard/src/components/history/BetCard.tsx` — matchup display
+- `dashboard/src/app/(protected)/history/page.tsx` — team/opponent mapping
+- `dashboard/src/components/history/HistorySummary.tsx` — per-stat win rate cards
+
+---
+
+## Session Summary (2026-03-06 — Session 67)
+
+### What We Did
+
+**Model Comparison Tool + Under-Prediction Research (1 new file, 3 docs)**
+
+1. **Built `src/tools/compare_models.py`** — CLI tool that loads two model directories, runs fresh inference on the same features/date, and prints a side-by-side comparison. Shows: summary by stat, player detail (Q10-Q90), top 10 largest Q50 differences, market accuracy (which model's Q50 is closer to the line). Supports partial player name matching with diacritical-insensitive search (e.g., "Doncic" matches "Doncic").
+
+2. **Compared legacy vs production model** — Ran both models on 2026-03-05 lines. Key findings:
+   - Model B (production/copula) is closer to market lines 54.9% vs 45.1% overall
+   - PTS predictions are systematically lower with copula (rho=0.336 amplifies under-prediction)
+   - REB barely changed between models (rho=-0.003, effectively zero)
+
+3. **Verified recalibration did NOT fix systematic under-prediction** — Re-ran inference with current production model against yesterday's stored predictions. Results nearly identical: 70-80% of Q50s below line across all stats.
+
+4. **Researched whether under-prediction is harmful** — Extensive academic literature review (4 parallel research agents). Conclusion: **the under-prediction is a feature, not a bug.**
+
+### Key Research Findings
+
+- **Hubacek et al. (2022)** — "Beating the Market with a Bad Predictive Model" — proves decorrelation from market errors matters more than accuracy
+- **Dmochowski (2023, PLOS ONE)** — optimal betting estimators may possess large bias
+- **Sportsbooks inflate prop lines** — public over-bias is well-documented; lines shade upward 0.5-2 stat points
+- **Calibration offsets hurt ROI** — 7.44% → 6.01% when offsets applied (Session 42). This is predicted by decorrelation theory: pushing predictions toward truth also pushes them toward the inflated market
+- **Sharp bettors systematically target unders** — our model's under-bias aligns with professional betting strategy
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Deploy dashboard to Vercel** — user bet tracking features need frontend deployment
+3. **Monitor cross-device sync** — verify checkmark state syncs between phone and laptop
+4. **Monitor user bet auto-resolution** — verify bets resolve correctly after daily_stats_job runs
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id, 500K missing team_id, 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **Train pitcher K model on 2024 data** — Training pipeline ready (`mlb_train_pipeline.py`, Session 69). Run: `python -m src.models.mlb.mlb_train_pipeline --train-seasons 2023 2024 --cal-season 2025`. Requires averages backfill first (item #7).
+11. **Build MLB daily runner** — inference pipeline mirroring NBA `daily_runner.py`
+12. **Build MLB backtesting harness** — historical replay for pitcher K predictions
+13. **Stripe integration** — subscribe page, customer portal, webhook
+14. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+15. **Apply NCAAB migrations 009-011 to Supabase** — NCAAB tables
+16. **Fix ncaab_teams UNIQUE constraint** — add UNIQUE(team_name) to migration 009
+17. **Add `cbbpy` to requirements.txt** — NCAAB dependency
+18. **Backfill NCAAB historical data** — CBBpy box scores, Barttorvik snapshots, game lines
+19. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
+20. ~~**Add stake calculation to useUserBets**~~ — **DONE (Session 68)**: PropCard checkmark uses Kelly from preferences; AnalysisModal "Take Bet" lets user input custom stake
+21. **Re-add NCAAB cron jobs to scheduler** — removed in Session 65 (failing on Railway); re-add after items 15-18 are complete
+22. **Selective PTS retrain with force-included matchup features** — PTS Q50 only uses 7 features (no opp defense, pace, teammate injuries). Force-include matchup features and compare betting edge vs current model. NOTE: Research suggests this may NOT improve ROI — the under-prediction is where the edge lives (see Session 67 research). Proceed with caution.
+23. **Deploy Session 65 changes to Railway + Vercel** — scheduler (NCAAB removal + --skip-paper), edge_refresh (line preservation + --skip-paper), dashboard (past date fix)
+24. **Backtest copula rho sweep for PTS** — Current rho=0.336 amplifies PTS under-prediction. Run backtest comparing rho=0 vs 0.1 vs 0.2 vs 0.336 to find optimal value for ROI
+
+---
+
+## Session Summary (2026-03-04 — Session 66)
+
+### What We Did
+
+**Multi-Select Sportsbook Filter + Pending Bets in History (5 files)**
+
+Replaced the single-select sportsbook dropdown with a multi-select checkbox dropdown. All state-legal books start checked; unchecking a book excludes its predictions. Added pending (outstanding) bets visibility to the History page — users can now see bets awaiting resolution.
+
+**New Files (1):**
+- `dashboard/src/components/predictions/BookFilterDropdown.tsx` — Multi-select checkbox dropdown with Select All / Clear All, outside-click and Escape to close
+
+**Modified (4):**
+- `dashboard/src/app/(protected)/dashboard/page.tsx` — Replaced `bookFilter: string` with `excludedBooks: Set<string>`, updated availability query to use `.in('bookmaker', activeBooks)`, state-change cleanup for stale exclusions
+- `dashboard/src/app/(protected)/history/page.tsx` — My Bets "All" view now includes pending bets (only excludes cancelled)
+- `dashboard/src/components/history/HistoryFilters.tsx` — Added "Pending" filter tab
+- `dashboard/src/components/history/HistorySummary.tsx` — Shows pending count (blue) when outstanding bets exist
+
+**Also created:** `nba_scraper_portable.zip` — portable package for running the NBA unified scraper on a separate machine (to bypass stats.nba.com IP ban)
+
+---
+
+## Session Summary (2026-03-05 — Session 65)
+
+### What We Did
+
+**Bug Fixes, Edge Refresh Hardening, Model Promotion (5 files)**
+
+1. **Removed NCAAB cron jobs** — 3 NCAAB job registrations, wrapper functions, and JOB_NAMES entries removed from `scheduler.py`. Jobs were failing on Railway (migrations not applied, no data, cbbpy missing).
+
+2. **Fixed dashboard showing no data for past dates** — `isGameDone()` filter in `dashboard/page.tsx` was hiding ALL predictions when viewing historical dates. Fixed by only applying game-time filters when `selectedDate === getToday()`.
+
+3. **Fixed edge refresh nulling old lines** — LEFT merge in `edge_refresh_job.py` was overwriting line/odds/bookmaker with NULL when fresh props weren't available. Added `fillna()` fallback to preserve previous values.
+
+4. **Fixed edge refresh 45-minute timeouts** — Paper trading step (loading MC samples + BL blending) was causing hangs during game hours. Added `--skip-paper` flag; scheduler's 5-minute silent cron runs now pass it.
+
+5. **Promoted retrained model to production** — Archived old production to `production_archived_20260305/`. New model has worst calibration gap of 3.5% (down from 27.4%). Excluded `combined_calibration_offsets.json` (hurts ROI per Session 42). Carried over `threes_multiclass_model.joblib`.
+
+6. **Investigated model under-bias** — 90% of recommended picks are unders. Root cause: PTS rate model only uses 7 features at Q50 (missing opponent defense, pace, teammate injury features). Feature selector prunes matchup features because they don't improve pinball loss enough. Recommendation: selective PTS retrain with force-included matchup features.
+
+**Modified:** `src/orchestration/scheduler.py`, `src/orchestration/edge_refresh_job.py`, `dashboard/src/app/(protected)/dashboard/page.tsx`
+**Created:** `database/scripts/recover_nulled_lines.sql`
+**Promoted:** `src/models/artifacts/production/` (new model from `run_20260304_214009/`)
+
+---
+
+## Session Summary (2026-03-03 — Session 64)
+
+### What We Did
+
+**User Bet Tracking — Cross-Device Sync + Auto-Resolution (9 files)**
+
+Built full-stack user bet tracking: database migration, React hooks, dashboard integration, backend auto-resolution, and My Bets tabs on History and Performance pages.
+
+**New Files (4):**
+- `database/migrations/012_user_bet_tracking.sql` — `user_profiles` + `user_bets` tables with RLS policies, indexes, `updated_at` trigger
+- `dashboard/src/lib/hooks/useUserBets.ts` — Optimistic UI toggle + async Supabase upsert/delete, per-date fetching
+- `dashboard/src/lib/hooks/useUserPreferences.ts` — localStorage-first + debounced DB sync for bankroll/kelly/state
+- `src/paper_trading/user_bet_resolver.py` — `UserBetResolver` class mirroring `PaperTrader.resolve_bets()` for `user_bets` table
+
+**Modified (5):**
+- `dashboard/src/app/(protected)/dashboard/page.tsx` — Replaced localStorage with `useUserBets` + `useUserPreferences` hooks
+- `dashboard/src/components/analysis/AnalysisModal.tsx` — Replaced 6 localStorage reads with `useUserPreferences` hook
+- `src/orchestration/daily_stats_job.py` — Added `resolve_pending_user_bets()` step after paper bet resolution
+- `dashboard/src/app/(protected)/history/page.tsx` — Added "My Bets" / "Model History" tab toggle
+- `dashboard/src/app/(protected)/performance/page.tsx` — Added "My Bets" tab alongside Props / DFS
+
+**Migration applied to Supabase:** Both tables created with RLS enabled.
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Deploy dashboard to Vercel** — user bet tracking features need frontend deployment
+3. **Monitor cross-device sync** — verify checkmark state syncs between phone and laptop
+4. **Monitor user bet auto-resolution** — verify bets resolve correctly after daily_stats_job runs
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id, 500K missing team_id, 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **Train pitcher K model on 2024 data** — run end-to-end training pipeline, validate calibration
+11. **Build MLB daily runner** — inference pipeline mirroring NBA `daily_runner.py`
+12. **Build MLB backtesting harness** — historical replay for pitcher K predictions
+13. **Stripe integration** — subscribe page, customer portal, webhook
+14. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+15. **Apply NCAAB migrations 009-011 to Supabase** — NCAAB tables
+16. **Fix ncaab_teams UNIQUE constraint** — add UNIQUE(team_name) to migration 009
+17. **Add `cbbpy` to requirements.txt** — NCAAB dependency
+18. **Backfill NCAAB historical data** — CBBpy box scores, Barttorvik snapshots, game lines
+19. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
+20. ~~**Add stake calculation to useUserBets**~~ — **DONE (Session 68)**: PropCard checkmark uses Kelly from preferences; AnalysisModal "Take Bet" lets user input custom stake
+21. **Re-add NCAAB cron jobs to scheduler** — removed in Session 65 (failing on Railway); re-add after items 15-18 are complete
+22. **Selective PTS retrain with force-included matchup features** — PTS Q50 only uses 7 features (no opp defense, pace, teammate injuries). Force-include matchup features and compare betting edge vs current model
+23. **Deploy Session 65 changes to Railway + Vercel** — scheduler (NCAAB removal + --skip-paper), edge_refresh (line preservation + --skip-paper), dashboard (past date fix)
+
+---
+
+## Session Summary (2026-03-03 — Session 63)
+
+### What We Did
+
+**NCAAB Game-Level Prediction Pipeline — Full Stack Implementation (~20 new files)**
+
+Built the complete NCAA Men's Basketball prediction pipeline from scratch: database migrations, scrapers, processing, feature store, XGBoost models, backtester, orchestration, and tests.
+
+**New Files (20):**
+- `database/migrations/009_ncaab_foundation.sql` — Core tables (teams, schedule, box scores, game lines)
+- `database/migrations/010_ncaab_barttorvik.sql` — Barttorvik ratings snapshot table
+- `database/migrations/011_ncaab_averages.sql` — Team rolling averages table
+- `src/scrapers/ncaab/ncaab_game_lines_scraper.py` — Odds API (sport key `basketball_ncaab`)
+- `src/scrapers/ncaab/ncaab_cbbpy_scraper.py` — ESPN box scores via CBBpy
+- `src/scrapers/ncaab/ncaab_barttorvik_scraper.py` — Free efficiency ratings CSV download
+- `src/processing/ncaab/ncaab_config.py` — Rolling windows, stat lists, team aliases
+- `src/processing/ncaab/ncaab_linker.py` — Game-level linking (Odds API → schedule)
+- `src/processing/ncaab/ncaab_populate_averages.py` — Shift(1) rolling team averages
+- `src/processing/ncaab/ncaab_barttorvik_linker.py` — Link Barttorvik names to teams
+- `src/models/ncaab_feature_store.py` — ~30 game-level matchup features (team differentials)
+- `src/models/ncaab_trainer.py` — XGBoost spread + total quantile models
+- `src/models/ncaab_backtest.py` — Time-travel backtester (ATS, O/U tracking)
+- `src/orchestration/ncaab_daily_stats_job.py` — Daily pipeline (CBBpy → averages → Barttorvik)
+- `src/orchestration/ncaab_lines_job.py` — Game lines scrape + linker
+- 4 test files (34 tests, all passing)
+
+**Modified:** `src/orchestration/scheduler.py` (3 new NCAAB cron jobs with `month="11-12,1-4"` guard)
+
+**Key Design Decisions:**
+- Game-level only (no player props for college sports — regulatory)
+- Features are team differentials (home - away) for efficiency, box scores, pace, context
+- Barttorvik for adjusted efficiency (free alternative to KenPom)
+- Point-in-time Barttorvik via LATERAL JOIN (`snapshot_date < game_date`)
+- Reuses existing `QuantileModelSuite` — XGBoost quantile regression (Q10-Q90)
+- Moneyline derived from spread distribution (fit normal to Q25/Q50/Q75)
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Monitor first few 5-min cycles** — verify fuzzy cache creates on first run, hits on subsequent runs
+3. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+4. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id, 500K missing team_id, 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **Train pitcher K model on 2024 data** — run end-to-end training pipeline, validate calibration, evaluate backtesting performance
+11. **Build MLB daily runner** — inference pipeline mirroring NBA `daily_runner.py` for production predictions
+12. **Build MLB backtesting harness** — historical replay for pitcher K predictions
+13. **Stripe integration** — subscribe page, customer portal, webhook
+14. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+15. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+16. **Apply NCAAB migrations 009-011 to Supabase** — create ncaab_teams, ncaab_game_schedule, ncaab_team_box_scores, ncaab_raw_game_lines, ncaab_barttorvik_ratings, ncaab_team_rolling_averages tables
+17. **Fix ncaab_teams UNIQUE constraint** — migration 009 has UNIQUE on espn_team_id but CBBpy scraper uses ON CONFLICT (team_name). Need to add UNIQUE(team_name) to migration.
+18. **Add `cbbpy` to requirements.txt** — new dependency for NCAAB ESPN data scraping
+19. **Populate NCAAB team aliases** — `ODDS_API_TEAM_ALIASES` and `BARTTORVIK_TO_ESPN` dicts need expansion after first scrape
+20. **Verify CBBpy import path** — `cbbpy.mens_scraper` needs runtime verification
+21. **Backfill NCAAB historical data** — CBBpy box scores (2022-2025), Barttorvik snapshots, Odds API historical game lines
+22. **Train NCAAB spread + total models** — 2022-2024 training, 2025 backtest validation
+23. **Build NCAAB dashboard section** — if models show promise
+
+---
+
+## Session Summary (2026-03-03 — Session 62)
+
+### What We Did
+
+**MLB Model Architecture — Feature Store + Pitcher K Quantile Model + Monte Carlo Sampler**
+
+Built the complete model layer for MLB pitcher strikeout predictions (6 new files, 0 existing files modified):
+
+**New Files:**
+- `src/models/mlb/__init__.py` — Package init
+- `src/models/mlb/mlb_stat_config.py` — MLB stat types and edge thresholds (quantile/negbin/binary, 8-10%)
+- `src/processing/mlb/mlb_matchup_features.py` — Opposing team batting tendencies (L10 K rate + batting avg) via window functions, bulk computation for training
+- `src/models/mlb/mlb_feature_store.py` — 28-feature pitcher K feature store with LATERAL JOIN SQL, training/inference/backtest modes, time-travel safe
+- `src/models/mlb/mlb_quantile_trainer.py` — `MLBPitcherKPipeline` wrapping `QuantileModelSuite`, direct SO prediction (no minutes decomposition)
+- `src/models/mlb/mlb_monte_carlo.py` — `MLBMonteCarloPredictor` with inverse CDF sampling, integer rounding, batch prediction, reuses `PropPrediction`
+
+**Key Design Decisions:**
+- No minutes-rate decomposition (MLB stats predicted directly)
+- No copula (single stat, no correlation to model)
+- Reuses QuantileModelSuite, QuantileModelConfig, PropPrediction from NBA code
+- Higher edge thresholds (8-10% vs NBA 5%) due to higher MLB prop juice
+- 28 features from 6 data sources (pitching avgs, Statcast, FanGraphs, park factors, opposing team batting, prop/game lines)
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Monitor first few 5-min cycles** — verify fuzzy cache creates on first run, hits on subsequent runs
+3. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+4. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id, 500K missing team_id, 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **~~MLB model architecture~~** ✅ — Feature store, quantile trainer, and MC sampler built (Session 62)
+11. **Train pitcher K model on 2024 data** — run end-to-end training pipeline, validate calibration, evaluate backtesting performance
+12. **Build MLB daily runner** — inference pipeline mirroring NBA `daily_runner.py` for production predictions
+13. **Build MLB backtesting harness** — historical replay for pitcher K predictions
+14. **Stripe integration** — subscribe page, customer portal, webhook
+15. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+16. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
+## Session Summary (2026-03-03 — Session 61)
+
+### What We Did
+
+**MLB Linker Deep Debug — Team Alias Fix + Re-link Pass → 62% to 96.8% Linking**
+
+**Root Cause: ARI/OAK Team Abbreviation Mismatch (`mlb_config.py`):**
+- `MLB_TEAM_ALIASES` mapped "Arizona Diamondbacks" → "ARI" and "Oakland Athletics" → "OAK", but the `mlb_teams` DB table uses "AZ" and "ATH"
+- This caused EVERY game involving Arizona or Oakland to fail game matching (~3M+ affected rows)
+- Fixed: "ARI" → "AZ", "OAK" → "ATH", plus all abbreviation pass-through entries
+
+**New Re-link Pass (Sub-stage 5 in `mlb_linker_local.py`):**
+- Added `process_player_props_relink()` function that runs after initial 4 sub-stages
+- Finds rows with game_id + player_id set but team_id NULL
+- Categorizes: wrong_pid_fixable, correct_pid_not_in_game, game_no_boxscore, name_not_found
+- Fixes wrong player_ids where the correct player IS in the game's boxscore
+- Resolves team_id from nearby games (within 30 days) for remaining rows
+- Added corresponding upload stages with chunked retry
+
+**Results:**
+- Fully linked: 14,075,000 → 21,974,799 (+7.9M rows)
+- Linked %: 62.0% → 96.8%
+- Missing game_id: 7,111,625 → 231,687 (-96.7%)
+- Missing team_id: 1,520,376 → 500,319 (-67.1%)
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Monitor first few 5-min cycles** — verify fuzzy cache creates on first run, hits on subsequent runs
+3. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+4. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker remaining gaps (3.2%)** — 231K missing game_id (46 unmatched games not in schedule), 500K missing team_id (player not in any nearby boxscore), 3.4K unmatched players
+7. **Run MLB averages backfill** — `mlb_populate_averages --table all` now that linking is at 96.8%
+8. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+9. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+10. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+11. **Stripe integration** — subscribe page, customer portal, webhook
+12. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+13. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
+## Session Summary (2026-03-03 — Session 60)
+
+### What We Did
+
+**Faster Lines Pipeline — Fuzzy Cache + Parallel Steps + 5-Minute Refresh Cadence**
+
+**Persistent Fuzzy Cache (`nba_linker_local.py`):**
+- Added `_load_fuzzy_cache()` / `_save_fuzzy_cache()` — file-based cache at `linker_data/_fuzzy_cache.json` maps `{normalized_name: player_id_or_null}` with player count for invalidation
+- Added `_resolve_fuzzy_names()` — batch SequenceMatcher on unique unmatched names (0.80 threshold, +0.15 last name bonus)
+- Refactored player matching in both `link_incremental()` and `process_local()` from per-row `match_player()` to 3-step batch: manual `.map()` → exact `.map(player_lookup)` → fuzzy cache lookup
+- First run builds cache, subsequent runs see 95%+ cache hits (~15s → <1s for linker step)
+
+**Parallel Steps (`lines_job.py`):**
+- Added `--parallel` flag: props path (game lines → props → linker) and injury path (scraper → linker) run concurrently via threads
+- New `run_step_group()` and `run_parallel_groups()` helpers
+- Without `--parallel`: identical sequential behavior (backward compatible)
+- Full mode runtime: ~90s → ~45-55s
+
+**5-Minute Refresh (`scheduler.py`):**
+- Props-only cron: `*/10` → `*/5` (every 5 minutes, ~156 runs/day)
+- Edge refresh cron: updated to match 5-minute cadence
+- Noon/4pm full runs now use `--parallel` via `run_lines_full_parallel()`
+
+### Remaining Action Items
+
+1. **Deploy to Railway** — push changes so new scheduler, fuzzy cache, parallel execution, and 5-min cadence are active
+2. **Monitor first few 5-min cycles** — verify fuzzy cache creates on first run, hits on subsequent runs
+3. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+4. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+5. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+6. **MLB linker backfill in progress** — run `mlb_linker_local all` for full offline pipeline, then re-run averages backfill
+7. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+8. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+9. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+10. **Stripe integration** — subscribe page, customer portal, webhook
+11. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+12. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
+## Session Summary (2026-03-02 — Session 59)
+
+### What We Did
+
+**MLB Local Linker with Checkpoint/Resume — offline CSV-based linking pipeline mirroring the NBA local linker.**
+
+**New File: `src/processing/mlb/mlb_linker_local.py`**
+- Download/process/upload workflow: downloads 6 tables to `mlb_linker_data/` CSVs, matches IDs locally in pandas, uploads via chunked temp tables
+- Checkpoint/resume system (`_checkpoint.json`) tracks per-stage and per-chunk progress — interrupted runs pick up where they left off
+- 4 processing sub-stages: game_lines, props_games (±1 day fuzzy), props_players (exact + fuzzy), props_teams (boxscore cross-ref)
+- Upload retry/backoff (20 retries, 60s cap, `engine.dispose()` on error) survives laptop sleep/wake
+- CLI: download, process, upload, all, status, init, reset with `--force` and `--batch-delay` flags
+- Reuses matching functions from `mlb_linker.py` — no code duplication
+- Player name diagnostics: `unmatched_players.csv` with fuzzy suggestions, `player_mappings.csv` for manual overrides
+
+### Remaining Action Items
+
+1. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+2. **Deploy to Railway** — push changes so new scheduler, retries, and dependency gates are active in production
+3. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+4. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+5. **MLB linker backfill in progress** — run `mlb_linker_local all` for full offline pipeline, then re-run averages backfill
+6. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+7. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+8. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+9. **Stripe integration** — subscribe page, customer portal, webhook
+10. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+11. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
+## Session Summary (2026-03-02 — Session 58)
+
+### What We Did
+
+**Pipeline Resilience Overhaul — made the pipeline self-healing, dependency-aware, and transparent about failures.**
+
+**Job Status Tracking:**
+- Added `JOB_STATUS` in-memory dict to `scheduler.py` — tracks every job's status, end time, and duration after execution.
+- Added `record_job_execution()` — persists execution history to `job_executions` Supabase table (migration 007).
+- Provides both fast in-memory dependency checks and persistent history for debugging.
+
+**Per-Step Retries with Backoff:**
+- Extended `run_command()` in `daily_stats_job.py` with `max_retries` and `retry_delay` params.
+- Critical steps (scrape, linker, rolling averages, opponent stats) get 2 retries with exponential backoff (15s, 30s).
+- Step 6 (rolling averages) timeout increased from 10m→20m (most common timeout culprit).
+- Step 7 (opponent stats) timeout increased to 15m. Non-critical steps reduced to 5m.
+- Global scheduler timeout increased from 30m→45m.
+
+**Dependency Gate:**
+- `check_dependency()` in scheduler verifies upstream jobs succeeded within configurable time window.
+- `run_inference()` checks daily stats succeeded in last 8 hours before running.
+- If stale: passes `--stale-warning` flag, sends Discord alert, but still runs inference (stale data > no data).
+
+**Automatic 9:30 AM Retry:**
+- New `run_daily_stats_retry()` at 14:30 UTC checks if 9 AM run succeeded, re-runs if not.
+- Gives the system a second chance before inference at 12:15 PM.
+
+**Stale Data Transparency:**
+- Inference staleness check improved: changed from `days_stale > 2` to `latest_game_date < yesterday`.
+- `--stale-warning` flag triggers stale-data Discord alert after successful prediction generation.
+- Edge refresh warns via Discord if MC samples are >6 hours old.
+
+### Remaining Action Items
+
+1. **Apply migration 007 to Supabase** — `database/migrations/007_job_executions.sql` (job_executions table)
+2. **Deploy to Railway** — push changes so new scheduler, retries, and dependency gates are active in production
+3. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (from Session 57)
+4. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` may be in invalid state
+5. **MLB linker backfill in progress** — re-run averages backfill after linker completes
+6. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+7. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+8. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+9. **Stripe integration** — subscribe page, customer portal, webhook
+10. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+11. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
+## Session Summary (2026-03-01 — Session 57)
+
+### What We Did
+
+**Fixed production DFS dashboard (no data showing), sportsbook RPC timeouts, and edge refresh 30-minute timeout.**
+
+**DFS Dashboard Fix:**
+- Applied migration 004 to production (RPCs no longer depend on `daily_predictions`).
+- Fixed `get_dfs_lines` and `get_sportsbook_lines` RPCs: replaced `commence_time::date` cast (prevents index usage) with range conditions.
+- Created `idx_props_commence_time` index on `raw_player_props_combined(commence_time)`.
+
+**Sportsbook RPC Timeout Fix:**
+- Old `get_sportsbook_lines(date)` timed out scanning millions of accumulated snapshot rows (8s Supabase PostgREST limit).
+- Created new `get_sportsbook_lines_by_games(text[])` RPC (migration 005): accepts game_id array, 24h snapshot_time cutoff, pure SQL function. Returns in 0.3s for 3 games.
+- Updated DFS dashboard page to two-step fetch: load DFS lines first, extract game_ids, then batch sportsbook calls (3 games per batch, parallel).
+
+**Edge Refresh 30-Minute Timeout Fix:**
+- `fetch_fresh_lines()` had no `snapshot_time` cutoff — scanned ALL historical snapshots. During evening games (22:22-22:52 UTC), query degraded past 30-minute timeout, causing 3 consecutive skipped runs.
+- Added `AND snapshot_time > now() - interval '24 hours'` cutoff.
+
+**DFS Paper Trader Query Fix:**
+- Both `_fetch_dfs_lines()` and `_fetch_sportsbook_lines()` used slow `commence_time::date` cast and had no snapshot_time cutoff.
+- Updated to range conditions + 24-hour cutoff, matching the RPC fix pattern.
+
+**MLB Rolling Averages pgBouncer Fix:**
+- `mlb_populate_averages.py` crashed with "lost synchronization with server" when fetching the entire batting stats table through pgBouncer.
+- Added `_get_seasons()` helper; fetch/concat data season-by-season.
+
+**Dashboard UX:**
+- Added `allGamesStarted` detection — shows helpful message with "+ Live" button when Pre-Game filter hides all games.
+
+### Remaining Action Items
+
+1. **Deploy dashboard changes to Vercel** — batched sportsbook fetch + allGamesStarted UX (code committed, not yet deployed)
+2. **Verify partial index creation state** — `idx_props_dfs_commence` and `idx_props_sb_commence` were started but stopped mid-creation; may be in invalid state
+3. **MLB linker backfill in progress** — re-run averages backfill after linker completes
+4. **Build MLB Statcast rolling averages** — `mlb_player_average_statcast_batting/pitching` tables after Statcast backfill finishes
+5. **Monitor DFS paper trading P&L** — review after 1 week (~28 entries) via `--dfs` audit flag
+6. **MLB model architecture** — build feature store and training pipeline once processing layer is complete
+7. **Stripe integration** — subscribe page, customer portal, webhook
+8. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+9. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
+## Session Summary (2026-02-28 — Session 51)
+
+### What We Did
+
+**Rewrote scheduler to 10-minute cadence + fixed paper bet resolution + added live game filtering.**
+
+**Scheduler Rewrite (`scheduler.py`):**
+- Replaced 21 hardcoded job definitions (hourly 1-3 PM, half-hourly 4:30-6:30 PM) with 2 APScheduler cron jobs covering 11 AM – 11 PM ET every 10 minutes (~78 runs/day each).
+- Added `silent_on_success` flag to `run_job()` — high-frequency jobs only send Discord alerts on failure.
+- Total job definitions reduced from 21 → 7.
+
+**Continuous Bet Resolution (`edge_refresh_job.py`):**
+- Edge refresh step 7b now calls `resolve_all_pending(exclude_today=True)` before placing new bets.
+- Bets from previous days are resolved every 10 minutes instead of only at the daily stats job.
+- Backfilled 14 missed historical bets across 5 dates; P&L corrected from $1,841.68 → $2,231.14.
+
+**Live Game Filter (`paper_trader.py`):**
+- Added `_get_started_game_ids()` — checks `commence_time` from `raw_player_props_combined` to identify in-progress games.
+- `select_bets()` now skips games where `commence_time < now()`, preventing false edges from mid-game line comparisons.
+- Added `exclude_today` parameter to `resolve_all_pending()` to prevent same-day false resolution.
+
+**Diagnostic Tool (`audit_and_resolve.py`):**
+- New script with `--audit`, `--resolve`, `--backfill`, `--dry-run` flags for inspecting and fixing paper bet state.
+
+### Remaining Action Items
+
+1. **Run MLB backfills** — boxscores (2022-2025), then FanGraphs (all seasons), then Statcast (2024-2025), then props/lines
+2. **Stripe integration** — subscribe page, customer portal, webhook
+3. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts (or find alternative data source)
+4. **13 open issues remain in ISSUES.md** — mostly low priority/cosmetic
+
+---
+
 ## Session Summary (2026-02-26 — Session 50)
 
 ### What We Did

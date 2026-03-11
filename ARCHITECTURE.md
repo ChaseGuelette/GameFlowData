@@ -25,7 +25,7 @@ GameFlowData is a data-intensive application that ingests raw NBA game statistic
 | **ML Core** | XGBoost, Scikit-Learn, NumPy, SciPy | Quantile regression, isotonic calibration, statistics |
 | **HPO** | Optuna | Bayesian hyperparameter optimization |
 | **API** | FastAPI, Uvicorn, Pydantic | Web framework (future live pipeline) |
-| **Data Sources** | nba_api, The Odds API, ESPN, pybaseball | NBA stats, sportsbook odds, injury reports, MLB Statcast/FanGraphs |
+| **Data Sources** | nba_api, The Odds API, ESPN, pybaseball, CBBpy, Barttorvik | NBA stats, sportsbook odds, injury reports, MLB Statcast/FanGraphs, NCAAB box scores/efficiency |
 | **Pipeline** | Custom Python orchestration | Training, inference, and backfill jobs |
 | **Visualization** | Plotly | Backtest equity curves and diagnostic plots |
 | **Image Gen** | Pillow | Social media pick card rendering |
@@ -135,10 +135,25 @@ The system ingests data from two distinct worlds that don't natively share ident
 - **pybaseball** — Free Python library wrapping Baseball Savant (Statcast pitch-level data) and FanGraphs (season-level advanced stats). Used for quality-of-contact metrics critical for MLB modeling.
 - **The Odds API** — Same API as NBA, sport key `baseball_mlb`. Player props + game lines.
 
+#### NCAAB Scrapers (`src/scrapers/ncaab/`)
+
+| Module | Purpose |
+|--------|---------|
+| `ncaab_game_lines_scraper.py` | Live/historical game lines (spreads, totals, moneylines) from The Odds API (`basketball_ncaab`). Direct port of `mlb_daily_game_lines_scraper.py`. |
+| `ncaab_cbbpy_scraper.py` | ESPN box scores and schedules via CBBpy package. Aggregates player-level data to team level. Computes possessions (`FGA - OREB + TOV + 0.44 * FTA`) and Four Factors inline. |
+| `ncaab_barttorvik_scraper.py` | Bulk CSV download of adjusted efficiency ratings from barttorvik.com. Flexible column mapping for year-to-year header variations. Stores point-in-time snapshots. |
+
+**Data Sources:**
+- **CBBpy** — Python package wrapping ESPN D1 basketball data. Free, no auth. Returns player box scores that are aggregated to team-level stats.
+- **Barttorvik/T-Rank** — Free adjusted efficiency metrics (AdjOE, AdjDE, AdjT, Barthag, Four Factors). Bulk CSV at `barttorvik.com/{season}_team_results.csv`. No API key, updates every 15 min in-season.
+- **The Odds API** — Sport key `basketball_ncaab`. Game lines only (no player props for college sports — regulatory).
+
 #### The NBA Linker (`src/processing/nba_linker_local.py`)
 
 Serves as the bridge between NBA and sportsbook data:
 - **Fuzzy Matching:** Matches variations of player names (e.g., "Luka Doncic" vs "Luka Dončić") and team names.
+- **Persistent Fuzzy Cache (2026-03-03):** File-based cache at `linker_data/_fuzzy_cache.json` stores `{normalized_name: player_id_or_null}` mappings. Eliminates redundant O(n*m) SequenceMatcher runs — typical runs see 95%+ cache hits (0 new fuzzy lookups). Cache auto-invalidates when player count changes (new player added to DB). Used by both `process` and `incremental` modes.
+- **Batch Player Matching (2026-03-03):** Player matching refactored from per-row `match_player()` to 3-step batch pipeline: (1) manual mappings via `.map()`, (2) exact normalized match via `.map(player_lookup)` (vectorized), (3) fuzzy cache lookup for remaining unmatched. Only truly new names trigger SequenceMatcher.
 - **Team Normalization:** All team names normalized to 3-letter abbreviations (e.g., "Atlanta Hawks" → "ATL", "Los Angeles Lakers" → "LAL") for consistent matching between Odds API full names and NBA API abbreviations.
 - **Date Alignment:** Handles timezone differences and scheduling quirks (e.g., ±90 day fuzzy windows for futures).
 - **Staging Tables:** Data first lands in `raw_*_staging` tables before being linked to official `game_id` and `player_id`.
@@ -162,6 +177,60 @@ Serves as the bridge between NBA and sportsbook data:
 | `backfill_team_ids.py` | Validates and links team IDs across data sources. |
 | `feature_selection.py` | `ImprovedFeatureSelector` — per-quantile feature selection with time-series aware 3-split CV and permutation importance. |
 | `link_injury_data.py` | Links RapidAPI injury records to NBA player/team IDs via 3-tier cascade: manual CSV overrides → exact normalized match → SequenceMatcher fuzzy match (threshold 0.80, +0.15 last name bonus). 99.3% coverage. |
+
+#### MLB Processing (`src/processing/mlb/`)
+
+| Module | Purpose |
+|--------|---------|
+| `mlb_config.py` | Shared constants: rolling windows (`BATTING_WINDOWS`, `PITCHING_WINDOWS`), stat lists, team aliases (`MLB_TEAM_ALIASES` — 66 entries mapping Odds API names/variants/abbreviations to canonical DB abbreviations like AZ, ATH), batch sizes. |
+| `mlb_linker.py` | Links `mlb_raw_player_props` rows by populating `game_id`, `player_id`, `team_id`. Mirrors NBA linker with MLB-specific adaptations (INTEGER game_id, ±1 day date window, team_id from boxscore cross-reference). Modes: `incremental` (daily) and `backfill` (one-time). Retry logic survives connection drops and laptop sleep. |
+| `mlb_linker_local.py` | Local CSV-based linker with checkpoint/resume. Downloads 6 tables to `mlb_linker_data/`, processes matching in pandas, uploads via chunked temp tables. 5 processing sub-stages: game_lines, props→games, props→players, props→teams, re-link (fixes wrong player_ids + team_id backfill from nearby games). Checkpoint file (`_checkpoint.json`) tracks per-stage and per-chunk progress for resume after interruption. Retry/backoff (20 attempts, 60s cap) survives laptop sleep. Reuses matching functions from `mlb_linker.py`. As of Session 61: 96.8% linking coverage (21.97M/22.71M rows). |
+| `mlb_populate_averages.py` | Full backfill of `mlb_player_average_batting` and `mlb_player_average_pitching`. Shift(1) rolling averages (no data leakage), rate stats from rolling sums (BA, OBP, SLG, OPS, ERA, WHIP, K/9, BB/9), std devs, context metrics (rest days, pitch count). |
+| `mlb_populate_averages_incremental.py` | Daily incremental — processes only players active on target date. Per-player rolling calculation, UPSERT via `ON CONFLICT DO UPDATE`. |
+| `mlb_populate_statcast_averages.py` | Statcast rolling averages for pitching (contact quality, velo/spin, plate discipline, pitch mix, batted ball distribution). Windows: L3/L5/SZN. PK: `(player_id, game_date)`. |
+| `mlb_matchup_features.py` | Opposing team batting tendencies for pitcher K predictions. Computes team-level L10 strikeout rate, batting average, K% (SO/PA), and swing-weighted whiff% from Statcast batting data via window functions. Also provides `get_pitcher_handedness()` and `compute_matchup_features_bulk()` for training efficiency. |
+
+#### NCAAB Processing (`src/processing/ncaab/`)
+
+| Module | Purpose |
+|--------|---------|
+| `ncaab_config.py` | Shared constants: rolling windows (`l5/l10/l20/szn`), stat lists (`TEAM_BOX_STATS`, `TEAM_OPP_STATS`), team alias dicts (`BARTTORVIK_TO_ESPN`, `ODDS_API_TEAM_ALIASES`). |
+| `ncaab_linker.py` | Game-level linking of Odds API game lines to `ncaab_game_schedule`. Normalizes team names via alias dict + fuzzy matching (`SequenceMatcher >= 0.72`). Simpler than MLB/NBA linkers — no player matching needed. |
+| `ncaab_populate_averages.py` | Shift(1) rolling team averages at L5/L10/L20/SZN windows. Box score stats + Four Factors + opponent stats. Computes rest_days, games_last_7d. Full backfill (TRUNCATE) or incremental (DELETE stale + re-insert). |
+| `ncaab_barttorvik_linker.py` | Links Barttorvik team_name to `ncaab_teams.team_id`. 3-step: manual mapping → direct name match → fuzzy (SequenceMatcher >= 0.72). |
+
+#### NCAAB Models (`src/models/`)
+
+| Module | Purpose |
+|--------|---------|
+| `ncaab_feature_store.py` | Game-level matchup features (~30 features). LATERAL JOIN SQL pattern for point-in-time Barttorvik ratings (`snapshot_date < game_date`). Features are team differentials (home - away). |
+| `ncaab_trainer.py` | Two XGBoost quantile models (spread + total). Reuses `QuantileModelSuite` from `quantile_trainer.py`. Config: max_depth=4, 800 estimators, lr=0.04. Derives moneyline from spread distribution. |
+| `ncaab_backtest.py` | Time-travel backtester. Iterates dates, generates predictions using only pre-game data. Tracks ATS record, O/U record, spread/total MAE, edge metrics. |
+
+**Key Differences from NBA/MLB Pipeline:**
+- **Game-level, not player-level** — Each training row is one game with home team as reference. Features are team differentials (home - away).
+- **No minutes decomposition** — Targets are `home_margin` and `total_score` directly.
+- **Barttorvik for adjusted efficiency** — Free alternative to KenPom. Point-in-time via `snapshot_date < game_date` prevents lookahead bias.
+- **Neutral site handling** — `is_neutral_site` flag zeroes out home court advantage (~3.5 pts in NCAAB). Critical for March Madness games.
+- **363 D1 teams** — Much larger team namespace than NBA (30) or MLB (30). Team alias dictionaries are the biggest manual effort.
+
+#### MLB Models (`src/models/mlb/`)
+
+MLB-specific modeling layer. Pitcher strikeouts first (semi-continuous, quantile regression). No minutes-rate decomposition — MLB stats predicted directly.
+
+| Module | Purpose |
+|--------|---------|
+| `mlb_stat_config.py` | Per-stat model type and edge threshold configuration. Quantile (pitcher K/outs, 8% edge), NegBin (batter counts, 10%), Binary (HR, 10%). Higher thresholds than NBA due to higher MLB prop juice. |
+| `mlb_feature_store.py` | Central feature engineering for pitcher K model. 31 features across 6 data sources (pitching rolling avgs, Statcast, FanGraphs, park factors, opposing team batting, prop/game lines). Includes derived features (`pitcher_est_bf_l5` = 3×IP + H + BB, `pitcher_so_l3_l5_ratio`). LATERAL JOIN SQL pattern mirroring NBA `feature_store.py`. Methods: `get_training_dataset()`, `get_player_game_features()`, `get_features_for_date()`, `enrich_with_matchup_features()`. Time-travel safe (shift(1) averages, `<=` game_date). |
+| `mlb_quantile_trainer.py` | `MLBPitcherKPipeline` — wraps `QuantileModelSuite` from NBA code. Trains XGBoost quantile regression (Q10-Q90) directly on SO counts. No minutes model needed. Config: 1000 estimators, depth 5, lr 0.03. Save/load via joblib. |
+| `mlb_monte_carlo.py` | `MLBMonteCarloPredictor` — inverse CDF sampling from quantile predictions. No copula (single stat). Integer rounding, floor at 0. Batch prediction for efficiency. Reuses `PropPrediction` dataclass from NBA `monte_carlo.py`. |
+| `mlb_train_pipeline.py` | `MLBTrainingOrchestrator` — 10-step CLI for end-to-end model training. Steps: load train/cal data, per-quantile feature selection, optional Optuna HP tuning, train quantile models, calibrate on holdout, calibration report, Monte Carlo sanity check, save artifacts (atomic `_incomplete` pattern), finalize. CLI: `--train-seasons`, `--cal-season`, `--cal-end-date`, `--tune`, `--tuning-trials`, `--feature-tolerance`, `--n-simulations`, `--output-dir`. |
+
+**Key Differences from NBA Pipeline:**
+- **No minutes decomposition:** Pitcher K predicted directly (not minutes × K-rate)
+- **No copula:** Single stat per model, no correlation to capture
+- **Integer targets:** Strikeouts are whole numbers, samples rounded after MC sampling
+- **Higher edge thresholds:** 8-10% vs NBA's 5% due to wider MLB prop spreads
 
 ### 4. Diagnostics (`src/diagnostics/`)
 
@@ -387,6 +456,7 @@ A simulation environment to validate betting strategies.
 | Module | Purpose |
 |--------|---------|
 | `query_player.py` | CLI tool for querying stored predictions. Modes: line probability, player overview, top edges. |
+| `compare_models.py` | CLI tool for comparing predictions from two model directories side-by-side. Loads both models, runs inference on the same features, prints Q50 differences, market accuracy comparison, and player-level detail. No DB writes. |
 
 ### 9. Orchestration (`src/orchestration/`)
 
@@ -397,23 +467,32 @@ A simulation environment to validate betting strategies.
 | Script | Schedule | Purpose |
 |--------|----------|---------|
 | `daily_stats_job.py` | 9:00 AM ET (once) | NBA game results + full processing pipeline |
-| `lines_job.py --live` | 12 PM, 4 PM ET | Full lines scrape (game lines + live props + injuries + linker) |
+| `lines_job.py --live --parallel` | 12 PM, 4 PM ET | Full lines scrape with parallel execution (props + injuries concurrent) |
 | `inference_job.py` | 12:15 PM, 4:15 PM ET | Full inference (MC predictions + edges + BL) |
-| `lines_job.py --live --props-only` | 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET | Props-only scrape (live props + linker) |
-| `edge_refresh_job.py` | 2 min after each props-only | Recalculate edges from stored MC samples + fresh lines |
+| `lines_job.py --live --props-only` | Every 5 min, 11 AM–11 PM ET | Props-only scrape (~156 runs/day, silent Discord) |
+| `edge_refresh_job.py` | Every 5 min +2 min offset, 11 AM–11 PM ET | Recalculate edges (~156 runs/day, silent Discord, `--skip-paper` on cron runs) |
 
 **`daily_stats_job.py`** — Once-daily stats scraping after previous night's games finalize. Steps: `nba_unified_scraper.py` → `nba_linker_local.py incremental` → `backfill_team_ids_incremental.py` → `update_player_position_history.py` → `update_league_position_averages.py` → `populate_average_stats_incremental.py` → `backfill_opponent_allowed_incremental.py` → **resolve ALL pending paper bets** (via `PaperTrader.resolve_all_pending()`). The bet resolution step finds all pending bets across multiple dates, checks if game stats are available, and resolves them automatically — enabling multi-day catchup. Supports `--dry-run` to preview commands and `--skip-resolution` to skip bet resolution. Resolution failures don't fail the job (stats are prioritized). Runtime: ~3-5 minutes (optimized from ~30 minutes via incremental scripts).
 
-**Step resilience (2026-02-24):** Each step is marked critical or non-critical. Critical steps (CDN scrape, linker, rolling averages, opponent allowed) cause the job to abort on failure. Non-critical steps (team IDs backfill, position history, league averages) log a warning and continue to the next step. This ensures paper bet resolution always runs even when a non-critical step fails. Play type scraper (`play_type_scraper.py`) was removed from the daily pipeline because `stats.nba.com` blocks datacenter IPs (Railway, GitHub Actions) — can be re-added when the API becomes accessible.
+**Step resilience (2026-02-24, enhanced 2026-03-02):** Each step is marked critical or non-critical. Critical steps (CDN scrape, linker, rolling averages, opponent allowed) cause the job to abort on failure. Non-critical steps (team IDs backfill, position history, league averages) log a warning and continue to the next step. This ensures paper bet resolution always runs even when a non-critical step fails. Play type scraper (`play_type_scraper.py`) was removed from the daily pipeline because `stats.nba.com` blocks datacenter IPs (Railway, GitHub Actions) — can be re-added when the API becomes accessible.
 
-**`lines_job.py`** — Multiple-times-daily props and injuries scraping. Two modes:
-- **Full mode (`--live`):** `daily_game_lines_scraper.py` → `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `rapidapi_injury_backfill.py` → `link_injury_data.py` → `nba_linker_local.py incremental`. Used at 12 PM and 4 PM ET.
-- **Props-only mode (`--live --props-only`):** `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `nba_linker_local.py incremental`. Skips game lines and injuries for fast intra-day refreshes. Used hourly/half-hourly between inference windows.
-- Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`, `--live`, `--props-only`. Runtime: ~30-90 seconds (full), ~15-30 seconds (props-only).
+**Per-step retries and timeout tuning (2026-03-02):** `run_command()` now accepts `max_retries` and `retry_delay` parameters with exponential backoff. Critical steps get 2 retries (15s base delay, doubling each attempt). Per-step timeouts tuned to actual workload: Step 6 (rolling averages) increased from 10m→20m (most common timeout culprit), Step 7 (opponent allowed) increased to 15m, Steps 3-5 (non-critical) reduced to 5m. Global scheduler timeout increased from 30m→45m to accommodate retries.
 
-**`inference_job.py`** — Full prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, checks upstream data freshness (warns if rolling averages >2 days stale), generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, **automatically places paper bets** on recommended predictions (via `PaperTrader.select_bets()` + `place_bets()`), sends Discord alert, and exports CSV backup. Runs twice daily (12:15 PM, 4:15 PM ET) to catch new player props. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`, `--skip-bets`, `--skip-discord`. Runtime: ~1-3 minutes.
+**`lines_job.py`** — Multiple-times-daily props and injuries scraping. Three modes:
+- **Full mode (`--live`):** `daily_game_lines_scraper.py` → `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `rapidapi_injury_backfill.py` → `link_injury_data.py` → `nba_linker_local.py incremental`.
+- **Full parallel mode (`--live --parallel`):** Same steps but props path (game lines → props → linker) and injury path (injury scraper → injury linker) run concurrently via threads. Used at 12 PM and 4 PM ET. Runtime: ~45-55 seconds (was ~90 seconds sequential).
+- **Props-only mode (`--live --props-only`):** `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `nba_linker_local.py incremental`. Skips game lines and injuries for fast intra-day refreshes. Used every 5 minutes between inference windows.
+- Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`, `--live`, `--props-only`, `--parallel`. Runtime: ~45-55 seconds (full parallel), ~25-30 seconds (props-only).
 
-**`edge_refresh_job.py`** — Lightweight edge recalculation (~2-3 seconds). Loads stored predictions from `daily_predictions` and MC samples from `daily_prediction_samples` via `PredictionStore.get_all_samples_for_date()`, fetches fresh prop lines from `raw_player_props_combined`, recalculates edges (empirical CDF) and Black-Litterman recommendations, upserts updated predictions. Self-contained — does NOT instantiate model pipeline or feature store. Exits gracefully if no samples exist (inference hasn't run yet). Supports `--date`, `--dry-run`, `--stats`, `--skip-discord`. Runs after each intra-day props scrape.
+**`inference_job.py`** — Full prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, checks upstream data freshness (warns if latest `game_date` in `player_average_game_stats` is before yesterday — stale data from a failed 9 AM job), generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, **automatically places paper bets** on recommended predictions (via `PaperTrader.select_bets()` + `place_bets()`), sends Discord alert, and exports CSV backup. Runs twice daily (12:15 PM, 4:15 PM ET) to catch new player props. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`, `--skip-bets`, `--skip-discord`, `--stale-warning`. Runtime: ~1-3 minutes.
+
+**Stale data handling (2026-03-02):** Inference never hard-fails on stale data — running with slightly stale rolling averages (L5 has 4/5 overlap, L15 has 14/15 overlap) is better than producing zero predictions. When stale data is detected (via DB check or `--stale-warning` flag from scheduler dependency gate), the job sets a `data_stale` flag, logs prominent warnings, sends a separate "Stale Data Warning" Discord alert, and completes normally.
+
+**`edge_refresh_job.py`** — Lightweight edge recalculation (~2-3 minutes). Loads stored predictions from `daily_predictions` and MC samples from `daily_prediction_samples` via `PredictionStore.get_all_samples_for_date()`, fetches fresh prop lines from `raw_player_props_combined` (24-hour snapshot_time cutoff for performance on multi-million row table), recalculates edges (empirical CDF) and Black-Litterman recommendations, upserts updated predictions. Self-contained — does NOT instantiate model pipeline or feature store. Exits gracefully with info-level "NO-OP" message if no samples exist (inference hasn't run yet — expected before first run of the day). **MC sample staleness check (2026-03-02):** If MC samples are >6 hours old, logs a warning and sends a Discord alert. **DFS paper trading runs as step 0 (before MC sample check)** — this ensures DFS entry resolution and placement runs every 10 minutes independently of whether model inference has occurred. **Line preservation (2026-03-05):** When fresh lines aren't available for a prediction (e.g., props pulled from the API), old line/odds/bookmaker values are preserved via `fillna()` fallback instead of being nulled out by the LEFT merge. **Skip paper trading (2026-03-05):** `--skip-paper` flag skips the paper trading step (bet selection + placement via `PaperTrader`). Used by the 5-minute silent cron runs to avoid timeouts — loading MC samples and running BL blending for every prediction was causing 45-minute hangs during game hours. Paper trading still runs during full inference jobs. Supports `--date`, `--dry-run`, `--stats`, `--skip-discord`, `--skip-paper`. Runs after each intra-day props scrape.
+
+**Line selection (2026-03-01 fix):** `fetch_fresh_lines()` partitions by `(player_id, game_id, market_key, bookmaker, line, outcome_label)` — the `line` in the partition ensures alt lines from the same bookmaker are treated as separate rows, preventing `MAX(line)` from conflating different line values. A `HAVING` clause requires both Over and Under odds to exist, eliminating orphan alt-line rows. The sharpest-book selection (`idxmin` on booksum) then naturally picks the primary line (lowest vig). Same fix applied to `daily_runner.py._get_current_lines()`.
+
+**Performance (2026-03-01 fix):** All queries against `raw_player_props_combined` (multi-million row append-only table) now include a `snapshot_time > now() - interval '24 hours'` cutoff. Without this, accumulating snapshot rows cause progressive query degradation — edge refresh was timing out after 30 minutes during evening games. The cutoff keeps queries sub-second by limiting scan to recent snapshots. Applied to `edge_refresh_job.py:fetch_fresh_lines()`, `dfs_paper_trader.py:_fetch_dfs_lines()`, and `dfs_paper_trader.py:_fetch_sportsbook_lines()`. DFS paper trader queries also updated from `commence_time::date` cast (prevents index usage) to range conditions.
 
 **Cron Configuration:** See `cron/gameflow_crontab.txt` for Linux server deployment template with UTC times and environment setup instructions.
 
@@ -427,12 +506,19 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 **Railway Cloud Deployment (2026-02-14):** Production deployment uses Railway with APScheduler for job orchestration:
 - `nixpacks.toml` — Nixpacks build config: Python venv with system-site-packages, explicit `LD_LIBRARY_PATH` for Nix-installed shared libraries (libz, libstdc++), zlib and stdenv.cc.cc.lib nixPkgs for numpy/scipy/xgboost C extensions
 - `railway.toml` — Railway-specific build and deploy settings (nixpacks builder, restart policy)
-- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 21 jobs on cron schedule (UTC times):
+- `src/orchestration/scheduler.py` — APScheduler-based scheduler runs 7 job definitions on cron schedule (UTC times):
   - `daily_stats_job.py` — 9 AM ET (scrapes NBA game results)
-  - `lines_job.py --live` — 12 PM, 4 PM ET (full live scrape: game lines + props + injuries + linker)
-  - `inference_job.py` — 12:15 PM, 4:15 PM ET (full MC inference)
-  - `lines_job.py --live --props-only` — 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET (props-only scrape + linker)
-  - `edge_refresh_job.py` — 2 min after each props-only run (recalculates edges from stored samples + fresh lines)
+  - `daily_stats_job.py` (retry) — 9:30 AM ET (auto-retry if 9 AM run failed)
+  - `lines_job.py --live --parallel` — 12 PM, 4 PM ET (full live scrape with parallel props + injury paths)
+  - `inference_job.py` — 12:15 PM, 4:15 PM ET (full MC inference, with dependency check on daily stats)
+  - `lines_job.py --live --props-only` — Every 5 min, 11 AM–11 PM ET (props-only scrape, ~156 runs/day)
+  - `edge_refresh_job.py` — Every 5 min offset by 2 min, 11 AM–11 PM ET (recalculates edges, ~156 runs/day)
+- **Job status tracking (2026-03-02):** `JOB_STATUS` in-memory dict tracks every job's status, end time, and duration. `record_job_execution()` writes to `job_executions` Supabase table for persistent history and debugging. `check_dependency()` queries `JOB_STATUS` before running dependent jobs (e.g., inference checks daily stats succeeded in last 8 hours).
+- **Automatic retry (2026-03-02):** 9:30 AM ET retry job (`run_daily_stats_retry()`) checks if the 9 AM daily stats succeeded — if not, re-runs it. Gives the system a second chance before inference at 12:15 PM.
+- **Dependency gate (2026-03-02):** `run_inference()` checks `check_dependency("daily_stats_job.py", max_age_hours=8)`. If stale, still runs inference but passes `--stale-warning` flag and sends Discord alert about stale rolling averages.
+- **5-minute refresh cadence (2026-03-03):** Props-only and edge refresh increased from every 10 min to every 5 min (~156 runs/day each). Full scrapes at noon/4pm use `--parallel` for concurrent props + injury paths. Enabled by fuzzy cache optimization reducing linker overhead to <1s.
+- **NCAAB jobs (2026-03-03, removed 2026-03-05):** Three NCAAB cron jobs were added in Session 63 but removed in Session 65 because migrations 009-011 aren't applied, no historical data is backfilled, and `cbbpy` isn't in `requirements.txt` on Railway. Will be re-added after backfill is complete (see ACTIONITEMS.md #21).
+- **Silent alerts (2026-02-28):** The every-5-min props and edge refresh jobs use `silent_on_success=True` — Discord alerts only sent on failure to avoid notification spam. Full scrape and inference jobs still alert on success.
 - **Discord job status alerts (2026-02-15):** Scheduler sends success/failure notifications to `#alerts` channel after each job completes. Includes job name, duration, metrics (when available), and error details for failures. Non-fatal — alert failures don't affect job execution.
 - **Subprocess Python path (2026-02-18):** All orchestration job scripts use `sys.executable` instead of hardcoded `python` when spawning subprocesses, ensuring the venv Python (with all installed packages) is used consistently.
 - Single always-on worker process handles all scheduled jobs
@@ -443,7 +529,13 @@ Scheduled tasks (GameFlow-DailyStats, GameFlow-Lines-12PM, GameFlow-Lines-4PM, G
 
 ### 10. Paper Trading (`src/paper_trading/`)
 
-Paper bet placement, outcome resolution, and P&L tracking. Bet placement is automated via `inference_job.py` (runs after each prediction generation). Resolution is automated via `daily_stats_job.py` (runs each morning after games finalize). Manual CLI scripts also available for ad-hoc operations. Integrated with the Dashboard for visualization.
+Paper bet placement, outcome resolution, and P&L tracking. Bet placement is automated via `edge_refresh_job.py` (runs every 10 min, 11 AM–11 PM ET). Resolution is automated at two points: (1) `edge_refresh_job.py` resolves previous-day bets before placing new ones (via `resolve_all_pending(exclude_today=True)`), and (2) `daily_stats_job.py` resolves any remaining pending bets each morning. Manual CLI scripts also available for ad-hoc operations. Integrated with the Dashboard for visualization.
+
+**Live game protection (2026-02-28):** `select_bets()` checks `commence_time` from `raw_player_props_combined` and skips games already in progress. Prevents false edges from comparing pre-game MC samples against mid-game lines.
+
+**Same-day resolution guard (2026-02-28):** `resolve_all_pending(exclude_today=True)` excludes today's bets from resolution, preventing false resolution of games that haven't finished. Secondary guard: `team_game_stats` won't have today's data until the 9 AM scraper runs the next morning.
+
+**DFS Paper Trading (2026-02-28):** `dfs_paper_trader.py` — Separate paper trading engine for multi-leg DFS entries using market edge (devigged sportsbook consensus, no model dependency). Builds 4 entries/day (ud_3_standard, ud_5_standard, pp_5_flex, pp_6_flex), each selecting top-N positive-edge legs by consensus probability. Supports flex partial payouts (e.g., PP 5-flex: 5/5=10x, 4/5=2x, 3/5=0.4x). Automated via `edge_refresh_job.py` step 0 (runs before MC sample check, independent of model inference). Bankroll: $500 start, $10/entry. `--dfs` flag added to `audit_and_resolve.py` for inspection. **Performance (2026-03-01):** Both `_fetch_dfs_lines()` and `_fetch_sportsbook_lines()` use `commence_time` range conditions (not `::date` cast) and 24-hour `snapshot_time` cutoff to avoid full table scans on the multi-million row `raw_player_props_combined` table.
 
 ### 11. Dashboard (`dashboard/`)
 
@@ -487,7 +579,7 @@ dashboard/
 │   ├── components/
 │   │   ├── landing/            # HeroSection, FeatureGrid
 │   │   ├── layout/             # Navbar, PublicNavbar, Footer
-│   │   ├── predictions/        # PropCard, PropGrid, FilterTabs, PlayOfTheDay
+│   │   ├── predictions/        # PropCard, PropGrid, FilterTabs, PlayOfTheDay, BookFilterDropdown
 │   │   ├── dfs/                # DfsTable, DfsFilters — DFS edge comparison
 │   │   ├── stats/              # HeatmapTable, StatTabs, CategoryTabs, WindowToggle, PositionFilter, OffDefToggle
 │   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
@@ -497,6 +589,9 @@ dashboard/
 │   │   └── shared/             # PlayerAvatar, Badge, BetSourceFilter components
 │   ├── lib/
 │   │   ├── supabase/           # Client, server, and middleware helpers
+│   │   ├── hooks/              # Custom React hooks
+│   │   │   ├── useUserBets.ts  # Cross-device bet tracking (optimistic UI + Supabase sync)
+│   │   │   └── useUserPreferences.ts # Cross-device preferences (localStorage cache + DB sync)
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
 │   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV, devigging, market edge calculations
 │   │   ├── insights.ts         # Template-based insight generator
@@ -518,20 +613,24 @@ dashboard/
 **Key Features:**
 - **Play of the Day:** Featured card at the top of the dashboard highlighting the model's highest-edge pick. Amber/gold visual treatment with trophy badge, large player avatar, star rating, and prominent edge display. Respects current filter settings (date, edge threshold, BL blending). Clicking "Analyze Pick" opens the analysis modal.
 - **Predictions View (`/`):** Displays predictions filtered by stat type (pts/reb/ast), sorted by edge magnitude. Matchup filter allows viewing predictions for specific games (e.g., "LAL vs SAS"). Includes:
+  - **Live Betting Toggle:** Pill-style "Pre-Game / + Live" toggle. Default (Pre-Game) hides predictions whose `game_time` has passed (game started or finished). "+ Live" (orange pill) shows all predictions including live games. Comparison is client-side: `new Date(p.game_time) <= new Date()`. **LIVE tags** appear on PropCard, PlayOfTheDay, and TonightsGames game pills when a game has started (pulsing red dot + "Live" badge). Game times always display (show "TBD" when unknown). Client-side game_time backfill propagates times from same-game predictions.
   - **Date Selector:** View predictions from any date in the last 30 days (uses `get_prediction_dates()` RPC function for efficient distinct query)
   - **Edge Threshold Filter:** Filter picks by minimum edge (All, ≥3%, ≥5%, ≥7%, ≥10%, ≥15%, ≥20%)
   - **Black-Litterman Blending Filter:** Optionally apply BL blending to edges (Off, τ=0.03, τ=0.05, τ=0.10, τ=0.15, τ=0.25). BL calculation implemented client-side using `calculateBLConfidence()` and `blendProbability()` utility functions.
+  - **Sportsbook Filter:** Multi-select checkbox dropdown (`BookFilterDropdown`) — all state-legal books checked by default. Unchecking a book excludes predictions only available at that book. Uses `excludedBooks: Set<string>` state; when any books are excluded, queries `raw_player_props_combined` with `.in('bookmaker', activeBooks)` to build availability set. "Select All" / "Clear All" toggle, closes on outside click or Escape. Button shows "All Books" or "Books (N)".
 - **Analysis Modal:** Click any prop card to see:
   - Last 5 games chart with performance history
   - Quantile distribution summary with visual bar
   - Sportsbook line shopping with actual edge calculations
   - Kelly bet sizing calculator with bankroll input and fraction selection
   - Model probabilities, market implied probabilities, and edge breakdown
-- **State Selector:** Dropdown filter persisted to localStorage (`user_state`). Filters AnalysisModal sportsbook lines to only show bookmakers legal in the selected state. Offshore books (Pinnacle, Novig, ProphetX, Bovada) excluded from all states. Mapping in `sportsbook-availability.ts` covers ~26 legal sports betting states.
+  - **"Take Bet" button** (footer) — appears when a sportsbook line is selected. Stake input pre-filled from Kelly recommendation, editable. Clicking "Take Bet" records the bet with the selected book/odds/line/stake to `user_bets`, turns button to "Bet Taken!", and marks the PropCard checkmark green.
+- **State Selector:** Dropdown filter synced cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Filters AnalysisModal sportsbook lines to only show bookmakers legal in the selected state. Offshore books (Pinnacle, Novig, ProphetX, Bovada) excluded from all states. Mapping in `sportsbook-availability.ts` covers ~26 legal sports betting states.
 - **Line Shopping:** Shows all available bookmaker lines for each prop (filtered by state if set). For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line. Lines are clickable — selecting a line recalculates the bet sizing section using that line's odds and model probability. Defaults to the best-edge line.
-- **Kelly Sizing:** Bankroll persisted to localStorage. Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
-- **History View (`/history`):** Shows past betting results with bet source filter (Model Picks/All Bets), status filters (All/Won/Lost/Push), summary stats bar, and individual bet cards with actual vs line comparison. Model Picks filter shows only bets with edge ≥9% (matching production model configuration). Displays bookmaker badge on each bet card showing which sportsbook had the sharpest line.
-- **Performance View (`/performance`):** KPI cards (bankroll, P&L, ROI, win rate), bankroll over time chart (Recharts AreaChart), and performance breakdown by stat type. Includes bet source filter to view Model Picks performance separately from all bets. Model Picks view simulates what bankroll would be if only high-edge bets were taken.
+- **Kelly Sizing:** Bankroll persisted cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
+- **User Bet Tracking:** Two paths to record a bet: (1) Quick-take via PropCard checkmark — auto-selects best odds/book. (2) AnalysisModal "Take Bet" button — user selects a specific sportsbook line and edits the stake (pre-filled from Kelly recommendation). Both write to `user_bets` table with full context (direction, odds, book, model probability, edge, team_abbrev, opponent_abbrev). `placeBetCustom()` standalone function handles AnalysisModal path; `markBetTaken()` syncs the PropCard checkmark state. Syncs across devices via `useUserBets` hook with optimistic UI updates. Bets auto-resolve against actual game results via `UserBetResolver` in the daily stats job.
+- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. BetCards display matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` are available (graceful fallback for older bets). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only. **Per-stat win rate cards** (PTS/REB/AST) displayed below the summary grid when resolved bet data exists.
+- **Performance View (`/performance`):** Three tabs — **My Bets**, **Props**, and **DFS**. My Bets tab: personal KPI cards (bankroll, P&L, ROI, win rate), bankroll chart from cumulative user bet P&L, and stat breakdown. Props tab: model paper trading KPIs with bet source filter (Model Picks/All Bets). DFS tab: KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays current paper trading bankroll from `paper_trading_daily_log`.
 - **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
@@ -539,9 +638,10 @@ dashboard/
 - **Data Vault (`/stats`):** Dense heatmap stat table with player, team, defense-vs-position, and play type breakdowns. Features percentile-based blue heatmap coloring (5-step gradient with inline legend), sortable columns, sticky name/position/team columns, window toggles (L5/L15/SZN), category tabs (Box Score/Shooting/Advanced/Consistency for players), position and team filters with info button explaining G/W/B groups, stat header tooltips, and player search. Reads from 3 database views (`player_stats_latest`, `team_stats_latest`, `defense_by_position_latest`) plus the `team_play_types` table (Synergy play type data) that join rolling average tables with player/team reference data. All filtering and sorting is client-side after initial parallel fetch.
 - **DFS Edge Finder (`/dfs`):** Three-mode edge analysis for DFS platforms (PrizePicks, Underdog, Pick6, Betr):
   - **Model Edge:** Re-estimates model probability at the DFS-specific line via quantile interpolation from `dfs-utils.ts`. Computes EV = model_prob - break_even per slip type.
-  - **Market Edge:** Compares DFS lines against devigged sportsbook consensus probabilities. Uses `get_sportsbook_lines` RPC to fetch non-DFS bookmaker lines, finds exact line matches, applies multiplicative devigging (`americanToImpliedProb`, `devig` from `dfs-utils.ts`), identifies sharpest book (lowest vig). Shows `"--"` when no sportsbook offers the exact DFS line.
+  - **Market Edge:** Compares DFS lines against devigged sportsbook consensus probabilities. Uses `get_sportsbook_lines_by_games` RPC (batched by game_id, 3 per call) to fetch non-DFS bookmaker lines, finds exact line matches, applies multiplicative devigging (`americanToImpliedProb`, `devig` from `dfs-utils.ts`), identifies sharpest book (lowest vig). Shows `"--"` when no sportsbook offers the exact DFS line.
   - **Combined Edge:** Highest-conviction tier — only shows picks where BOTH model AND market agree on direction AND both have positive edge. Displayed edge = `min(model_edge, market_edge)` (conservative estimate).
-  - Platform filter tabs, slip type selector (UD 3/5-Pick, PP 5/6-Flex), stat filter, +EV toggle, 3-way edge mode segmented control, KPI summary cards, and sortable table with mode-specific columns. Data fetched via `get_dfs_lines` and `get_sportsbook_lines` RPC functions.
+  - **Live Toggle:** "Pre-Game / + Live" toggle filters out started games by default. When enabled (orange), shows all picks including in-progress games.
+  - Platform filter tabs, slip type selector (PP 2-Pick, UD 3/5-Pick, PP 5/6-Flex), stat filter, +EV toggle, 3-way edge mode segmented control, KPI summary cards, and sortable table with mode-specific columns. Data fetched via `get_dfs_lines` and `get_sportsbook_lines` RPC functions. **Market mode works without predictions** — comparisons are built from DFS line data when no predictions exist (player_name/game_time from RPC join with `players` table and `commence_time`).
 - **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account/stats/dfs (requires auth).
 
 **Data Sources:**
@@ -551,11 +651,14 @@ dashboard/
 - `raw_player_props_combined` table — bookmaker lines for line shopping
 - `paper_bets` table — individual bet records with status and P&L
 - `paper_trading_daily_log` table — daily aggregated stats, bankroll tracking
+- `user_bets` table — user-placed bets from dashboard checkmark (RLS-filtered by user)
+- `user_profiles` table — per-user preferences: state, bankroll, kelly settings (RLS-filtered)
 - `player_stats_latest` view — Data Vault player tab (rolling averages + advanced stats)
 - `team_stats_latest` view — Data Vault team tab (rolling team averages)
 - `defense_by_position_latest` view — Data Vault defense tab (defense-vs-position stats)
 - `team_play_types` table — Season-level Synergy play type data (30 teams x 11 play types x 2 groupings)
 - SQL view definitions version-controlled in `sql/views/` (player_stats_latest.sql, team_stats_latest.sql, defense_by_position_latest.sql). All views use deterministic `DISTINCT ON` with `game_id DESC` tiebreaker.
+- **RPC Functions:** `get_dfs_lines` scopes by `commence_time` range (not `::date` cast, not `daily_predictions`), enabling data availability before inference runs. Joins with `players` table for `player_name` and returns `game_time` (commence_time). Migration `004_fix_rpc_prediction_dependency.sql`. `get_sportsbook_lines_by_games(text[])` accepts game_id array with 24-hour snapshot_time cutoff for sub-second performance on the multi-million row `raw_player_props_combined` table. Dashboard fetches sportsbook lines in batches of 3 game_ids in parallel. Migration `005_fast_sportsbook_rpc.sql`.
 - **NBA CDN Schedule API** — `/api/games` server-side route fetches today's games from `cdn.nba.com/static/json/staticData/scheduleLeagueV2.json`. Used as fallback when predictions haven't been generated yet (e.g., before inference runs). Maps tri-codes to full team names. 1-hour revalidation cache. Replaces previous `get_games_for_date` RPC which depended on the odds scraper having run.
 
 **Run Commands:**
@@ -567,9 +670,11 @@ cd dashboard && npm run lint   # ESLint check
 
 | Module | Purpose |
 |--------|---------|
-| `paper_trader.py` | Core `PaperTrader` class — bet selection, Kelly sizing, outcome resolution, daily log updates |
+| `paper_trader.py` | Core `PaperTrader` class — bet selection (with live game filter), Kelly sizing, outcome resolution, daily log updates |
+| `user_bet_resolver.py` | `UserBetResolver` — resolves user-placed bets (from dashboard checkmark) against actual game stats. Mirrors `PaperTrader.resolve_bets()` logic for `user_bets` table. Called from `daily_stats_job.py` after paper bet resolution. |
 | `place_bets.py` | CLI to place paper bets from daily predictions |
 | `resolve_bets.py` | CLI to resolve bets using actual game results |
+| `audit_and_resolve.py` | Diagnostic script — audits bet status by date, finds missed bets, backfills, and resolves |
 
 **Database Tables:**
 - `paper_bets` — Individual bet records with odds, edge, stake, status, P&L. Unique on `(game_date, player_id, stat_type, bet_direction)`.
@@ -584,6 +689,8 @@ cd dashboard && npm run lint   # ESLint check
 2. Daily Stats Job (9:00 AM ET, next day):
    daily_stats_job.py → stats scraped → PaperTrader.resolve_all_pending()
    └── Reads player_game_stats → Compares to lines → Updates paper_bets & daily_log
+   Then: UserBetResolver.resolve_all_pending()
+   └── Same logic for user_bets table (dashboard checkmark bets)
 ```
 
 **Manual CLI (ad-hoc operations):**
@@ -752,16 +859,35 @@ DISCORD_CHANNEL_PERFORMANCE=...
 - `mlb_player_game_statcast_pitching`: Per-game Statcast pitching aggregates — contact quality against, fastball velo/spin, pitch mix, CSW%, plate discipline. PK: `(player_id, game_date)`.
 - `mlb_player_season_advanced`: Season-level FanGraphs stats (wRC+, wOBA, ISO, FIP, xFIP, SIERA, WAR). PK: `(player_id, season, player_type)`.
 - `mlb_park_factors`: Venue-level park factor adjustments (runs, HR, hits, SO).
-- `mlb_raw_player_props`: MLB player prop lines from The Odds API.
+- `mlb_player_average_batting`: Pre-game rolling batting averages (shift(1)). 12 stats × 4 windows (L5/L10/L20/SZN) + 7 std devs at L5 + 4 rate stats at L10 (BA, OBP, SLG, OPS from rolling sums) + context (rest_days, games_last_7d). PK: `(player_id, game_id)`.
+- `mlb_player_average_pitching`: Pre-game rolling pitching averages (shift(1)). 8 stats × 3 windows (L3/L5/SZN) + 4 derived rates at L5 (ERA, WHIP, K/9, BB/9) + 2 std devs + context (days_rest, pitch_count_last_start, starts_l3/l5/szn). PK: `(player_id, game_id)`.
+- `mlb_raw_player_props`: MLB player prop lines from The Odds API. Linked to entities via `mlb_linker.py`.
 - `mlb_raw_game_lines`: MLB game lines (moneyline, spreads, totals).
+
+### NCAAB Data
+- `ncaab_teams`: 363 D1 programs (team_id SERIAL, espn_team_id UNIQUE, team_name, abbreviation, conference).
+- `ncaab_game_schedule`: One row per game (game_id BIGINT PK from ESPN, game_date, home/away_team_id, scores, neutral_site, season_type). Supports regular season, conference tournament, and NCAA tournament.
+- `ncaab_team_box_scores`: Team-level aggregated stats per game (game_id + team_id UNIQUE). Raw box score stats + computed possessions + Four Factors (eFG%, TOV%, ORB%, FT Rate) + opponent Four Factors.
+- `ncaab_raw_game_lines`: Odds API game lines ingest. Same schema as `mlb_raw_game_lines` with linked columns (game_id, home_team_id, away_team_id).
+- `ncaab_barttorvik_ratings`: Point-in-time efficiency snapshots (UNIQUE on team_name, season, snapshot_date). AdjOE, AdjDE, AdjEM, AdjTempo, Barthag, Four Factors (offense + defense), ranks.
+- `ncaab_team_rolling_averages`: Pre-game team features (UNIQUE on team_id, game_id). Rolling averages at L5/L10/L20/SZN windows for all box score stats and Four Factors. Includes rest_days, games_last_7d.
 
 ### Predictions
 - `daily_predictions`: Stored daily prediction quantiles, edges, and implied probabilities. Unique on `(prediction_date, player_id, game_id, stat)`. Supports upsert for re-runs.
 - `daily_prediction_samples`: Gzip-compressed MC sample arrays (10K float64 values per prediction, ~20-40KB). Unique on `(prediction_date, player_id, game_id, stat)`.
 
-### Paper Trading
+### Paper Trading (Model-Based)
 - `paper_bets`: Individual paper bet records with full context (odds, edge, stake, status, P&L). Unique on `(game_date, player_id, stat_type, bet_direction)`.
 - `paper_trading_daily_log`: Daily aggregated P&L tracking. Unique on `game_date`. Tracks wins/losses, total staked, ROI, cumulative P&L, and running bankroll.
+
+### User Bet Tracking (Cross-Device)
+- `user_profiles`: Per-user preferences (state, bankroll, kelly_fraction, use_custom_kelly). PK on `user_id` (FK to `auth.users`). RLS: users access only their own row. `updated_at` auto-trigger.
+- `user_bets`: User-placed bets from dashboard checkmark or AnalysisModal "Take Bet" button. Unique on `(user_id, game_date, player_id, stat_type)`. Tracks prediction context (direction, odds, book, model_prob, edge), resolution status (pending/won/lost/push/cancelled), actual_value, P&L, `team_abbrev`, and `opponent_abbrev` (for matchup display in history). RLS: users access only their own rows. Resolved by `UserBetResolver` in `daily_stats_job.py`.
+
+### DFS Paper Trading (Market-Edge)
+- `dfs_paper_entries`: Multi-leg DFS entries (slips). One row per slip type per day. Unique on `(entry_date, slip_type)`. Tracks legs won/lost/push/cancelled, payout multiplier, P&L. Supports 4 slip types: ud_3_standard, ud_5_standard, pp_5_flex, pp_6_flex.
+- `dfs_paper_legs`: Individual picks within entries. FK to `dfs_paper_entries(id) ON DELETE CASCADE`. Unique on `(entry_id, player_id)`. Stores player, stat, line, direction, market consensus probability, edge, actual value.
+- `dfs_paper_daily_log`: Daily aggregate tracking for DFS entries. Unique on `entry_date`. Tracks entries placed/won/lost/partial, cumulative P&L, bankroll ($500 start, $10/entry).
 
 ### Dashboard Views (Pre-Computed Joins)
 - `player_stats_latest`: Latest per-player rolling stats — joins `player_average_game_stats` + `player_average_advanced_stats` + `players` + `player_position_history`. ~529 rows.
@@ -882,6 +1008,34 @@ python -m src.scrapers.mlb.mlb_player_props_scraper --start-date 2024-04-01 --en
 python -m src.scrapers.mlb.mlb_daily_game_lines_scraper --live
 ```
 
+### NCAAB Scrapers
+```bash
+# Game lines (The Odds API)
+python -m src.scrapers.ncaab.ncaab_game_lines_scraper --live
+python -m src.scrapers.ncaab.ncaab_game_lines_scraper --date 2025-01-15
+
+# Box scores (CBBpy / ESPN)
+python -m src.scrapers.ncaab.ncaab_cbbpy_scraper --season 2025
+
+# Barttorvik ratings
+python -m src.scrapers.ncaab.ncaab_barttorvik_scraper --season 2025
+python -m src.scrapers.ncaab.ncaab_barttorvik_scraper --backfill 2022 2023 2024 2025
+```
+
+### NCAAB Processing
+```bash
+python -m src.processing.ncaab.ncaab_linker                           # Link game lines to schedule
+python -m src.processing.ncaab.ncaab_populate_averages --season 2025  # Full backfill
+python -m src.processing.ncaab.ncaab_populate_averages --incremental  # Daily update
+python -m src.processing.ncaab.ncaab_barttorvik_linker                # Link Barttorvik names to teams
+```
+
+### NCAAB Orchestration
+```bash
+python src/orchestration/ncaab_daily_stats_job.py [--dry-run]         # 9:05 AM ET (Nov-Apr)
+python src/orchestration/ncaab_lines_job.py --live [--dry-run]        # 12:30/4:30 PM ET (Nov-Apr)
+```
+
 ### Processing
 ```bash
 python src/processing/nba_linker_local.py [download|process|upload|incremental]
@@ -890,12 +1044,30 @@ python src/processing/populate_average_stats.py [--season YYYY-YY] [--table play
 python src/processing/populate_average_stats_incremental.py [--date YYYY-MM-DD]  # Lightweight daily update (~1s)
 python src/processing/backfill_opponent_allowed.py
 python src/processing/backfill_league_priors.py
+
+# MLB Processing
+python -m src.processing.mlb.mlb_linker incremental                    # Daily: link new unlinked props
+python -m src.processing.mlb.mlb_linker backfill                       # One-time: link all unlinked props
+python -m src.processing.mlb.mlb_linker_local download                 # Download tables to mlb_linker_data/
+python -m src.processing.mlb.mlb_linker_local process                  # Match IDs locally in pandas
+python -m src.processing.mlb.mlb_linker_local upload                   # Push results back to DB
+python -m src.processing.mlb.mlb_linker_local all                      # Full pipeline (download + process + upload)
+python -m src.processing.mlb.mlb_linker_local status                   # Show checkpoint progress
+python -m src.processing.mlb.mlb_populate_averages --table all         # Full backfill of rolling averages
+python -m src.processing.mlb.mlb_populate_averages --table batting --season 2024  # Single table/season
+python -m src.processing.mlb.mlb_populate_averages_incremental --date 2024-09-15  # Daily incremental
 ```
 
 ### Training
 ```bash
+# NBA
 python -m src.models.train_pipeline [--tune-hyperparams] [--tuning-trials N]
 python -m src.models.hyperparameter_tuner [--n-trials 50] [--timeout 3600]
+
+# MLB
+python -m src.models.mlb.mlb_train_pipeline --train-seasons 2023 2024 --cal-season 2025
+python -m src.models.mlb.mlb_train_pipeline --train-seasons 2023 2024 --cal-season 2025 --tune --tuning-trials 50
+python -m src.models.mlb.mlb_train_pipeline --train-seasons 2024 --cal-season 2025 --cal-end-date 2025-07-01
 ```
 
 ### Backtesting
@@ -934,11 +1106,11 @@ python src/orchestration/run_daily.py [--date YYYY-MM-DD] [--skip-scraping] [--s
 
 # Frequency-separated jobs (E6)
 python src/orchestration/daily_stats_job.py [--dry-run]                           # 9 AM ET - Stats + processing
-python src/orchestration/lines_job.py --live [--dry-run]                          # 12/4 PM ET - Full live scrape
-python src/orchestration/lines_job.py --live --props-only [--dry-run]             # Hourly/half-hourly - Props only
-python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker]  # Historical mode
+python src/orchestration/lines_job.py --live --parallel [--dry-run]               # 12/4 PM ET - Full live scrape (parallel)
+python src/orchestration/lines_job.py --live --props-only [--dry-run]             # Every 5 min - Props only
+python src/orchestration/lines_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-injuries] [--skip-linker] [--parallel]  # Historical mode
 python src/orchestration/inference_job.py [--date YYYY-MM-DD] [--dry-run] [--model-dir PATH] [--stats pts reb ast] [--skip-bets] [--skip-discord]  # 12:15/4:15 PM ET
-python src/orchestration/edge_refresh_job.py [--date YYYY-MM-DD] [--dry-run] [--stats pts reb ast] [--skip-discord]  # After each props scrape
+python src/orchestration/edge_refresh_job.py [--date YYYY-MM-DD] [--dry-run] [--stats pts reb ast] [--skip-discord] [--skip-paper]  # After each props scrape
 ```
 
 The `--scrape-injuries` flag:
@@ -962,6 +1134,23 @@ python src/tools/query_player.py --top 20
 
 # Top edges for a specific date
 python src/tools/query_player.py --date 2026-01-29 --top 10
+```
+
+### Compare Models
+```bash
+# Compare old vs new model predictions for a date
+python src/tools/compare_models.py \
+  --model-a src/models/artifacts/production_archived_20260305 \
+  --model-b src/models/artifacts/production \
+  --date 2026-03-05
+
+# Filter to specific player (supports partial match, diacritical-insensitive)
+python src/tools/compare_models.py \
+  --model-a src/models/artifacts/production_archived_20260305 \
+  --model-b src/models/artifacts/production \
+  --date 2026-03-05 \
+  --player "Luka Doncic" \
+  --stats pts reb ast
 ```
 
 ### Social Media Images
@@ -1009,7 +1198,7 @@ python src/paper_trading/resolve_bets.py --date 2026-02-04 --dry-run
 
 **Framework:** Pytest with pytest-cov (60% coverage target).
 
-**Test Organization:** 34 test modules in `tests/` mirroring `src/` structure. Each source module has a corresponding `test_*.py`.
+**Test Organization:** 38 test modules in `tests/` mirroring `src/` structure. Each source module has a corresponding `test_*.py`. Includes 4 NCAAB test modules (game lines scraper, barttorvik scraper, linker, feature store).
 
 **Test Categories (markers):**
 - `unit` — Isolated logic tests with mocks.
@@ -1108,3 +1297,7 @@ See `ACTIONITEMS.md` for full details.
 5. **Historical backfill:** `src/tools/backfill_prediction_features.py` script populates feat_* columns for historical predictions without modifying prediction values. Supports `--date`, `--start/--end`, `--dry-run` flags.
 
 **Dashboard Vercel deployment (2026-02-14):** Dashboard deployed to Vercel at `game-flow-data.vercel.app`. Configuration: root directory `dashboard`, environment variables `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Vercel MCP available via `claude mcp add --transport http vercel https://mcp.vercel.com`.
+
+**Dashboard live toggle + DFS 2-pick (2026-02-28):** Two dashboard enhancements:
+1. **Live Betting Toggle:** Added "Pre-Game / + Live" pill toggle to the main predictions dashboard. Default state (Pre-Game) hides predictions for games that have already started by comparing `game_time` against current time client-side. Orange "+ Live" pill reveals all predictions including in-progress games. State variable `showLive` (default `false`) controls filter in `filteredPredictions`. **Historical date fix (2026-03-05):** The `isGameDone()` and `showLive` filters are now only applied when `selectedDate === getToday()`. Previously, viewing a past date would filter out ALL predictions because every game from that date had already ended.
+2. **DFS PP 2-Pick Slip Type:** Added PrizePicks 2-Pick Power (3x payout) to `DFS_SLIP_TYPES` in `dashboard/src/types/dfs.ts`. Break-even per leg = 57.7% (`1/√3`). This is the most conservative slip type — highest per-leg threshold — suitable for high-conviction plays.

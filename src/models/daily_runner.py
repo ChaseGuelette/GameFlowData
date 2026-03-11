@@ -390,9 +390,12 @@ class DailyPredictionRunner:
         """
         from datetime import timedelta
 
-        # Games for target_date evening are stored with next day's UTC date
-        # (e.g., 7:30 PM ET on Feb 10 = 00:30 UTC on Feb 11)
-        utc_date = target_date + timedelta(days=1)
+        # Games on target_date span two UTC dates:
+        #   - Matinee games (noon-6 PM ET) fall on the same UTC date
+        #   - Evening games (7 PM+ ET) roll into the next UTC date
+        # Search both to catch all games.
+        utc_start = target_date
+        utc_end = target_date + timedelta(days=2)
 
         query = text("""
             WITH game_times AS (
@@ -401,7 +404,9 @@ class DailyPredictionRunner:
                     away_team,
                     commence_time
                 FROM raw_game_lines_staging
-                WHERE commence_time::date = :utc_date
+                WHERE commence_time >= CAST(:utc_start AS date)
+                  AND commence_time < CAST(:utc_end AS date)
+                  AND CAST(commence_time AT TIME ZONE 'US/Eastern' AS date) = CAST(:target_date AS date)
                 ORDER BY home_team, away_team, snapshot_time DESC
             )
             SELECT
@@ -417,7 +422,11 @@ class DailyPredictionRunner:
 
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(query, {"utc_date": utc_date})
+                result = conn.execute(query, {
+                    "utc_start": utc_start,
+                    "utc_end": utc_end,
+                    "target_date": target_date,
+                })
                 time_lookup = {
                     (row[0], row[1]): row[2]
                     for row in result
@@ -426,7 +435,7 @@ class DailyPredictionRunner:
             # Log if no times found in database
             if not time_lookup:
                 logger.warning(
-                    f"No game times found in raw_game_lines_staging for UTC date {utc_date}. "
+                    f"No game times found in raw_game_lines_staging for date {target_date}. "
                     "Ensure lines_job ran before inference."
                 )
                 return games
@@ -528,42 +537,75 @@ class DailyPredictionRunner:
         return result_players
 
     def _filter_injured_players(self, players: list[dict], target_date: date) -> list[dict]:
-        """Remove players listed as 'Out' using rapidapi_injuries (player_id matching).
+        """Remove players listed as 'Out' using rapidapi_injuries.
+
+        Two-pass filtering:
+          1. Primary: match by player_id (integer) for linked injuries.
+          2. Fallback: match by player name for unlinked injuries (player_id IS NULL)
+             to catch the ~0.7% of injuries the linker couldn't resolve.
 
         Gets each player's MOST RECENT status from the last 7 days, filtering out
         players whose latest status is 'Out'. This handles cases where a player
         is marked Out on day N but not re-listed on day N+1.
-
-        Matches by player_id (integer) for reliable filtering, consistent
-        with the feature_store and backtest harness injury queries.
         """
         try:
-            # Get players whose most recent status (in last 7 days) is 'Out'
-            # This fixes the bug where players marked Out yesterday but not
-            # re-listed today would slip through
-            query = text("""
-                WITH recent_injuries AS (
-                    SELECT
-                        player_id,
-                        status,
-                        report_date,
-                        ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY report_date DESC) as rn
-                    FROM rapidapi_injuries
-                    WHERE report_date >= :cutoff_date
-                      AND report_date <= :target_date
-                      AND player_id IS NOT NULL
-                )
-                SELECT DISTINCT player_id
-                FROM recent_injuries
-                WHERE rn = 1 AND status = 'Out'
-            """)
-
             # Look back 7 days for injury reports
             cutoff_date = target_date - timedelta(days=7)
 
             with self.engine.connect() as conn:
+                # Pass 1: Get Out players by player_id (linked injuries)
+                query = text("""
+                    WITH recent_injuries AS (
+                        SELECT
+                            player_id,
+                            status,
+                            report_date,
+                            ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY report_date DESC) as rn
+                        FROM rapidapi_injuries
+                        WHERE report_date >= :cutoff_date
+                          AND report_date <= :target_date
+                          AND player_id IS NOT NULL
+                    )
+                    SELECT DISTINCT player_id
+                    FROM recent_injuries
+                    WHERE rn = 1 AND status = 'Out'
+                """)
                 result = conn.execute(query, {"target_date": target_date, "cutoff_date": cutoff_date})
                 out_player_ids = {row[0] for row in result}
+
+                # Pass 2: Get Out player names from unlinked injuries (player_id IS NULL)
+                name_query = text("""
+                    WITH recent_unlinked AS (
+                        SELECT
+                            player,
+                            status,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY LOWER(TRIM(player))
+                                ORDER BY report_date DESC
+                            ) as rn
+                        FROM rapidapi_injuries
+                        WHERE report_date >= :cutoff_date
+                          AND report_date <= :target_date
+                          AND player_id IS NULL
+                    )
+                    SELECT DISTINCT LOWER(TRIM(player)) as out_name
+                    FROM recent_unlinked
+                    WHERE rn = 1 AND status = 'Out'
+                """)
+                result = conn.execute(name_query, {"target_date": target_date, "cutoff_date": cutoff_date})
+                out_names = {row[0] for row in result}
+
+            # Match unlinked Out names against our players list
+            if out_names:
+                name_matched = 0
+                for p in players:
+                    name = p.get("player_name", "")
+                    if name and name.lower().strip() in out_names and p["player_id"] not in out_player_ids:
+                        out_player_ids.add(p["player_id"])
+                        name_matched += 1
+                        logger.info(f"  Name-matched Out player: {name} (ID: {p['player_id']})")
+                if name_matched:
+                    logger.info(f"Found {name_matched} additional Out players via name matching")
 
             if not out_player_ids:
                 logger.info("No 'Out' players found in recent injury reports.")
@@ -641,6 +683,8 @@ class DailyPredictionRunner:
             FROM ranked_lines
             WHERE rn = 1
             GROUP BY player_id, game_id, bookmaker, market_key, line
+            HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
+               AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
         """).bindparams(
             bindparam("game_ids", expanding=True),
             bindparam("markets", expanding=True),

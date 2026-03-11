@@ -1,6 +1,7 @@
 -- Function: get_sportsbook_lines
--- Returns NON-DFS bookmaker lines for players with predictions on target_date.
+-- Returns NON-DFS bookmaker lines for games on target_date.
 -- Used by the DFS Edge Finder page for Market Edge and Combined Edge modes.
+-- Scopes by commence_time::date so it works before inference runs.
 
 CREATE OR REPLACE FUNCTION get_sportsbook_lines(target_date date)
 RETURNS TABLE (
@@ -16,12 +17,7 @@ RETURNS TABLE (
 LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
   RETURN QUERY
-  WITH game_ids AS (
-    SELECT DISTINCT dp.game_id
-    FROM daily_predictions dp
-    WHERE dp.prediction_date = target_date
-  ),
-  latest AS (
+  WITH latest AS (
     SELECT
       rp.player_id, rp.game_id, rp.bookmaker, rp.market_key,
       rp.outcome_label, rp.line, rp.odds_american, rp.snapshot_time,
@@ -30,10 +26,10 @@ BEGIN
         ORDER BY rp.snapshot_time DESC
       ) AS rn
     FROM raw_player_props_combined rp
-    JOIN game_ids g ON (rp.game_id = g.game_id OR LPAD(rp.game_id, 10, '0') = g.game_id)
     WHERE rp.market_key IN ('player_points', 'player_rebounds', 'player_assists')
       AND rp.bookmaker NOT IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
       AND rp.player_id IS NOT NULL
+      AND rp.commence_time::date = target_date
   )
   SELECT
     l.player_id, l.game_id, l.bookmaker, l.market_key, l.line,

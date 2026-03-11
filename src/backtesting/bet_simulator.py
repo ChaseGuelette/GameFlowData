@@ -110,6 +110,7 @@ class BetSimulator:
     starting_bankroll: float = 10000.0
     kelly_fraction: float = 0.125
     max_bet_pct: float | None = None  # Cap bet size as % of bankroll (e.g., 0.025 = 2.5%)
+    flat_bet_size: float | None = None  # Fixed dollar amount per bet (overrides Kelly when set)
     min_odds: int = -200  # Don't bet on heavy favorites
     max_odds: int = 200  # Don't bet on long shots
     allowed_bets: set[tuple[str, str]] | None = None  # e.g., {("pts", "under"), ("reb", "over")}
@@ -118,9 +119,11 @@ class BetSimulator:
 
     bets: list[Bet] = field(default_factory=list)
     current_bankroll: float = field(init=False)
+    _day_start_bankroll: float = field(init=False, default=0.0)  # Snapshot for within-day sizing
 
     def __post_init__(self):
         self.current_bankroll = self.starting_bankroll
+        self._day_start_bankroll = self.starting_bankroll
 
     def _get_edge_threshold(self, stat: str) -> float:
         """Get edge threshold for a stat, using per-stat config if available."""
@@ -128,22 +131,26 @@ class BetSimulator:
             return self.stat_config.get_edge_threshold(stat)
         return self.edge_threshold
 
-    def _calculate_kelly_stake(self, odds: int, model_prob: float) -> float:
-        """Calculate stake using fractional Kelly Criterion with optional cap."""
+    def _calculate_stake(self, odds: int, model_prob: float) -> float:
+        """Calculate stake using flat sizing or fractional Kelly Criterion.
+
+        Uses day-start bankroll for Kelly sizing so all bets within a day
+        are sized from the same capital base (realistic for simultaneous bets).
+        """
+        # Flat bet sizing: fixed dollar amount per bet
+        if self.flat_bet_size is not None:
+            return min(self.flat_bet_size, self.current_bankroll)
+
         if odds == 0:
             return 0.0
 
-        # Convert American odds to decimal odds (b = net fractional odds)
-        # Decimal Odds = (odds / 100) + 1 for positive
-        # Decimal Odds = (100 / abs(odds)) + 1 for negative
-        # Kelly 'b' is the net odds (Decimal - 1)
+        # Convert American odds to net fractional odds (Kelly 'b')
         if odds > 0:
             b = odds / 100.0
         else:
             b = 100.0 / abs(odds)
 
         # Kelly formula: f = (p(b + 1) - 1) / b
-        # Simplified: f = (p * b - (1 - p)) / b
         f = (model_prob * (b + 1) - 1) / b
 
         # Apply fraction
@@ -156,10 +163,10 @@ class BetSimulator:
         if self.max_bet_pct is not None:
             f_fractional = min(f_fractional, self.max_bet_pct)
 
-        # Calculate stake based on current bankroll
-        stake = f_fractional * self.current_bankroll
+        # Size off day-start bankroll (all bets in a night use same capital base)
+        stake = f_fractional * self._day_start_bankroll
 
-        # Safety: Ensure we don't bet more than we have
+        # But can't bet more than we actually have remaining
         return min(stake, self.current_bankroll)
 
     def should_bet(
@@ -218,7 +225,7 @@ class BetSimulator:
         # Use sizing_prob for Kelly when available, else use model_prob
         if stake is None:
             kelly_prob = sizing_prob if sizing_prob is not None else model_prob
-            stake = self._calculate_kelly_stake(odds, kelly_prob)
+            stake = self._calculate_stake(odds, kelly_prob)
 
         # Ensure we have funds (double check)
         if stake > self.current_bankroll:
@@ -258,6 +265,10 @@ class BetSimulator:
         - implied_over, implied_under
         """
         new_bets = []
+
+        # Snapshot bankroll at day start — all bets tonight are sized from
+        # the same capital base (realistic for simultaneous placement)
+        self._day_start_bankroll = self.current_bankroll
 
         for _, row in predictions_df.iterrows():
             if pd.isna(row.get("line")):

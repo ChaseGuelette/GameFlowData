@@ -18,6 +18,8 @@ interface DfsFiltersProps {
   onStatChange: (stat: StatFilter) => void
   evOnly: boolean
   onEvOnlyChange: (evOnly: boolean) => void
+  showLive: boolean
+  onShowLiveChange: (showLive: boolean) => void
 }
 
 const platforms: { value: PlatformFilter; label: string }[] = [
@@ -49,6 +51,8 @@ export function DfsFilters({
   onStatChange,
   evOnly,
   onEvOnlyChange,
+  showLive,
+  onShowLiveChange,
 }: DfsFiltersProps) {
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -131,6 +135,32 @@ export function DfsFilters({
       >
         +EV Only
       </button>
+
+      {/* Live betting toggle */}
+      <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg">
+        <button
+          onClick={() => onShowLiveChange(false)}
+          className={cn(
+            'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+            !showLive
+              ? 'bg-slate-700 text-slate-100'
+              : 'text-slate-400 hover:text-slate-200'
+          )}
+        >
+          Pre-Game
+        </button>
+        <button
+          onClick={() => onShowLiveChange(true)}
+          className={cn(
+            'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+            showLive
+              ? 'bg-orange-600 text-white'
+              : 'text-slate-400 hover:text-slate-200'
+          )}
+        >
+          + Live
+        </button>
+      </div>
     </div>
   )
 }

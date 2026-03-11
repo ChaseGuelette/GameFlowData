@@ -9,57 +9,63 @@ The daily pipeline is split into four jobs based on execution frequency:
 | Job | Schedule (ET) | Purpose | Runtime |
 |-----|---------------|---------|---------|
 | `daily_stats_job.py` | 9:00 AM | NBA game results + processing | ~3-5 min |
-| `lines_job.py --live` | 12 PM, 4 PM | Full live scrape (game lines + props + injuries + linker) | ~30-90 sec |
-| `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation | ~16 sec |
-| `lines_job.py --live --props-only` | 1-3 PM hourly, 4:30-6:30 PM half-hourly | Props-only live scrape + linker | ~15-30 sec |
-| `edge_refresh_job.py` | 2 min after each props-only | Recalculate edges from stored samples + fresh lines | ~2-3 sec |
+| `daily_stats_job.py` (retry) | 9:30 AM | Auto-retry if 9 AM run failed | ~3-5 min |
+| `lines_job.py --live --parallel` | 12 PM, 4 PM | Full live scrape with parallel props + injury paths | ~45-55 sec |
+| `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation (checks daily stats dependency) | ~16 sec |
+| `lines_job.py --live --props-only` | Every 5 min, 11 AM – 11 PM | Props-only live scrape + linker | ~25-30 sec |
+| `edge_refresh_job.py` | Every 5 min (+2 min offset), 11 AM – 11 PM | Recalculate edges (--skip-paper on cron runs) | ~2-3 min |
 
 **Note:** Inference job optimized from ~3 min to ~16 sec in Session 27 via parallel feature building and prop lines query optimization.
 
-**API Budget:** 5M credits/month. New schedule uses ~3,250/month (previously ~750/month) — negligible impact.
+**API Budget:** 5M credits/month. Current schedule uses ~6,400/day (~200K/month) — 4% of quota.
+
+**Discord Alerts:** High-frequency jobs (props-only, edge refresh) only send Discord alerts on failure (`silent_on_success`). Full scrapes, inference, and daily stats always alert.
 
 ## Pipeline Timeline
 
 ```
 9:00 AM    daily_stats_job.py
-           ├─ nba_unified_scraper.py (NBA game results)
-           ├─ nba_linker_local.py incremental
-           ├─ backfill_team_ids.py
-           ├─ update_player_position_history.py
-           ├─ update_league_position_averages.py
-           ├─ populate_average_stats_incremental.py (lightweight, ~1s)
-           ├─ backfill_opponent_allowed_incremental.py --days-back 2
-           └─ resolve ALL pending paper bets
+           ├─ nba_unified_scraper.py (NBA game results)       [10m timeout, 2 retries]
+           ├─ nba_linker_local.py incremental                 [10m timeout, 2 retries]
+           ├─ backfill_team_ids.py                            [5m timeout, no retries]
+           ├─ update_player_position_history.py                [5m timeout, no retries]
+           ├─ update_league_position_averages.py               [5m timeout, no retries]
+           ├─ populate_average_stats_incremental.py            [20m timeout, 2 retries]
+           ├─ backfill_opponent_allowed_incremental.py         [15m timeout, 2 retries]
+           ├─ resolve ALL pending paper bets
+           └─ resolve ALL pending user bets (from dashboard checkmark)
 
-12:00 PM   lines_job.py --live (full scrape)
-           ├─ daily_game_lines_scraper.py
-           ├─ daily_player_props_scraper.py --live --target-table raw_player_props_combined
-           ├─ rapidapi_injury_backfill.py
-           ├─ link_injury_data.py
-           └─ nba_linker_local.py incremental
+9:30 AM    daily_stats_retry (auto-retry if 9 AM failed)
+           └─ Checks JOB_STATUS["daily_stats_job.py"], re-runs if not "success"
+
+12:00 PM   lines_job.py --live --parallel (full scrape, parallel)
+           Group A (props):    ├─ daily_game_lines_scraper.py
+                               ├─ daily_player_props_scraper.py --live --target-table raw_player_props_combined
+                               └─ nba_linker_local.py incremental
+           Group B (injuries): ├─ rapidapi_injury_backfill.py
+              (concurrent)     └─ link_injury_data.py
 
 12:15 PM   inference_job.py (FULL MC inference)
+           ├─ Scheduler checks daily_stats dependency (8h window)
+           │   └─ If stale: passes --stale-warning, sends Discord alert
            ├─ Load model artifacts
-           ├─ Check upstream data freshness
+           ├─ Check upstream data freshness (latest game_date < yesterday?)
            ├─ DailyPredictionRunner.run_for_date()
            ├─ Store predictions + MC samples to DB
            ├─ Place paper bets (PaperTrader.select_bets + place_bets)
            ├─ Export predictions CSV
-           └─ Send Discord alert
+           └─ Send Discord alert (+ stale data warning if applicable)
 
-1:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (1:02 PM)
-2:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (2:02 PM)
-3:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (3:02 PM)
+11 AM -    lines_job.py --live --props-only (every 5 min, :00/:05/:10/.../:55)
+11 PM      edge_refresh_job.py (every 5 min, :02/:07/:12/.../:57)
+           ├─ Resolve pending bets from previous days (exclude_today=True)
+           ├─ Recalculate edges from stored MC samples + fresh lines
+           └─ Place/update paper bets for today (skips live games)
+           Discord alerts: ONLY on failure (silent_on_success)
 
-4:00 PM    lines_job.py --live (full scrape — catches new player props)
+4:00 PM    lines_job.py --live --parallel (full scrape — catches new player props)
 
 4:15 PM    inference_job.py (FULL MC inference — second window)
-
-4:30 PM    lines_job.py --live --props-only → edge_refresh_job.py (4:32 PM)
-5:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (5:02 PM)
-5:30 PM    lines_job.py --live --props-only → edge_refresh_job.py (5:32 PM)
-6:00 PM    lines_job.py --live --props-only → edge_refresh_job.py (6:02 PM)
-6:30 PM    lines_job.py --live --props-only → edge_refresh_job.py (6:32 PM, final)
 
 7:00 PM    Games typically start
 ```
@@ -92,13 +98,17 @@ python src/orchestration/daily_stats_job.py --dry-run
 
 ### Pipeline Steps
 
-1. `nba_unified_scraper.py` - Fetch latest game box scores from NBA API **(critical)**
-2. `nba_linker_local.py incremental` - Link unmatched props to player/game IDs **(critical)**
-3. `backfill_team_ids.py` - Fill missing team IDs in staging tables *(non-critical)*
-4. `update_player_position_history.py` - Update position snapshots *(non-critical)*
-5. `update_league_position_averages.py` - Update league averages by position *(non-critical)*
-6. `populate_average_stats_incremental.py` - Compute rolling averages for today's players only (~1s vs ~28min for full) **(critical)**
-7. `backfill_opponent_allowed_incremental.py --days-back 2` - Update opponent-adjusted defensive stats **(critical)**
+| Step | Script | Critical | Timeout | Retries |
+|------|--------|----------|---------|---------|
+| 1 | `nba_unified_scraper.py` — Fetch latest game box scores | Yes | 10m | 2 |
+| 2 | `nba_linker_local.py incremental` — Link unmatched props | Yes | 10m | 2 |
+| 3 | `backfill_team_ids.py` — Fill missing team IDs | No | 5m | 0 |
+| 4 | `update_player_position_history.py` — Update positions | No | 5m | 0 |
+| 5 | `update_league_position_averages.py` — League averages | No | 5m | 0 |
+| 6 | `populate_average_stats_incremental.py` — Rolling averages | Yes | **20m** | **2** |
+| 7 | `backfill_opponent_allowed_incremental.py` — Opponent stats | Yes | **15m** | **2** |
+
+**Retries use exponential backoff:** 15s → 30s → 60s between attempts. Step 6 is the most common timeout culprit — its timeout was doubled from 10m→20m in Session 58.
 
 **Note:** `play_type_scraper.py` was removed (Session 46) because `stats.nba.com` blocks datacenter IPs. Non-critical step failures log a warning and continue; critical step failures abort the pipeline.
 
@@ -115,14 +125,17 @@ Output is written to `logs/daily_stats.log`.
 **Purpose:** Scrape latest player prop lines and injury updates. Supports full scrapes and lightweight props-only refreshes.
 
 **Schedule:**
-- **Full scrape (`--live`):** 12 PM, 4 PM ET
-- **Props-only (`--live --props-only`):** 1, 2, 3, 4:30, 5, 5:30, 6, 6:30 PM ET
+- **Full scrape (`--live --parallel`):** 12 PM, 4 PM ET (props + injuries run concurrently)
+- **Props-only (`--live --props-only`):** Every 5 minutes, 11 AM – 11 PM ET (silent on success)
 - **Historical mode (no `--live`):** For backfills (uses historical API snapshots)
 
 ### Usage
 
 ```bash
-# Live full scrape (game lines + props + injuries + linker)
+# Live full scrape with parallel execution
+python src/orchestration/lines_job.py --live --parallel
+
+# Live full scrape (sequential, backward compatible)
 python src/orchestration/lines_job.py --live
 
 # Live props-only (fast — props + linker only)
@@ -131,11 +144,8 @@ python src/orchestration/lines_job.py --live --props-only
 # Historical scrape for specific date
 python src/orchestration/lines_job.py --date 2026-02-05
 
-# Skip injuries (faster)
-python src/orchestration/lines_job.py --live --skip-injuries
-
 # Dry run
-python src/orchestration/lines_job.py --live --props-only --dry-run
+python src/orchestration/lines_job.py --live --parallel --dry-run
 ```
 
 ### CLI Arguments
@@ -145,17 +155,25 @@ python src/orchestration/lines_job.py --live --props-only --dry-run
 | `--date YYYY-MM-DD` | Target date (defaults to today) |
 | `--live` | Use live API endpoints; writes props to `raw_player_props_combined` |
 | `--props-only` | Skip game lines and injuries (only props + linker) |
+| `--parallel` | Run props path and injury path concurrently (full mode only) |
 | `--dry-run` | Show what would be executed without running |
 | `--skip-injuries` | Skip injury scraping (faster execution) |
 | `--skip-linker` | Skip incremental linker (if already run today) |
 
 ### Pipeline Steps (Full Mode)
 
+When `--parallel` is set, Group A and Group B run concurrently:
+
+**Group A (props path — serial):**
 1. `daily_game_lines_scraper.py` - Fetch game lines from Odds API (skipped in `--props-only`)
 2. `daily_player_props_scraper.py --live --target-table raw_player_props_combined` - Fetch live player props
-3. `rapidapi_injury_backfill.py` - Fetch injury updates (skipped in `--props-only`)
-4. `link_injury_data.py` - Link injury player names to IDs (skipped in `--props-only`)
-5. `nba_linker_local.py incremental` - Link new props to player/game IDs
+3. `nba_linker_local.py incremental` - Link new props to player/game IDs
+
+**Group B (injury path — serial, concurrent with Group A):**
+4. `rapidapi_injury_backfill.py` - Fetch injury updates (skipped in `--props-only`)
+5. `link_injury_data.py` - Link injury player names to IDs (skipped in `--props-only`)
+
+Without `--parallel`, all steps run sequentially in order 1→2→4→5→3.
 
 ### Logs
 
@@ -169,7 +187,7 @@ Output is written to `logs/lines.log`.
 
 **Purpose:** Lightweight edge recalculation using stored MC samples and fresh prop lines. Does NOT re-run inference — no model loading, no feature engineering, no MC sampling.
 
-**Schedule:** 2 minutes after each props-only scrape (8 times daily)
+**Schedule:** Every 5 minutes (+2 min offset from props scrape), 11 AM – 11 PM ET (~156 runs/day, silent on success)
 
 ### Usage
 
@@ -195,25 +213,32 @@ python src/orchestration/edge_refresh_job.py --stats pts reb
 | `--dry-run` | Compute edges but don't upsert to database |
 | `--stats STAT [STAT ...]` | Stats to refresh (defaults to `pts reb ast`) |
 | `--skip-discord` | Skip Discord alert |
+| `--skip-paper` | Skip paper trading step (bet selection + placement). Used by 5-min cron runs to avoid timeouts |
 
 ### Pipeline Steps
 
 1. Load stored MC samples via `PredictionStore.get_all_samples_for_date()` — returns `dict[(player_id, game_id, stat) -> np.ndarray]`
 2. Load stored predictions from `daily_predictions` for target date
 3. Get unique game_ids from predictions
-4. Fetch fresh prop lines from `raw_player_props_combined` (sharpest book per player/game/market)
+4. Fetch fresh prop lines from `raw_player_props_combined` (sharpest book per player/game/market, 24h snapshot_time cutoff)
 5. Recalculate over/under probabilities from MC samples (empirical CDF)
 6. Compute implied probabilities from odds (multiplicative devigging)
 7. Recalculate raw edges (model prob - implied prob)
 8. Recalculate Black-Litterman blended probabilities and recommendations
 9. Upsert updated predictions to `daily_predictions`
 10. Export CSV backup
+11. **Resolve pending paper bets** from previous days (`exclude_today=True`) — prevents same-day false resolution
+12. **Place/update paper bets** for today's recommended predictions — skips games already in progress (checks `commence_time`)
 
 ### Key Design Decisions
 
 - **Self-contained:** Does NOT instantiate `DailyPredictionRunner` or load model/feature pipeline. Only uses `PredictionStore`, `BlackLittermanBlender`, and raw SQL queries.
-- **Graceful exit:** If no MC samples exist for the target date (inference hasn't run yet), exits with a warning and code 0.
+- **Graceful exit:** If no MC samples exist for the target date (inference hasn't run yet), exits with info-level "NO-OP" message and code 0 (expected before first inference of the day).
+- **MC sample staleness (2026-03-02):** If MC samples are >6 hours old, logs a warning and sends a Discord alert so operators know edge calculations use stale inference data.
 - **Feature preservation:** Loads existing predictions and only updates line/edge/BL columns. All `feat_*` columns and quantile predictions are preserved.
+- **Line preservation (2026-03-05 fix):** When fresh lines aren't available for a prediction (props no longer on the API), old line/odds/bookmaker values are preserved via `fillna()` fallback instead of being nulled out by the LEFT merge.
+- **Skip paper trading (2026-03-05):** `--skip-paper` flag skips paper bet selection and placement. The 5-minute silent cron runs use this to avoid 45-minute timeouts caused by loading MC samples and running BL blending for every prediction during game hours.
+- **Line selection (2026-03-01 fix):** `fetch_fresh_lines()` partitions by `(player_id, game_id, market_key, bookmaker, line, outcome_label)` — including `line` in the partition ensures alt lines from the same bookmaker are separate rows. A `HAVING` clause requires both Over and Under odds. The sharpest-book selection (lowest booksum) naturally picks primary lines with matched odds. Previously, `MAX(line)` conflated alt lines, causing mismatched odds and stale line selection.
 
 ### Logs
 
@@ -258,6 +283,7 @@ python src/orchestration/inference_job.py --stats pts reb
 | `--stats STAT [STAT ...]` | Stats to predict (defaults to `pts reb ast`) |
 | `--skip-bets` | Skip automatic paper bet placement |
 | `--skip-discord` | Skip sending Discord alert |
+| `--stale-warning` | Flag that upstream daily stats may be stale (set by scheduler dependency check) |
 
 ### Pipeline Steps
 
@@ -265,7 +291,7 @@ python src/orchestration/inference_job.py --stats pts reb
 2. Initialize FeatureStore and MonteCarloPredictor (10,000 samples)
 3. Load Gaussian copula params for correlated sampling
 4. Load combined calibration offsets (if `combined_calibration_offsets.json` exists — currently not deployed)
-5. Check upstream data freshness (warns if rolling averages >2 days stale)
+5. Check upstream data freshness — warns if latest `game_date` in `player_average_game_stats` is before yesterday (changed from >2 days threshold in Session 58). Sets `data_stale` flag but **does not hard-fail** — stale data is better than zero predictions.
 6. Run `DailyPredictionRunner.run_for_date()`
    - **Parallel feature building** (8 workers, ~5s) — queries feature store concurrently
    - **Optimized prop lines query** (~0.2s) — searches both 8/10-digit game_id formats
@@ -399,6 +425,49 @@ For self-hosted server deployment, use the template at `cron/gameflow_crontab.tx
 ```
 
 **Note:** NBA API (`nba_api`) may be blocked from datacenter IPs. Consider local Windows deployment or residential proxy for cloud servers.
+
+---
+
+## Pipeline Resilience (Session 58)
+
+### Job Status Tracking
+
+The scheduler maintains an in-memory `JOB_STATUS` dict that tracks every job's status, end time, and duration. After each `run_job()` call, status is recorded both in-memory (for fast dependency checks) and to the `job_executions` Supabase table (for persistent history and debugging).
+
+```sql
+-- Query recent job executions
+SELECT job_name, status, started_at, duration_seconds, error_message
+FROM job_executions
+ORDER BY started_at DESC
+LIMIT 20;
+```
+
+### Dependency Gate
+
+Before running inference, the scheduler calls `check_dependency("daily_stats_job.py", max_age_hours=8)`. If the daily stats job hasn't succeeded in the last 8 hours:
+
+1. Logs a WARNING with the specific upstream failure
+2. Sends a Discord alert: "Daily stats job has not succeeded today"
+3. **Still runs inference** with `--stale-warning` flag
+4. Inference runs normally but flags predictions as potentially stale
+
+### Automatic Retry
+
+If the 9 AM daily stats job fails, a retry fires automatically at 9:30 AM ET. The retry checks `JOB_STATUS` — if the 9 AM run already succeeded, it's a no-op.
+
+### Failure Cascade (What Happens When 9 AM Fails)
+
+```
+9:00 AM  - daily_stats_job FAILS (timeout, network error, etc.)
+9:30 AM  - daily_stats_retry fires, re-runs daily_stats_job
+           ├─ If retry SUCCEEDS: pipeline continues normally
+           └─ If retry also FAILS:
+12:15 PM - inference checks dependency → STALE
+           ├─ Sends Discord alert: "stale rolling averages"
+           ├─ Passes --stale-warning to inference_job
+           └─ Inference RUNS with slightly stale data (L5 has 4/5 overlap)
+           All downstream jobs continue normally
+```
 
 ---
 

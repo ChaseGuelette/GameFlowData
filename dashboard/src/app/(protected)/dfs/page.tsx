@@ -14,6 +14,9 @@ import { TEAM_ABBREV } from '@/lib/constants'
 import { getToday, formatDate } from '@/lib/utils'
 import { estimateOverProb, estimateUnderProb, calcAllSlipEvs, devig, computeVig } from '@/lib/dfs-utils'
 
+// Normalize game_id to 10-digit zero-padded format to match RPC LPAD output
+const padGameId = (id: string) => id.padStart(10, '0')
+
 export default function DfsPage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [dfsLines, setDfsLines] = useState<DfsLine[]>([])
@@ -28,6 +31,7 @@ export default function DfsPage() {
   const [slipType, setSlipType] = useState<string>('pp_6_flex')
   const [statFilter, setStatFilter] = useState<'all' | StatType>('all')
   const [evOnly, setEvOnly] = useState(true)
+  const [showLive, setShowLive] = useState(false)
 
   // Fetch available dates
   useEffect(() => {
@@ -53,7 +57,8 @@ export default function DfsPage() {
     setLoading(true)
     const supabase = createClient()
 
-    const [predictionsRes, dfsRes, sbRes] = await Promise.all([
+    // Step 1: Fetch predictions and DFS lines in parallel
+    const [predictionsRes, dfsRes] = await Promise.all([
       supabase
         .from('daily_predictions')
         .select('*')
@@ -62,8 +67,6 @@ export default function DfsPage() {
         .limit(3000),
       supabase
         .rpc('get_dfs_lines', { target_date: date }),
-      supabase
-        .rpc('get_sportsbook_lines', { target_date: date }),
     ])
 
     if (!predictionsRes.error && predictionsRes.data) {
@@ -89,14 +92,35 @@ export default function DfsPage() {
       setPredictions([])
     }
 
+    let dfsData: DfsLine[] = []
     if (!dfsRes.error && dfsRes.data) {
-      setDfsLines(dfsRes.data)
+      dfsData = dfsRes.data
+      setDfsLines(dfsData)
     } else {
       setDfsLines([])
     }
 
-    if (!sbRes.error && sbRes.data) {
-      setSportsbookLines(sbRes.data)
+    // Step 2: Fetch sportsbook lines per-game in parallel (avoids timeout on large table)
+    const gameIds = [...new Set(dfsData.map(dl => dl.game_id))]
+    if (gameIds.length > 0) {
+      // Batch game_ids into groups of 3 to balance parallelism vs query size
+      const batchSize = 3
+      const batches: string[][] = []
+      for (let i = 0; i < gameIds.length; i += batchSize) {
+        batches.push(gameIds.slice(i, i + batchSize))
+      }
+      const sbResults = await Promise.all(
+        batches.map(batch =>
+          supabase.rpc('get_sportsbook_lines_by_games', { p_game_ids: batch })
+        )
+      )
+      const allSbLines: SportsbookLine[] = []
+      for (const res of sbResults) {
+        if (!res.error && res.data) {
+          allSbLines.push(...res.data)
+        }
+      }
+      setSportsbookLines(allSbLines)
     } else {
       setSportsbookLines([])
     }
@@ -114,14 +138,14 @@ export default function DfsPage() {
 
     const predMap = new Map<string, Prediction>()
     for (const p of predictions) {
-      predMap.set(`${p.player_id}-${p.game_id}-${p.stat}`, p)
+      predMap.set(`${p.player_id}-${padGameId(p.game_id)}-${p.stat}`, p)
     }
 
     const dfsGrouped = new Map<string, DfsLine[]>()
     for (const dl of dfsLines) {
       const stat = MARKET_TO_STAT[dl.market_key]
       if (!stat) continue
-      const key = `${dl.player_id}-${dl.game_id}-${stat}`
+      const key = `${dl.player_id}-${padGameId(dl.game_id)}-${stat}`
       if (!dfsGrouped.has(key)) dfsGrouped.set(key, [])
       dfsGrouped.get(key)!.push(dl)
     }
@@ -194,7 +218,7 @@ export default function DfsPage() {
     for (const sb of sportsbookLines) {
       const stat = MARKET_TO_STAT[sb.market_key]
       if (!stat) continue
-      const key = `${sb.player_id}-${sb.game_id}-${stat}`
+      const key = `${sb.player_id}-${padGameId(sb.game_id)}-${stat}`
       if (!idx.has(key)) idx.set(key, [])
       idx.get(key)!.push(sb)
     }
@@ -205,17 +229,17 @@ export default function DfsPage() {
   const marketComparisons = useMemo(() => {
     if (dfsLines.length === 0) return new Map<string, { comp: DfsComparison; platforms: MarketEdgePlatformLine[] }>()
 
-    // We need predictions for player info
+    // Build prediction lookup (may be empty before inference)
     const predMap = new Map<string, Prediction>()
     for (const p of predictions) {
-      predMap.set(`${p.player_id}-${p.game_id}-${p.stat}`, p)
+      predMap.set(`${p.player_id}-${padGameId(p.game_id)}-${p.stat}`, p)
     }
 
     const dfsGrouped = new Map<string, DfsLine[]>()
     for (const dl of dfsLines) {
       const stat = MARKET_TO_STAT[dl.market_key]
       if (!stat) continue
-      const key = `${dl.player_id}-${dl.game_id}-${stat}`
+      const key = `${dl.player_id}-${padGameId(dl.game_id)}-${stat}`
       if (!dfsGrouped.has(key)) dfsGrouped.set(key, [])
       dfsGrouped.get(key)!.push(dl)
     }
@@ -224,7 +248,8 @@ export default function DfsPage() {
 
     for (const [key, dfsLinesForPlayer] of dfsGrouped) {
       const pred = predMap.get(key)
-      if (!pred) continue
+      const firstLine = dfsLinesForPlayer[0]
+      const stat = MARKET_TO_STAT[firstLine.market_key] as StatType
 
       // Get sportsbook lines for this player/stat
       const sbLines = sbIndex.get(key) || []
@@ -299,21 +324,21 @@ export default function DfsPage() {
       })
 
       const comp: DfsComparison = {
-        player_id: pred.player_id,
-        player_name: pred.player_name || `Player ${pred.player_id}`,
-        game_id: pred.game_id,
-        stat: pred.stat,
-        team_abbrev: pred.team_abbrev || 'UNK',
-        opponent_abbrev: pred.opponent_abbrev || 'UNK',
-        game_time: pred.game_time,
-        sharp_line: pred.prop_line,
-        q10: pred.q10,
-        q25: pred.q25,
-        q50: pred.q50,
-        q75: pred.q75,
-        q90: pred.q90,
-        model_prob_over: pred.model_prob_over,
-        model_prob_under: pred.model_prob_under,
+        player_id: pred?.player_id ?? firstLine.player_id,
+        player_name: pred?.player_name || firstLine.player_name || `Player ${firstLine.player_id}`,
+        game_id: pred?.game_id ?? firstLine.game_id,
+        stat: pred?.stat ?? stat,
+        team_abbrev: pred?.team_abbrev || 'UNK',
+        opponent_abbrev: pred?.opponent_abbrev || 'UNK',
+        game_time: pred?.game_time || firstLine.game_time,
+        sharp_line: pred?.prop_line ?? 0,
+        q10: pred?.q10 ?? 0,
+        q25: pred?.q25 ?? 0,
+        q50: pred?.q50 ?? 0,
+        q75: pred?.q75 ?? 0,
+        q90: pred?.q90 ?? 0,
+        model_prob_over: pred?.model_prob_over ?? 0,
+        model_prob_under: pred?.model_prob_under ?? 0,
         dfs_lines: [],
       }
 
@@ -327,9 +352,12 @@ export default function DfsPage() {
   const filteredRows = useMemo<DfsRow[]>(() => {
     const breakEven = DFS_SLIP_TYPES[slipType]?.breakEven ?? 0.55
 
+    const now = new Date()
+
     if (edgeMode === 'model') {
       const rows: ModelDfsRow[] = []
       for (const comp of comparisons) {
+        if (!showLive && comp.game_time && new Date(comp.game_time) <= now) continue
         if (statFilter !== 'all' && comp.stat !== statFilter) continue
         for (const pl of comp.dfs_lines) {
           if (platformFilter !== 'all' && pl.bookmaker !== platformFilter) continue
@@ -345,6 +373,7 @@ export default function DfsPage() {
     if (edgeMode === 'market') {
       const rows: MarketDfsRow[] = []
       for (const [, { comp, platforms }] of marketComparisons) {
+        if (!showLive && comp.game_time && new Date(comp.game_time) <= now) continue
         if (statFilter !== 'all' && comp.stat !== statFilter) continue
         for (const pl of platforms) {
           if (platformFilter !== 'all' && pl.bookmaker !== platformFilter) continue
@@ -367,13 +396,14 @@ export default function DfsPage() {
     const rows: CombinedDfsRow[] = []
 
     for (const comp of comparisons) {
+      if (!showLive && comp.game_time && new Date(comp.game_time) <= now) continue
       if (statFilter !== 'all' && comp.stat !== statFilter) continue
 
       for (const modelPl of comp.dfs_lines) {
         if (platformFilter !== 'all' && modelPl.bookmaker !== platformFilter) continue
 
         // Find matching market data
-        const key = `${comp.player_id}-${comp.game_id}-${comp.stat}`
+        const key = `${comp.player_id}-${padGameId(comp.game_id)}-${comp.stat}`
         const marketData = marketComparisons.get(key)
         if (!marketData) continue
 
@@ -423,7 +453,7 @@ export default function DfsPage() {
 
     rows.sort((a, b) => (b.platform.ev_by_slip[slipType] ?? 0) - (a.platform.ev_by_slip[slipType] ?? 0))
     return rows
-  }, [comparisons, marketComparisons, platformFilter, statFilter, slipType, evOnly, edgeMode])
+  }, [comparisons, marketComparisons, platformFilter, statFilter, slipType, evOnly, edgeMode, showLive])
 
   // Summary stats
   const summaryStats = useMemo(() => {
@@ -438,6 +468,21 @@ export default function DfsPage() {
       bestPick: filteredRows[0],
     }
   }, [filteredRows, slipType])
+
+  // Detect when Pre-Game filter is hiding all results (all games have started)
+  const allGamesStarted = useMemo(() => {
+    if (showLive || loading) return false
+    const now = new Date()
+    const hasData = edgeMode === 'model'
+      ? comparisons.length > 0
+      : marketComparisons.size > 0
+    if (!hasData) return false
+    // Check if every comparison has a past game_time
+    if (edgeMode === 'model') {
+      return comparisons.every(c => c.game_time && new Date(c.game_time) <= now)
+    }
+    return [...marketComparisons.values()].every(({ comp }) => comp.game_time && new Date(comp.game_time) <= now)
+  }, [showLive, loading, edgeMode, comparisons, marketComparisons])
 
   const modeSubtitles: Record<EdgeMode, string> = {
     model: 'Model probability vs DFS break-even',
@@ -485,6 +530,8 @@ export default function DfsPage() {
           onStatChange={setStatFilter}
           evOnly={evOnly}
           onEvOnlyChange={setEvOnly}
+          showLive={showLive}
+          onShowLiveChange={setShowLive}
         />
       </div>
 
@@ -522,6 +569,17 @@ export default function DfsPage() {
           <div className="flex flex-col items-center gap-3">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
             <div className="text-slate-400">Loading DFS lines...</div>
+          </div>
+        </div>
+      ) : allGamesStarted ? (
+        <div className="bg-slate-800/50 rounded-lg border border-slate-700">
+          <div className="flex items-center justify-center py-16">
+            <div className="text-center">
+              <p className="text-slate-400 text-lg">All games have started</p>
+              <p className="text-slate-500 text-sm mt-2">
+                Click <button onClick={() => setShowLive(true)} className="text-orange-400 hover:text-orange-300 font-medium">+ Live</button> to view in-progress and completed game lines
+              </p>
+            </div>
           </div>
         </div>
       ) : (

@@ -89,18 +89,44 @@ export function americanToImplied(american: number): number {
 }
 
 // Format game time for display (e.g., "7:30 PM")
-export function formatGameTime(gameTime: string | undefined): string {
-  if (!gameTime) return ''
+export function formatGameTime(gameTime: string | undefined | null): string {
+  if (!gameTime) return 'TBD'
   try {
     const date = new Date(gameTime)
-    if (isNaN(date.getTime())) return ''
+    if (isNaN(date.getTime())) return 'TBD'
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
     })
   } catch {
-    return ''
+    return 'TBD'
+  }
+}
+
+// Game status based on start time (~3 hour game duration)
+const GAME_DURATION_MS = 3 * 60 * 60 * 1000
+
+export function isGameLive(gameTime: string | undefined | null): boolean {
+  if (!gameTime) return false
+  try {
+    const start = new Date(gameTime)
+    if (isNaN(start.getTime())) return false
+    const now = Date.now()
+    return start.getTime() <= now && now < start.getTime() + GAME_DURATION_MS
+  } catch {
+    return false
+  }
+}
+
+export function isGameDone(gameTime: string | undefined | null): boolean {
+  if (!gameTime) return false
+  try {
+    const start = new Date(gameTime)
+    if (isNaN(start.getTime())) return false
+    return Date.now() >= start.getTime() + GAME_DURATION_MS
+  } catch {
+    return false
   }
 }
 

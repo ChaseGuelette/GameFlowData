@@ -11,10 +11,22 @@ import { formatProb } from '@/lib/utils'
 import { generateInsights, type Insight } from '@/lib/insights'
 import { getAllowedBookmakers } from '@/lib/sportsbook-availability'
 import { estimateUnderProb, americanToImpliedProb, formatBookmaker } from '@/lib/dfs-utils'
+import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
+
+export interface TakeBetData {
+  book: string
+  odds: number
+  line: number
+  stake: number
+  modelProb: number
+  edge: number
+  direction: 'over' | 'under'
+}
 
 interface AnalysisModalProps {
   prediction: Prediction
   onClose: () => void
+  onTakeBet?: (prediction: Prediction, data: TakeBetData) => void
 }
 
 // Map stat type to column name in player_game_stats
@@ -30,6 +42,9 @@ const STAT_TO_MARKET: Record<StatType, string> = {
   reb: 'player_rebounds',
   ast: 'player_assists',
 }
+
+// DFS platforms to exclude from main dashboard sportsbook lines
+const DFS_BOOKMAKERS = ['prizepicks', 'underdog', 'pick6', 'betr_us_dfs']
 
 // Format odds for display
 const formatOdds = (odds: number): string => {
@@ -60,74 +75,51 @@ const KELLY_OPTIONS = [
   { value: 1.0, label: 'Full Kelly (Max Risk)' },
 ]
 
-export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
+export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalProps) {
   const [history, setHistory] = useState<PlayerGameStats[]>([])
   const [bookmakerLines, setBookmakerLines] = useState<BookmakerLine[]>([])
   const [loading, setLoading] = useState(true)
   const [linesLoading, setLinesLoading] = useState(true)
 
-  // Read user's state filter (set on dashboard page, read-only here)
-  const [userState] = useState<string>(() => {
-    if (typeof window === 'undefined') return ''
-    return localStorage.getItem('user_state') || ''
-  })
+  // Cross-device synced preferences
+  const { prefs, updatePref } = useUserPreferences()
+  const userState = prefs.userState
+  const bankroll = prefs.bankroll
+  const kellyFraction = prefs.kellyFraction
+  const useCustomKelly = prefs.useCustomKelly
 
-  // Bankroll and Kelly settings (persisted to localStorage) - use lazy initialization
-  const [bankroll, setBankroll] = useState<number>(() => {
-    if (typeof window === 'undefined') return 1000
-    const saved = localStorage.getItem('betting_bankroll')
-    return saved ? parseFloat(saved) : 1000
-  })
-  const [bankrollInput, setBankrollInput] = useState<string>(() => {
-    if (typeof window === 'undefined') return '1000'
-    const saved = localStorage.getItem('betting_bankroll')
-    return saved || '1000'
-  })
-  const [kellyFraction, setKellyFraction] = useState<number>(() => {
-    if (typeof window === 'undefined') return 0.25
-    const saved = localStorage.getItem('betting_kelly_fraction')
-    return saved ? parseFloat(saved) : 0.25
-  })
-  const [useCustomKelly, setUseCustomKelly] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return localStorage.getItem('betting_use_custom_kelly') === 'true'
-  })
-  const [customKellyInput, setCustomKellyInput] = useState<string>(() => {
-    if (typeof window === 'undefined') return '0.25'
-    const saved = localStorage.getItem('betting_kelly_fraction')
-    return saved || '0.25'
-  })
+  // Local input state for controlled text fields
+  const [bankrollInput, setBankrollInput] = useState<string>(bankroll.toString())
+  const [customKellyInput, setCustomKellyInput] = useState<string>(kellyFraction.toString())
 
-  // Save bankroll to localStorage when changed
+  // Sync input fields when prefs load from DB
+  useEffect(() => {
+    setBankrollInput(prefs.bankroll.toString())
+    setCustomKellyInput(prefs.kellyFraction.toString())
+  }, [prefs.bankroll, prefs.kellyFraction])
+
   const handleBankrollChange = (value: string) => {
     setBankrollInput(value)
     const num = parseFloat(value) || 0
-    setBankroll(num)
-    localStorage.setItem('betting_bankroll', num.toString())
+    updatePref('bankroll', num)
   }
 
-  // Save Kelly fraction to localStorage when changed (preset)
   const handleKellyChange = (value: string) => {
     const num = parseFloat(value)
-    setKellyFraction(num)
     setCustomKellyInput(num.toString())
-    localStorage.setItem('betting_kelly_fraction', num.toString())
+    updatePref('kellyFraction', num)
   }
 
-  // Save custom Kelly fraction
   const handleCustomKellyChange = (value: string) => {
     setCustomKellyInput(value)
     const num = parseFloat(value)
     if (!isNaN(num) && num >= 0 && num <= 1) {
-      setKellyFraction(num)
-      localStorage.setItem('betting_kelly_fraction', num.toString())
+      updatePref('kellyFraction', num)
     }
   }
 
-  // Toggle custom Kelly mode
   const handleKellyToggle = (useCustom: boolean) => {
-    setUseCustomKelly(useCustom)
-    localStorage.setItem('betting_use_custom_kelly', useCustom.toString())
+    updatePref('useCustomKelly', useCustom)
   }
 
   useEffect(() => {
@@ -137,6 +129,7 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
         .from('player_game_stats')
         .select('game_date, pts, reb, ast, fg3m, min')
         .eq('player_id', prediction.player_id)
+        .gt('min', 0)
         .order('game_date', { ascending: false })
         .limit(5)
 
@@ -174,6 +167,7 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
         .eq('player_id', prediction.player_id)
         .eq('game_id', prediction.game_id)
         .eq('market_key', marketKey)
+        .not('bookmaker', 'in', `(${DFS_BOOKMAKERS.join(',')})`)
         .order('bookmaker')
 
       if (error) {
@@ -286,6 +280,10 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
       .sort((a, b) => b.lineEdge - a.lineEdge)
   }, [bookmakerLines, prediction.q10, prediction.q25, prediction.q50, prediction.q75, prediction.q90, isOverBet, userState])
 
+  // Take Bet state
+  const [customStake, setCustomStake] = useState<string>('')
+  const [betPlaced, setBetPlaced] = useState(false)
+
   // Selected line index for bet sizing (defaults to best edge = index 0)
   const [selectedLineIndex, setSelectedLineIndex] = useState<number>(0)
 
@@ -298,6 +296,35 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
   const selectedLine = processedLines.length > 0 && processedLines[selectedLineIndex]?.lineEdge > 0
     ? processedLines[selectedLineIndex]
     : null
+
+  // Lift sizing computation to useMemo for reuse in Take Bet
+  const sizingData = useMemo(() => {
+    const sizingOdds = selectedLine
+      ? selectedLine.relevantOdds
+      : (isOverBet ? prediction.best_over_odds : prediction.best_under_odds) || -110
+    const sizingModelProb = selectedLine
+      ? selectedLine.modelProb
+      : probability
+    const sizingBookmaker = selectedLine ? selectedLine.bookmaker : null
+    const sizingLineVal = selectedLine ? selectedLine.line : prediction.prop_line
+
+    const kellyPct = calculateKelly(sizingModelProb, sizingOdds, kellyFraction)
+    const recommendedBet = bankroll * kellyPct
+
+    return { sizingOdds, sizingModelProb, sizingBookmaker, sizingLineVal, kellyPct, recommendedBet }
+  }, [selectedLine, isOverBet, prediction.best_over_odds, prediction.best_under_odds, prediction.prop_line, probability, kellyFraction, bankroll])
+
+  // Sync customStake from recommended bet when sizing changes
+  useEffect(() => {
+    if (!betPlaced) {
+      setCustomStake(sizingData.recommendedBet > 0 ? sizingData.recommendedBet.toFixed(2) : '')
+    }
+  }, [sizingData.recommendedBet, betPlaced])
+
+  // Reset betPlaced when prediction changes
+  useEffect(() => {
+    setBetPlaced(false)
+  }, [prediction.id])
 
   // Handle escape key
   useEffect(() => {
@@ -586,38 +613,21 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
           </div>
 
           {/* Recommended bet size — uses selected sportsbook line when available */}
-          {(() => {
-            // Use the selected line's odds and model probability, falling back to prediction-level data
-            const sizingOdds = selectedLine
-              ? selectedLine.relevantOdds
-              : (isOverBet ? prediction.best_over_odds : prediction.best_under_odds) || -110
-            const sizingModelProb = selectedLine
-              ? selectedLine.modelProb
-              : probability
-            const sizingBookmaker = selectedLine ? formatBookmaker(selectedLine.bookmaker) : null
-            const sizingLineVal = selectedLine ? selectedLine.line : prediction.prop_line
-
-            const kellyPct = calculateKelly(sizingModelProb, sizingOdds, kellyFraction)
-            const recommendedBet = bankroll * kellyPct
-
-            return (
-              <div className="bg-slate-700/50 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-slate-400 text-sm">Recommended Bet</span>
-                  <span className="text-slate-400 text-sm">
-                    {(kellyPct * 100).toFixed(2)}% of bankroll
-                  </span>
-                </div>
-                <div className="text-2xl font-bold text-green-400">
-                  ${recommendedBet.toFixed(2)}
-                </div>
-                <div className="text-xs text-slate-500 mt-2">
-                  Based on {(sizingModelProb * 100).toFixed(1)}% model prob at {formatOdds(sizingOdds)} odds
-                  {sizingBookmaker && ` (${sizingBookmaker} ${direction} ${sizingLineVal})`}
-                </div>
-              </div>
-            )
-          })()}
+          <div className="bg-slate-700/50 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-slate-400 text-sm">Recommended Bet</span>
+              <span className="text-slate-400 text-sm">
+                {(sizingData.kellyPct * 100).toFixed(2)}% of bankroll
+              </span>
+            </div>
+            <div className="text-2xl font-bold text-green-400">
+              ${sizingData.recommendedBet.toFixed(2)}
+            </div>
+            <div className="text-xs text-slate-500 mt-2">
+              Based on {(sizingData.sizingModelProb * 100).toFixed(1)}% model prob at {formatOdds(sizingData.sizingOdds)} odds
+              {sizingData.sizingBookmaker && ` (${formatBookmaker(sizingData.sizingBookmaker)} ${direction} ${sizingData.sizingLineVal})`}
+            </div>
+          </div>
         </div>
 
         {/* Quantile Summary */}
@@ -660,14 +670,55 @@ export function AnalysisModal({ prediction, onClose }: AnalysisModalProps) {
           )}
         </div>
 
-        {/* Close button */}
-        <div className="p-6 pt-0">
+        {/* Footer: Close + Take Bet */}
+        <div className="p-6 pt-0 flex items-center gap-3">
           <button
             onClick={onClose}
-            className="w-full py-3 px-4 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-md font-medium transition-colors"
+            className="py-3 px-4 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-md font-medium transition-colors"
           >
             Close
           </button>
+          {onTakeBet && selectedLine && (
+            <div className="flex-1 flex items-center gap-2 justify-end">
+              <span className="text-slate-400 text-sm">$</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={customStake}
+                onChange={(e) => setCustomStake(e.target.value)}
+                onFocus={(e) => e.target.select()}
+                className="w-24 bg-slate-700 border border-slate-600 rounded px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-green-500"
+                placeholder="Stake"
+                disabled={betPlaced}
+              />
+              <button
+                onClick={() => {
+                  const stake = parseFloat(customStake) || 0
+                  if (stake <= 0) return
+                  onTakeBet(prediction, {
+                    book: selectedLine.bookmaker,
+                    odds: selectedLine.relevantOdds,
+                    line: selectedLine.line,
+                    stake,
+                    modelProb: selectedLine.modelProb,
+                    edge: selectedLine.lineEdge,
+                    direction: isOverBet ? 'over' : 'under',
+                  })
+                  setBetPlaced(true)
+                  // Auto-close modal after brief delay so user sees confirmation
+                  setTimeout(() => onClose(), 1500)
+                }}
+                disabled={betPlaced || !customStake || parseFloat(customStake) <= 0}
+                className={`py-2 px-4 rounded-md font-medium text-sm transition-colors ${
+                  betPlaced
+                    ? 'bg-green-700 text-green-200 cursor-default'
+                    : 'bg-green-600 hover:bg-green-500 text-white disabled:bg-slate-700 disabled:text-slate-500'
+                }`}
+              >
+                {betPlaced ? 'Bet Taken!' : 'Take Bet'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
