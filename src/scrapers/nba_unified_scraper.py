@@ -30,26 +30,24 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
-from dotenv import load_dotenv
-
-# Add project root to path
+# Path setup and env loading must precede src.* imports
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-# Load environment variables
+from dotenv import load_dotenv  # noqa: E402
+
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
-# NBA API imports
-from nba_api.stats.endpoints import (
+import pandas as pd  # noqa: E402
+from nba_api.stats.endpoints import (  # noqa: E402
     boxscoreadvancedv3,
     boxscoretraditionalv3,
     leaguegamefinder,
 )
-from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
-from sqlalchemy import inspect, text
+from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout  # noqa: E402
+from sqlalchemy import inspect, text  # noqa: E402
 
-from src.db.client import get_engine
-from src.scrapers.nba_cdn_scraper import scrape_games_cdn
+from src.db.client import get_engine  # noqa: E402
+from src.scrapers.nba_cdn_scraper import scrape_games_cdn  # noqa: E402
 
 # =============================================================================
 # Configuration
