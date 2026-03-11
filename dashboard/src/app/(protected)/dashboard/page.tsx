@@ -236,6 +236,39 @@ export default function DashboardPage() {
         }
       }
 
+      // Secondary fallback: if any predictions still have missing game_time,
+      // query raw_player_props_combined for commence_time (props scrape runs
+      // every 5-10 min and includes commence_time even when game_lines_staging doesn't)
+      const stillMissing = mappedPredictions.filter(p => !p.game_time && p.game_id)
+      if (stillMissing.length > 0) {
+        try {
+          const missingGameIds = [...new Set(stillMissing.map(p => p.game_id))]
+          const { data: propsTimeData } = await supabase
+            .from('raw_player_props_combined')
+            .select('game_id, commence_time')
+            .in('game_id', missingGameIds)
+            .not('commence_time', 'is', null)
+            .limit(1000)
+
+          if (propsTimeData && propsTimeData.length > 0) {
+            const propsTimeMap = new Map<string, string>()
+            for (const row of propsTimeData) {
+              if (row.commence_time && row.game_id && !propsTimeMap.has(row.game_id)) {
+                propsTimeMap.set(row.game_id, row.commence_time)
+              }
+            }
+            for (const p of mappedPredictions) {
+              if (!p.game_time && p.game_id) {
+                const ct = propsTimeMap.get(p.game_id)
+                if (ct) p.game_time = ct
+              }
+            }
+          }
+        } catch {
+          // Non-fatal: props table may not have times or RLS may restrict access
+        }
+      }
+
       setPredictions(mappedPredictions)
       if (mappedPredictions.length === 0) {
         // Fallback: fetch today's games from NBA CDN schedule

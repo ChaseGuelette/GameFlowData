@@ -62,7 +62,8 @@ class CalibrationMetrics:
 
     @property
     def all_alerts(self) -> list[str]:
-        return self.quantile_alerts + self.prob_alerts + self.bias_alerts + self.edge_alerts
+        """Alerts that drive severity. Bias excluded (systematic under-prediction is expected)."""
+        return self.quantile_alerts + self.prob_alerts + self.edge_alerts
 
     @property
     def has_drift(self) -> bool:

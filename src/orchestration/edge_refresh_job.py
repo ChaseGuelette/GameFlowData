@@ -457,6 +457,106 @@ def filter_out_players(
     return filtered, filtered_samples
 
 
+def backfill_game_times(engine, predictions: pd.DataFrame, target_date: date) -> pd.DataFrame:
+    """Backfill NULL game_time values from raw_game_lines_staging.
+
+    The inference job enriches game_time once, but if odds data hasn't been
+    scraped yet at that point, predictions get permanent NULL game_time.
+    This function re-checks the staging table on each edge refresh so that
+    game_time is populated as soon as odds data becomes available.
+
+    Non-fatal: returns predictions unchanged on error.
+    """
+    if "game_time" not in predictions.columns:
+        return predictions
+
+    missing_mask = predictions["game_time"].isna()
+    n_missing = missing_mask.sum()
+    if n_missing == 0:
+        return predictions
+
+    logger.info(f"Found {n_missing} predictions with missing game_time — attempting backfill")
+
+    try:
+        from datetime import timedelta
+
+        utc_start = target_date
+        utc_end = target_date + timedelta(days=2)
+
+        query = text("""
+            WITH game_times AS (
+                SELECT DISTINCT ON (home_team, away_team)
+                    home_team,
+                    away_team,
+                    commence_time
+                FROM raw_game_lines_staging
+                WHERE commence_time >= CAST(:utc_start AS date)
+                  AND commence_time < CAST(:utc_end AS date)
+                  AND CAST(commence_time AT TIME ZONE 'US/Eastern' AS date) = CAST(:target_date AS date)
+                ORDER BY home_team, away_team, snapshot_time DESC
+            )
+            SELECT
+                t_home.team_id as home_team_id,
+                t_away.team_id as away_team_id,
+                gt.commence_time
+            FROM game_times gt
+            JOIN teams t_home ON t_home.team_name = gt.home_team
+                OR (t_home.team_name = 'LA Clippers' AND gt.home_team = 'Los Angeles Clippers')
+            JOIN teams t_away ON t_away.team_name = gt.away_team
+                OR (t_away.team_name = 'LA Clippers' AND gt.away_team = 'Los Angeles Clippers')
+        """)
+
+        with engine.connect() as conn:
+            result = conn.execute(query, {
+                "utc_start": utc_start,
+                "utc_end": utc_end,
+                "target_date": target_date,
+            })
+            # Build lookup: (home_team_id, away_team_id) → commence_time
+            time_lookup = {(row[0], row[1]): row[2] for row in result}
+
+        if not time_lookup:
+            logger.info("No game times found in staging table for backfill")
+            return predictions
+
+        # Map game_id → (team_id, opponent_id) from predictions themselves.
+        # Each prediction has team_id and opponent_id; we need to figure out
+        # which is home/away. Try both orderings against the lookup.
+        game_team_map: dict[str, tuple[int, int]] = {}
+        for _, row in predictions[["game_id", "team_id", "opponent_id"]].drop_duplicates("game_id").iterrows():
+            game_team_map[row["game_id"]] = (row["team_id"], row["opponent_id"])
+
+        game_time_map: dict[str, object] = {}
+        for game_id, (tid, oid) in game_team_map.items():
+            # Try team as home, opponent as away
+            ct = time_lookup.get((tid, oid))
+            if ct is None:
+                # Try opponent as home, team as away
+                ct = time_lookup.get((oid, tid))
+            if ct is not None:
+                game_time_map[game_id] = ct
+
+        if not game_time_map:
+            logger.info("Staging table had times but none matched prediction games")
+            return predictions
+
+        # Apply backfill only to rows with missing game_time
+        filled = 0
+        for idx in predictions.index[missing_mask]:
+            gid = predictions.at[idx, "game_id"]
+            ct = game_time_map.get(gid)
+            if ct is not None:
+                predictions.at[idx, "game_time"] = ct
+                filled += 1
+
+        logger.info(f"Backfilled game_time for {filled}/{n_missing} predictions")
+        return predictions
+
+    except Exception as e:
+        logger.warning(f"game_time backfill failed (non-fatal): {e}")
+        return predictions
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Edge Refresh Job - Recalculate edges with fresh lines",
@@ -591,6 +691,9 @@ def main():
             sys.exit(0)
 
         logger.info(f"Loaded {len(predictions)} predictions, {len(samples_dict)} sample arrays")
+
+        # 2b. Backfill missing game_time from staging table
+        predictions = backfill_game_times(engine, predictions, target_date)
 
         # 3. Refresh injury data and filter out players now marked as 'Out'
         if not args.dry_run:

@@ -8,30 +8,18 @@ automatically by APScheduler + pytz.
 
 Schedule (ET):
     9:00 AM  - daily_stats_job
+    9:30 AM  - daily_stats_retry (if 9 AM failed)
+
+    11 AM - 11 PM ET every 5 min:
+        :00,:05,...,:55  - lines_job --live --props-only  (silent)
+        :02,:07,...,:57  - edge_refresh_job               (silent)
 
     12:00 PM - lines_job --live (full)
     12:15 PM - inference_job (full MC)
-    11 AM-11 PM ET (16:00-04:00 UTC) every 5 min:
-        :00,:05,...,:55         - lines_job --live --props-only  (silent)
-        :02,:07,...,:57         - edge_refresh_job               (silent)
 
-    12:00 PM ET (17:00 UTC) - lines_job --live --parallel (full)
-    12:15 PM ET (17:15 UTC) - inference_job (full MC)
-
-    1:00 PM  - lines_job --live --props-only + edge_refresh
-    2:00 PM  - lines_job --live --props-only + edge_refresh
-    3:00 PM  - lines_job --live --props-only + edge_refresh
-
-    4:00 PM  - lines_job --live (full)
+    4:00 PM  - lines_job --live --parallel (full)
     4:15 PM  - inference_job (full MC)
-    4:00 PM ET  (21:00 UTC) - lines_job --live --parallel (full)
-    4:15 PM ET  (21:15 UTC) - inference_job (full MC)
 
-    4:30 PM  - lines_job --live --props-only + edge_refresh
-    5:00 PM  - lines_job --live --props-only + edge_refresh
-    5:30 PM  - lines_job --live --props-only + edge_refresh
-    6:00 PM  - lines_job --live --props-only + edge_refresh
-    6:30 PM  - lines_job --live --props-only + edge_refresh (final)
     "silent" = Discord alerts only on failure (~156 runs/day each).
 
 Usage:
@@ -524,10 +512,10 @@ def main():
         name="Daily Stats (9 AM ET)",
     )
 
-    # 9:30 AM ET (14:30 UTC) - Retry daily stats if 9 AM run failed
+    # 9:30 AM ET - Retry daily stats if 9 AM run failed
     scheduler.add_job(
         run_daily_stats_retry,
-        CronTrigger(hour=14, minute=30),
+        CronTrigger(hour=9, minute=30),
         id="daily_stats_retry",
         name="Daily Stats Retry (9:30 AM ET)",
     )
@@ -551,28 +539,27 @@ def main():
     )
 
     # --- Every 5 min props-only + edge refresh: 11 AM - 11 PM ET ---
-    # UTC: hour 16-23 and 0-4 (EST = UTC-5)
 
     scheduler.add_job(
         run_lines_props_only_silent,
-        CronTrigger(hour='16-23,0-4', minute='*/5'),
+        CronTrigger(hour='11-23', minute='*/5'),
         id="props_every_5",
         name="Props Only (every 5 min, 11AM-11PM ET)",
     )
 
     scheduler.add_job(
         run_edge_refresh_silent,
-        CronTrigger(hour='16-23,0-4', minute='2,7,12,17,22,27,32,37,42,47,52,57'),
+        CronTrigger(hour='11-23', minute='2,7,12,17,22,27,32,37,42,47,52,57'),
         id="edge_refresh_every_5",
         name="Edge Refresh (every 5 min, 11AM-11PM ET)",
     )
 
     # --- Second window: 4 PM full scrape + inference ---
 
-    # 4:00 PM ET (21:00 UTC) - Full lines scrape (live, parallel)
+    # 4:00 PM ET - Full lines scrape (live, parallel)
     scheduler.add_job(
         run_lines_full_parallel,
-        CronTrigger(hour=21, minute=0),
+        CronTrigger(hour=16, minute=0),
         id="lines_4pm_full",
         name="Lines Full Parallel (4 PM ET)",
     )
