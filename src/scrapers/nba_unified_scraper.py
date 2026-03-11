@@ -22,6 +22,7 @@ Examples:
 """
 
 import argparse
+import os
 import random
 import re
 import sys
@@ -30,9 +31,13 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+from dotenv import load_dotenv
 
 # Add project root to path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
+
+# Load environment variables
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 # NBA API imports
 from nba_api.stats.endpoints import (
@@ -51,16 +56,20 @@ from src.scrapers.nba_cdn_scraper import scrape_games_cdn
 # =============================================================================
 
 # Rate limiting settings
-SHORT_DELAY_MIN = 0.6
-SHORT_DELAY_MAX = 1.5
-LONG_PAUSE_EVERY = 100
+SHORT_DELAY_MIN = 3.0
+SHORT_DELAY_MAX = 6.0
+LONG_PAUSE_EVERY = 20
 LONG_PAUSE_MIN = 30
 LONG_PAUSE_MAX = 60
-BAN_COOLDOWN = 600  # 10 minutes if rate limited
-MAX_RETRIES = 3
+BAN_COOLDOWN = 120  # 2 minutes if rate limited (was 10 — too aggressive)
+MAX_RETRIES = 5
+REQUEST_TIMEOUT = 120  # seconds per request (nba_api default is 30)
 
 # Current season default
 DEFAULT_SEASON = "2025-26"
+
+# Proxy (IPRoyal) - loaded from .env PROXY_URL
+PROXY_URL = os.getenv("PROXY_URL")
 
 
 # =============================================================================
@@ -250,7 +259,8 @@ def scrape_team_game_stats(engine, seasons: list[str], season_type: str = "Regul
         try:
             print(f"\nFetching {season_type} games for {season}...")
             game_finder = leaguegamefinder.LeagueGameFinder(
-                season_nullable=season, league_id_nullable="00", season_type_nullable=season_type
+                season_nullable=season, league_id_nullable="00", season_type_nullable=season_type,
+                proxy=PROXY_URL, timeout=REQUEST_TIMEOUT,
             )
 
             games_df = game_finder.get_data_frames()[0]
@@ -434,7 +444,7 @@ def scrape_single_game_advanced(game_id: str) -> tuple[pd.DataFrame, pd.DataFram
     Scrape advanced stats for a single game.
     Returns: (player_df, team_df)
     """
-    box_adv = boxscoreadvancedv3.BoxScoreAdvancedV3(game_id=game_id)
+    box_adv = boxscoreadvancedv3.BoxScoreAdvancedV3(game_id=game_id, proxy=PROXY_URL, timeout=REQUEST_TIMEOUT)
     dfs = box_adv.get_data_frames()
 
     # dfs[0] = players, dfs[1] = teams
@@ -832,7 +842,7 @@ def scrape_traditional_stats(engine, limit: int | None = None) -> tuple[int, int
                 )
 
                 # Call API (V3)
-                box = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id)
+                box = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id, proxy=PROXY_URL, timeout=REQUEST_TIMEOUT)
                 player_df = box.player_stats.get_data_frame()
 
                 if player_df.empty:
@@ -928,8 +938,14 @@ def main():
         default=None,
         help="Limit number of games to scrape for stats (useful for testing)",
     )
+    parser.add_argument("--no-proxy", action="store_true", help="Disable proxy even if PROXY_URL is set")
 
     args = parser.parse_args()
+
+    # Resolve proxy setting
+    global PROXY_URL
+    if args.no_proxy:
+        PROXY_URL = None
 
     print("=" * 60)
     print("NBA UNIFIED STATS SCRAPER")
@@ -939,6 +955,7 @@ def main():
     print(f"Skip Team Stats: {args.skip_team}")
     print(f"Skip Traditional Stats: {args.skip_traditional}")  # Diag
     print(f"Skip Advanced Stats: {args.skip_advanced}")
+    print(f"Proxy: {'Enabled (' + PROXY_URL.split('@')[1] + ')' if PROXY_URL else 'Disabled'}")
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # Connect to database

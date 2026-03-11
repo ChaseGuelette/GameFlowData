@@ -3,30 +3,27 @@
 Scheduler - APScheduler-based job runner for Railway
 =====================================================
 Runs all daily jobs on schedule using APScheduler.
+All times are in America/New_York (ET). DST transitions are handled
+automatically by APScheduler + pytz.
 
-Schedule (ET → UTC for EST):
-    9:00 AM ET  (14:00 UTC) - daily_stats_job
+Schedule (ET):
+    9:00 AM  - daily_stats_job
 
-    12:00 PM ET (17:00 UTC) - lines_job --live (full)
-    12:15 PM ET (17:15 UTC) - inference_job (full MC)
+    12:00 PM - lines_job --live (full)
+    12:15 PM - inference_job (full MC)
 
-    1:00 PM ET  (18:00 UTC) - lines_job --live --props-only
-    1:02 PM ET  (18:02 UTC) - edge_refresh_job
+    1:00 PM  - lines_job --live --props-only + edge_refresh
+    2:00 PM  - lines_job --live --props-only + edge_refresh
+    3:00 PM  - lines_job --live --props-only + edge_refresh
 
-    2:00 PM ET  (19:00 UTC) - lines_job --live --props-only
-    2:02 PM ET  (19:02 UTC) - edge_refresh_job
+    4:00 PM  - lines_job --live (full)
+    4:15 PM  - inference_job (full MC)
 
-    3:00 PM ET  (20:00 UTC) - lines_job --live --props-only
-    3:02 PM ET  (20:02 UTC) - edge_refresh_job
-
-    4:00 PM ET  (21:00 UTC) - lines_job --live (full)
-    4:15 PM ET  (21:15 UTC) - inference_job (full MC)
-
-    4:30 PM ET  (21:30 UTC) - lines_job --live --props-only + edge_refresh
-    5:00 PM ET  (22:00 UTC) - lines_job --live --props-only + edge_refresh
-    5:30 PM ET  (22:30 UTC) - lines_job --live --props-only + edge_refresh
-    6:00 PM ET  (23:00 UTC) - lines_job --live --props-only + edge_refresh
-    6:30 PM ET  (23:30 UTC) - lines_job --live --props-only + edge_refresh (final)
+    4:30 PM  - lines_job --live --props-only + edge_refresh
+    5:00 PM  - lines_job --live --props-only + edge_refresh
+    5:30 PM  - lines_job --live --props-only + edge_refresh
+    6:00 PM  - lines_job --live --props-only + edge_refresh
+    6:30 PM  - lines_job --live --props-only + edge_refresh (final)
 
 Usage:
     python src/orchestration/scheduler.py              # Start scheduler loop
@@ -324,67 +321,67 @@ def main():
         logger.info("Test job complete. Exiting.")
         return
 
-    scheduler = BlockingScheduler(timezone="UTC")
+    scheduler = BlockingScheduler(timezone="America/New_York")
 
-    # Schedule jobs (all times in UTC; EST = UTC-5)
+    # Schedule jobs (all times in America/New_York ET)
     # ==============================================================
 
-    # 9:00 AM ET (14:00 UTC) - Daily stats
+    # 9:00 AM ET - Daily stats
     scheduler.add_job(
         run_daily_stats,
-        CronTrigger(hour=14, minute=0),
+        CronTrigger(hour=9, minute=0),
         id="daily_stats",
         name="Daily Stats (9 AM ET)",
     )
 
     # --- First window: noon full scrape + inference ---
 
-    # 12:00 PM ET (17:00 UTC) - Full lines scrape (live)
+    # 12:00 PM ET - Full lines scrape (live)
     scheduler.add_job(
         run_lines_full,
-        CronTrigger(hour=17, minute=0),
+        CronTrigger(hour=12, minute=0),
         id="lines_noon_full",
         name="Lines Full (12 PM ET)",
     )
 
-    # 12:15 PM ET (17:15 UTC) - Full inference
+    # 12:15 PM ET - Full inference
     scheduler.add_job(
         run_inference,
-        CronTrigger(hour=17, minute=15),
+        CronTrigger(hour=12, minute=15),
         id="inference_noon",
         name="Inference (12:15 PM ET)",
     )
 
     # --- Hourly props-only + edge refresh: 1-3 PM ET ---
 
-    for utc_hour, et_label in [(18, "1 PM"), (19, "2 PM"), (20, "3 PM")]:
+    for et_hour, et_label in [(13, "1 PM"), (14, "2 PM"), (15, "3 PM")]:
         scheduler.add_job(
             run_lines_props_only,
-            CronTrigger(hour=utc_hour, minute=0),
-            id=f"props_{utc_hour}",
+            CronTrigger(hour=et_hour, minute=0),
+            id=f"props_{et_hour}",
             name=f"Props Only ({et_label} ET)",
         )
         scheduler.add_job(
             run_edge_refresh,
-            CronTrigger(hour=utc_hour, minute=2),
-            id=f"edge_refresh_{utc_hour}",
+            CronTrigger(hour=et_hour, minute=2),
+            id=f"edge_refresh_{et_hour}",
             name=f"Edge Refresh ({et_label}:02 ET)",
         )
 
     # --- Second window: 4 PM full scrape + inference ---
 
-    # 4:00 PM ET (21:00 UTC) - Full lines scrape (live)
+    # 4:00 PM ET - Full lines scrape (live)
     scheduler.add_job(
         run_lines_full,
-        CronTrigger(hour=21, minute=0),
+        CronTrigger(hour=16, minute=0),
         id="lines_4pm_full",
         name="Lines Full (4 PM ET)",
     )
 
-    # 4:15 PM ET (21:15 UTC) - Full inference
+    # 4:15 PM ET - Full inference
     scheduler.add_job(
         run_inference,
-        CronTrigger(hour=21, minute=15),
+        CronTrigger(hour=16, minute=15),
         id="inference_4pm",
         name="Inference (4:15 PM ET)",
     )
@@ -392,20 +389,20 @@ def main():
     # --- Half-hourly props-only + edge refresh: 4:30-6:30 PM ET ---
 
     half_hourly = [
-        (21, 30, "4:30 PM"), (22, 0, "5 PM"), (22, 30, "5:30 PM"),
-        (23, 0, "6 PM"), (23, 30, "6:30 PM"),
+        (16, 30, "4:30 PM"), (17, 0, "5 PM"), (17, 30, "5:30 PM"),
+        (18, 0, "6 PM"), (18, 30, "6:30 PM"),
     ]
-    for utc_h, utc_m, et_label in half_hourly:
+    for et_h, et_m, et_label in half_hourly:
         scheduler.add_job(
             run_lines_props_only,
-            CronTrigger(hour=utc_h, minute=utc_m),
-            id=f"props_{utc_h}_{utc_m:02d}",
+            CronTrigger(hour=et_h, minute=et_m),
+            id=f"props_{et_h}_{et_m:02d}",
             name=f"Props Only ({et_label} ET)",
         )
         scheduler.add_job(
             run_edge_refresh,
-            CronTrigger(hour=utc_h, minute=utc_m + 2),
-            id=f"edge_refresh_{utc_h}_{utc_m:02d}",
+            CronTrigger(hour=et_h, minute=et_m + 2),
+            id=f"edge_refresh_{et_h}_{et_m:02d}",
             name=f"Edge Refresh ({et_label}:02 ET)",
         )
 
