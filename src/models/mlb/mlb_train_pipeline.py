@@ -114,6 +114,7 @@ class MLBTrainingOrchestrator:
         cal_df = self.feature_store.enrich_with_matchup_features(cal_df)
         if cal_end_date:
             pre_filter = len(cal_df)
+            cal_end_date = pd.Timestamp(cal_end_date).date()
             cal_df = cal_df[cal_df["game_date"] <= cal_end_date].reset_index(drop=True)
             logger.info(f"Calibration data: {len(cal_df):,} rows (filtered from {pre_filter:,}, end={cal_end_date})")
         else:

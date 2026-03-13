@@ -66,6 +66,8 @@ JOB_NAMES = {
     "inference_job.py": "Inference",
     "edge_refresh_job.py": "Edge Refresh",
     "test_job.py": "System Test",
+    "mlb_daily_stats_job.py": "MLB Daily Stats",
+    "mlb_inference_job.py": "MLB Inference",
 }
 
 # In-memory job status tracking for dependency checks.
@@ -475,6 +477,35 @@ def run_edge_refresh_silent():
     run_job("edge_refresh_job.py", extra_args="--skip-paper", silent_on_success=True)
 
 
+# ---- MLB Jobs (April–October) ----
+
+def run_mlb_daily_stats():
+    """Run MLB daily stats job."""
+    run_job("mlb_daily_stats_job.py")
+
+
+def run_mlb_daily_stats_retry():
+    """Re-run MLB daily stats if the 10 AM run failed."""
+    status = JOB_STATUS.get("mlb_daily_stats_job.py", {})
+    if status.get("status") == "success":
+        logger.info("MLB daily stats already succeeded today, skipping 10:30 retry.")
+        return
+    logger.warning("MLB daily stats failed or did not run at 10 AM — retrying now...")
+    run_job("mlb_daily_stats_job.py")
+
+
+def run_mlb_inference():
+    """Run MLB inference, checking if MLB daily stats succeeded first."""
+    if not check_dependency("mlb_daily_stats_job.py", max_age_hours=8):
+        logger.warning(
+            "MLB daily stats job has not succeeded in the last 8 hours — "
+            "MLB inference will run with potentially stale data."
+        )
+        run_job("mlb_inference_job.py")
+    else:
+        run_job("mlb_inference_job.py")
+
+
 def main():
     import argparse
 
@@ -570,6 +601,42 @@ def main():
         CronTrigger(hour=16, minute=15),
         id="inference_4pm",
         name="Inference (4:15 PM ET)",
+    )
+
+    # ==============================================================
+    # MLB Jobs (April–October only)
+    # ==============================================================
+
+    # 10:00 AM ET - MLB daily stats (results from last night)
+    scheduler.add_job(
+        run_mlb_daily_stats,
+        CronTrigger(hour=10, minute=0, month='4-10'),
+        id="mlb_daily_stats",
+        name="MLB Daily Stats (10 AM ET, Apr-Oct)",
+    )
+
+    # 10:30 AM ET - Retry MLB daily stats if 10 AM failed
+    scheduler.add_job(
+        run_mlb_daily_stats_retry,
+        CronTrigger(hour=10, minute=30, month='4-10'),
+        id="mlb_daily_stats_retry",
+        name="MLB Daily Stats Retry (10:30 AM ET, Apr-Oct)",
+    )
+
+    # 1:00 PM ET - MLB inference (afternoon/evening games)
+    scheduler.add_job(
+        run_mlb_inference,
+        CronTrigger(hour=13, minute=30, month='4-10'),
+        id="mlb_inference_1pm",
+        name="MLB Inference (1:30 PM ET, Apr-Oct)",
+    )
+
+    # 6:30 PM ET - MLB inference refresh (evening games)
+    scheduler.add_job(
+        run_mlb_inference,
+        CronTrigger(hour=18, minute=30, month='4-10'),
+        id="mlb_inference_6pm",
+        name="MLB Inference (6:30 PM ET, Apr-Oct)",
     )
 
     # Log scheduled jobs

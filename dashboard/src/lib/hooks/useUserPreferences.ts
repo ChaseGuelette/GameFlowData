@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/client'
 export interface UserPreferences {
   userState: string
   bankroll: number
+  initialBankroll: number
   kellyFraction: number
   useCustomKelly: boolean
 }
@@ -11,6 +12,7 @@ export interface UserPreferences {
 const DEFAULTS: UserPreferences = {
   userState: '',
   bankroll: 1000,
+  initialBankroll: 1000,
   kellyFraction: 0.25,
   useCustomKelly: false,
 }
@@ -26,6 +28,7 @@ export function useUserPreferences() {
     return {
       userState: localStorage.getItem('user_state') || '',
       bankroll: parseFloat(localStorage.getItem('betting_bankroll') || '') || 1000,
+      initialBankroll: parseFloat(localStorage.getItem('betting_initial_bankroll') || '') || 1000,
       kellyFraction: parseFloat(localStorage.getItem('betting_kelly_fraction') || '') || 0.25,
       useCustomKelly: localStorage.getItem('betting_use_custom_kelly') === 'true',
     }
@@ -47,7 +50,7 @@ export function useUserPreferences() {
 
       const { data, error } = await supabase
         .from('user_profiles')
-        .select('user_state, bankroll, kelly_fraction, use_custom_kelly')
+        .select('user_state, bankroll, initial_bankroll, kelly_fraction, use_custom_kelly')
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -55,6 +58,7 @@ export function useUserPreferences() {
         const dbPrefs: UserPreferences = {
           userState: data.user_state ?? prefs.userState,
           bankroll: data.bankroll != null ? Number(data.bankroll) : prefs.bankroll,
+          initialBankroll: data.initial_bankroll != null ? Number(data.initial_bankroll) : prefs.initialBankroll,
           kellyFraction: data.kelly_fraction != null ? Number(data.kelly_fraction) : prefs.kellyFraction,
           useCustomKelly: data.use_custom_kelly ?? prefs.useCustomKelly,
         }
@@ -62,6 +66,7 @@ export function useUserPreferences() {
         // Update localStorage to match DB (DB is source of truth once fetched)
         localStorage.setItem('user_state', dbPrefs.userState)
         localStorage.setItem('betting_bankroll', dbPrefs.bankroll.toString())
+        localStorage.setItem('betting_initial_bankroll', dbPrefs.initialBankroll.toString())
         localStorage.setItem('betting_kelly_fraction', dbPrefs.kellyFraction.toString())
         localStorage.setItem('betting_use_custom_kelly', dbPrefs.useCustomKelly.toString())
       }
@@ -88,6 +93,7 @@ export function useUserPreferences() {
           user_id: userId,
           user_state: newPrefs.userState,
           bankroll: newPrefs.bankroll,
+          initial_bankroll: newPrefs.initialBankroll,
           kelly_fraction: newPrefs.kellyFraction,
           use_custom_kelly: newPrefs.useCustomKelly,
         }, {
@@ -115,6 +121,9 @@ export function useUserPreferences() {
           break
         case 'bankroll':
           localStorage.setItem('betting_bankroll', (value as number).toString())
+          break
+        case 'initialBankroll':
+          localStorage.setItem('betting_initial_bankroll', (value as number).toString())
           break
         case 'kellyFraction':
           localStorage.setItem('betting_kelly_fraction', (value as number).toString())

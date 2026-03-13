@@ -69,7 +69,7 @@ class MLBStatsScraper:
             "startDate": start_date,
             "endDate": end_date,
             "gameType": game_type,
-            "hydrate": "venue",
+            "hydrate": "venue,probablePitcher",
         }
 
         resp = self.session.get(url, params=params, timeout=30)
@@ -92,20 +92,28 @@ class MLBStatsScraper:
                     away = game.get("teams", {}).get("away", {})
                     venue = game.get("venue", {})
 
+                    # Extract probable pitcher IDs
+                    home_pitcher = home.get("probablePitcher", {})
+                    away_pitcher = away.get("probablePitcher", {})
+
                     conn.execute(
                         text("""
                             INSERT INTO mlb_game_schedule
                                 (game_id, game_date, season, game_type,
                                  home_team_id, away_team_id, venue_id, venue_name,
-                                 home_score, away_score, status, game_time_utc)
+                                 home_score, away_score, status, game_time_utc,
+                                 probable_pitcher_home_id, probable_pitcher_away_id)
                             VALUES
                                 (:game_id, :game_date, :season, :game_type,
                                  :home_team_id, :away_team_id, :venue_id, :venue_name,
-                                 :home_score, :away_score, :status, :game_time_utc)
+                                 :home_score, :away_score, :status, :game_time_utc,
+                                 :probable_pitcher_home_id, :probable_pitcher_away_id)
                             ON CONFLICT (game_id) DO UPDATE SET
                                 home_score = EXCLUDED.home_score,
                                 away_score = EXCLUDED.away_score,
-                                status = EXCLUDED.status
+                                status = EXCLUDED.status,
+                                probable_pitcher_home_id = COALESCE(EXCLUDED.probable_pitcher_home_id, mlb_game_schedule.probable_pitcher_home_id),
+                                probable_pitcher_away_id = COALESCE(EXCLUDED.probable_pitcher_away_id, mlb_game_schedule.probable_pitcher_away_id)
                         """),
                         {
                             "game_id": game_pk,
@@ -120,6 +128,8 @@ class MLBStatsScraper:
                             "away_score": away.get("score"),
                             "status": status,
                             "game_time_utc": game.get("gameDate"),
+                            "probable_pitcher_home_id": home_pitcher.get("id"),
+                            "probable_pitcher_away_id": away_pitcher.get("id"),
                         },
                     )
                     games_inserted += 1

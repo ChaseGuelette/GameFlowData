@@ -4,29 +4,14 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter, usePathname } from 'next/navigation'
+import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 
 export function Navbar() {
   const router = useRouter()
   const pathname = usePathname()
   const supabase = createClient()
-  const [bankroll, setBankroll] = useState<number | undefined>(undefined)
+  const { prefs, loading: prefsLoading } = useUserPreferences()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-
-  useEffect(() => {
-    async function fetchBankroll() {
-      const { data } = await supabase
-        .from('paper_trading_daily_log')
-        .select('bankroll')
-        .order('game_date', { ascending: false })
-        .limit(1)
-        .single()
-
-      if (data?.bankroll) {
-        setBankroll(data.bankroll)
-      }
-    }
-    fetchBankroll()
-  }, [supabase])
 
   useEffect(() => {
     setMobileMenuOpen(false)
@@ -91,11 +76,11 @@ export function Navbar() {
 
           {/* Desktop: Bankroll and Logout */}
           <div className="hidden md:flex items-center space-x-4">
-            {bankroll !== undefined && (
+            {!prefsLoading && (
               <div className="text-right">
                 <div className="text-xs text-slate-400">Balance</div>
                 <div className="text-lg font-semibold text-green-500">
-                  ${bankroll.toLocaleString()}
+                  ${prefs.bankroll.toLocaleString()}
                 </div>
               </div>
             )}
@@ -151,11 +136,11 @@ export function Navbar() {
             Data Vault
           </Link>
 
-          {bankroll !== undefined && (
+          {!prefsLoading && (
             <div className="px-3 py-2 border-t border-slate-700 mt-2 pt-2">
               <div className="text-xs text-slate-400">Balance</div>
               <div className="text-lg font-semibold text-green-500">
-                ${bankroll.toLocaleString()}
+                ${prefs.bankroll.toLocaleString()}
               </div>
             </div>
           )}

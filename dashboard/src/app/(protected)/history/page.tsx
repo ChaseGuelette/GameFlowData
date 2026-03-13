@@ -17,6 +17,24 @@ interface PaperBetWithRecommended extends PaperBet {
 }
 
 type HistoryTab = 'my_bets' | 'model_history'
+type DatePreset = '7d' | '30d' | '90d' | 'all'
+
+function getDefaultStartDate(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 30)
+  return d.toISOString().split('T')[0]
+}
+
+function getDefaultEndDate(): string {
+  return new Date().toISOString().split('T')[0]
+}
+
+function formatDateLabel(start: string, end: string): string {
+  const s = new Date(start + 'T00:00:00')
+  const e = new Date(end + 'T00:00:00')
+  const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return `${fmt(s)} – ${fmt(e)}`
+}
 
 export default function HistoryPage() {
   const [bets, setBets] = useState<PaperBetWithRecommended[]>([])
@@ -25,6 +43,10 @@ export default function HistoryPage() {
   const [betSource, setBetSource] = useState<BetSource>('model') // Default to Model Picks
   const [activeTab, setActiveTab] = useState<HistoryTab>('my_bets')
 
+  // Date range state
+  const [startDate, setStartDate] = useState(getDefaultStartDate)
+  const [endDate, setEndDate] = useState(getDefaultEndDate)
+
   // My Bets state
   const [myBets, setMyBets] = useState<PaperBet[]>([])
   const [myBetsLoading, setMyBetsLoading] = useState(false)
@@ -32,20 +54,31 @@ export default function HistoryPage() {
   const [directionFilter, setDirectionFilter] = useState<DirectionFilterValue>('both')
   const [myBetsDirectionFilter, setMyBetsDirectionFilter] = useState<DirectionFilterValue>('both')
 
+  const applyPreset = (preset: DatePreset) => {
+    const now = new Date()
+    const end = now.toISOString().split('T')[0]
+    setEndDate(end)
+    if (preset === 'all') {
+      setStartDate('2024-01-01')
+    } else {
+      const days = preset === '7d' ? 7 : preset === '30d' ? 30 : 90
+      const d = new Date()
+      d.setDate(d.getDate() - days)
+      setStartDate(d.toISOString().split('T')[0])
+    }
+  }
+
   // Fetch model history (paper_bets)
   useEffect(() => {
     async function fetchData() {
+      setLoading(true)
       const supabase = createClient()
-
-      // Fetch all resolved bets (last 30 days)
-      const thirtyDaysAgo = new Date()
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-      const startDate = thirtyDaysAgo.toISOString().split('T')[0]
 
       const { data: betsData, error: betsError } = await supabase
         .from('paper_bets')
         .select('*')
         .gte('game_date', startDate)
+        .lte('game_date', endDate)
         .order('game_date', { ascending: false })
 
       if (!betsError && betsData) {
@@ -88,25 +121,21 @@ export default function HistoryPage() {
     }
 
     fetchData()
-  }, [])
+  }, [startDate, endDate])
 
-  // Fetch user bets when switching to My Bets tab
+  // Fetch user bets when switching to My Bets tab or date range changes
   useEffect(() => {
     if (activeTab !== 'my_bets') return
-    if (myBets.length > 0) return // Already loaded
 
     async function fetchMyBets() {
       setMyBetsLoading(true)
       const supabase = createClient()
 
-      const thirtyDaysAgo = new Date()
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-      const startDate = thirtyDaysAgo.toISOString().split('T')[0]
-
       const { data, error } = await supabase
         .from('user_bets')
         .select('*')
         .gte('game_date', startDate)
+        .lte('game_date', endDate)
         .order('game_date', { ascending: false })
 
       if (!error && data) {
@@ -136,7 +165,7 @@ export default function HistoryPage() {
     }
 
     fetchMyBets()
-  }, [activeTab, myBets.length])
+  }, [activeTab, startDate, endDate])
 
   // Filter bets by source (Model Picks = is_recommended from daily_predictions)
   const sourcedBets = betSource === 'model'
@@ -186,7 +215,7 @@ export default function HistoryPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-50">Bet History</h1>
-            <p className="text-slate-400">Last 30 days</p>
+            <p className="text-slate-400">{formatDateLabel(startDate, endDate)}</p>
           </div>
           <div className="flex items-center gap-3">
             {/* Tab Toggle */}
@@ -219,6 +248,37 @@ export default function HistoryPage() {
             )}
           </div>
         </div>
+
+        {/* Date range filter */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={startDate}
+              onChange={e => setStartDate(e.target.value)}
+              className="px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            />
+            <span className="text-slate-500 text-sm">to</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={e => setEndDate(e.target.value)}
+              className="px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            {(['7d', '30d', '90d', 'all'] as DatePreset[]).map(preset => (
+              <button
+                key={preset}
+                onClick={() => applyPreset(preset)}
+                className="px-2.5 py-1 rounded text-xs font-medium bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500 transition-colors"
+              >
+                {preset === 'all' ? 'All' : preset.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="flex items-center justify-between">
           {activeTab === 'my_bets' ? (
             <DirectionFilter activeDirection={myBetsDirectionFilter} onDirectionChange={setMyBetsDirectionFilter} />

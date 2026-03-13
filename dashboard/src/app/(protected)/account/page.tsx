@@ -3,10 +3,12 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { DISCORD_URL } from '@/lib/constants'
+import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 
 export default function AccountPage() {
   const [email, setEmail] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const { prefs, updatePref } = useUserPreferences()
 
   useEffect(() => {
     async function fetchAccountData() {
@@ -46,6 +48,49 @@ export default function AccountPage() {
             <span className="px-2 py-1 rounded text-xs font-medium bg-blue-500/20 text-blue-400">
               Free Beta
             </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Bankroll Settings */}
+      <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 mb-6">
+        <h2 className="text-lg font-semibold text-slate-50 mb-4">Bankroll Settings</h2>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Initial Bankroll</label>
+            <p className="text-xs text-slate-500 mb-2">What you started with — used for ROI and growth calculations</p>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">$</span>
+              <input
+                type="number"
+                min={0}
+                step={100}
+                value={prefs.initialBankroll}
+                onChange={e => {
+                  const val = parseFloat(e.target.value)
+                  if (!isNaN(val) && val >= 0) updatePref('initialBankroll', val)
+                }}
+                className="w-full pl-7 pr-3 py-2 bg-slate-900 border border-slate-600 rounded-md text-slate-100 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Current Bankroll</label>
+            <p className="text-xs text-slate-500 mb-2">Your actual bankroll right now — used for bet sizing</p>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">$</span>
+              <input
+                type="number"
+                min={0}
+                step={100}
+                value={prefs.bankroll}
+                onChange={e => {
+                  const val = parseFloat(e.target.value)
+                  if (!isNaN(val) && val >= 0) updatePref('bankroll', val)
+                }}
+                className="w-full pl-7 pr-3 py-2 bg-slate-900 border border-slate-600 rounded-md text-slate-100 focus:outline-none focus:border-blue-500"
+              />
+            </div>
           </div>
         </div>
       </div>

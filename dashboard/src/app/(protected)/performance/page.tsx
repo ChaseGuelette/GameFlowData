@@ -8,6 +8,7 @@ import { StatBreakdown } from '@/components/performance/StatBreakdown'
 import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFilter'
 import { cn } from '@/lib/utils'
 import { type DailyPerformance, type StatPerformance, type PaperBet, type StatType } from '@/types/predictions'
+import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 
 type PerformanceTab = 'props' | 'dfs' | 'my_bets'
 
@@ -57,6 +58,7 @@ const SLIP_TYPE_LABELS: Record<string, string> = {
 }
 
 export default function PerformancePage() {
+  const { prefs } = useUserPreferences()
   const [dailyData, setDailyData] = useState<DailyPerformance[]>([])
   const [allBets, setAllBets] = useState<PaperBetWithRecommended[]>([])
   const [loading, setLoading] = useState(true)
@@ -274,7 +276,6 @@ export default function PerformancePage() {
     }
 
     // For Model Picks, simulate bankroll progression
-    const INITIAL_BANKROLL = 1000
     const dailyPnlMap = new Map<string, number>()
 
     for (const bet of filteredBets) {
@@ -293,7 +294,7 @@ export default function PerformancePage() {
         game_date: date,
         total_pnl: dayPnl,
         cumulative_pnl: cumulativePnl,
-        bankroll_after: INITIAL_BANKROLL + cumulativePnl,
+        bankroll_after: prefs.initialBankroll + cumulativePnl,
         total_bets: 0, // Not used in chart
         bets_won: 0,
         bets_lost: 0,
@@ -301,7 +302,7 @@ export default function PerformancePage() {
         roi_pct: 0
       } as DailyPerformance
     })
-  }, [dailyData, filteredBets, betSource])
+  }, [dailyData, filteredBets, betSource, prefs.initialBankroll])
 
   // Calculate display bankroll based on filter
   const displayBankroll = betSource === 'model' && chartData.length > 0
@@ -384,7 +385,6 @@ export default function PerformancePage() {
 
   // My Bets bankroll chart data
   const myBetsChartData = useMemo(() => {
-    const INITIAL_BANKROLL = 1000
     const dailyPnlMap = new Map<string, number>()
 
     for (const bet of myBets) {
@@ -402,7 +402,7 @@ export default function PerformancePage() {
         game_date: date,
         total_pnl: dayPnl,
         cumulative_pnl: cumulativePnl,
-        bankroll_after: INITIAL_BANKROLL + cumulativePnl,
+        bankroll_after: prefs.initialBankroll + cumulativePnl,
         total_bets: 0,
         bets_won: 0,
         bets_lost: 0,
@@ -410,7 +410,7 @@ export default function PerformancePage() {
         roi_pct: 0,
       } as DailyPerformance
     })
-  }, [myBets])
+  }, [myBets, prefs.initialBankroll])
 
   // My Bets stat breakdown
   const myBetsStatData = useMemo(() => {
@@ -659,7 +659,7 @@ export default function PerformancePage() {
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <KPICard
                   label="My Bankroll"
-                  value={`$${(1000 + myBetsKpis.pnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  value={`$${(prefs.initialBankroll + myBetsKpis.pnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 />
                 <KPICard
                   label="Total P&L"

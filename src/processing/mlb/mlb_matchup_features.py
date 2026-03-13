@@ -51,8 +51,7 @@ def get_opposing_team_batting_stats(engine: Engine, team_id: int, game_date: str
                 SUM(scb.whiff_pct * scb.total_swings) /
                     NULLIF(SUM(scb.total_swings), 0) AS team_whiff_pct
             FROM mlb_player_game_statcast_batting scb
-            WHERE scb.season = :season
-              AND scb.game_date IN (
+            WHERE scb.game_date IN (
                   SELECT DISTINCT game_date FROM team_games
               )
               AND scb.player_id IN (
@@ -146,9 +145,8 @@ def compute_matchup_features_bulk(engine: Engine, season: int) -> pd.DataFrame:
             JOIN mlb_player_game_stats_batting bat
               ON bat.player_id = scb.player_id
              AND bat.game_date = scb.game_date
-             AND bat.season = scb.season
              AND bat.did_not_play = FALSE
-            WHERE scb.season = :season
+            WHERE bat.season = :season
               AND scb.total_swings > 0
             GROUP BY bat.team_id, scb.game_date
         ),
