@@ -440,8 +440,9 @@ def run_lines_props_only():
     run_job("lines_job.py", extra_args="--live --props-only")
 
 
-def run_inference():
+def run_inference(skip_bets: bool = False):
     """Run inference, checking if daily stats succeeded first."""
+    extra = "--skip-bets" if skip_bets else ""
     if not check_dependency("daily_stats_job.py", max_age_hours=8):
         logger.warning(
             "Daily stats job has not succeeded in the last 8 hours — "
@@ -457,9 +458,10 @@ def run_inference():
                 "inference will run with stale rolling averages"
             ),
         )
-        run_job("inference_job.py", extra_args="--stale-warning")
+        stale_extra = f"--stale-warning {extra}".strip()
+        run_job("inference_job.py", extra_args=stale_extra)
     else:
-        run_job("inference_job.py")
+        run_job("inference_job.py", extra_args=extra) if extra else run_job("inference_job.py")
 
 
 def run_edge_refresh():
@@ -595,12 +597,12 @@ def main():
         name="Lines Full Parallel (4 PM ET)",
     )
 
-    # 4:15 PM ET - Full inference
+    # 4:15 PM ET - Full inference (skip bets — already placed at noon)
     scheduler.add_job(
-        run_inference,
+        lambda: run_inference(skip_bets=True),
         CronTrigger(hour=16, minute=15),
         id="inference_4pm",
-        name="Inference (4:15 PM ET)",
+        name="Inference (4:15 PM ET, skip bets)",
     )
 
     # ==============================================================
