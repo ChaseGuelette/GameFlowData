@@ -23,7 +23,25 @@ Each table includes:
 - `rolling_with_groupby` computes group-safe rolling means (supports `agg` parameter: `"mean"`, `"std"`, `"min"`, `"sum"`).
 - `calculate_b2_b3_b4_features(df)` computes 14 new columns using shift(1) no-leakage pattern.
 - `_count_games_in_window(df, group_cols, days)` counts calendar-window prior games.
-- Insert functions truncate and bulk insert in batches (`BATCH_SIZE`).
+- Insert functions use DELETE + batch INSERT with fresh connections per batch (PgBouncer-compatible).
+
+## Minimum-Minutes Filter (`MIN_MINUTES_FOR_STATS = 5`)
+
+Games where a player played fewer than 5 minutes (injury exits, garbage-time-only appearances) are NaN-masked before computing rolling averages. This prevents a 1-minute injury exit from dragging down L5 averages and corrupting min_floor.
+
+**What is filtered:**
+- All rolling stat averages (L5, L15, SZN)
+- L3 rolling averages (B3 features)
+- L5 standard deviations (B3/B4 features)
+- `min_floor_l5` (B4 feature)
+- `games_started_l5` (B4 feature)
+
+**What is NOT filtered (schedule features count all games):**
+- `rest_days` — days since last game regardless of minutes
+- `games_last_7d` — calendar-window game count
+- `games_l5` / `games_l15` / `games_szn` — game counts in each window
+
+**Implementation:** A boolean mask `min_mask = shifted_min >= 5` is applied via `.where(min_mask)` to the shifted stat values before rolling window computation. NaN values from masking are naturally skipped by pandas rolling functions (`min_periods` still applies to non-NaN values). If all prior games in a window are < 5 min, the rolling average is NaN (handled by feature store's COALESCE defaults).
 
 ## B2/B3/B4 Features (14 columns)
 

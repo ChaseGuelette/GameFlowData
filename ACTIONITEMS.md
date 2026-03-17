@@ -1,5 +1,74 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-17 — Session 74)
+
+### What We Did
+
+**Minimum-Minutes Filter for Rolling Averages + PgBouncer Fix (3 files modified)**
+
+1. **Added `MIN_MINUTES_FOR_STATS = 5` filter** to both `populate_average_stats.py` and `populate_average_stats_incremental.py`. Games where a player played < 5 minutes are NaN-masked before computing rolling averages (L5/L15/SZN, L3, L5 std, min_floor, games_started). Schedule features (rest_days, games_last_7d) still count all games.
+
+2. **Fixed PgBouncer timeout on writes** — Replaced `TRUNCATE` with `DELETE FROM` in all three insert functions. Added `engine.dispose()` before write phase and fresh connection per batch. TRUNCATE required AccessExclusive lock that consistently timed out through Supabase pooler (port 6543).
+
+3. **Added 3 unit tests** — Covers low-minutes exclusion, all-low-minutes NaN, and incremental pipeline consistency.
+
+4. **Ran full backfill** — 22,965 rows for season 22025. Verified Miller's `avg_reb_l5` corrected from 7.40 → 9.25.
+
+**Modified (3):**
+- `src/processing/populate_average_stats.py` — min_mask, DELETE, engine.dispose()
+- `src/processing/populate_average_stats_incremental.py` — min_mask
+- `tests/test_populate_average_stats.py` — 3 new tests
+
+### Remaining Action Items
+
+1. **Run advanced stats scraper** — 3 days missed (3/14-3/16), task scheduler didn't fire (PC was likely asleep). Run manually: `python src/scrapers/nba_unified_scraper.py --no-proxy --skip-team --skip-traditional`
+2. **Consider enabling WakeToRun** on `GameFlowData_AdvancedScraper` scheduled task to prevent future missed runs
+3. **Deploy to Vercel** — push dashboard changes (date filter, bankroll settings from Session 73)
+4. **Deploy to Railway** — push scheduler changes so 11 AM time is active (from Session 71)
+5. **Stripe integration** — subscribe page, customer portal, webhook
+6. **MLB pipeline** — train pitcher K model, build daily runner, backtesting harness
+7. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+
+---
+
+## Session Summary (2026-03-13 — Session 73)
+
+### What We Did
+
+**Date Range Filter + Bankroll Settings + Bankroll Integration (1 migration, 5 files modified)**
+
+1. **DB Migration** — Added `initial_bankroll numeric DEFAULT 1000` column to `user_profiles` table via Supabase `apply_migration`.
+
+2. **Updated `useUserPreferences` hook** — Added `initialBankroll` field throughout (interface, defaults, localStorage key `betting_initial_bankroll`, DB column `initial_bankroll`, `updatePref` switch case). Full cross-device sync like existing fields.
+
+3. **Bankroll Settings on Account page** — New card between Profile and Community sections with two `$`-prefixed number inputs: Initial Bankroll (for ROI/growth calcs) and Current Bankroll (for bet sizing + Navbar display). Both sync via `useUserPreferences`.
+
+4. **Date range filter on History page** — Two `<input type="date">` pickers with quick preset buttons (7D, 30D, 90D, All). Shared across both My Bets and Model History tabs. Both fetch `useEffect`s now use `startDate`/`endDate` state as dependencies with `.lte('game_date', endDate)`. Subtitle dynamically shows the selected range.
+
+5. **Bankroll wired into Performance page** — Replaced all 3 hardcoded `INITIAL_BANKROLL = 1000` references (Model Picks chart, My Bets chart, My Bets KPI card) with `prefs.initialBankroll`. Added to `useMemo` dependency arrays.
+
+6. **Navbar uses user bankroll** — Replaced standalone `paper_trading_daily_log` Supabase fetch with `useUserPreferences` hook. Shows `prefs.bankroll` (user's current bankroll) instead of paper sim balance.
+
+**Modified (5):**
+- `dashboard/src/lib/hooks/useUserPreferences.ts` — `initialBankroll` field
+- `dashboard/src/app/(protected)/account/page.tsx` — Bankroll Settings card
+- `dashboard/src/app/(protected)/history/page.tsx` — Date range filter
+- `dashboard/src/app/(protected)/performance/page.tsx` — User bankroll integration
+- `dashboard/src/components/layout/Navbar.tsx` — User bankroll from prefs
+
+### Remaining Action Items
+
+1. **Deploy to Vercel** — push dashboard changes (date filter, bankroll settings, navbar)
+2. **Deploy to Railway** — push scheduler changes so 11 AM time is active (from Session 71)
+3. **Verify bankroll sync** — set initial bankroll on Account page, confirm Performance page uses it
+4. **Verify date range** — switch to 7D/90D on history, confirm data refetches correctly
+5. **Stripe integration** — subscribe page, customer portal, webhook
+6. **MLB pipeline** — train pitcher K model, build daily runner, backtesting harness
+7. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+8. **Re-enable play type scraper** when `stats.nba.com` datacenter ban lifts
+
+---
+
 ## Session Summary (2026-03-11 — Session 72)
 
 ### What We Did

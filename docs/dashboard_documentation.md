@@ -36,7 +36,7 @@ dashboard/
 │   │   │   ├── dfs/page.tsx          # DFS Edge Finder (model/market/combined)
 │   │   │   ├── history/page.tsx    # Bet history with filters
 │   │   │   ├── performance/page.tsx # Performance metrics
-│   │   │   ├── account/page.tsx    # Profile + community card
+│   │   │   ├── account/page.tsx    # Profile + bankroll settings + community card
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
 │   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback games)
 │   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s cache)
@@ -88,7 +88,7 @@ dashboard/
 │   ├── lib/hooks/
 │   │   ├── useGameStatus.ts       # Live NBA scoreboard polling (30s, today only)
 │   │   ├── useUserBets.ts         # Cross-device bet tracking
-│   │   └── useUserPreferences.ts  # Cross-device preferences
+│   │   └── useUserPreferences.ts  # Cross-device preferences (bankroll, initialBankroll, kelly, state)
 │   ├── lib/
 │   │   ├── supabase/           # Supabase client configuration
 │   │   │   ├── client.ts       # Browser client
@@ -1373,14 +1373,14 @@ Cross-device sync for user-placed bets and preferences, replacing per-device loc
 **`dashboard/src/lib/hooks/useUserPreferences.ts`** — Preferences sync hook.
 - Loads instantly from localStorage (SSR-safe), then syncs from `user_profiles` table
 - On change: writes to localStorage (instant) and DB (500ms debounced)
-- Covers: `userState`, `bankroll`, `kellyFraction`, `useCustomKelly`
+- Covers: `userState`, `bankroll`, `initialBankroll`, `kellyFraction`, `useCustomKelly`
 - Auto-creates profile row on first use via upsert
 - Returns `{ prefs, updatePref, loading }`
 
 ### Database Tables
 
 **`user_profiles`** — Per-user preferences.
-- `user_id` (uuid PK, FK auth.users), `user_state`, `bankroll` (default 1000), `kelly_fraction` (default 0.25), `use_custom_kelly`, `created_at`, `updated_at`
+- `user_id` (uuid PK, FK auth.users), `user_state`, `bankroll` (default 1000), `initial_bankroll` (default 1000), `kelly_fraction` (default 0.25), `use_custom_kelly`, `created_at`, `updated_at`
 - RLS: users access only their own row
 
 **`user_bets`** — User-placed bets from PropCard checkmark or AnalysisModal "Take Bet".
@@ -1402,12 +1402,14 @@ Cross-device sync for user-placed bets and preferences, replacing per-device loc
 
 - **Dashboard page** — `useUserBets(selectedDate)` replaces localStorage `takenBets`. `useUserPreferences()` replaces localStorage `userState`.
 - **AnalysisModal** — `useUserPreferences()` replaces 6 localStorage reads for bankroll/kelly/state. `onTakeBet` prop enables "Take Bet" button (Session 68). Sizing computation lifted to `useMemo`.
-- **History page** — Two tabs: "My Bets" (default, green) queries `user_bets`, "Model History" preserves existing paper_bets view. Maps `team_abbrev`/`opponent_abbrev` for matchup display on BetCards (Session 68).
-- **Performance page** — Three tabs: "My Bets" (green), "Props", "DFS". My Bets shows KPIs, bankroll chart, and stat breakdown from `user_bets`.
+- **History page** — Two tabs: "My Bets" (default, green) queries `user_bets`, "Model History" preserves existing paper_bets view. Maps `team_abbrev`/`opponent_abbrev` for matchup display on BetCards (Session 68). Date range filter with date pickers and preset buttons (7D, 30D, 90D, All) — re-fetches data on date change (Session 73).
+- **Performance page** — Three tabs: "My Bets" (green), "Props", "DFS". My Bets shows KPIs, bankroll chart, and stat breakdown from `user_bets`. All bankroll chart calculations use `prefs.initialBankroll` instead of hardcoded 1000 (Session 73).
+- **Account page** — Bankroll Settings card with Initial Bankroll (ROI calcs) and Current Bankroll (bet sizing + Navbar) inputs. Both sync via `useUserPreferences` (Session 73).
+- **Navbar** — Shows user's current bankroll from `useUserPreferences` instead of paper trading daily log (Session 73).
 
 ## Future Enhancements
 
-1. **Date range selector** — Allow selecting custom date ranges for history/performance
+1. ~~**Date range selector**~~ — **DONE (Session 73)**: History page has date pickers + presets (7D/30D/90D/All)
 2. **Vercel Analytics** — Add `@vercel/analytics` for page view tracking
 3. **Error monitoring** — Add Sentry for error tracking
 4. **Health check endpoint** — `/api/health` for uptime monitoring

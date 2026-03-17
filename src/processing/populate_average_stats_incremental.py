@@ -55,6 +55,7 @@ PLAYER_BASIC_STATS = [
 
 B3_B4_STATS = ["min", "pts", "reb", "ast", "fg3m"]
 STARTER_MINUTES_THRESHOLD = 20
+MIN_MINUTES_FOR_STATS = 5
 
 # Player advanced stat mapping: source column → target name
 PLAYER_ADVANCED_MAPPING = {
@@ -250,11 +251,16 @@ def calculate_basic_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFrame:
     player_df["games_l15"] = (player_df["game_number"] - 1).clip(upper=15)
     player_df["games_szn"] = player_df["game_number"] - 1
 
+    # Mask out games where the player played < MIN_MINUTES_FOR_STATS
+    # These are injury exits / garbage-time-only appearances that distort rolling averages.
+    # Schedule features (rest_days, games_last_7d) still count all games.
+    min_mask = player_df["min"].shift(1) >= MIN_MINUTES_FOR_STATS
+
     # Rolling averages for each stat (L5, L15, szn)
     for stat in PLAYER_BASIC_STATS:
         if stat not in player_df.columns:
             continue
-        shifted = player_df[stat].shift(1)
+        shifted = player_df[stat].shift(1).where(min_mask)
         for window_name, window_size in WINDOWS.items():
             col_name = f"avg_{stat}_{window_name}"
             if window_size is None:
@@ -266,25 +272,25 @@ def calculate_basic_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFrame:
     for stat in L3_STATS:
         if stat not in player_df.columns:
             continue
-        shifted = player_df[stat].shift(1)
+        shifted = player_df[stat].shift(1).where(min_mask)
         player_df[f"avg_{stat}_l3"] = shifted.rolling(window=3, min_periods=1).mean()
 
     # B3/B4: L5 standard deviations
     for stat in B3_B4_STATS:
         if stat not in player_df.columns:
             continue
-        shifted = player_df[stat].shift(1)
+        shifted = player_df[stat].shift(1).where(min_mask)
         player_df[f"std_{stat}_l5"] = shifted.rolling(window=5, min_periods=2).std()
 
     # B4: Minutes floor (L5 min)
     if "min" in player_df.columns:
-        shifted_min = player_df["min"].shift(1)
+        shifted_min = player_df["min"].shift(1).where(min_mask)
         player_df["min_floor_l5"] = shifted_min.rolling(window=5, min_periods=1).min()
 
     # B4: Games started L5
     if "min" in player_df.columns:
         is_starter = (player_df["min"] >= STARTER_MINUTES_THRESHOLD).astype(float)
-        shifted_starter = is_starter.shift(1)
+        shifted_starter = is_starter.shift(1).where(min_mask)
         player_df["games_started_l5"] = shifted_starter.rolling(window=5, min_periods=1).sum()
 
     # B2: Rest days

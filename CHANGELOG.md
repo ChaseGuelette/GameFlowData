@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-17 Session 74] — Minimum-Minutes Filter for Rolling Averages + PgBouncer Fix
+
+### Added
+
+- **`MIN_MINUTES_FOR_STATS = 5` constant** in both `populate_average_stats.py` and `populate_average_stats_incremental.py` — games where a player played < 5 minutes (injury exits, garbage time) are NaN-masked before computing rolling averages. Prevents 1-minute injury games from corrupting L5/L15/SZN averages, L3 averages, L5 standard deviations, min_floor, and games_started features.
+- **3 new unit tests** in `test_populate_average_stats.py`:
+  - `test_low_minutes_games_excluded_from_rolling` — 1-min game excluded from reb avg and min_floor, rest_days still counts it
+  - `test_all_low_minutes_produces_nan` — all prior games < 5 min produces NaN features
+  - `test_low_minutes_excluded_incremental` — incremental pipeline matches full backfill behavior
+
+### Changed
+
+- **Insert functions use DELETE instead of TRUNCATE** — `TRUNCATE` requires AccessExclusive lock that times out through PgBouncer/Supabase pooler (port 6543). All three insert functions (`insert_player_basic_averages`, `insert_player_advanced_averages`, `insert_team_averages`) now use `DELETE FROM` + fresh connection per batch.
+- **`engine.dispose()` before write phase** — clears stale pooled connections after the computation phase to prevent SSL timeout errors.
+- **Schedule features unchanged** — `rest_days` and `games_last_7d` still count all games regardless of minutes (schedule features, not stat features).
+
+### Context
+
+Leonard Miller's REB prediction for 3/16 exposed the issue: a 1-minute injury exit on 3/8 dragged `avg_reb_l5` from 9.25 to 7.40 and `min_floor_l5` from 24.0 to 1.0, producing a large probability disagreement with the market.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/processing/populate_average_stats.py` | Modified — min_mask filter, DELETE instead of TRUNCATE, engine.dispose() |
+| `src/processing/populate_average_stats_incremental.py` | Modified — min_mask filter |
+| `tests/test_populate_average_stats.py` | Modified — 3 new tests, TRUNCATE→DELETE assertions |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean
+- Full backfill completed (22,965 rows, season 22025)
+- Miller's avg_reb_l5: 7.40 → 9.25, min_floor_l5: 1.00 → 24.00
+
+---
+
+## [2026-03-13 Session 73] — Date Range Filter + Bankroll Settings + Integration
+
+### Added
+
+- **`initial_bankroll` column** on `user_profiles` table — `numeric DEFAULT 1000`. Stores user's starting bankroll for ROI/growth calculations.
+- **`initialBankroll` in `useUserPreferences` hook** — Full cross-device sync (localStorage cache `betting_initial_bankroll` + Supabase `initial_bankroll` column). Interface, defaults, DB read/write, and `updatePref` switch case.
+- **Bankroll Settings card on Account page** — Two `$`-prefixed number inputs between Profile and Community: Initial Bankroll (ROI calcs) and Current Bankroll (bet sizing + Navbar display).
+- **Date range filter on History page** — Two `<input type="date">` pickers and quick preset buttons (7D, 30D, 90D, All). Shared across both My Bets and Model History tabs. Re-fetches on date change.
+
+### Changed
+
+- **History page subtitle** — Dynamic date range label (e.g., "Feb 11 – Mar 13") replaces hardcoded "Last 30 days".
+- **Performance page** — All 3 hardcoded `INITIAL_BANKROLL = 1000` replaced with `prefs.initialBankroll` (Model Picks chart, My Bets chart, My Bets KPI card). Added to `useMemo` dependency arrays.
+- **Navbar bankroll** — Shows user's current bankroll from `useUserPreferences` instead of paper trading daily log. Removed standalone Supabase `paper_trading_daily_log` fetch.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/lib/hooks/useUserPreferences.ts` | Modified — `initialBankroll` field |
+| `dashboard/src/app/(protected)/account/page.tsx` | Modified — Bankroll Settings card |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — Date range filter + presets |
+| `dashboard/src/app/(protected)/performance/page.tsx` | Modified — User bankroll integration |
+| `dashboard/src/components/layout/Navbar.tsx` | Modified — User bankroll from prefs |
+
+### Verified
+
+- 693 Python tests pass, 0 failures
+- Ruff clean
+- Dashboard build clean (`npm run build`)
+
+---
+
 ## [2026-03-11 Session 72] — Real-Time Game Status from NBA Scoreboard
 
 ### Added

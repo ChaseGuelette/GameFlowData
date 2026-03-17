@@ -184,7 +184,7 @@ def test_insert_player_basic_averages_truncates_and_batches(module, monkeypatch)
 
     module.insert_player_basic_averages(engine, df)
 
-    assert any("TRUNCATE TABLE player_average_game_stats" in str(call[0][0]) for call in conn.execute.call_args_list)
+    assert any("DELETE FROM player_average_game_stats" in str(call[0][0]) for call in conn.execute.call_args_list)
     assert len(captured_batches) == 2
     assert captured_batches[0]["avg_min_l5"].iloc[0] == 1.2346
 
@@ -224,7 +224,7 @@ def test_insert_player_advanced_averages_inserts(module, monkeypatch):
 
     assert "player_average_advanced_stats" in to_sql_calls
     assert any(
-        "TRUNCATE TABLE player_average_advanced_stats" in str(call[0][0]) for call in conn.execute.call_args_list
+        "DELETE FROM player_average_advanced_stats" in str(call[0][0]) for call in conn.execute.call_args_list
     )
 
 
@@ -261,7 +261,7 @@ def test_insert_team_averages_inserts(module, monkeypatch):
     module.insert_team_averages(engine, df)
 
     assert "team_average_game_stats" in to_sql_calls
-    assert any("TRUNCATE TABLE team_average_game_stats" in str(call[0][0]) for call in conn.execute.call_args_list)
+    assert any("DELETE FROM team_average_game_stats" in str(call[0][0]) for call in conn.execute.call_args_list)
 
 
 def test_main_player_only_calls_player_flow(module, monkeypatch):
@@ -302,6 +302,114 @@ def test_main_player_only_calls_player_flow(module, monkeypatch):
     insert_basic.assert_called_once()
     fetch_adv.assert_not_called()
     fetch_team.assert_not_called()
+
+
+@pytest.fixture
+def incremental_module(monkeypatch):
+    mock_client = Mock()
+    monkeypatch.setitem(sys.modules, "src.db.client", mock_client)
+    monkeypatch.setitem(sys.modules, "src.db", Mock())
+    if "processing.populate_average_stats_incremental" in sys.modules:
+        del sys.modules["processing.populate_average_stats_incremental"]
+    return importlib.import_module("processing.populate_average_stats_incremental")
+
+
+def test_low_minutes_games_excluded_from_rolling(module):
+    """A 1-min injury exit game should be excluded from stat rolling averages
+    but schedule features (rest_days) should still count it."""
+    df = pd.DataFrame(
+        {
+            "player_id": [1] * 7,
+            "season_id": ["2024"] * 7,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-03", "2024-10-04",
+                 "2024-10-05", "2024-10-06", "2024-10-07"]
+            ),
+            "min": [30, 32, 28, 1, 30, 34, 29],   # game 3 (idx=3) is 1-min injury exit
+            "pts": [20, 22, 18, 0, 24, 26, 20],
+            "reb": [8, 9, 7, 0, 8, 10, 6],
+            "ast": [5, 4, 6, 0, 5, 7, 3],
+            "fg3m": [2, 3, 1, 0, 2, 4, 1],
+        }
+    )
+
+    df = module.calculate_player_basic_averages(df)
+    df = module.calculate_b2_b3_b4_features(df)
+
+    # Row 6 (game 7): L5 window covers games 1-5 (indices 1-5)
+    # Without filter: avg_reb_l5 includes 0 from 1-min game → (9+7+0+8+10)/5 = 6.8
+    # With filter: avg_reb_l5 excludes 1-min game → (9+7+8+10)/4 = 8.5
+    row6 = df.iloc[6]
+    assert row6["avg_reb_l5"] == pytest.approx(8.5, abs=0.01), \
+        f"Expected 8.5 but got {row6['avg_reb_l5']} — low-minutes game not excluded"
+
+    # min_floor_l5 should exclude the 1-min game
+    # Without filter: min(32, 28, 1, 30, 34) = 1.0
+    # With filter: min(32, 28, 30, 34) = 28.0
+    assert row6["min_floor_l5"] == pytest.approx(28.0, abs=0.01), \
+        f"Expected 28.0 but got {row6['min_floor_l5']} — 1-min game not excluded from min_floor"
+
+    # rest_days should still count the 1-min game (schedule feature)
+    # Game 7 (Oct 7) - Game 6 (Oct 6) = 1 day
+    assert row6["rest_days"] == 1
+
+
+def test_all_low_minutes_produces_nan(module):
+    """When all prior games are < 5 min, rolling averages should be NaN."""
+    df = pd.DataFrame(
+        {
+            "player_id": [1] * 4,
+            "season_id": ["2024"] * 4,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-03", "2024-10-04"]
+            ),
+            "min": [2, 3, 4, 30],   # first 3 games all < 5 min
+            "pts": [1, 2, 1, 20],
+            "reb": [0, 1, 0, 8],
+            "ast": [0, 0, 1, 5],
+            "fg3m": [0, 0, 0, 3],
+        }
+    )
+
+    df = module.calculate_player_basic_averages(df)
+
+    # Row 3 (game 4): all prior games were < 5 min, so all masked → NaN
+    assert pd.isna(df["avg_reb_l5"].iloc[3]), \
+        f"Expected NaN but got {df['avg_reb_l5'].iloc[3]} — low-minutes games should produce NaN"
+
+
+def test_low_minutes_excluded_incremental(incremental_module):
+    """Test that the incremental pipeline also excludes low-minutes games."""
+    player_df = pd.DataFrame(
+        {
+            "player_id": [1] * 7,
+            "game_id": [f"g{i}" for i in range(7)],
+            "season_id": ["2024"] * 7,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-03", "2024-10-04",
+                 "2024-10-05", "2024-10-06", "2024-10-07"]
+            ),
+            "team_id": [10] * 7,
+            "min": [30, 32, 28, 1, 30, 34, 29],
+            "pts": [20, 22, 18, 0, 24, 26, 20],
+            "reb": [8, 9, 7, 0, 8, 10, 6],
+            "ast": [5, 4, 6, 0, 5, 7, 3],
+            "fg3m": [2, 3, 1, 0, 2, 4, 1],
+            "fgm": [8] * 7, "fga": [16] * 7, "fg_pct": [0.5] * 7,
+            "fg3a": [5] * 7, "fg3_pct": [0.4] * 7,
+            "ftm": [4] * 7, "fta": [5] * 7, "ft_pct": [0.8] * 7,
+            "oreb": [2] * 7, "dreb": [6] * 7,
+            "stl": [1] * 7, "blk": [1] * 7, "tov": [2] * 7,
+            "pf": [3] * 7, "plus_minus": [5] * 7,
+        }
+    )
+
+    result = incremental_module.calculate_basic_rolling_for_player(player_df)
+
+    row6 = result.iloc[6]
+    assert row6["avg_reb_l5"] == pytest.approx(8.5, abs=0.01)
+    assert row6["min_floor_l5"] == pytest.approx(28.0, abs=0.01)
+    assert row6["rest_days"] == 1
 
 
 def test_calculate_b2_b3_b4_features_l3_no_leakage(module):

@@ -38,6 +38,7 @@ BATCH_SIZE = 100
 # B2/B3/B4 feature configuration
 B3_B4_STATS = ["min", "pts", "reb", "ast", "fg3m"]
 STARTER_MINUTES_THRESHOLD = 20  # No start_position col in DB; proxy via minutes
+MIN_MINUTES_FOR_STATS = 5
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -215,14 +216,18 @@ def calculate_player_basic_averages(df: pd.DataFrame) -> pd.DataFrame:
     # Calculate game number and games in each window
     df = calculate_games_in_window(df, group_cols)
 
+    # Mask out games where the player played < MIN_MINUTES_FOR_STATS
+    # (injury exits / garbage-time-only). Schedule features still count all games.
+    min_mask = df.groupby(group_cols)["min"].shift(1) >= MIN_MINUTES_FOR_STATS
+
     # Calculate rolling averages for each stat
     for stat in PLAYER_BASIC_STATS:
         if stat not in df.columns:
             logger.warning(f"Column {stat} not found, skipping")
             continue
 
-        # Shift to only use prior games (prevent leakage)
-        shifted = df.groupby(group_cols)[stat].shift(1)
+        # Shift to only use prior games (prevent leakage), mask low-minutes games
+        shifted = df.groupby(group_cols)[stat].shift(1).where(min_mask)
 
         for window_name, window_size in WINDOWS.items():
             col_name = f"avg_{stat}_{window_name}"
@@ -283,23 +288,26 @@ def calculate_b2_b3_b4_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values(group_cols + ["game_date"]).copy()
     group_key = df[group_cols].apply(lambda x: tuple(x), axis=1)
 
+    # Mask out games where the player played < MIN_MINUTES_FOR_STATS
+    min_mask = df.groupby(group_cols)["min"].shift(1) >= MIN_MINUTES_FOR_STATS
+
     # === B3: L3 rolling averages ===
     for stat in B3_B4_STATS:
-        shifted = df.groupby(group_cols)[stat].shift(1)
+        shifted = df.groupby(group_cols)[stat].shift(1).where(min_mask)
         df[f"avg_{stat}_l3"] = rolling_with_groupby(shifted, group_key, window=3)
 
     # === B3/B4: L5 rolling standard deviation ===
     for stat in B3_B4_STATS:
-        shifted = df.groupby(group_cols)[stat].shift(1)
+        shifted = df.groupby(group_cols)[stat].shift(1).where(min_mask)
         df[f"std_{stat}_l5"] = rolling_with_groupby(shifted, group_key, window=5, min_periods=2, agg="std")
 
     # === B4: Minutes floor (L5 rolling min) ===
-    shifted_min = df.groupby(group_cols)["min"].shift(1)
+    shifted_min = df.groupby(group_cols)["min"].shift(1).where(min_mask)
     df["min_floor_l5"] = rolling_with_groupby(shifted_min, group_key, window=5, agg="min")
 
     # === B4: Games started L5 (min >= threshold proxy) ===
     df["_is_starter"] = (df["min"] >= STARTER_MINUTES_THRESHOLD).astype(float)
-    shifted_starter = df.groupby(group_cols)["_is_starter"].shift(1)
+    shifted_starter = df.groupby(group_cols)["_is_starter"].shift(1).where(min_mask)
     df["games_started_l5"] = rolling_with_groupby(shifted_starter, group_key, window=5, agg="sum")
     df.drop(columns=["_is_starter"], inplace=True)
 
@@ -377,18 +385,22 @@ def insert_player_basic_averages(engine, df: pd.DataFrame):
     if "min_floor_l5" in insert_df.columns:
         insert_df["min_floor_l5"] = insert_df["min_floor_l5"].round(2)
 
-    # Batch insert with upsert
-    with engine.begin() as conn:
-        # Truncate and reload (simpler than upsert for full refresh)
-        conn.execute(text("TRUNCATE TABLE player_average_game_stats"))
+    # Clear stale pool connections before write phase
+    engine.dispose()
 
-        # Insert in batches
-        for i in range(0, len(insert_df), BATCH_SIZE):
-            batch = insert_df.iloc[i : i + BATCH_SIZE]
+    # Delete and reload (DELETE works better than TRUNCATE through PgBouncer)
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM player_average_game_stats"))
+        logger.info("Deleted existing player basic average rows")
+
+    # Insert in batches (fresh connection per batch to avoid pooler timeouts)
+    for i in range(0, len(insert_df), BATCH_SIZE):
+        batch = insert_df.iloc[i : i + BATCH_SIZE]
+        with engine.begin() as conn:
             batch.to_sql("player_average_game_stats", conn, if_exists="append", index=False, method="multi")
-            logger.info(
-                f"Inserted batch {i // BATCH_SIZE + 1} ({min(i + BATCH_SIZE, len(insert_df)):,}/{len(insert_df):,})"
-            )
+        logger.info(
+            f"Inserted batch {i // BATCH_SIZE + 1} ({min(i + BATCH_SIZE, len(insert_df)):,}/{len(insert_df):,})"
+        )
 
     logger.info(f"Inserted {len(insert_df):,} player basic average rows")
 
@@ -544,11 +556,15 @@ def insert_player_advanced_averages(engine, df: pd.DataFrame):
     numeric_cols = [c for c in insert_df.columns if c.startswith("avg_")]
     insert_df[numeric_cols] = insert_df[numeric_cols].round(4)
 
-    with engine.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE player_average_advanced_stats"))
+    engine.dispose()
 
-        for i in range(0, len(insert_df), BATCH_SIZE):
-            batch = insert_df.iloc[i : i + BATCH_SIZE]
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM player_average_advanced_stats"))
+        logger.info("Deleted existing player advanced average rows")
+
+    for i in range(0, len(insert_df), BATCH_SIZE):
+        batch = insert_df.iloc[i : i + BATCH_SIZE]
+        with engine.begin() as conn:
             batch.to_sql(
                 "player_average_advanced_stats",
                 conn,
@@ -556,9 +572,9 @@ def insert_player_advanced_averages(engine, df: pd.DataFrame):
                 index=False,
                 method="multi",
             )
-            logger.info(
-                f"Inserted batch {i // BATCH_SIZE + 1} ({min(i + BATCH_SIZE, len(insert_df)):,}/{len(insert_df):,})"
-            )
+        logger.info(
+            f"Inserted batch {i // BATCH_SIZE + 1} ({min(i + BATCH_SIZE, len(insert_df)):,}/{len(insert_df):,})"
+        )
 
     logger.info(f"Inserted {len(insert_df):,} player advanced average rows")
 
@@ -746,15 +762,19 @@ def insert_team_averages(engine, df: pd.DataFrame):
     numeric_cols = [c for c in insert_df.columns if c.startswith("avg_")]
     insert_df[numeric_cols] = insert_df[numeric_cols].round(4)
 
-    with engine.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE team_average_game_stats"))
+    engine.dispose()
 
-        for i in range(0, len(insert_df), BATCH_SIZE):
-            batch = insert_df.iloc[i : i + BATCH_SIZE]
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM team_average_game_stats"))
+        logger.info("Deleted existing team average rows")
+
+    for i in range(0, len(insert_df), BATCH_SIZE):
+        batch = insert_df.iloc[i : i + BATCH_SIZE]
+        with engine.begin() as conn:
             batch.to_sql("team_average_game_stats", conn, if_exists="append", index=False, method="multi")
-            logger.info(
-                f"Inserted batch {i // BATCH_SIZE + 1} ({min(i + BATCH_SIZE, len(insert_df)):,}/{len(insert_df):,})"
-            )
+        logger.info(
+            f"Inserted batch {i // BATCH_SIZE + 1} ({min(i + BATCH_SIZE, len(insert_df)):,}/{len(insert_df):,})"
+        )
 
     logger.info(f"Inserted {len(insert_df):,} team average rows")
 

@@ -534,7 +534,7 @@ class BacktestHarness:
             logger.warning(f"Error fetching lines for {game_date}: {e}")
             return pd.DataFrame()
 
-    def _prefetch_all_lines(self, start_date: date, end_date: date, chunk_size: int = 15) -> dict[date, pd.DataFrame]:
+    def _prefetch_all_lines(self, start_date: date, end_date: date, chunk_size: int = 3) -> dict[date, pd.DataFrame]:
         """Prefetch all prop lines for a date range in chunked queries.
 
         Returns dict[date, DataFrame] with the same columns as _get_lines_for_date.
@@ -644,7 +644,29 @@ class BacktestHarness:
                 )
 
             except Exception as e:
-                logger.error(f"Error fetching lines chunk {ci + 1} ({chunk_start} to {chunk_end}): {e}")
+                logger.warning(f"Lines chunk {ci + 1} failed ({chunk_start} to {chunk_end}), retrying 1-date-at-a-time...")
+                for single_date in chunk_dates:
+                    try:
+                        with self.engine.connect() as conn:
+                            single_lines = pd.read_sql(
+                                query,
+                                conn,
+                                params={
+                                    "chunk_start": single_date,
+                                    "chunk_end": single_date,
+                                    "markets": list(markets),
+                                    "bookmakers": list(self.bookmakers),
+                                },
+                            )
+                        if not single_lines.empty:
+                            for gd, group_df in single_lines.groupby("game_date"):
+                                if hasattr(gd, "date"):
+                                    gd = gd.date()
+                                result[gd] = group_df.drop(columns=["game_date"]).reset_index(drop=True)
+                            total_lines += len(single_lines)
+                            logger.info(f"    Retry {single_date}: {len(single_lines)} rows")
+                    except Exception as retry_e:
+                        logger.error(f"    Retry {single_date} also failed: {retry_e}")
 
         logger.info(f"Prefetched lines for {len(result)} dates ({total_lines} total line entries)")
         return result
