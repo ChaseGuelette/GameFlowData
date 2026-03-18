@@ -128,7 +128,7 @@ PTS   0.100→0.144  0.250→0.263  0.500→0.512  0.750→0.761  0.900→0.908
 Flag any quantile where drift exceeds 5 percentage points with a warning marker.
 
 ### C. Bias Summary
-Show mean bias % for each stat. Flag if >5%.
+Show mean bias % for each stat. Flag if >4%.
 
 ### D. Betting ROI Summary
 Show the stat/direction breakdown table from Step 3, plus overall ROI and total P&L.

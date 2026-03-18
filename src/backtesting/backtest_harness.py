@@ -643,7 +643,7 @@ class BacktestHarness:
                     f"({len(chunk_dates)} dates) -> {len(chunk_lines)} rows"
                 )
 
-            except Exception as e:
+            except Exception:
                 logger.warning(f"Lines chunk {ci + 1} failed ({chunk_start} to {chunk_end}), retrying 1-date-at-a-time...")
                 for single_date in chunk_dates:
                     try:

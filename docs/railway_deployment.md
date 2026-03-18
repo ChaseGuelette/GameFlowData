@@ -15,7 +15,7 @@ Railway runs a single always-on worker (`scheduler.py`) with 7 APScheduler job d
 | Full Lines (Noon) | 12:00 PM | Full scrape (game lines + props + injuries) | Always |
 | Inference (Noon) | 12:15 PM | Full MC inference + paper bets | Always |
 | Full Lines (4 PM) | 4:00 PM | Full scrape (catches new props) | Always |
-| Inference (4 PM) | 4:15 PM | Full MC inference + paper bets | Always |
+| Inference (4 PM) | 4:15 PM | Full MC inference (skip paper bets — already placed at noon) | Always |
 
 ## Quick Start
 

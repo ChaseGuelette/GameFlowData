@@ -27,13 +27,13 @@ logger = logging.getLogger(__name__)
 QUANTILES = [0.10, 0.25, 0.50, 0.75, 0.90]
 QUANTILE_COLS = {q: f"pred_q{int(q * 100)}" for q in QUANTILES}
 
-# Thresholds
+# Thresholds (tightened Session 75 — catch drift earlier)
 MIN_RESOLVED_BETS = 20
-QUANTILE_GAP_THRESHOLD = 0.05  # flag if coverage gap > 5%
-BIAS_REL_THRESHOLD = 5.0  # flag if relative bias > 5%
-EDGE_GAP_THRESHOLD = 0.10  # flag if edge accuracy gap > 10pp
+QUANTILE_GAP_THRESHOLD = 0.03  # flag if coverage gap > 3% (was 5%)
+BIAS_REL_THRESHOLD = 4.0  # flag if relative bias > 4% (was 5%)
+EDGE_GAP_THRESHOLD = 0.08  # flag if edge accuracy gap > 8pp (was 10pp)
 EDGE_MIN_SAMPLE = 10  # minimum bets in an edge bucket
-ECE_THRESHOLD = 0.05
+ECE_THRESHOLD = 0.03  # flag if ECE > 0.03 (was 0.05)
 
 
 @dataclass

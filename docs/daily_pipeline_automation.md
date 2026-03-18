@@ -8,10 +8,10 @@ The daily pipeline is split into four jobs based on execution frequency:
 
 | Job | Schedule (ET) | Purpose | Runtime |
 |-----|---------------|---------|---------|
-| `daily_stats_job.py` | 9:00 AM | NBA game results + processing | ~3-5 min |
-| `daily_stats_job.py` (retry) | 9:30 AM | Auto-retry if 9 AM run failed | ~3-5 min |
+| `daily_stats_job.py` | 11:00 AM | NBA game results + processing | ~3-5 min |
+| `daily_stats_job.py` (retry) | 11:30 AM | Auto-retry if 11 AM run failed | ~3-5 min |
 | `lines_job.py --live --parallel` | 12 PM, 4 PM | Full live scrape with parallel props + injury paths | ~45-55 sec |
-| `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation (checks daily stats dependency) | ~16 sec |
+| `inference_job.py` | 12:15 PM, 4:15 PM | Full MC inference + edge calculation (checks daily stats dependency). 4:15 PM run uses `--skip-bets` to avoid paper trading hang during game hours. | ~16 sec |
 | `lines_job.py --live --props-only` | Every 5 min, 11 AM – 11 PM | Props-only live scrape + linker | ~25-30 sec |
 | `edge_refresh_job.py` | Every 5 min (+2 min offset), 11 AM – 11 PM | Recalculate edges (--skip-paper on cron runs) | ~2-3 min |
 
@@ -24,7 +24,7 @@ The daily pipeline is split into four jobs based on execution frequency:
 ## Pipeline Timeline
 
 ```
-9:00 AM    daily_stats_job.py
+11:00 AM   daily_stats_job.py
            ├─ nba_unified_scraper.py (NBA game results)       [10m timeout, 2 retries]
            ├─ nba_linker_local.py incremental                 [10m timeout, 2 retries]
            ├─ backfill_team_ids.py                            [5m timeout, no retries]
@@ -35,7 +35,7 @@ The daily pipeline is split into four jobs based on execution frequency:
            ├─ resolve ALL pending paper bets
            └─ resolve ALL pending user bets (from dashboard checkmark)
 
-9:30 AM    daily_stats_retry (auto-retry if 9 AM failed)
+11:30 AM   daily_stats_retry (auto-retry if 11 AM failed)
            └─ Checks JOB_STATUS["daily_stats_job.py"], re-runs if not "success"
 
 12:00 PM   lines_job.py --live --parallel (full scrape, parallel)
@@ -65,7 +65,7 @@ The daily pipeline is split into four jobs based on execution frequency:
 
 4:00 PM    lines_job.py --live --parallel (full scrape — catches new player props)
 
-4:15 PM    inference_job.py (FULL MC inference — second window)
+4:15 PM    inference_job.py --skip-bets (MC inference — skip paper trading, bets already placed at noon)
 
 7:00 PM    Games typically start
 ```
@@ -78,7 +78,7 @@ The daily pipeline is split into four jobs based on execution frequency:
 
 **Purpose:** Scrape NBA game results from the previous night and run the full processing pipeline to update derived stats.
 
-**Schedule:** Once daily, 9:00 AM ET (after previous night's games are final)
+**Schedule:** Once daily, 11:00 AM ET (after previous night's games are final, moved from 9 AM to ensure all games are posted)
 
 ### Usage
 

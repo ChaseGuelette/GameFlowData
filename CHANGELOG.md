@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-17 Session 75b] — Inference Recovery, Scheduler Skip-Bets Fix, Calibration Threshold Tightening
+
+### Fixed
+
+- **4:15 PM inference timeout on Railway** — `PaperTrader.select_bets()` hangs during game hours loading MC samples + BL blending (same issue as Session 65's edge_refresh fix). Root cause confirmed via Railway logs: started at 16:15:00 UTC, timed out at 17:00:00 (exactly 45 min). Fixed by adding `skip_bets=True` parameter to the 4:15 PM cron job in `scheduler.py`.
+- **TBD game times** — All 603 predictions had `game_time = NULL` because `raw_game_lines_staging` was empty. Manually ran game lines scraper, then re-ran inference to populate game times via `_enrich_game_times()`.
+
+### Changed
+
+- **Calibration monitoring thresholds tightened** in `calibration_monitor.py` — catches drift earlier:
+  - Quantile coverage gap: 5% → 3%
+  - ECE: 0.05 → 0.03
+  - Bias relative threshold: 5.0% → 4.0%
+  - Edge accuracy gap: 10pp → 8pp
+- **Scheduler 4 PM inference skips paper trading** — `run_inference()` now accepts `skip_bets: bool` parameter. 4:15 PM cron uses `lambda: run_inference(skip_bets=True)` since bets are already placed at noon.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/scheduler.py` | Modified — skip_bets parameter, 4PM lambda |
+| `src/paper_trading/calibration_monitor.py` | Modified — tightened all 4 drift thresholds |
+
+### Verified
+
+- 663 Python tests pass, 0 failures
+- Ruff clean
+- Inference re-run successful: 591 predictions, 7 recommended bets, game times populated
+
+---
+
+## [2026-03-17 Session 75] — Model Recalibration A/B Test, New Model Deployment, Backtest SSL Fix
+
+### Added
+
+- **Backtest lines retry with single-date fallback** in `backtest_harness.py` — when a multi-date chunk fails (SSL timeout), retries each date individually so partial data is still recovered.
+
+### Changed
+
+- **Backtest lines chunk_size reduced from 15 to 3 days** in `backtest_harness.py` — prevents SSL timeouts on the large `raw_player_props_combined` JOIN query through Supabase pooler. 16-day backtest now completes in ~5 min with 163K line entries (was timing out on 15-date chunks).
+- **Production model promoted to `run_20260317_133145`** — trained on 3 seasons (22023+22024+22025) with proven hyperparams from prior model. Backtested at 40.3% ROI, 73.4% win rate, 308 bets over Mar 1-16 (vs old model's 35.2% ROI, 71.0% win rate, 328 bets). Deployed without calibration offsets.
+
+### Investigation Results
+
+- **Calibration offsets confirmed harmful (3rd time)** — Fresh conformal offsets on old model: ROI dropped from 35.2% → 22.4% (328 → 311 bets). REB ROI cratered from 43.4% → 11.4%. Max drawdown doubled (21% → 44%). Same offsets on new model also hurt (40.3% → 34.7%). The model's lower-quantile "miscalibration" IS the under-betting edge — correcting it removes the edge.
+- **Supabase zombie connections found and killed** — 2 "idle in transaction" connections from Mar 4 and Mar 6 (12+ days old) were holding locks, blocking all new queries and causing SSL timeouts. Terminated via `pg_terminate_backend()`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/backtesting/backtest_harness.py` | Modified — chunk_size 15→3, single-date retry fallback |
+| `src/models/artifacts/production/` | Replaced — new model run_20260317_133145, no offsets |
+
+### Verified
+
+- 696 Python tests pass, 0 failures
+- Ruff clean
+- A/B backtest: 4 runs compared (old model ± offsets, new model ± offsets)
+- New model without offsets wins on ROI (+5.1pp), win rate (+2.4pp), Sharpe (+0.22)
+
+---
+
 ## [2026-03-17 Session 74] — Minimum-Minutes Filter for Rolling Averages + PgBouncer Fix
 
 ### Added

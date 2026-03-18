@@ -432,7 +432,7 @@ A simulation environment to validate betting strategies.
 
 | Module | Purpose |
 |--------|---------|
-| `backtest_harness.py` | Core engine — day-by-day historical replay with blind predictions. `BacktestResult` dataclass. Integrates optional BL blending in `_calculate_edges()`. Supports per-stat configuration via `StatConfigSet`. |
+| `backtest_harness.py` | Core engine — day-by-day historical replay with blind predictions. `BacktestResult` dataclass. Integrates optional BL blending in `_calculate_edges()`. Supports per-stat configuration via `StatConfigSet`. Lines prefetched in 3-day chunks with single-date retry fallback on failure. |
 | `bet_simulator.py` | `Bet` and `BetOutcome` classes. `BetSide` enum (OVER/UNDER). P&L tracking per bet. Stores BL `posterior_prob` diagnostic. Supports per-stat edge thresholds via `StatConfigSet`. |
 | `performance_metrics.py` | `PerformanceMetrics` dataclass — ROI, hit rate, Sharpe ratio, drawdown, Brier score. |
 | `run_backtest.py` | CLI entry point. Accepts date range, model paths, output directory. Supports per-stat edge thresholds and BL tau via `nargs="+"` format. |
@@ -468,7 +468,7 @@ A simulation environment to validate betting strategies.
 |--------|----------|---------|
 | `daily_stats_job.py` | 11:00 AM ET (once) | NBA game results + full processing pipeline |
 | `lines_job.py --live --parallel` | 12 PM, 4 PM ET | Full lines scrape with parallel execution (props + injuries concurrent) |
-| `inference_job.py` | 12:15 PM, 4:15 PM ET | Full inference (MC predictions + edges + BL) |
+| `inference_job.py` | 12:15 PM, 4:15 PM ET | Full inference (MC predictions + edges + BL). 4:15 PM run uses `--skip-bets` to avoid paper trading hang during game hours (Session 75 fix). |
 | `lines_job.py --live --props-only` | Every 5 min, 11 AM–11 PM ET | Props-only scrape (~156 runs/day, silent Discord) |
 | `edge_refresh_job.py` | Every 5 min +2 min offset, 11 AM–11 PM ET | Recalculate edges (~156 runs/day, silent Discord, `--skip-paper` on cron runs) |
 
@@ -525,6 +525,7 @@ Scheduled tasks registered via `scripts/setup_windows_tasks.ps1` (run as Adminis
 - Single always-on worker process handles all scheduled jobs
 - Environment variables: `DATABASE_URL`, `ODDS_API_KEY`, `RAPIDAPI_KEY`, `DISCORD_CHANNEL_ALERTS`
 - Model artifacts use "production folder" strategy: `src/models/artifacts/production/` is committed to git, `run_*/` directories are gitignored
+- **Current production model:** `run_20260317_133145` — trained on seasons 22023+22024+22025 (3 seasons), calibrated on 22025 through Mar 1 2026. No calibration offsets deployed (offsets confirmed to hurt ROI in 3 separate A/B backtests). Previous model `run_20260210_095220` backed up to `production_old_20260210/`.
 - Promote models via `scripts/promote_model.py` — copies latest training run to production folder
 - See `docs/railway_deployment.md` for full setup guide
 
@@ -680,6 +681,7 @@ cd dashboard && npm run lint   # ESLint check
 | `place_bets.py` | CLI to place paper bets from daily predictions |
 | `resolve_bets.py` | CLI to resolve bets using actual game results |
 | `audit_and_resolve.py` | Diagnostic script — audits bet status by date, finds missed bets, backfills, and resolves |
+| `calibration_monitor.py` | Calibration drift monitor — computes quantile coverage, bias, ECE, Brier score, and edge accuracy from resolved paper bets. Runs after bet resolution in daily_stats_job. Thresholds (tightened Session 75): quantile gap 3%, ECE 0.03, bias 4%, edge gap 8pp. Alerts drive Discord severity (healthy/warning/critical). Bias alerts excluded from severity (systematic under-prediction is intentional). |
 
 **Database Tables:**
 - `paper_bets` — Individual bet records with odds, edge, stake, status, P&L. Unique on `(game_date, player_id, stat_type, bet_direction)`.

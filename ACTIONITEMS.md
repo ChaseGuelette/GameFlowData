@@ -1,33 +1,61 @@
 # GameFlowData — Roadmap
 
-## Session Summary (2026-03-17 — Session 74)
+## Session Summary (2026-03-17 — Session 75b)
 
 ### What We Did
 
-**Minimum-Minutes Filter for Rolling Averages + PgBouncer Fix (3 files modified)**
+**Inference Recovery + Scheduler Fix + Calibration Threshold Tightening (2 files modified)**
 
-1. **Added `MIN_MINUTES_FOR_STATS = 5` filter** to both `populate_average_stats.py` and `populate_average_stats_incremental.py`. Games where a player played < 5 minutes are NaN-masked before computing rolling averages (L5/L15/SZN, L3, L5 std, min_floor, games_started). Schedule features (rest_days, games_last_7d) still count all games.
+1. **Diagnosed 4:15 PM inference timeout** — Railway logs showed 4:15 PM UTC inference started at 16:15:00 and timed out at 17:00:00 (exactly 45 min). Root cause: `PaperTrader.select_bets()` hangs during game hours loading MC samples + BL blending (same issue fixed in Session 65 for `edge_refresh_job.py`).
 
-2. **Fixed PgBouncer timeout on writes** — Replaced `TRUNCATE` with `DELETE FROM` in all three insert functions. Added `engine.dispose()` before write phase and fresh connection per batch. TRUNCATE required AccessExclusive lock that consistently timed out through Supabase pooler (port 6543).
+2. **Fixed scheduler skip-bets for 4 PM run** — Added `skip_bets: bool = False` parameter to `run_inference()` in `scheduler.py`. 4:15 PM cron job now uses `lambda: run_inference(skip_bets=True)` to skip paper trading (bets already placed at noon).
 
-3. **Added 3 unit tests** — Covers low-minutes exclusion, all-low-minutes NaN, and incremental pipeline consistency.
+3. **Fixed TBD game times** — `raw_game_lines_staging` was empty (game lines hadn't been scraped). Manually ran `daily_game_lines_scraper.py`, then re-ran inference which called `_enrich_game_times()` to populate all game_time values.
 
-4. **Ran full backfill** — 22,965 rows for season 22025. Verified Miller's `avg_reb_l5` corrected from 7.40 → 9.25.
+4. **Re-ran inference with new model** — After new model (`run_20260317_133145`) was pushed, manually re-ran inference: 591 predictions, 7 recommended bets, 7 paper bets placed, Discord alert sent.
 
-**Modified (3):**
-- `src/processing/populate_average_stats.py` — min_mask, DELETE, engine.dispose()
-- `src/processing/populate_average_stats_incremental.py` — min_mask
-- `tests/test_populate_average_stats.py` — 3 new tests
+5. **Tightened calibration monitoring thresholds** — More aggressive drift detection:
+   - `QUANTILE_GAP_THRESHOLD`: 5% → 3%
+   - `ECE_THRESHOLD`: 0.05 → 0.03
+   - `BIAS_REL_THRESHOLD`: 5.0% → 4.0%
+   - `EDGE_GAP_THRESHOLD`: 10pp → 8pp
+
+**Modified (2):**
+- `src/orchestration/scheduler.py` — skip-bets parameter for 4 PM inference
+- `src/paper_trading/calibration_monitor.py` — tightened all drift thresholds
+
+---
+
+## Session Summary (2026-03-17 — Session 75)
+
+### What We Did
+
+**Model Recalibration A/B Test + New Model Deployment + Backtest SSL Fix (2 files modified)**
+
+1. **Ran calibration A/B backtest** — Generated fresh conformal offsets on old production model, ran 4-way backtest comparison (old ± offsets, new ± offsets) over Mar 1-16 with full 163K line entries. Confirmed for the 3rd time that calibration offsets hurt ROI (-12.8pp on old model, -5.7pp on new model).
+
+2. **Promoted new model to production** — `run_20260317_133145` trained on 3 seasons (22023+22024+22025) with proven hyperparams. Backtested at 40.3% ROI, 73.4% win rate (vs old model's 35.2%, 71.0%). Deployed without offsets.
+
+3. **Fixed backtest SSL timeouts** — Killed 2 zombie "idle in transaction" DB connections (12+ days old), reduced lines chunk_size from 15→3 days, added single-date retry fallback.
+
+4. **Updated calibration log and memory** — Documented findings, revised recalibration triggers (ROI <5% over 14d, ECE >0.10, age >4 weeks), established rule to never use global conformal offsets again.
+
+**Modified (2):**
+- `src/backtesting/backtest_harness.py` — chunk_size 15→3, retry fallback
+- `src/models/artifacts/production/` — new model run_20260317_133145
 
 ### Remaining Action Items
 
-1. **Run advanced stats scraper** — 3 days missed (3/14-3/16), task scheduler didn't fire (PC was likely asleep). Run manually: `python src/scrapers/nba_unified_scraper.py --no-proxy --skip-team --skip-traditional`
-2. **Consider enabling WakeToRun** on `GameFlowData_AdvancedScraper` scheduled task to prevent future missed runs
-3. **Deploy to Vercel** — push dashboard changes (date filter, bankroll settings from Session 73)
-4. **Deploy to Railway** — push scheduler changes so 11 AM time is active (from Session 71)
-5. **Stripe integration** — subscribe page, customer portal, webhook
-6. **MLB pipeline** — train pitcher K model, build daily runner, backtesting harness
-7. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+1. ~~**Run inference with new model**~~ — DONE (Session 75b)
+2. **Monitor new model performance** — Track ROI over first week, compare to backtest expectations
+3. **Run advanced stats scraper** — 3+ days missed (3/14-3/16+), task scheduler didn't fire (PC was likely asleep)
+4. **Consider enabling WakeToRun** on `GameFlowData_AdvancedScraper` scheduled task
+5. **Deploy to Vercel** — push dashboard changes (date filter, bankroll settings from Session 73)
+6. ~~**Deploy to Railway**~~ — DONE (scheduler changes deployed, skip-bets fix active)
+7. **Stripe integration** — subscribe page, customer portal, webhook
+8. **MLB pipeline** — train pitcher K model, build daily runner, backtesting harness
+9. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+10. **Clean up `production_old_20260210/`** — remove old model backup after confirming new model is stable (~1 week)
 
 ---
 
