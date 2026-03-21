@@ -2,6 +2,7 @@ import { ImageResponse } from 'next/og'
 import { NextRequest } from 'next/server'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import { createClient } from '@/lib/supabase/server'
 
 interface SlatePickData {
   player_id: number
@@ -49,10 +50,22 @@ const STAT_LABEL: Record<string, string> = {
 }
 
 export async function POST(request: NextRequest) {
-  const body: SlateRequest = await request.json()
+  // Auth check — only logged-in users can generate slates
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return new Response('Unauthorized', { status: 401 })
+  }
+
+  let body: SlateRequest
+  try {
+    body = await request.json()
+  } catch {
+    return new Response('Invalid JSON', { status: 400 })
+  }
   const { picks, date } = body
 
-  if (!picks || picks.length === 0) {
+  if (!picks || picks.length === 0 || !date) {
     return new Response('No picks provided', { status: 400 })
   }
 

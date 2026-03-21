@@ -83,7 +83,7 @@ class TestTrainingOrchestratorInit:
         assert orchestrator.run_dir.exists()
 
     def test_run_dir_is_timestamped(self, orchestrator):
-        assert orchestrator.run_dir.name.startswith("run_")
+        assert orchestrator.run_dir.name.startswith("nba_run_")
 
     def test_default_tuning_disabled(self, orchestrator):
         assert orchestrator.tune_hyperparams is False

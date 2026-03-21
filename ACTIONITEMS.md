@@ -1,5 +1,57 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-21 — Session 80)
+
+### What We Did
+
+**DFS Edge Finder: Threes/Steals/Blocks Support (1 migration, 4 files modified, 1 new file)**
+
+1. **Extended `StatType`** — Added `'stl' | 'blk' | '3pm'` to `StatType` union in `predictions.ts`. Added labels (Steals, Blocks, Threes) and colors (orange, red, cyan) to `STAT_LABELS` and `STAT_COLORS`.
+
+2. **Extended DFS Market Mappings** — Added `player_steals`, `player_blocks`, `player_threes` to `MARKET_TO_STAT` and `STAT_TO_MARKET` in `dfs.ts`. Previously 232 DFS lines (18.5% of daily total) were silently dropped because they had no market mapping.
+
+3. **Dynamic Stat Filter** — Changed `DfsFilters.tsx` from hardcoded 3-stat list to dynamic `Object.entries(STAT_LABELS)` so the DFS page now shows all 6 stat filter buttons.
+
+4. **RPC Market Filter Removed** — Migration 020 removes the `market_key IN ('player_points', 'player_rebounds', 'player_assists')` filter from `get_sportsbook_lines_by_games`. RPC now returns all markets (threes: 15 books, steals: 7, blocks: 8). Frontend filters via `MARKET_TO_STAT`.
+
+5. **AnalysisModal Compatibility** — Updated local `STAT_COLUMN_MAP` and `STAT_TO_MARKET` types from `Record<StatType, ...>` to `Record<string, ...>` to avoid TS errors with the expanded union.
+
+6. **Prediction Pages Unaffected** — `FilterTabs.tsx` (used by picks/performance/history) remains hardcoded to PTS/REB/AST only.
+
+### Remaining Action Items
+
+1. **Deploy to Vercel** — push all dashboard changes (DFS 6-stat support, security headers, error boundaries, auth, query narrowing)
+2. **Stripe integration** — subscribe page, customer portal, webhook
+3. **MLB pipeline** — train pitcher K model, build daily runner, backtesting harness
+4. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+5. **Clean up `production_old_20260210/`** — remove old model backup
+6. **Future: Pagination** — Add pagination to history/performance pages (see SCALING.md Tier 1)
+7. **Future: Client-side caching** — React Query for cross-page data caching (see SCALING.md Tier 2)
+8. **Future: Database indexes** — Composite indexes on `raw_player_props_combined`, `paper_bets`, `user_bets` (see SCALING.md)
+9. **Fix pre-existing test** — `test_finds_latest_run_directory` fails because `find_latest_model_dir` now expects `nba_run_*` prefix but test creates `run_*` dirs
+
+---
+
+## Session Summary (2026-03-21 — Session 79)
+
+### What We Did
+
+**Production Security Hardening (1 migration, 9 files modified, 4 new files)**
+
+1. **RLS Lockdown** — Enabled Row Level Security on all 20 unprotected tables via migration 018. Added 3 authenticated SELECT policies for dashboard-facing tables (`dfs_paper_daily_log`, `dfs_paper_entries`, `rapidapi_injuries`). All other tables default-deny (Python backend bypasses via postgres role).
+
+2. **Security Headers** — Added 5 security headers to `next.config.ts`: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy`, `Permissions-Policy`.
+
+3. **Error Boundaries** — Created `error.tsx` in all 3 route groups (`(protected)`, `(public)`, `(auth)`). Catches runtime errors and shows retry UI instead of white screen.
+
+4. **API Auth** — Added Supabase auth check to `/api/slate` POST handler. Returns 401 for unauthenticated requests.
+
+5. **Query Hardening** — Replaced `select('*')` with explicit column lists on 10 queries across 4 files. Added try/catch around slate JSON body parsing.
+
+6. **SCALING.md** — Created comprehensive scaling guide with bottleneck analysis, capacity estimates, and phased optimization roadmap.
+
+---
+
 ## Session Summary (2026-03-18 — Session 77)
 
 ### What We Did

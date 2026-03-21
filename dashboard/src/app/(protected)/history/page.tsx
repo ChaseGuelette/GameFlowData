@@ -76,7 +76,7 @@ export default function HistoryPage() {
 
       const { data: betsData, error: betsError } = await supabase
         .from('paper_bets')
-        .select('*')
+        .select('id, prediction_id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl')
         .gte('game_date', startDate)
         .lte('game_date', endDate)
         .order('game_date', { ascending: false })
@@ -133,7 +133,7 @@ export default function HistoryPage() {
 
       const { data, error } = await supabase
         .from('user_bets')
-        .select('*')
+        .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet, team_abbrev, opponent_abbrev, bet_context, user_confidence')
         .gte('game_date', startDate)
         .lte('game_date', endDate)
         .order('game_date', { ascending: false })

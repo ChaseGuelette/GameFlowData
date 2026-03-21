@@ -586,14 +586,14 @@ def find_latest_model_dir(base_dir: str) -> Path:
     if (base / "minutes_model.joblib").exists():
         return base
 
-    # Find all run_* directories, sorted newest first
+    # Find all nba_run_* directories, sorted newest first
     runs = sorted(
-        [d for d in base.iterdir() if d.is_dir() and d.name.startswith("run_")],
+        [d for d in base.iterdir() if d.is_dir() and d.name.startswith("nba_run_")],
         reverse=True,
     )
 
     if not runs:
-        raise FileNotFoundError(f"No run_* directories found in {base}")
+        raise FileNotFoundError(f"No nba_run_* directories found in {base}")
 
     # Find first complete run (has minutes_model.joblib)
     for run_dir in runs:
@@ -731,7 +731,7 @@ Examples:
         output_dir = Path(args.output_dir)
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path("backtest_results") / f"sweep_{timestamp}"
+        output_dir = Path("backtest_results") / f"nba_sweep_{timestamp}"
 
     # Initialize shared components
     engine = get_engine()

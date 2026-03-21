@@ -137,7 +137,7 @@ def main():
             runs = sorted([
                 d for d in artifacts_path.iterdir()
                 if d.is_dir()
-                and d.name.startswith("run_")
+                and d.name.startswith("nba_run_")
                 and not d.name.endswith("_incomplete")
             ])
             if not runs:
@@ -145,7 +145,7 @@ def main():
                     f"No model found. Checked:\n"
                     f"  - {artifacts_path}/minutes_model.joblib\n"
                     f"  - {artifacts_path}/production/\n"
-                    f"  - {artifacts_path}/run_*/\n"
+                    f"  - {artifacts_path}/nba_run_*/\n"
                     "Run training first or promote a model to production."
                 )
             model_path = runs[-1]

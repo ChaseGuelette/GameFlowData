@@ -97,6 +97,8 @@ export default function DfsPage() {
       dfsData = dfsRes.data
       setDfsLines(dfsData)
     } else {
+      // eslint-disable-next-line no-console
+      if (dfsRes.error) console.error('get_dfs_lines RPC error:', dfsRes.error)
       setDfsLines([])
     }
 

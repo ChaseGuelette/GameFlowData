@@ -1,4 +1,4 @@
-export type StatType = 'pts' | 'reb' | 'ast'
+export type StatType = 'pts' | 'reb' | 'ast' | 'stl' | 'blk' | '3pm'
 
 export interface Prediction {
   id: number
@@ -180,6 +180,9 @@ export const STAT_LABELS: Record<StatType, string> = {
   pts: 'Points',
   reb: 'Rebounds',
   ast: 'Assists',
+  stl: 'Steals',
+  blk: 'Blocks',
+  '3pm': 'Threes',
 }
 
 // Stat colors for badges
@@ -187,4 +190,7 @@ export const STAT_COLORS: Record<StatType, string> = {
   pts: 'bg-blue-500',
   reb: 'bg-green-500',
   ast: 'bg-purple-500',
+  stl: 'bg-orange-500',
+  blk: 'bg-red-500',
+  '3pm': 'bg-cyan-500',
 }

@@ -83,7 +83,7 @@ export default function PerformancePage() {
       // Fetch daily performance log (for bankroll chart)
       const { data: logData, error: logError } = await supabase
         .from('paper_trading_daily_log')
-        .select('*')
+        .select('game_date, total_bets, bets_won, bets_lost, bets_push, total_staked, total_pnl, cumulative_pnl, bankroll_after, roi_pct')
         .order('game_date', { ascending: true })
 
       if (!logError && logData) {
@@ -96,7 +96,7 @@ export default function PerformancePage() {
       // Fetch all resolved bets
       const { data: betsData, error: betsError } = await supabase
         .from('paper_bets')
-        .select('*')
+        .select('id, prediction_id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl')
         .in('status', ['won', 'lost', 'push'])
         .order('game_date', { ascending: true })
 
@@ -145,11 +145,11 @@ export default function PerformancePage() {
       const [entriesRes, dailyRes] = await Promise.all([
         supabase
           .from('dfs_paper_entries')
-          .select('*')
+          .select('id, entry_date, slip_type, platform, num_legs, stake, status, legs_won, legs_lost, legs_push, legs_cancelled, payout_multiplier, pnl, avg_edge, min_edge')
           .order('entry_date', { ascending: true }),
         supabase
           .from('dfs_paper_daily_log')
-          .select('*')
+          .select('entry_date, entries_placed, entries_won, entries_lost, entries_partial, total_staked, total_pnl, roi_pct, cumulative_pnl, bankroll_after')
           .order('entry_date', { ascending: true }),
       ])
 
@@ -177,7 +177,7 @@ export default function PerformancePage() {
 
       const { data, error } = await supabase
         .from('user_bets')
-        .select('*')
+        .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet')
         .in('status', ['won', 'lost', 'push'])
         .order('game_date', { ascending: true })
 

@@ -5,7 +5,7 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
   const supabase = await createClient()
   const { data, error } = await supabase
     .from('user_subscriptions')
-    .select('*')
+    .select('status, current_period_end')
     .eq('user_id', userId)
     .single()
 

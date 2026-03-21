@@ -38,7 +38,7 @@ def list_runs():
     runs = sorted([
         d for d in ARTIFACTS_DIR.iterdir()
         if d.is_dir()
-        and d.name.startswith("run_")
+        and d.name.startswith("nba_run_")
         and not d.name.endswith("_incomplete")
     ])
 
@@ -62,7 +62,7 @@ def promote(run_name: str | None = None):
     runs = sorted([
         d for d in ARTIFACTS_DIR.iterdir()
         if d.is_dir()
-        and d.name.startswith("run_")
+        and d.name.startswith("nba_run_")
         and not d.name.endswith("_incomplete")
     ])
 

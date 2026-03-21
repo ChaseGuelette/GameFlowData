@@ -699,10 +699,10 @@ def find_latest_model_dir(base_dir: str) -> Path:
 
     runs = sorted([
         d for d in base.iterdir()
-        if d.is_dir() and d.name.startswith("run_") and not d.name.endswith("_incomplete")
+        if d.is_dir() and d.name.startswith("mlb_run_") and not d.name.endswith("_incomplete")
     ])
     if not runs:
-        raise FileNotFoundError(f"No run_* directories found in {base}")
+        raise FileNotFoundError(f"No mlb_run_* directories found in {base}")
     return runs[-1]
 
 
@@ -761,7 +761,7 @@ def main():
         output_dir = Path(args.output_dir)
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path("backtest_results") / "mlb" / f"sweep_{timestamp}"
+        output_dir = Path("backtest_results") / f"mlb_sweep_{timestamp}"
 
     # Initialize
     engine = get_engine()

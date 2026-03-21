@@ -51,7 +51,7 @@ class NCAABTrainingOrchestrator:
         self.engine = create_engine(DATABASE_URL)
         self.feature_store = NCAABFeatureStore(self.engine)
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_dir = ARTIFACTS_DIR / f"run_{self.timestamp}_incomplete"
+        self.run_dir = ARTIFACTS_DIR / f"ncaab_run_{self.timestamp}_incomplete"
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self, train_seasons: list[int], cal_season: int | None = None) -> None:
@@ -92,7 +92,7 @@ class NCAABTrainingOrchestrator:
         self._save(spread_suite, total_suite)
 
         # Rename run dir (remove _incomplete)
-        final_dir = ARTIFACTS_DIR / f"run_{self.timestamp}"
+        final_dir = ARTIFACTS_DIR / f"ncaab_run_{self.timestamp}"
         self.run_dir.rename(final_dir)
         logger.info(f"Artifacts saved to {final_dir}")
 

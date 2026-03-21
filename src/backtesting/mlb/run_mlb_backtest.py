@@ -52,14 +52,14 @@ def find_latest_model_dir(base_dir: str) -> Path:
     if (base / "production" / "pitcher_k_model.joblib").exists():
         return base / "production"
 
-    # Fall back to latest run_* directory
+    # Fall back to latest mlb_run_* directory
     runs = sorted([
         d for d in base.iterdir()
-        if d.is_dir() and d.name.startswith("run_")
+        if d.is_dir() and d.name.startswith("mlb_run_")
         and not d.name.endswith("_incomplete")
     ])
     if not runs:
-        raise FileNotFoundError(f"No run_* directories found in {base}")
+        raise FileNotFoundError(f"No mlb_run_* directories found in {base}")
 
     return runs[-1]
 
@@ -129,7 +129,7 @@ def main():
     result = harness.run(args.start, args.end)
 
     # Output results
-    output_dir = args.output_dir or f"backtest_results/mlb/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    output_dir = args.output_dir or f"backtest_results/mlb_bt_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     result.to_csv(output_dir)
 
     # Print summary

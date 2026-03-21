@@ -53,10 +53,10 @@ def find_latest_model_dir(base_dir: str) -> Path:
     if (base / "minutes_model.joblib").exists():
         return base
 
-    # Otherwise look for run_* subdirectories
-    runs = sorted([d for d in base.iterdir() if d.is_dir() and d.name.startswith("run_")])
+    # Otherwise look for nba_run_* subdirectories
+    runs = sorted([d for d in base.iterdir() if d.is_dir() and d.name.startswith("nba_run_")])
     if not runs:
-        raise FileNotFoundError(f"No run_* directories found in {base}")
+        raise FileNotFoundError(f"No nba_run_* directories found in {base}")
 
     return runs[-1]
 
@@ -163,7 +163,7 @@ def main():
         output_dir = Path(args.output_dir)
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path("backtest_results") / f"bt_{timestamp}"
+        output_dir = Path("backtest_results") / f"nba_bt_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize components

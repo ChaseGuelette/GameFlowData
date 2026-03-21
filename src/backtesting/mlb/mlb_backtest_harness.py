@@ -151,24 +151,77 @@ class MLBBacktestHarness:
         if not all_predictions:
             logger.warning("No predictions generated in backtest period")
             empty_df = pd.DataFrame()
+            empty_metrics = PerformanceMetrics(
+                total_bets=0, wins=0, losses=0, pushes=0,
+                total_staked=0.0, total_profit=0.0, roi=0.0,
+                return_on_capital=0.0, hit_rate=0.0, sharpe_ratio=0.0,
+                max_drawdown=0.0, win_streak=0, loss_streak=0,
+                calibration_results=[], overall_calibration_gap=0.0,
+                by_stat={}, by_edge_bucket={},
+            )
             return MLBBacktestResult(
                 predictions_df=empty_df,
                 bets_df=empty_df,
                 all_edges_df=empty_df,
-                metrics=PerformanceMetrics(),
+                metrics=empty_metrics,
                 start_date=start_date,
                 end_date=end_date,
                 config=self._get_config(),
             )
 
         predictions_df = pd.DataFrame(all_predictions)
+        predictions_df = predictions_df.sort_values(["game_date", "game_id", "player_id"])
         all_edges_df = pd.DataFrame(all_bookmaker_edges) if all_bookmaker_edges else pd.DataFrame()
 
-        # Simulate betting
-        bets_df = self._simulator.simulate(predictions_df)
+        logger.info(f"Total predictions generated: {len(predictions_df)}")
+
+        # Phase 2: Sequential betting simulation (day-by-day for bankroll management)
+        logger.info("Phase 2: Simulating bets...")
+
+        # Build actuals DataFrame for resolution
+        actuals_rows = []
+        for pred in all_predictions:
+            if "actual" in pred and pred["actual"] is not None:
+                actuals_rows.append({
+                    "player_id": pred["player_id"],
+                    "game_id": pred["game_id"],
+                    "stat": pred["stat"],
+                    "actual_value": pred["actual"],
+                })
+        actuals_df = pd.DataFrame(actuals_rows) if actuals_rows else pd.DataFrame()
+
+        # Day-by-day simulation
+        sorted_dates = sorted(predictions_df["game_date"].unique())
+        for sim_date in sorted_dates:
+            # Resolve pending bets from previous days
+            if len(actuals_df) > 0:
+                self._simulator.resolve_bets(actuals_df)
+
+            # Get and evaluate predictions for this date
+            day_preds = predictions_df[predictions_df["game_date"] == sim_date]
+            self._simulator.evaluate_predictions(day_preds, sim_date)
+
+        # Final resolution
+        if len(actuals_df) > 0:
+            resolved = self._simulator.resolve_bets(actuals_df)
+            logger.info(f"Final resolution: {resolved} resolved bets")
+
+        bets_df = self._simulator.to_dataframe()
+
+        # Merge actuals into predictions_df
+        if len(predictions_df) > 0 and len(actuals_df) > 0:
+            actuals_merge = actuals_df.rename(columns={"actual_value": "actual"})
+            predictions_df = predictions_df.drop(columns=["actual"], errors="ignore")
+            predictions_df = predictions_df.merge(
+                actuals_merge[["player_id", "game_id", "stat", "actual"]],
+                on=["player_id", "game_id", "stat"],
+                how="left",
+            )
 
         # Calculate metrics
-        metrics = self._metrics_calc.calculate(predictions_df, bets_df)
+        metrics = self._metrics_calc.calculate(
+            predictions_df, bets_df, starting_bankroll=self.starting_bankroll
+        )
 
         logger.info(
             f"MLB Backtest complete: {len(predictions_df)} predictions, "
@@ -209,27 +262,33 @@ class MLBBacktestHarness:
         # Get games for date
         games = self._get_games(game_date)
         if not games:
+            logger.info(f"  {game_date}: no games found in schedule")
             return predictions, all_edges
 
         # Pitcher K predictions
         pitcher_stats = [s for s in self.stats if s.startswith("pitcher_")]
         if pitcher_stats and self.pitcher_k_predictor is not None:
             pitchers = self._get_pitchers(games)
+            logger.info(f"  {game_date}: {len(games)} games, {len(pitchers)} probable pitchers")
             for pitcher in pitchers:
                 try:
                     pred = self._predict_pitcher(pitcher, game_date)
-                    if pred is not None:
-                        # Fetch lines and calculate edges
-                        lines = self._get_lines_for_player(
-                            pitcher["player_id"], pitcher["game_id"],
-                            "pitcher_strikeouts", game_date
-                        )
-                        if lines:
-                            pred = self._add_edges(pred, lines)
-                            predictions.append(pred)
-                            all_edges.extend(lines)
+                    if pred is None:
+                        logger.debug(f"  {game_date}: no features for pitcher {pitcher['player_id']}")
+                        continue
+                    # Fetch lines and calculate edges
+                    lines = self._get_lines_for_player(
+                        pitcher["player_id"], pitcher["game_id"],
+                        "pitcher_strikeouts", game_date
+                    )
+                    if not lines:
+                        logger.debug(f"  {game_date}: no lines for pitcher {pitcher['player_id']}")
+                        continue
+                    pred = self._add_edges(pred, lines)
+                    predictions.append(pred)
+                    all_edges.extend(lines)
                 except Exception as e:
-                    logger.debug(f"Error predicting pitcher {pitcher['player_id']}: {e}")
+                    logger.warning(f"  {game_date}: error predicting pitcher {pitcher['player_id']}: {e}")
 
         # Fetch actuals for all predictions on this date
         if predictions:
@@ -247,6 +306,7 @@ class MLBBacktestHarness:
         query = text("""
             SELECT s.game_id, s.home_team_id, s.away_team_id,
                    s.probable_pitcher_home_id, s.probable_pitcher_away_id,
+                   s.venue_id,
                    ht.team_abbreviation AS home_team_abbrev,
                    at.team_abbreviation AS away_team_abbrev
             FROM mlb_game_schedule s
@@ -274,6 +334,7 @@ class MLBBacktestHarness:
                         "game_id": int(game["game_id"]),
                         "team_id": game[f"{side}_team_id"],
                         "opponent_id": game[f"{opp_side}_team_id"],
+                        "venue_id": game.get("venue_id") or 0,
                         "is_home": is_home,
                     })
         return pitchers
@@ -283,9 +344,11 @@ class MLBBacktestHarness:
         features = self.pitcher_feature_store.get_player_game_features(
             player_id=pitcher["player_id"],
             game_id=pitcher["game_id"],
-            as_of_date=game_date,
+            game_date=str(game_date),
             team_id=pitcher["team_id"],
-            opponent_id=pitcher["opponent_id"],
+            opp_team_id=pitcher["opponent_id"],
+            venue_id=pitcher.get("venue_id", 0),
+            season=game_date.year,
             is_home=pitcher["is_home"],
         )
 

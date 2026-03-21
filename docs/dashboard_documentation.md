@@ -40,6 +40,7 @@ dashboard/
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
 │   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback games)
 │   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s cache)
+│   │   ├── api/slate/route.tsx   # OG image generation for pick slates (auth-gated)
 │   │   ├── auth/callback/route.ts # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
@@ -103,8 +104,8 @@ dashboard/
 │   │   ├── subscription.ts     # Subscription utils (dormant)
 │   │   └── utils.ts            # Utility functions (formatting, edge tiers, game status)
 │   ├── types/
-│   │   ├── predictions.ts      # TypeScript interfaces (Prediction, PaperBet, BetContext)
-│   │   ├── dfs.ts              # DFS line types, slip types, platform constants
+│   │   ├── predictions.ts      # TypeScript interfaces (Prediction, PaperBet, BetContext); StatType (pts/reb/ast/stl/blk/3pm), STAT_LABELS, STAT_COLORS
+│   │   ├── dfs.ts              # DFS line types, slip types, platform constants, MARKET_TO_STAT (6 markets), STAT_TO_MARKET
 │   │   ├── stats.ts            # Data Vault types (ColumnDef, StatRow, SortState, PlayTypeCategory, PlayTypeGrouping)
 │   │   └── subscription.ts     # Subscription types (dormant)
 │   └── middleware.ts           # Auth redirect middleware
@@ -542,6 +543,32 @@ No subscription/paywall check (free beta). All authenticated users have full acc
 const PUBLIC_ROUTES = ['/', '/picks', '/pricing', '/terms', '/privacy']
 const AUTH_ROUTES = ['/login', '/signup']
 ```
+
+### API Route Auth
+
+Middleware excludes `/api/` routes. Auth is checked inside route handlers where needed:
+- `/api/slate` — requires `supabase.auth.getUser()`, returns 401 if unauthenticated
+- `/api/games`, `/api/scoreboard` — no auth (public NBA CDN data proxies)
+
+### Security Headers
+
+Applied to all routes via `next.config.ts` `headers()` function:
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `X-XSS-Protection: 1; mode=block`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy: camera=(), microphone=(), geolocation=()`
+
+Note: CSP not yet added — requires tuning for Supabase, NBA CDN, and inline styles.
+
+### Error Boundaries
+
+Each route group has an `error.tsx` that catches runtime errors:
+- `(protected)/error.tsx` — covers dashboard, performance, history, stats, dfs, account, subscribe
+- `(public)/error.tsx` — covers landing, picks, pricing, terms, privacy
+- `(auth)/error.tsx` — covers login, signup
+
+All show "Something went wrong" with a retry button. Prevents white-screen crashes.
 
 ### Login Flow
 
@@ -1232,9 +1259,9 @@ const sizingOdds = selectedLine ? selectedLine.relevantOdds : fallbackOdds
 const sizingModelProb = selectedLine ? selectedLine.modelProb : probability
 ```
 
-## DFS Edge Finder Page (`/dfs`) — Sessions 48-49
+## DFS Edge Finder Page (`/dfs`) — Sessions 48-49, 80
 
-Three-mode edge analysis comparing DFS platform lines (PrizePicks, Underdog, Pick6, Betr) against model probabilities and sportsbook consensus.
+Three-mode edge analysis comparing DFS platform lines (PrizePicks, Underdog, Pick6, Betr) against model probabilities and sportsbook consensus. Supports 6 stat types: Points, Rebounds, Assists, Steals, Blocks, Threes.
 
 ### Edge Modes
 
@@ -1274,7 +1301,7 @@ Three-mode edge analysis comparing DFS platform lines (PrizePicks, Underdog, Pic
 | `edgeMode` | `EdgeMode` | `'model'` | Which edge analysis to show |
 | `platformFilter` | string | `'all'` | Filter by DFS platform |
 | `slipType` | string | `'pp_6_flex'` | Break-even threshold for EV calc |
-| `statFilter` | string | `'all'` | Filter by stat type |
+| `statFilter` | string | `'all'` | Filter by stat type (All/PTS/REB/AST/STL/BLK/3PM — dynamic from `STAT_LABELS`) |
 | `evOnly` | boolean | `true` | Only show +EV picks |
 | `showLive` | boolean | `false` | Include picks from started games |
 
@@ -1320,6 +1347,8 @@ Devigging and market utilities (Session 49):
 **RPC Function:** `get_dfs_lines(target_date date)` — SECURITY DEFINER function returning latest DFS lines. Uses `ROW_NUMBER()` partitioned by (player_id, game_id, bookmaker, market_key, outcome_label) ordered by snapshot_time DESC. Handles game ID format mismatch via LPAD.
 
 **RPC Function:** `get_sportsbook_lines(target_date date)` — SECURITY DEFINER function returning latest non-DFS bookmaker lines for players with predictions on target date. Excludes DFS platforms (prizepicks, underdog, pick6, betr_us_dfs). Returns over_odds, under_odds, snapshot_time per player/game/bookmaker/market/line.
+
+**RPC Function:** `get_sportsbook_lines_by_games(text[])` — Accepts game_id array, returns all non-DFS sportsbook lines (no market_key filter since Session 80 / migration 020). 24-hour snapshot_time cutoff. Frontend filters to mapped markets via `MARKET_TO_STAT`. Returns threes (15+ books), steals (7+ books), blocks (8+ books) in addition to pts/reb/ast.
 
 **Index:** `idx_props_bookmaker_dfs` — Partial index for DFS bookmaker queries on 26M+ row table.
 

@@ -579,6 +579,7 @@ dashboard/
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
 │   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback game list)
 │   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s ISR cache)
+│   │   ├── api/slate/route.tsx   # OG image generation for pick slates (auth-gated)
 │   │   ├── auth/callback/route.ts  # Auth callback for email confirmation
 │   │   └── layout.tsx          # Root layout with dark theme
 │   ├── components/
@@ -608,13 +609,13 @@ dashboard/
 │   │   ├── subscription.ts     # Subscription types/utils (dormant)
 │   │   └── utils.ts            # Formatting, edge tiers, headshot URLs, game status helpers
 │   ├── types/
-│   │   ├── predictions.ts      # TypeScript interfaces for predictions, bets, performance
-│   │   ├── dfs.ts              # DFS line types, slip types, platform constants
+│   │   ├── predictions.ts      # TypeScript interfaces for predictions, bets, performance; StatType (pts/reb/ast/stl/blk/3pm), STAT_LABELS, STAT_COLORS
+│   │   ├── dfs.ts              # DFS line types, slip types, platform constants, MARKET_TO_STAT (6 markets), STAT_TO_MARKET
 │   │   ├── stats.ts            # Types for Data Vault (ColumnDef, StatRow, SortState)
 │   │   └── subscription.ts     # Subscription type definitions (dormant)
 │   └── middleware.ts           # Auth redirect for protected routes
 ├── .env.local                  # Supabase credentials (not committed)
-└── next.config.ts              # NBA CDN image domains
+└── next.config.ts              # NBA CDN image domains, security headers
 ```
 
 **Key Features:**
@@ -641,15 +642,17 @@ dashboard/
 - **Performance View (`/performance`):** Three tabs — **My Bets**, **Props**, and **DFS**. My Bets tab: personal KPI cards (bankroll, P&L, ROI, win rate), bankroll chart from cumulative user bet P&L, and stat breakdown. Props tab: model paper trading KPIs with bet source filter (Model Picks/All Bets), bankroll chart uses `prefs.initialBankroll` (user-configurable via Account page). DFS tab: KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays user's current bankroll from `useUserPreferences` hook (synced to `user_profiles.bankroll` via localStorage cache + Supabase DB). Account page provides dedicated Bankroll Settings card with Initial Bankroll (for ROI/growth calcs) and Current Bankroll (for bet sizing and Navbar display) inputs.
-- **Auth Protection:** Middleware redirects unauthenticated users to `/login`.
+- **Auth Protection:** Middleware redirects unauthenticated users to `/login`. API routes check auth inside handlers (`/api/slate` requires auth; `/api/games` and `/api/scoreboard` are public proxies).
+- **Security Headers:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` applied to all routes.
+- **Error Boundaries:** `error.tsx` in each route group (`(protected)`, `(public)`, `(auth)`) catches runtime errors with retry UI.
 - **Free Beta Model:** No paywall — all authenticated users have full access. Public `/picks` page shows 3 real picks via `get_public_picks()` RPC to drive signups. All CTAs point to sign-up and Discord. Stripe infrastructure preserved (dormant) for future activation at ~200 Discord members.
 - **Data Vault (`/stats`):** Dense heatmap stat table with player, team, defense-vs-position, and play type breakdowns. Features percentile-based blue heatmap coloring (5-step gradient with inline legend), sortable columns, sticky name/position/team columns, window toggles (L5/L15/SZN), category tabs (Box Score/Shooting/Advanced/Consistency for players), position and team filters with info button explaining G/W/B groups, stat header tooltips, and player search. Reads from 3 database views (`player_stats_latest`, `team_stats_latest`, `defense_by_position_latest`) plus the `team_play_types` table (Synergy play type data) that join rolling average tables with player/team reference data. All filtering and sorting is client-side after initial parallel fetch.
 - **DFS Edge Finder (`/dfs`):** Three-mode edge analysis for DFS platforms (PrizePicks, Underdog, Pick6, Betr):
   - **Model Edge:** Re-estimates model probability at the DFS-specific line via quantile interpolation from `dfs-utils.ts`. Computes EV = model_prob - break_even per slip type.
-  - **Market Edge:** Compares DFS lines against devigged sportsbook consensus probabilities. Uses `get_sportsbook_lines_by_games` RPC (batched by game_id, 3 per call) to fetch non-DFS bookmaker lines, finds exact line matches, applies multiplicative devigging (`americanToImpliedProb`, `devig` from `dfs-utils.ts`), identifies sharpest book (lowest vig). Shows `"--"` when no sportsbook offers the exact DFS line.
+  - **Market Edge:** Compares DFS lines against devigged sportsbook consensus probabilities for all 6 stat types (pts/reb/ast/stl/blk/3pm). Uses `get_sportsbook_lines_by_games` RPC (batched by game_id, 3 per call) to fetch non-DFS bookmaker lines across all markets, finds exact line matches, applies multiplicative devigging (`americanToImpliedProb`, `devig` from `dfs-utils.ts`), identifies sharpest book (lowest vig). Shows `"--"` when no sportsbook offers the exact DFS line.
   - **Combined Edge:** Highest-conviction tier — only shows picks where BOTH model AND market agree on direction AND both have positive edge. Displayed edge = `min(model_edge, market_edge)` (conservative estimate).
   - **Live Toggle:** "Pre-Game / + Live" toggle filters out started games by default. When enabled (orange), shows all picks including in-progress games.
-  - Platform filter tabs, slip type selector (PP 2-Pick, UD 3/5-Pick, PP 5/6-Flex), stat filter, +EV toggle, 3-way edge mode segmented control, KPI summary cards, and sortable table with mode-specific columns. Data fetched via `get_dfs_lines` and `get_sportsbook_lines` RPC functions. **Market mode works without predictions** — comparisons are built from DFS line data when no predictions exist (player_name/game_time from RPC join with `players` table and `commence_time`).
+  - Platform filter tabs, slip type selector (PP 2-Pick, UD 3/5-Pick, PP 5/6-Flex), stat filter (6 stats: Points, Rebounds, Assists, Steals, Blocks, Threes — dynamic from `STAT_LABELS`), +EV toggle, 3-way edge mode segmented control, KPI summary cards, and sortable table with mode-specific columns. Data fetched via `get_dfs_lines` and `get_sportsbook_lines` RPC functions. **Market mode works without predictions** — comparisons are built from DFS line data when no predictions exist (player_name/game_time from RPC join with `players` table and `commence_time`).
 - **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account/stats/dfs (requires auth).
 
 **Data Sources:**
@@ -666,7 +669,7 @@ dashboard/
 - `defense_by_position_latest` view — Data Vault defense tab (defense-vs-position stats)
 - `team_play_types` table — Season-level Synergy play type data (30 teams x 11 play types x 2 groupings)
 - SQL view definitions version-controlled in `sql/views/` (player_stats_latest.sql, team_stats_latest.sql, defense_by_position_latest.sql). All views use deterministic `DISTINCT ON` with `game_id DESC` tiebreaker.
-- **RPC Functions:** `get_dfs_lines` scopes by `commence_time` range (not `::date` cast, not `daily_predictions`), enabling data availability before inference runs. Joins with `players` table for `player_name` and returns `game_time` (commence_time). Migration `004_fix_rpc_prediction_dependency.sql`. `get_sportsbook_lines_by_games(text[])` accepts game_id array with 24-hour snapshot_time cutoff for sub-second performance on the multi-million row `raw_player_props_combined` table. Dashboard fetches sportsbook lines in batches of 3 game_ids in parallel. Migration `005_fast_sportsbook_rpc.sql`.
+- **RPC Functions:** `get_dfs_lines` scopes by `commence_time` range (not `::date` cast, not `daily_predictions`), enabling data availability before inference runs. Joins with `players` table for `player_name` and returns `game_time` (commence_time). Migration `004_fix_rpc_prediction_dependency.sql`. `get_sportsbook_lines_by_games(text[])` accepts game_id array with 24-hour snapshot_time cutoff for sub-second performance on the multi-million row `raw_player_props_combined` table. Returns all market types (no `market_key` filter — frontend filters via `MARKET_TO_STAT`). Dashboard fetches sportsbook lines in batches of 3 game_ids in parallel. Migrations `005_fast_sportsbook_rpc.sql`, `008_fix_rpc_game_id_dedup.sql`, `020_add_sportsbook_markets.sql`.
 - **NBA CDN Schedule API** — `/api/games` server-side route fetches today's games from `cdn.nba.com/static/json/staticData/scheduleLeagueV2.json`. Used as fallback when predictions haven't been generated yet (e.g., before inference runs). Maps tri-codes to full team names. 1-hour revalidation cache. Replaces previous `get_games_for_date` RPC which depended on the odds scraper having run.
 - **NBA CDN Live Scoreboard** — `/api/scoreboard` server-side route fetches `cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json`. Returns `Record<gameId, GameStatusInfo>` map with `gameStatus` (1=Pre, 2=Live, 3=Final), `gameStatusText` (e.g., "Q3 5:42"), `period`, and `gameClock`. 30-second ISR cache. Consumed by `useGameStatus` hook which polls every 30s when viewing today. Components fall back to time-based estimation when the scoreboard is unavailable or viewing historical dates.
 
@@ -905,10 +908,25 @@ DISCORD_CHANNEL_PERFORMANCE=...
 - `defense_by_position_latest`: Latest defense-vs-position — joins `team_allowed_by_position` + `teams`, filtered to G/W/B positions. 90 rows.
 - `team_play_types`: Season-level Synergy play type frequency and efficiency. 660 rows (30 teams x 11 play types x offensive/defensive). Public read RLS.
 
+### DFS Paper Trading
+- `dfs_paper_entries`: Multi-leg DFS slips. RLS enabled, authenticated SELECT.
+- `dfs_paper_daily_log`: Daily DFS aggregate tracking. RLS enabled, authenticated SELECT.
+- `dfs_paper_legs`: Individual picks within entries. RLS enabled, default deny (backend-only).
+
+### Internal/Operational
+- `job_executions`: Scheduler job run history. RLS enabled, default deny.
+- `rapidapi_injuries`: Injury reports from RapidAPI. RLS enabled, authenticated SELECT.
+
+### MLB Tables (Future)
+All 15 MLB tables (`mlb_daily_predictions`, `mlb_daily_prediction_samples`, `mlb_game_schedule`, `mlb_paper_bets`, `mlb_paper_trading_daily_log`, `mlb_park_factors`, `mlb_player_game_statcast_batting`, `mlb_player_game_statcast_pitching`, `mlb_player_game_stats_batting`, `mlb_player_game_stats_pitching`, `mlb_player_season_advanced`, `mlb_players`, `mlb_raw_game_lines`, `mlb_raw_player_props`, `mlb_teams`) have RLS enabled with default deny. Policies will be added when dashboard support is built.
+
 ### Reference
 - `players`: Player reference data.
 - `teams`: Team reference data.
 - `player_position_history`: Position tracking over time.
+
+### RLS Summary
+All public-schema tables have Row Level Security enabled. Python backend uses the `postgres` role which bypasses RLS. Dashboard queries use the `anon`/`authenticated` roles and are governed by explicit policies. Tables without policies use default-deny (no client access).
 
 ---
 

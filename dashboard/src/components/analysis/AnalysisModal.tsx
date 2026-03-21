@@ -33,17 +33,20 @@ interface AnalysisModalProps {
 }
 
 // Map stat type to column name in player_game_stats
-const STAT_COLUMN_MAP: Record<StatType, keyof PlayerGameStats> = {
+const STAT_COLUMN_MAP: Record<string, keyof PlayerGameStats> = {
   pts: 'pts',
   reb: 'reb',
   ast: 'ast',
 }
 
 // Map stat type to market_key in raw_player_props_combined
-const STAT_TO_MARKET: Record<StatType, string> = {
+const STAT_TO_MARKET: Record<string, string> = {
   pts: 'player_points',
   reb: 'player_rebounds',
   ast: 'player_assists',
+  stl: 'player_steals',
+  blk: 'player_blocks',
+  '3pm': 'player_threes',
 }
 
 // DFS platforms to exclude from main dashboard sportsbook lines

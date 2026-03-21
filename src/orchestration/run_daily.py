@@ -132,9 +132,9 @@ def main():
             if (artifacts_path / "minutes_model.joblib").exists():
                 model_path = artifacts_path
             else:
-                runs = sorted([d for d in artifacts_path.iterdir() if d.is_dir() and d.name.startswith("run_")])
+                runs = sorted([d for d in artifacts_path.iterdir() if d.is_dir() and d.name.startswith("nba_run_")])
                 if not runs:
-                    raise FileNotFoundError(f"No run_* directories found in {artifacts_path}")
+                    raise FileNotFoundError(f"No nba_run_* directories found in {artifacts_path}")
                 model_path = runs[-1]
                 logger.info(f"Using latest model artifacts from: {model_path.name}")
 

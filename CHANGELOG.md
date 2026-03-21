@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-21 Session 80] — DFS Edge Finder: Threes/Steals/Blocks
+
+### Added
+
+- **3 new stat types** — `StatType` extended with `'stl' | 'blk' | '3pm'`. `STAT_LABELS` and `STAT_COLORS` updated (Steals/orange, Blocks/red, Threes/cyan).
+- **3 new DFS market mappings** — `MARKET_TO_STAT` and `STAT_TO_MARKET` extended with `player_steals`, `player_blocks`, `player_threes`. Previously 18.5% of daily DFS lines (232 lines) were silently dropped.
+- **Migration 020** — `get_sportsbook_lines_by_games` RPC no longer filters `market_key IN (...)`. Returns all sportsbook markets; frontend filters via `MARKET_TO_STAT`.
+
+### Changed
+
+- **Dynamic DFS stat filter** — `DfsFilters.tsx` now uses `Object.entries(STAT_LABELS)` instead of hardcoded 3-stat list. Shows all 6 stat filter buttons.
+- **AnalysisModal type relaxation** — `STAT_COLUMN_MAP` and local `STAT_TO_MARKET` changed from `Record<StatType, ...>` to `Record<string, ...>` for compatibility with expanded union.
+
+### Unchanged
+
+- **Prediction pages** — `FilterTabs.tsx` (picks/performance/history) remains hardcoded to PTS/REB/AST. Model only predicts 3 stats; DFS page shows all 6 for market edge comparison.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/types/predictions.ts` | Modified — 3 new StatType members, labels, colors |
+| `dashboard/src/types/dfs.ts` | Modified — 3 new market mappings |
+| `dashboard/src/components/dfs/DfsFilters.tsx` | Modified — dynamic stat list |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — relaxed Record types |
+| `database/migrations/020_add_sportsbook_markets.sql` | Created — remove market_key filter from RPC |
+
+---
+
+## [2026-03-21 Session 79] — Production Security Hardening
+
+### Added
+
+- **RLS on 20 unprotected tables** — `database/migrations/018_rls_lockdown.sql` enables Row Level Security on all remaining tables: `dfs_paper_daily_log`, `dfs_paper_entries`, `dfs_paper_legs`, `job_executions`, `rapidapi_injuries`, and 15 MLB tables. Three SELECT policies added for dashboard-facing tables (`dfs_paper_daily_log`, `dfs_paper_entries`, `rapidapi_injuries`) granting `authenticated` read access. All other tables default-deny (only `postgres` role / Python backend can access).
+- **Security headers** — Added `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` (camera/mic/geo disabled) to all routes via `next.config.ts` `headers()`.
+- **Error boundaries** — Created `error.tsx` in all 3 route groups (`(protected)`, `(public)`, `(auth)`) to catch runtime errors and show "Something went wrong" with retry button instead of white screen.
+- **Auth on `/api/slate`** — Added `supabase.auth.getUser()` check to POST handler. Unauthenticated requests return 401.
+- **SCALING.md** — New scaling & performance guide documenting bottlenecks, capacity estimates (~500 concurrent users current, roadmap to 2000+), and phased optimization plan.
+
+### Changed
+
+- **Explicit column selection** — Replaced `select('*')` with explicit column lists on 10 queries across `subscription.ts`, `performance/page.tsx` (5 queries), `history/page.tsx` (2 queries). Reduces data transfer and attack surface. `daily_predictions` and stats views left as `select('*')` (spread operator usage, many columns legitimately needed).
+- **Slate JSON parsing** — Wrapped `request.json()` in try/catch with 400 response on malformed JSON. Added `date` field validation.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `database/migrations/018_rls_lockdown.sql` | Created — RLS on 20 tables + 3 SELECT policies |
+| `dashboard/next.config.ts` | Modified — security headers |
+| `dashboard/src/app/(protected)/error.tsx` | Created — error boundary |
+| `dashboard/src/app/(public)/error.tsx` | Created — error boundary |
+| `dashboard/src/app/(auth)/error.tsx` | Created — error boundary |
+| `dashboard/src/app/api/slate/route.tsx` | Modified — auth check + JSON try/catch |
+| `dashboard/src/lib/subscription.ts` | Modified — explicit select columns |
+| `dashboard/src/app/(protected)/performance/page.tsx` | Modified — 5 queries narrowed |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — 2 queries narrowed |
+| `SCALING.md` | Created — scaling guide |
+
+---
+
 ## [2026-03-19 Session 78] — player_starter_prob Retrain A/B Test (NO-GO)
 
 ### Tested

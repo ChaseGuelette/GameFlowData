@@ -29,9 +29,7 @@ const platforms: { value: PlatformFilter; label: string }[] = [
 
 const stats: { value: StatFilter; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'pts', label: STAT_LABELS.pts },
-  { value: 'reb', label: STAT_LABELS.reb },
-  { value: 'ast', label: STAT_LABELS.ast },
+  ...Object.entries(STAT_LABELS).map(([k, v]) => ({ value: k as StatType, label: v })),
 ]
 
 const edgeModes: { value: EdgeMode; label: string; activeColor: string }[] = [

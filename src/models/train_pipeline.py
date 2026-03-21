@@ -56,8 +56,8 @@ class TrainingOrchestrator:
         # The directory is renamed to remove _incomplete after all artifacts are saved
         self.timestamp = datetime.now()
         timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
-        self._final_run_dir_name = f"run_{timestamp_str}"
-        self.run_dir = Path(base_artifacts_dir) / f"run_{timestamp_str}_incomplete"
+        self._final_run_dir_name = f"nba_run_{timestamp_str}"
+        self.run_dir = Path(base_artifacts_dir) / f"nba_run_{timestamp_str}_incomplete"
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         self.feature_config_path = self.run_dir / "selected_features.json"
