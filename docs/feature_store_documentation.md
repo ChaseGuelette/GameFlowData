@@ -81,7 +81,8 @@ Momentum ratios are computed in SQL as `CASE WHEN l15 > 0 THEN l3/l15 ELSE 1.0 E
 Pre-computed in `player_average_game_stats`. Added to `MINUTES_FEATURES`:
 - `player_min_std_l5` — minutes variance over last 5 games (shared with B3 std)
 - `player_min_floor_l5` — minimum minutes in last 5 games (floor games indicator)
-- `player_games_started_l5` — games with 20+ minutes in last 5 (starter consistency proxy)
+- `player_games_started_l5` — games started in last 5. Uses actual `started` column from `player_game_stats` (populated from CDN boxscore `starter` field) with fallback to minutes proxy (`min >= 20`) when `started` is NULL. Historical data backfilled via `backfill_starter_data.py`.
+- `player_starter_prob` — continuous [0,1] starter probability signal. Computed as `LEAST(games_started_l5 / 5.0, 1.0)`. Added to all feature lists (MINUTES, PTS, REB, AST) — not just MINUTES — to provide starter context to rate models.
 
 ### 3.9 Injury/Lineup Context Features (B1)
 Injury-driven features from `rapidapi_injuries` table, capturing how teammate and opponent absences affect a player's expected production.

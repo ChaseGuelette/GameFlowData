@@ -177,6 +177,7 @@ Serves as the bridge between NBA and sportsbook data:
 | `backfill_team_ids.py` | Validates and links team IDs across data sources. |
 | `feature_selection.py` | `ImprovedFeatureSelector` — per-quantile feature selection with time-series aware 3-split CV and permutation importance. |
 | `link_injury_data.py` | Links RapidAPI injury records to NBA player/team IDs via 3-tier cascade: manual CSV overrides → exact normalized match → SequenceMatcher fuzzy match (threshold 0.80, +0.15 last name bonus). 99.3% coverage. |
+| `backfill_starter_data.py` | Backfills `started` boolean column in `player_game_stats` from CDN boxscore `starter` field. Rate-limited (0.5s/game), logs progress every 100 games. Falls back to `min >= 20` proxy for games without CDN data. CLI: `--season`, `--dry-run`. |
 
 #### MLB Processing (`src/processing/mlb/`)
 
@@ -292,7 +293,7 @@ Centralized engine for converting raw stats into model-ready features.
     - **Pace-Adjusted Opponent Defense:** e.g., "Opponent allows X threes per 100 possessions."
     - **Rest & Schedule (B2):** `rest_days`, `is_back_to_back`, `games_in_last_7_days` — pre-computed in `player_average_game_stats` from game date diffs.
     - **Short-Window Trends (B3):** L3 rolling averages (`player_avg_{stat}_l3`), momentum ratios (`player_{stat}_l3_l15_ratio`), and L5 standard deviations (`player_std_{stat}_l5`) for all stats.
-    - **Minutes Stability (B4):** `player_min_std_l5`, `player_min_floor_l5`, `player_games_started_l5` — distinguishes locked-in starters from volatile rotation players.
+    - **Minutes Stability (B4):** `player_min_std_l5`, `player_min_floor_l5`, `player_games_started_l5`, `player_starter_prob` (= `games_started_l5 / 5.0`, clamped [0,1]) — distinguishes locked-in starters from volatile rotation players. `games_started_l5` uses actual `started` column from CDN boxscores with `min >= 20` fallback for older games.
     - **Injury Context (B1):** `team_out_count`, `team_out_min_sum`, `team_out_pts_sum`, `team_out_reb_sum`, `team_out_ast_sum`, `team_out_usg_sum` (teammate injuries), `opp_out_count`, `opp_out_min_sum` (opponent injuries), `player_is_questionable`, `player_is_probable` (player's own status). Computed via two separate SQL LATERAL JOINs (game stats + advanced stats) to `rapidapi_injuries` table with temporal integrity (report_date ≤ game_date).
     - **Betting Signals:** Implied totals and team-directional spreads as proxies for game script. `line_spread` is negative when the player's team is favored (home games with `matchup LIKE '%vs.%'`).
     - **Prop Line Centering:** Per-stat player prop lines (`prop_line_pts`, `prop_line_reb`, `prop_line_ast`, `prop_line_threes`) from `raw_player_props_combined`. Enables residual modeling — the model learns deviations from market expectation rather than absolute values.
@@ -306,8 +307,8 @@ Centralized engine for converting raw stats into model-ready features.
 - `get_training_dataset()` — Full training data for season(s).
 
 **Feature Groups:**
-- `RATE_FEATURES_PTS` / `_REB` / `_AST` — Per-stat rate model features. Each includes its corresponding `prop_line_*` centering feature plus B3 trend/variability features (`player_avg_{stat}_l3`, `player_{stat}_l3_l15_ratio`, `player_std_{stat}_l5`).
-- `MINUTES_FEATURES` — Playing time prediction features (includes `line_spread`, `line_total`, B2 rest/schedule, B3 minutes L3 trend, B4 minutes stability).
+- `RATE_FEATURES_PTS` / `_REB` / `_AST` — Per-stat rate model features. Each includes its corresponding `prop_line_*` centering feature plus B3 trend/variability features (`player_avg_{stat}_l3`, `player_{stat}_l3_l15_ratio`, `player_std_{stat}_l5`) and `player_starter_prob` (B4 starter signal).
+- `MINUTES_FEATURES` — Playing time prediction features (includes `line_spread`, `line_total`, B2 rest/schedule, B3 minutes L3 trend, B4 minutes stability + `player_starter_prob`).
 - Configuration via `FeatureConfig` dataclass.
 
 ### 6. Machine Learning Pipeline (`src/models/`)
@@ -390,6 +391,7 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 - Computes and saves Gaussian copula parameters (`copula_params.json`) for MC inference.
 - Computes per-stat per-quantile conformal offsets during combined calibration and saves as `combined_calibration_offsets.json`.
 - **`--calibrate-only` mode:** Loads an existing model, runs MC predictions on calibration data, computes combined offsets, and saves them to the model directory without retraining. Useful for post-hoc recalibration experiments.
+- **`--force-features` arg:** Force-includes specified features into all quantile lists for all models (minutes + rates). Used for surgical retrains that add a new feature without hyperparameter retuning.
 - Model persistence via `joblib`.
 - **Atomic rename pattern (added 2026-02-09):** Training creates `run_YYYYMMDD_HHMMSS_incomplete` directory initially, renamed to `run_YYYYMMDD_HHMMSS` only after all artifacts are saved. Prevents inference job from selecting incomplete models during training. Inference job filters out `_incomplete` directories when auto-selecting latest model.
 
@@ -525,7 +527,7 @@ Scheduled tasks registered via `scripts/setup_windows_tasks.ps1` (run as Adminis
 - Single always-on worker process handles all scheduled jobs
 - Environment variables: `DATABASE_URL`, `ODDS_API_KEY`, `RAPIDAPI_KEY`, `DISCORD_CHANNEL_ALERTS`
 - Model artifacts use "production folder" strategy: `src/models/artifacts/production/` is committed to git, `run_*/` directories are gitignored
-- **Current production model:** `run_20260317_133145` — trained on seasons 22023+22024+22025 (3 seasons), calibrated on 22025 through Mar 1 2026. No calibration offsets deployed (offsets confirmed to hurt ROI in 3 separate A/B backtests). Previous model `run_20260210_095220` backed up to `production_old_20260210/`.
+- **Current production model:** `run_20260317_133145` — trained on seasons 22023+22024+22025 (3 seasons), calibrated on 22025 through Mar 1 2026. No calibration offsets deployed (offsets confirmed to hurt ROI in 4 separate A/B backtests). A retrain with `player_starter_prob` force-included (run_20260319_110125) was tested but NOT promoted — ROI dropped 3.19pp and AST regressed 6.24pp. Feature remains in feature store for future experiments. Previous model `run_20260210_095220` backed up to `production_old_20260210/`.
 - Promote models via `scripts/promote_model.py` — copies latest training run to production folder
 - See `docs/railway_deployment.md` for full setup guide
 
@@ -586,7 +588,7 @@ dashboard/
 │   │   ├── dfs/                # DfsTable, DfsFilters — DFS edge comparison
 │   │   ├── stats/              # HeatmapTable, StatTabs, CategoryTabs, WindowToggle, PositionFilter, OffDefToggle
 │   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
-│   │   ├── history/            # BetCard, BetList, HistoryFilters, HistorySummary
+│   │   ├── history/            # BetCard, BetContextDetail, BetList, HistoryFilters, HistorySummary
 │   │   ├── performance/        # KPICard, BankrollChart, StatBreakdown
 │   │   ├── subscription/       # PricingCard (dormant, for future Stripe)
 │   │   └── shared/             # PlayerAvatar, Badge, BetSourceFilter, DirectionFilter components
@@ -599,6 +601,7 @@ dashboard/
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
 │   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV, devigging, market edge calculations
 │   │   ├── insights.ts         # Template-based insight generator
+│   │   ├── buildBetContext.ts    # Bet context snapshot builder (reuses generateInsights)
 │   │   ├── sportsbook-availability.ts # US state → legal bookmaker mapping for line filtering
 │   │   ├── stats/columns.ts    # Column definitions for Data Vault heatmap tables
 │   │   ├── stats/pivotPlayTypes.ts # Client-side pivot for play type long→wide format
@@ -629,12 +632,12 @@ dashboard/
   - Sportsbook line shopping with actual edge calculations
   - Kelly bet sizing calculator with bankroll input and fraction selection
   - Model probabilities, market implied probabilities, and edge breakdown
-  - **"Take Bet" button** (footer) — appears when a sportsbook line is selected. Stake input pre-filled from Kelly recommendation, editable. Clicking "Take Bet" records the bet with the selected book/odds/line/stake to `user_bets`, turns button to "Bet Taken!", and marks the PropCard checkmark green.
+  - **"Take Bet" button** (footer) — appears when a sportsbook line is selected. Stake input pre-filled from Kelly recommendation, editable. Clicking "Take Bet" records the bet with the selected book/odds/line/stake to `user_bets`, turns button to "Bet Taken!", and marks the PropCard checkmark green. Auto-closes after 1.5s. **Confidence stars** (1-5, toggle behavior) let the user rate conviction; context and confidence saved to `bet_context` JSONB + `user_confidence` columns.
 - **State Selector:** Dropdown filter synced cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Filters AnalysisModal sportsbook lines to only show bookmakers legal in the selected state. Offshore books (Pinnacle, Novig, ProphetX, Bovada) excluded from all states. Mapping in `sportsbook-availability.ts` covers ~26 legal sports betting states.
 - **Line Shopping:** Shows all available bookmaker lines for each prop (filtered by state if set). For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line. Lines are clickable — selecting a line recalculates the bet sizing section using that line's odds and model probability. Defaults to the best-edge line.
 - **Kelly Sizing:** Bankroll persisted cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
-- **User Bet Tracking:** Two paths to record a bet: (1) Quick-take via PropCard checkmark — auto-selects best odds/book. (2) AnalysisModal "Take Bet" button — user selects a specific sportsbook line and edits the stake (pre-filled from Kelly recommendation). Both write to `user_bets` table with full context (direction, odds, book, model probability, edge, team_abbrev, opponent_abbrev). `placeBetCustom()` standalone function handles AnalysisModal path; `markBetTaken()` syncs the PropCard checkmark state. Syncs across devices via `useUserBets` hook with optimistic UI updates. Bets auto-resolve against actual game results via `UserBetResolver` in the daily stats job.
-- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. BetCards display matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` are available (graceful fallback for older bets). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push) and **direction filters** (Both/Over/Under — independent per tab, filters by `bet_direction`). **Date range filter** with two `<input type="date">` pickers and quick preset buttons (7D, 30D, 90D, All) — shared across both tabs, defaults to last 30 days, re-fetches data on change. Subtitle dynamically shows the selected range (e.g., "Feb 11 – Mar 13"). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only. **Per-stat win rate cards** (PTS/REB/AST) displayed below the summary grid when resolved bet data exists. **Over/Under breakdown cards** show per-direction win rate, W-L record, and P&L (emerald badge for Over, orange for Under).
+- **User Bet Tracking:** Two paths to record a bet: (1) Quick-take via PropCard checkmark — auto-selects best odds/book. (2) AnalysisModal "Take Bet" button — user selects a specific sportsbook line and edits the stake (pre-filled from Kelly recommendation). Both write to `user_bets` table with full context (direction, odds, book, model probability, edge, team_abbrev, opponent_abbrev). `placeBetCustom()` standalone function handles AnalysisModal path; `markBetTaken()` syncs the PropCard checkmark state. Syncs across devices via `useUserBets` hook with optimistic UI updates. Bets auto-resolve against actual game results via `UserBetResolver` in the daily stats job. Both paths also save a `bet_context` JSONB snapshot (quantiles, features, insights, probabilities, kelly sizing, sportsbook lines, source indicator) and optional `user_confidence` (1-5 stars, AnalysisModal only).
+- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. BetCards display matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` are available (graceful fallback for older bets). BetCards with saved context are expandable — clicking reveals the full analysis snapshot (quantile distribution, L5/season averages, model context insights, probabilities, Kelly recommendation, and confidence stars). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push) and **direction filters** (Both/Over/Under — independent per tab, filters by `bet_direction`). **Date range filter** with two `<input type="date">` pickers and quick preset buttons (7D, 30D, 90D, All) — shared across both tabs, defaults to last 30 days, re-fetches data on change. Subtitle dynamically shows the selected range (e.g., "Feb 11 – Mar 13"). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only. **Per-stat win rate cards** (PTS/REB/AST) displayed below the summary grid when resolved bet data exists. **Over/Under breakdown cards** show per-direction win rate, W-L record, and P&L (emerald badge for Over, orange for Under).
 - **Performance View (`/performance`):** Three tabs — **My Bets**, **Props**, and **DFS**. My Bets tab: personal KPI cards (bankroll, P&L, ROI, win rate), bankroll chart from cumulative user bet P&L, and stat breakdown. Props tab: model paper trading KPIs with bet source filter (Model Picks/All Bets), bankroll chart uses `prefs.initialBankroll` (user-configurable via Account page). DFS tab: KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays user's current bankroll from `useUserPreferences` hook (synced to `user_profiles.bankroll` via localStorage cache + Supabase DB). Account page provides dedicated Bankroll Settings card with Initial Bankroll (for ROI/growth calcs) and Current Bankroll (for bet sizing and Navbar display) inputs.
@@ -656,7 +659,7 @@ dashboard/
 - `raw_player_props_combined` table — bookmaker lines for line shopping
 - `paper_bets` table — individual bet records with status and P&L
 - `paper_trading_daily_log` table — daily aggregated stats, bankroll tracking
-- `user_bets` table — user-placed bets from dashboard checkmark (RLS-filtered by user)
+- `user_bets` table — user-placed bets from dashboard checkmark or AnalysisModal (RLS-filtered by user). Includes `bet_context` JSONB snapshot and `user_confidence` rating.
 - `user_profiles` table — per-user preferences: state, bankroll, kelly settings (RLS-filtered)
 - `player_stats_latest` view — Data Vault player tab (rolling averages + advanced stats)
 - `team_stats_latest` view — Data Vault team tab (rolling team averages)
@@ -889,7 +892,7 @@ DISCORD_CHANNEL_PERFORMANCE=...
 
 ### User Bet Tracking (Cross-Device)
 - `user_profiles`: Per-user preferences (state, bankroll, kelly_fraction, use_custom_kelly). PK on `user_id` (FK to `auth.users`). RLS: users access only their own row. `updated_at` auto-trigger.
-- `user_bets`: User-placed bets from dashboard checkmark or AnalysisModal "Take Bet" button. Unique on `(user_id, game_date, player_id, stat_type)`. Tracks prediction context (direction, odds, book, model_prob, edge), resolution status (pending/won/lost/push/cancelled), actual_value, P&L, `team_abbrev`, and `opponent_abbrev` (for matchup display in history). RLS: users access only their own rows. Resolved by `UserBetResolver` in `daily_stats_job.py`.
+- `user_bets`: User-placed bets from dashboard checkmark or AnalysisModal "Take Bet" button. Unique on `(user_id, game_date, player_id, stat_type)`. Tracks prediction context (direction, odds, book, model_prob, edge), resolution status (pending/won/lost/push/cancelled), actual_value, P&L, `team_abbrev`, and `opponent_abbrev` (for matchup display in history). RLS: users access only their own rows. Resolved by `UserBetResolver` in `daily_stats_job.py`. `bet_context` JSONB stores full analysis snapshot at bet time (quantiles, features, insights, probabilities, kelly, sportsbook lines, source). `user_confidence` smallint (1-5, CHECK constraint) stores user conviction rating.
 
 ### DFS Paper Trading (Market-Edge)
 - `dfs_paper_entries`: Multi-leg DFS entries (slips). One row per slip type per day. Unique on `(entry_date, slip_type)`. Tracks legs won/lost/push/cancelled, payout multiplier, P&L. Supports 4 slip types: ud_3_standard, ud_5_standard, pp_5_flex, pp_6_flex.

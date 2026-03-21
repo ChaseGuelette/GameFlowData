@@ -5,6 +5,122 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-19 Session 78] — player_starter_prob Retrain A/B Test (NO-GO)
+
+### Tested
+
+- **Surgical retrain** (run_20260319_110125) — All 4 models (minutes + pts/reb/ast rate) retrained with `player_starter_prob` force-included in all quantile lists. Same hyperparams, same cal-end-date (2026-03-01).
+- **Individual calibration** — All gaps < 0.05. AST Q10 at 0.044 (structural, expected).
+- **A/B Backtest** (Mar 2-18, 17 days, 5000 MC samples, no offsets):
+
+| Metric | Production | Challenger | Delta |
+|--------|-----------|------------|-------|
+| ROI | 44.78% | 41.59% | -3.19pp |
+| Hit Rate | 74.3% | 74.6% | +0.3pp |
+| Sharpe | 2.78 | 2.78 | 0.00 |
+| Max Drawdown | 13.34% | 10.29% | -3.05pp |
+| PTS ROI | 65.85% | 61.65% | -4.20pp |
+| REB ROI | 49.32% | 44.60% | -4.72pp |
+| AST ROI | 13.42% | 7.18% | -6.24pp |
+| Total Bets | 343 | 338 | -1.5% |
+
+### Decision: NO-GO
+
+- ROI drops 3.19pp (hard-fail threshold: >2pp)
+- AST regresses 6.24pp (hard-fail threshold: >5pp)
+- Feature smooths calibration but reduces edge-finding — same pattern as calibration offsets
+- Production model `run_20260317_133145` remains unchanged
+
+### Note
+
+- Challenger initially loaded `combined_calibration_offsets.json` by default (31.16% ROI). Re-ran without offsets for fair comparison (41.59%). Confirms 4th time that offsets hurt ROI.
+- `player_starter_prob` remains in feature store SQL for future experiments but is not force-included in production.
+
+---
+
+## [2026-03-18 Session 77] — Bet Context Snapshot & User Confidence Rating
+
+### Added
+
+- **`bet_context` JSONB column on `user_bets`** — Stores full analysis snapshot at bet time: quantiles, L5/season averages, all 14+ model features, generated insights, probabilities (model/implied/edge), optional Kelly sizing, sportsbook lines, and source indicator (`analysis_modal` or `prop_card_toggle`).
+- **`user_confidence` smallint column on `user_bets`** — 1-5 star conviction rating with CHECK constraint. Queryable for future analytics (e.g., "my 5-star bets win at X%").
+- **`BetContext` TypeScript interface** — Full type definition in `predictions.ts` for the JSONB structure.
+- **`buildBetContext()` helper** — New `dashboard/src/lib/buildBetContext.ts` — pure function that extracts context from a Prediction with optional enrichment (L5 avg, Kelly, sportsbook lines, source). Reuses `generateInsights()` from `insights.ts`.
+- **Confidence stars in AnalysisModal** — 1-5 star toggle buttons in the Take Bet footer (yellow filled / slate unselected). Click to set, click same star to deselect. Resets on prediction change.
+- **`BetContextDetail` component** — New `dashboard/src/components/history/BetContextDetail.tsx` renders expandable analysis review: confidence stars (display-only), QuantileSummary reuse, L5/season averages, insights with sentiment icons, probabilities, Kelly recommendation, source indicator.
+- **BetCard expand/collapse** — Cards with saved `bet_context` are clickable with chevron indicator. Shows inline confidence stars on collapsed view. Renders `BetContextDetail` when expanded. Remove button uses `stopPropagation` to prevent conflicts.
+
+### Changed
+
+- **`useUserBets.ts`** — Both `placeBetCustom()` and `toggleBet()` now persist `bet_context` and `user_confidence`. Progressive retry fallback: strips context columns first, then team columns, for backward compatibility with un-migrated databases.
+- **`AnalysisModal.tsx`** — `TakeBetData` interface extended with `betContext` and `userConfidence`. On "Take Bet" click, assembles full context via `buildBetContext()` with Kelly sizing, sportsbook lines, and L5 average.
+- **Dashboard `page.tsx`** — `handleTakeBet` forwards `betContext` and `userConfidence` from `TakeBetData` to `placeBetCustom()`.
+- **History `page.tsx`** — Maps `bet_context` and `user_confidence` from query results into `PaperBet` objects.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `database/migrations/017_bet_context_confidence.sql` | New — bet_context + user_confidence columns |
+| `dashboard/src/types/predictions.ts` | Modified — BetContext interface, PaperBet extensions |
+| `dashboard/src/lib/buildBetContext.ts` | New — shared context builder |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — confidence stars, context assembly |
+| `dashboard/src/lib/hooks/useUserBets.ts` | Modified — persist context in both bet paths |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — forward betContext/userConfidence |
+| `dashboard/src/components/history/BetContextDetail.tsx` | New — expandable context detail view |
+| `dashboard/src/components/history/BetCard.tsx` | Modified — expand/collapse + inline confidence |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — map new columns |
+
+### Verified
+
+- 699 Python tests pass, 0 failures
+- Ruff clean
+- Next.js build passes with zero errors
+- Migration applied, columns verified via SQL query
+
+---
+
+## [2026-03-18 Session 76] — Starter Estimation Pipeline (Capture, Backfill, Feature Addition)
+
+### Added
+
+- **`started` boolean column on `player_game_stats`** — Stores actual starter data from CDN boxscore `starter` field ("1"/"0"). Added via Supabase migration.
+- **CDN starter extraction** — 1-line change in `nba_cdn_scraper.py` to extract `starter` field from CDN boxscore JSON into the new column.
+- **`backfill_starter_data.py`** — New script fetches CDN boxscores for all historical games, extracts starter field, batch-updates `player_game_stats`. CDN only available for ~2 recent seasons; older games fall back to `min >= 20` proxy. CLI: `--season`, `--dry-run`.
+- **`player_starter_prob` feature** — `LEAST(games_started_l5 / 5.0, 1.0)` added to all 4 feature lists (MINUTES, PTS, REB, AST) in `feature_store.py`. Continuous [0,1] starter probability signal. Computed in all 4 SQL query paths + single-player Python path.
+- **`--force-features` CLI arg** in `train_pipeline.py` — Force-includes specified features into all quantile lists for all models (minutes + rates) without hyperparameter retuning. Enables surgical retrains that add a single new feature.
+- **3 new unit tests** for starter data in `test_populate_average_stats.py`:
+  - `test_games_started_uses_actual_started_column` — actual `started` data used over proxy
+  - `test_games_started_fallback_when_started_null` — fallback to `min >= 20` when all NULL
+  - `test_games_started_mixed_null_and_actual` — mixed data uses actual where available
+
+### Changed
+
+- **`populate_average_stats.py`** — `calculate_b2_b3_b4_features()` now uses actual `started` column with `min >= 20` fallback when NULL. Added `started` to SELECT query.
+- **`populate_average_stats_incremental.py`** — Same starter fallback pattern for incremental daily processing.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| Supabase migration | New — `started boolean DEFAULT NULL` on `player_game_stats` |
+| `src/scrapers/nba_cdn_scraper.py` | Modified — extract starter field (1 line) |
+| `src/processing/backfill_starter_data.py` | New — CDN-based historical backfill |
+| `src/processing/populate_average_stats.py` | Modified — actual started with fallback + SELECT |
+| `src/processing/populate_average_stats_incremental.py` | Modified — actual started with fallback + SELECT |
+| `src/models/feature_store.py` | Modified — `player_starter_prob` in 4 lists + SQL |
+| `src/models/train_pipeline.py` | Modified — `--force-features` CLI arg |
+| `tests/test_populate_average_stats.py` | Modified — 3 new starter tests |
+
+### Verified
+
+- 666 Python tests pass, 0 failures
+- Ruff clean
+- Backfill completed: CDN data for recent seasons, proxy fallback for older
+- Rolling averages recalculated for seasons 22024 and 22025
+
+---
+
 ## [2026-03-17 Session 75b] — Inference Recovery, Scheduler Skip-Bets Fix, Calibration Threshold Tightening
 
 ### Fixed

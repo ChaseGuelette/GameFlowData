@@ -104,6 +104,31 @@ export interface PaperTradingSummary {
   bankroll: number
 }
 
+export interface BetContext {
+  quantiles: { q10: number; q25: number; q50: number; q75: number; q90: number }
+  l5_avg?: number | null
+  season_avg?: number | null
+  features: Record<string, number | boolean | string | null>
+  insights: Array<{ category: string; text: string; sentiment: string }>
+  probabilities: {
+    model_prob: number
+    implied_prob: number
+    edge: number
+  }
+  kelly?: {
+    fraction: number
+    recommended_stake: number
+    bankroll_pct: number
+  } | null
+  sportsbook_lines?: Array<{
+    bookmaker: string
+    line: number
+    over_odds: number
+    under_odds: number
+  }> | null
+  source: 'analysis_modal' | 'prop_card_toggle'
+}
+
 export type BetStatus = 'pending' | 'won' | 'lost' | 'push' | 'cancelled'
 
 export interface PaperBet {
@@ -123,6 +148,8 @@ export interface PaperBet {
   bookmaker?: string  // Which sportsbook had the line
   team_abbrev?: string
   opponent_abbrev?: string
+  bet_context?: BetContext | null
+  user_confidence?: number | null
 }
 
 export interface DailyPerformance {

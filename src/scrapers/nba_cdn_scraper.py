@@ -276,6 +276,7 @@ def transform_player_stats(game: dict, game_date: str) -> list[dict]:
                 "team_id": team_data["teamId"],
                 "comment": comment,
                 "did_not_play": is_dnp,
+                "started": player.get("starter") == "1",
             }
             rows.append(row)
 

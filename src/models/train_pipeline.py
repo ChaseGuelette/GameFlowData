@@ -151,6 +151,7 @@ class TrainingOrchestrator:
         retrain_stats: list[str] | None = None,
         retrain_minutes: bool = False,
         reselect_features: bool = False,
+        force_features: list[str] | None = None,
     ):
         """
         Surgical retrain: load an existing pipeline, retrain only specified
@@ -177,6 +178,7 @@ class TrainingOrchestrator:
             "retrain_stats": retrain_stats,
             "retrain_minutes": retrain_minutes,
             "reselect_features": reselect_features,
+            "force_features": force_features,
             "timestamp": self.timestamp.isoformat(),
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
@@ -221,6 +223,19 @@ class TrainingOrchestrator:
                     key = f"{stat}_rate_features"
                     if key in new_features:
                         pipeline.rate_features[stat] = new_features[key]
+
+        # 3a. Force-include features in all quantile lists for all models
+        if force_features:
+            for quantile, feat_list in pipeline.minutes_features.items():
+                for ff in force_features:
+                    if ff not in feat_list:
+                        feat_list.append(ff)
+            for stat in pipeline.rate_features:
+                for quantile, feat_list in pipeline.rate_features[stat].items():
+                    for ff in force_features:
+                        if ff not in feat_list:
+                            feat_list.append(ff)
+            logger.info(f"Force-included features in all models: {force_features}")
 
         # 3b. Hyperparameter tuning for retrained components
         hyperparams = self._resolve_hyperparams_partial(
@@ -1066,6 +1081,13 @@ if __name__ == "__main__":
         help="Feature selection tolerance (0.005 = keep features within 0.5%% of best pinball loss). "
              "Higher values = more features selected. 0 = strict minimum loss only.",
     )
+    parser.add_argument(
+        "--force-features",
+        nargs="+",
+        default=None,
+        help="Force-include these features in all quantile lists for all models "
+             "(e.g. --force-features player_starter_prob). Applied after loading base model features.",
+    )
 
     args = parser.parse_args()
 
@@ -1159,6 +1181,7 @@ if __name__ == "__main__":
                 retrain_stats=args.retrain_stats,
                 retrain_minutes=args.retrain_minutes,
                 reselect_features=args.reselect_features,
+                force_features=args.force_features,
             )
         else:
             orchestrator.run(

@@ -168,7 +168,7 @@ def fetch_player_basic_season_games(
             player_id, game_id, season_id, game_date::date as game_date, team_id,
             min, fgm, fga, fg_pct, fg3m, fg3a, fg3_pct,
             ftm, fta, ft_pct, oreb, dreb, reb, ast,
-            stl, blk, tov, pf, pts, plus_minus
+            stl, blk, tov, pf, pts, plus_minus, started
         FROM player_game_stats
         WHERE player_id IN {player_tuple}
           AND season_id = :season_id
@@ -287,9 +287,14 @@ def calculate_basic_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFrame:
         shifted_min = player_df["min"].shift(1).where(min_mask)
         player_df["min_floor_l5"] = shifted_min.rolling(window=5, min_periods=1).min()
 
-    # B4: Games started L5
+    # B4: Games started L5 (actual started column with minutes proxy fallback)
     if "min" in player_df.columns:
-        is_starter = (player_df["min"] >= STARTER_MINUTES_THRESHOLD).astype(float)
+        if "started" in player_df.columns and player_df["started"].notna().any():
+            is_starter = player_df["started"].fillna(
+                player_df["min"] >= STARTER_MINUTES_THRESHOLD
+            ).astype(float)
+        else:
+            is_starter = (player_df["min"] >= STARTER_MINUTES_THRESHOLD).astype(float)
         shifted_starter = is_starter.shift(1).where(min_mask)
         player_df["games_started_l5"] = shifted_starter.rolling(window=5, min_periods=1).sum()
 

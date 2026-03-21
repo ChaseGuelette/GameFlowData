@@ -6,12 +6,13 @@ import { PlayerAvatar } from '@/components/shared/PlayerAvatar'
 import { Badge, EdgeBadge } from '@/components/shared/Badge'
 import { Last5Chart } from './Last5Chart'
 import { QuantileSummary } from './QuantileSummary'
-import { type Prediction, type PlayerGameStats, type StatType, type BookmakerLine, STAT_LABELS } from '@/types/predictions'
+import { type Prediction, type PlayerGameStats, type StatType, type BookmakerLine, type BetContext, STAT_LABELS } from '@/types/predictions'
 import { formatProb } from '@/lib/utils'
 import { generateInsights, type Insight } from '@/lib/insights'
 import { getAllowedBookmakers } from '@/lib/sportsbook-availability'
 import { estimateUnderProb, americanToImpliedProb, formatBookmaker } from '@/lib/dfs-utils'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
+import { buildBetContext } from '@/lib/buildBetContext'
 
 export interface TakeBetData {
   book: string
@@ -21,6 +22,8 @@ export interface TakeBetData {
   modelProb: number
   edge: number
   direction: 'over' | 'under'
+  betContext?: BetContext
+  userConfidence?: number | null
 }
 
 interface AnalysisModalProps {
@@ -283,6 +286,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   // Take Bet state
   const [customStake, setCustomStake] = useState<string>('')
   const [betPlaced, setBetPlaced] = useState(false)
+  const [userConfidence, setUserConfidence] = useState<number | null>(null)
 
   // Selected line index for bet sizing (defaults to best edge = index 0)
   const [selectedLineIndex, setSelectedLineIndex] = useState<number>(0)
@@ -321,9 +325,10 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
     }
   }, [sizingData.recommendedBet, betPlaced])
 
-  // Reset betPlaced when prediction changes
+  // Reset betPlaced and confidence when prediction changes
   useEffect(() => {
     setBetPlaced(false)
+    setUserConfidence(null)
   }, [prediction.id])
 
   // Handle escape key
@@ -670,7 +675,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
           )}
         </div>
 
-        {/* Footer: Close + Take Bet */}
+        {/* Footer: Close + Confidence + Take Bet */}
         <div className="p-6 pt-0 flex items-center gap-3">
           <button
             onClick={onClose}
@@ -680,6 +685,32 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
           </button>
           {onTakeBet && selectedLine && (
             <div className="flex-1 flex items-center gap-2 justify-end">
+              {/* Confidence Stars */}
+              <div className="flex items-center gap-0.5 mr-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    type="button"
+                    onClick={() => setUserConfidence(prev => prev === star ? null : star)}
+                    disabled={betPlaced}
+                    className="p-0.5 transition-colors disabled:cursor-default"
+                    title={`${star} star${star > 1 ? 's' : ''}`}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                      className={`w-5 h-5 ${
+                        userConfidence && star <= userConfidence
+                          ? 'text-yellow-400'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      <path fillRule="evenodd" d="M10.868 2.884c-.321-.772-1.415-.772-1.736 0l-1.83 4.401-4.753.381c-.833.067-1.171 1.107-.536 1.651l3.62 3.102-1.106 4.637c-.194.813.691 1.456 1.405 1.02L10 15.591l4.069 2.485c.713.436 1.598-.207 1.404-1.02l-1.106-4.637 3.62-3.102c.635-.544.297-1.584-.536-1.65l-4.752-.382-1.831-4.401Z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                ))}
+              </div>
               <span className="text-slate-400 text-sm">$</span>
               <input
                 type="text"
@@ -695,6 +726,18 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                 onClick={() => {
                   const stake = parseFloat(customStake) || 0
                   if (stake <= 0) return
+
+                  const betContext = buildBetContext(prediction, {
+                    l5Avg: l5Avg,
+                    kelly: sizingData.kellyPct > 0 ? {
+                      fraction: kellyFraction,
+                      recommended_stake: sizingData.recommendedBet,
+                      bankroll_pct: sizingData.kellyPct,
+                    } : null,
+                    sportsbookLines: bookmakerLines.length > 0 ? bookmakerLines : null,
+                    source: 'analysis_modal',
+                  })
+
                   onTakeBet(prediction, {
                     book: selectedLine.bookmaker,
                     odds: selectedLine.relevantOdds,
@@ -703,6 +746,8 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                     modelProb: selectedLine.modelProb,
                     edge: selectedLine.lineEdge,
                     direction: isOverBet ? 'over' : 'under',
+                    betContext,
+                    userConfidence,
                   })
                   setBetPlaced(true)
                   // Auto-close modal after brief delay so user sees confirmation

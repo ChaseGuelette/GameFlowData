@@ -161,6 +161,8 @@ export default function DashboardPage() {
       direction: data.direction,
       modelProb: data.modelProb,
       edge: data.edge,
+      betContext: data.betContext,
+      userConfidence: data.userConfidence,
     })
     if (result) {
       markBetTaken(prediction.player_id, prediction.stat, result.id)

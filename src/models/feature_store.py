@@ -37,6 +37,7 @@ MINUTES_FEATURES = [
     "player_min_std_l5",
     "player_min_floor_l5",
     "player_games_started_l5",
+    "player_starter_prob",
     # Injury context
     "team_out_count",
     "team_out_min_sum",
@@ -78,6 +79,8 @@ RATE_FEATURES_PTS = [
     "team_out_usg_sum",
     "opp_out_count",
     "opp_out_min_sum",
+    # B4: Starter signal
+    "player_starter_prob",
 ]
 
 RATE_FEATURES_REB = [
@@ -107,6 +110,8 @@ RATE_FEATURES_REB = [
     "team_out_usg_sum",
     "opp_out_count",
     "opp_out_min_sum",
+    # B4: Starter signal
+    "player_starter_prob",
 ]
 
 RATE_FEATURES_AST = [
@@ -136,6 +141,8 @@ RATE_FEATURES_AST = [
     "team_out_usg_sum",
     "opp_out_count",
     "opp_out_min_sum",
+    # B4: Starter signal
+    "player_starter_prob",
 ]
 
 RATE_FEATURES_THREES = [
@@ -375,6 +382,7 @@ class FeatureStore:
                 -- B4: Minutes stability
                 COALESCE(p_avg.min_floor_l5, 0) as player_min_floor_l5,
                 COALESCE(p_avg.games_started_l5, 0) as player_games_started_l5,
+                LEAST(COALESCE(p_avg.games_started_l5, 0) / 5.0, 1.0) as player_starter_prob,
 
                 -- B2: Rest/schedule
                 LEAST(COALESCE(p_avg.rest_days, 3), 7) as rest_days,
@@ -693,6 +701,7 @@ class FeatureStore:
                     -- B4: Minutes stability
                     COALESCE(p_avg.min_floor_l5, 0) as player_min_floor_l5,
                     COALESCE(p_avg.games_started_l5, 0) as player_games_started_l5,
+                    LEAST(COALESCE(p_avg.games_started_l5, 0) / 5.0, 1.0) as player_starter_prob,
                     -- B2: Rest/schedule
                     LEAST(COALESCE(p_avg.rest_days, 3), 7) as rest_days,
                     CASE WHEN COALESCE(p_avg.rest_days, 3) = 1 THEN 1 ELSE 0 END as is_back_to_back,
@@ -1133,6 +1142,7 @@ class FeatureStore:
                 -- B4: Minutes stability
                 COALESCE(p_avg.min_floor_l5, 0) as player_min_floor_l5,
                 COALESCE(p_avg.games_started_l5, 0) as player_games_started_l5,
+                LEAST(COALESCE(p_avg.games_started_l5, 0) / 5.0, 1.0) as player_starter_prob,
 
                 -- B2: Rest/schedule
                 LEAST(COALESCE(p_avg.rest_days, 3), 7) as rest_days,
@@ -1413,7 +1423,7 @@ class FeatureStore:
                 "player_std_reb_l5": 0, "player_std_ast_l5": 0,
                 "player_std_fg3m_l5": 0,
                 # B4: Minutes stability
-                "player_min_floor_l5": 0, "player_games_started_l5": 0,
+                "player_min_floor_l5": 0, "player_games_started_l5": 0, "player_starter_prob": 0,
                 # B2: Rest/schedule
                 "rest_days": 3, "is_back_to_back": 0, "games_in_last_7_days": 2,
             }
@@ -1440,6 +1450,7 @@ class FeatureStore:
         # B4: Minutes stability
         stats["player_min_floor_l5"] = row.get("min_floor_l5") or 0
         stats["player_games_started_l5"] = row.get("games_started_l5") or 0
+        stats["player_starter_prob"] = min((stats["player_games_started_l5"] or 0) / 5.0, 1.0)
 
         # B3: Momentum ratios (computed in Python — safe division, default 1.0)
         # NOTE (ISS-017): *_l3_l15_ratio names misleading — only PTS uses L15;

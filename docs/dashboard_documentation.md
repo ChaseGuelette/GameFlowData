@@ -61,7 +61,8 @@ dashboard/
 │   │   │   ├── Last5Chart.tsx       # Last 5 games chart
 │   │   │   └── QuantileSummary.tsx  # Quantile distribution
 │   │   ├── history/            # Bet history components
-│   │   │   ├── BetCard.tsx     # Individual bet result card
+│   │   │   ├── BetCard.tsx     # Individual bet result card (expandable with context)
+│   │   │   ├── BetContextDetail.tsx  # Expandable analysis context view
 │   │   │   ├── BetList.tsx     # Grid of bet cards
 │   │   │   ├── HistoryFilters.tsx  # Status filter tabs
 │   │   │   └── HistorySummary.tsx  # Summary stats bar
@@ -97,11 +98,12 @@ dashboard/
 │   │   ├── constants.ts        # DISCORD_URL, TEAM_ABBREV shared map
 │   │   ├── dfs-utils.ts        # Quantile interpolation, DFS EV, devigging, market edge (shared)
 │   │   ├── insights.ts         # Template-based insight generator
+│   │   ├── buildBetContext.ts   # Bet context snapshot builder
 │   │   ├── stats/columns.ts    # Column definitions for Data Vault tables
 │   │   ├── subscription.ts     # Subscription utils (dormant)
 │   │   └── utils.ts            # Utility functions (formatting, edge tiers, game status)
 │   ├── types/
-│   │   ├── predictions.ts      # TypeScript interfaces
+│   │   ├── predictions.ts      # TypeScript interfaces (Prediction, PaperBet, BetContext)
 │   │   ├── dfs.ts              # DFS line types, slip types, platform constants
 │   │   ├── stats.ts            # Data Vault types (ColumnDef, StatRow, SortState, PlayTypeCategory, PlayTypeGrouping)
 │   │   └── subscription.ts     # Subscription types (dormant)

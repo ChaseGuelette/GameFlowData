@@ -10,14 +10,14 @@ Complete reference for all features used across the NBA prediction models. Featu
 
 | Model | Target | Feature List | Unique Features |
 |-------|--------|-------------|-----------------|
-| Minutes | `actual_minutes` | `MINUTES_FEATURES` | 25 |
-| Points Rate | `pts_per_min` | `RATE_FEATURES_PTS` | 24 |
-| Rebounds Rate | `reb_per_min` | `RATE_FEATURES_REB` | 23 |
-| Assists Rate | `ast_per_min` | `RATE_FEATURES_AST` | 23 |
+| Minutes | `actual_minutes` | `MINUTES_FEATURES` | 26 |
+| Points Rate | `pts_per_min` | `RATE_FEATURES_PTS` | 25 |
+| Rebounds Rate | `reb_per_min` | `RATE_FEATURES_REB` | 24 |
+| Assists Rate | `ast_per_min` | `RATE_FEATURES_AST` | 24 |
 | Threes Rate | `fg3m_per_min` | `RATE_FEATURES_THREES` | 26 |
 
-**Total entries across all lists: 121** (many shared — injury/rest features appear in every list)
-**Total unique features: 66**
+**Total entries across all lists: 125** (many shared — injury/rest features appear in every list)
+**Total unique features: 67**
 
 ---
 
@@ -86,7 +86,8 @@ Source: `player_average_game_stats`
 | Feature | Window | Models | Signal |
 |---------|--------|--------|--------|
 | `player_min_floor_l5` | L5 | MIN | Minimum minutes in last 5 (floor games) |
-| `player_games_started_l5` | L5 | MIN | Games with 20+ min in last 5 (starter consistency) |
+| `player_games_started_l5` | L5 | MIN | Games started in last 5 (uses actual `started` column with min >= 20 fallback) |
+| `player_starter_prob` | L5 | MIN, PTS, REB, AST | `games_started_l5 / 5.0` clamped to [0, 1] — continuous starter probability signal |
 
 ### Team Context
 

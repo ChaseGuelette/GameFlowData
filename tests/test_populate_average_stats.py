@@ -514,3 +514,84 @@ def test_calculate_b2_b3_b4_features_games_started(module):
 
     # Row 5 (last): prior games 0-4, last 5 started = [Y, N, Y, Y, N] = 3
     assert result["games_started_l5"].iloc[5] == 3
+
+
+def test_games_started_uses_actual_started_column(module):
+    """When 'started' column exists, games_started_l5 should use it."""
+    df = pd.DataFrame(
+        {
+            "player_id": [1] * 6,
+            "season_id": ["2024"] * 6,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-03",
+                 "2024-10-04", "2024-10-05", "2024-10-06"]
+            ),
+            # Minutes proxy would say: Y(25), N(10), Y(30), N(15), N(15), Y(28)
+            "min": [25, 10, 30, 15, 15, 28],
+            # Actual starter data: N, Y, Y, Y, Y, N  (different from proxy)
+            "started": [False, True, True, True, True, False],
+            "pts": [10, 5, 20, 15, 8, 18],
+            "reb": [5, 2, 7, 6, 3, 8],
+            "ast": [3, 1, 5, 4, 2, 6],
+            "fg3m": [1, 0, 3, 2, 1, 4],
+        }
+    )
+
+    result = module.calculate_b2_b3_b4_features(df)
+
+    # Row 5 (last): prior games 0-4 actual started = [N, Y, Y, Y, Y] = 4
+    # With proxy it would be [Y, N, Y, N, N] = 2
+    assert result["games_started_l5"].iloc[5] == 4, \
+        f"Expected 4 from actual started data but got {result['games_started_l5'].iloc[5]}"
+
+
+def test_games_started_fallback_when_started_null(module):
+    """When 'started' column is all NULL, should fall back to minutes proxy."""
+    df = pd.DataFrame(
+        {
+            "player_id": [1] * 6,
+            "season_id": ["2024"] * 6,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-03",
+                 "2024-10-04", "2024-10-05", "2024-10-06"]
+            ),
+            "min": [25, 10, 30, 22, 15, 28],
+            "started": [None, None, None, None, None, None],
+            "pts": [10, 5, 20, 15, 8, 18],
+            "reb": [5, 2, 7, 6, 3, 8],
+            "ast": [3, 1, 5, 4, 2, 6],
+            "fg3m": [1, 0, 3, 2, 1, 4],
+        }
+    )
+
+    result = module.calculate_b2_b3_b4_features(df)
+
+    # Same as proxy-only: Y, N, Y, Y, N → 3
+    assert result["games_started_l5"].iloc[5] == 3
+
+
+def test_games_started_mixed_null_and_actual(module):
+    """Mixed data: use actual where available, proxy for NULL."""
+    df = pd.DataFrame(
+        {
+            "player_id": [1] * 6,
+            "season_id": ["2024"] * 6,
+            "game_date": pd.to_datetime(
+                ["2024-10-01", "2024-10-02", "2024-10-03",
+                 "2024-10-04", "2024-10-05", "2024-10-06"]
+            ),
+            # Minutes: 25(Y), 10(N), 30(Y), 15(N), 25(Y), 28(Y)
+            "min": [25, 10, 30, 15, 25, 28],
+            # Actual: True, None(→proxy N), True, None(→proxy N), True, None(→proxy Y)
+            "started": [True, None, True, None, True, None],
+            "pts": [10, 5, 20, 15, 8, 18],
+            "reb": [5, 2, 7, 6, 3, 8],
+            "ast": [3, 1, 5, 4, 2, 6],
+            "fg3m": [1, 0, 3, 2, 1, 4],
+        }
+    )
+
+    result = module.calculate_b2_b3_b4_features(df)
+
+    # Row 5 (last): prior games 0-4 = [True, proxy(10→N), True, proxy(15→N), True] = 3
+    assert result["games_started_l5"].iloc[5] == 3

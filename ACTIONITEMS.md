@@ -1,5 +1,103 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-18 — Session 77)
+
+### What We Did
+
+**Bet Context & User Confidence Feature (1 migration, 6 files modified, 3 new files)**
+
+1. **DB Migration** — Added `bet_context jsonb` and `user_confidence smallint` (CHECK 1-5) columns to `user_bets` via Supabase migration 017.
+
+2. **`BetContext` TypeScript interface** — New interface in `predictions.ts` storing quantiles, L5/season averages, features map, insights array, probabilities, optional Kelly sizing, sportsbook lines, and source indicator. Extended `PaperBet` with `bet_context` and `user_confidence`.
+
+3. **`buildBetContext()` helper** — New `dashboard/src/lib/buildBetContext.ts` extracts all context from a `Prediction` and optional enrichment data (L5 avg, Kelly, sportsbook lines, source).
+
+4. **AnalysisModal confidence stars** — 1-5 star toggle buttons (yellow/slate) in the Take Bet footer. Click to set, click same to deselect. On "Take Bet", calls `buildBetContext()` with full context (Kelly, sportsbook lines, L5 avg) and passes `betContext` + `userConfidence` in `TakeBetData`.
+
+5. **`useUserBets` hook** — Both `placeBetCustom()` and `toggleBet()` now persist `bet_context` and `user_confidence` with progressive retry fallback (strips context columns, then team columns if migrations not applied).
+
+6. **BetContextDetail component** — New `dashboard/src/components/history/BetContextDetail.tsx` renders expandable detail view: confidence stars, `QuantileSummary` reuse, L5/season averages, insights (styled with green/red/neutral icons), probabilities, Kelly recommendation, and source indicator.
+
+7. **BetCard expand/collapse** — Cards with `bet_context` are clickable. Shows chevron indicator, inline confidence stars on collapsed view, renders `BetContextDetail` when expanded. Remove button uses `stopPropagation`.
+
+8. **History page mapping** — Added `bet_context` and `user_confidence` to the `PaperBet` mapping from query results.
+
+**New Files (3):**
+- `database/migrations/017_bet_context_confidence.sql`
+- `dashboard/src/lib/buildBetContext.ts`
+- `dashboard/src/components/history/BetContextDetail.tsx`
+
+**Modified (6):**
+- `dashboard/src/types/predictions.ts` — BetContext interface, PaperBet extensions
+- `dashboard/src/components/analysis/AnalysisModal.tsx` — Confidence stars, context assembly
+- `dashboard/src/lib/hooks/useUserBets.ts` — Persist context in both bet paths
+- `dashboard/src/app/(protected)/dashboard/page.tsx` — Forward betContext/userConfidence
+- `dashboard/src/components/history/BetCard.tsx` — Expand/collapse + inline confidence
+- `dashboard/src/app/(protected)/history/page.tsx` — Map new columns
+
+### Remaining Action Items
+
+1. ~~**Retrain model with starter feature**~~ — DONE (run_20260319_110125). A/B backtest result: **NO-GO**. Challenger ROI 41.59% vs production 44.78% (-3.19pp), AST regressed 6.24pp. Feature hurts edge-finding. Production model (run_20260317_133145) remains.
+2. **Deploy to Vercel** — push dashboard changes (bet context, confidence stars, date filter, bankroll settings)
+3. **Stripe integration** — subscribe page, customer portal, webhook
+4. **MLB pipeline** — train pitcher K model, build daily runner, backtesting harness
+5. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+6. **Clean up `production_old_20260210/`** — remove old model backup after confirming new model is stable
+7. **Future: Confidence analytics** — "My 5-star bets win at X%" dashboard widget querying `user_confidence` column
+8. **Future: player_starter_prob re-evaluation** — Feature is in feature store but doesn't help current model. Consider re-testing after next full retrain or with per-stat feature selection
+
+---
+
+## Session Summary (2026-03-18 — Session 76)
+
+### What We Did
+
+**Starter Estimation Pipeline — Capture, Backfill, Feature Addition (1 migration, 7 files modified, 2 new files)**
+
+1. **DB Migration** — Added `started boolean DEFAULT NULL` column to `player_game_stats` to store actual starter data from CDN boxscores.
+
+2. **CDN Scraper** — 1-line change in `nba_cdn_scraper.py` to extract `starter` field (`"1"`/`"0"`) from CDN boxscore JSON.
+
+3. **Backfill Script** — New `backfill_starter_data.py` fetches CDN boxscores for all historical games, extracts `starter` field, batch-updates `player_game_stats`. CDN only keeps ~2 recent seasons; older games fall back to `min >= 20` proxy.
+
+4. **Rolling Average Update** — Both `populate_average_stats.py` and `populate_average_stats_incremental.py` now use actual `started` column with fallback to `min >= 20` proxy when NULL.
+
+5. **New Feature `player_starter_prob`** — `LEAST(games_started_l5 / 5.0, 1.0)` added to all 4 feature lists (MINUTES, PTS, REB, AST) in `feature_store.py`. Computed in all 4 SQL query paths + single-player Python path.
+
+6. **`--force-features` CLI arg** — Added to `train_pipeline.py` to inject specified features into all quantile lists for all models without hyperparameter retuning.
+
+7. **Unit Tests** — 3 new tests for starter data (actual column, fallback, mixed). All 666 tests pass.
+
+8. **Ran Backfill + Recalculated Averages** — Backfilled starter data for all historical games (CDN for recent, proxy for older). Recalculated rolling averages for seasons 22024 and 22025.
+
+**New Files (2):**
+- `src/processing/backfill_starter_data.py`
+- (Supabase migration for `started` column)
+
+**Modified (7):**
+- `src/scrapers/nba_cdn_scraper.py` — extract starter field
+- `src/processing/populate_average_stats.py` — use actual started with fallback
+- `src/processing/populate_average_stats_incremental.py` — use actual started with fallback
+- `src/models/feature_store.py` — `player_starter_prob` in 4 feature lists + SQL paths
+- `src/models/train_pipeline.py` — `--force-features` CLI arg
+- `tests/test_populate_average_stats.py` — 3 new starter tests
+- (Docs: nba_feature_catalog, populate_average_stats_documentation, feature_store_documentation, model_pipeline_runbook, ARCHITECTURE)
+
+### Remaining Action Items
+
+1. **Retrain model with starter feature** — Run `python src/models/train_pipeline.py --base-model-dir src/models/artifacts/production --retrain-stats pts reb ast --retrain-minutes --train-seasons 22023 22024 22025 --cal-season 22025 --force-features player_starter_prob`
+2. **A/B Backtest** — Compare candidate (with `player_starter_prob`) vs production model
+3. **Conditional promote** — If candidate ROI >= production ROI
+4. **Monitor new model performance** — Track ROI over first week
+5. **Run advanced stats scraper** — Check if task scheduler is firing
+6. **Deploy to Vercel** — push dashboard changes (date filter, bankroll settings from Session 73)
+7. **Stripe integration** — subscribe page, customer portal, webhook
+8. **MLB pipeline** — train pitcher K model, build daily runner, backtesting harness
+9. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+10. **Clean up `production_old_20260210/`** — remove old model backup after confirming new model is stable
+
+---
+
 ## Session Summary (2026-03-17 — Session 75b)
 
 ### What We Did

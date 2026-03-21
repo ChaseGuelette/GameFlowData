@@ -187,7 +187,7 @@ def fetch_player_game_stats(engine, season_id: str | None = None, from_year: int
             min, fgm, fga, fg_pct, fg3m, fg3a, fg3_pct,
             ftm, fta, ft_pct, oreb, dreb, reb, ast,
             stl, blk, tov, pf, pts, plus_minus,
-            did_not_play
+            did_not_play, started
         FROM player_game_stats
         WHERE (did_not_play = false OR did_not_play IS NULL)
     """
@@ -305,8 +305,14 @@ def calculate_b2_b3_b4_features(df: pd.DataFrame) -> pd.DataFrame:
     shifted_min = df.groupby(group_cols)["min"].shift(1).where(min_mask)
     df["min_floor_l5"] = rolling_with_groupby(shifted_min, group_key, window=5, agg="min")
 
-    # === B4: Games started L5 (min >= threshold proxy) ===
-    df["_is_starter"] = (df["min"] >= STARTER_MINUTES_THRESHOLD).astype(float)
+    # === B4: Games started L5 (actual started column with minutes proxy fallback) ===
+    if "started" in df.columns and df["started"].notna().any():
+        is_starter = df["started"].fillna(
+            df["min"] >= STARTER_MINUTES_THRESHOLD
+        ).astype(float)
+    else:
+        is_starter = (df["min"] >= STARTER_MINUTES_THRESHOLD).astype(float)
+    df["_is_starter"] = is_starter
     shifted_starter = df.groupby(group_cols)["_is_starter"].shift(1).where(min_mask)
     df["games_started_l5"] = rolling_with_groupby(shifted_starter, group_key, window=5, agg="sum")
     df.drop(columns=["_is_starter"], inplace=True)

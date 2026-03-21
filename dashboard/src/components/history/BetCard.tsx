@@ -1,7 +1,9 @@
 'use client'
 
+import { useState } from 'react'
 import { type PaperBet, STAT_COLORS, STAT_LABELS } from '@/types/predictions'
 import { PlayerAvatar } from '@/components/shared/PlayerAvatar'
+import { BetContextDetail } from '@/components/history/BetContextDetail'
 import { cn } from '@/lib/utils'
 
 interface BetCardProps {
@@ -26,6 +28,8 @@ const STATUS_LABELS = {
 }
 
 export function BetCard({ bet, onRemove }: BetCardProps) {
+  const [expanded, setExpanded] = useState(false)
+  const hasContext = !!bet.bet_context
   const statusStyle = STATUS_STYLES[bet.status]
   const pnlColor = bet.pnl && bet.pnl > 0 ? 'text-green-400' : bet.pnl && bet.pnl < 0 ? 'text-red-400' : 'text-slate-400'
 
@@ -40,12 +44,16 @@ export function BetCard({ bet, onRemove }: BetCardProps) {
   }
 
   return (
-    <div className={cn(
-      'bg-slate-800 rounded-lg border p-4 transition-colors',
-      bet.status === 'won' ? 'border-green-500/30' :
-      bet.status === 'lost' ? 'border-red-500/30' :
-      'border-slate-700'
-    )}>
+    <div
+      className={cn(
+        'bg-slate-800 rounded-lg border p-4 transition-colors',
+        bet.status === 'won' ? 'border-green-500/30' :
+        bet.status === 'lost' ? 'border-red-500/30' :
+        'border-slate-700',
+        hasContext && 'cursor-pointer'
+      )}
+      onClick={hasContext ? () => setExpanded(prev => !prev) : undefined}
+    >
       {/* Header: Player + Date */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
@@ -60,12 +68,30 @@ export function BetCard({ bet, onRemove }: BetCardProps) {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* Inline confidence stars on collapsed view */}
+          {bet.user_confidence && !expanded && (
+            <div className="flex gap-0.5">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <svg
+                  key={star}
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className={`w-3.5 h-3.5 ${
+                    star <= bet.user_confidence! ? 'text-yellow-400' : 'text-slate-600'
+                  }`}
+                >
+                  <path fillRule="evenodd" d="M10.868 2.884c-.321-.772-1.415-.772-1.736 0l-1.83 4.401-4.753.381c-.833.067-1.171 1.107-.536 1.651l3.62 3.102-1.106 4.637c-.194.813.691 1.456 1.405 1.02L10 15.591l4.069 2.485c.713.436 1.598-.207 1.404-1.02l-1.106-4.637 3.62-3.102c.635-.544.297-1.584-.536-1.65l-4.752-.382-1.831-4.401Z" clipRule="evenodd" />
+                </svg>
+              ))}
+            </div>
+          )}
           <span className={cn('text-xs px-2 py-1 rounded border', statusStyle)}>
             {STATUS_LABELS[bet.status]}
           </span>
           {bet.status === 'pending' && onRemove && (
             <button
-              onClick={() => onRemove(bet.id)}
+              onClick={(e) => { e.stopPropagation(); onRemove(bet.id) }}
               className="text-slate-500 hover:text-red-400 transition-colors p-1"
               title="Remove bet"
             >
@@ -115,6 +141,32 @@ export function BetCard({ bet, onRemove }: BetCardProps) {
           </span>
         </div>
       </div>
+
+      {/* Expand indicator */}
+      {hasContext && (
+        <div className="flex justify-center mt-2">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className={cn(
+              'w-4 h-4 text-slate-500 transition-transform',
+              expanded && 'rotate-180'
+            )}
+          >
+            <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+          </svg>
+        </div>
+      )}
+
+      {/* Expanded Context Detail */}
+      {expanded && bet.bet_context && (
+        <BetContextDetail
+          context={bet.bet_context}
+          userConfidence={bet.user_confidence}
+          line={bet.line}
+        />
+      )}
     </div>
   )
 }

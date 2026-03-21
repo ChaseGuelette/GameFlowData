@@ -157,6 +157,8 @@ export default function HistoryPage() {
           bookmaker: row.book_at_bet,
           team_abbrev: row.team_abbrev ?? undefined,
           opponent_abbrev: row.opponent_abbrev ?? undefined,
+          bet_context: row.bet_context ?? null,
+          user_confidence: row.user_confidence ?? null,
         }))
         setMyBets(mapped)
       }

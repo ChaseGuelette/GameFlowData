@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { type Prediction } from '@/types/predictions'
+import { type Prediction, type BetContext } from '@/types/predictions'
+import { buildBetContext } from '@/lib/buildBetContext'
 
 export interface PlaceBetCustomParams {
   prediction: Prediction
@@ -11,6 +12,8 @@ export interface PlaceBetCustomParams {
   direction: 'over' | 'under'
   modelProb: number
   edge: number
+  betContext?: BetContext
+  userConfidence?: number | null
 }
 
 /**
@@ -22,7 +25,7 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { prediction, book, odds, line, stake, direction, modelProb, edge } = params
+  const { prediction, book, odds, line, stake, direction, modelProb, edge, betContext, userConfidence } = params
 
   const baseRow = {
     user_id: user.id,
@@ -40,13 +43,15 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
     stake,
   }
 
-  // Try with team/opponent columns first, fall back without if migration not applied
+  // Try with all columns first, fall back progressively if migrations not applied
   let { data, error } = await supabase
     .from('user_bets')
     .upsert({
       ...baseRow,
       team_abbrev: prediction.team_abbrev ?? null,
       opponent_abbrev: prediction.opponent_abbrev ?? null,
+      bet_context: betContext ?? null,
+      user_confidence: userConfidence ?? null,
     }, {
       onConflict: 'user_id,game_date,player_id,stat_type',
     })
@@ -54,20 +59,37 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
     .single()
 
   if (error) {
-    // Retry without new columns (migration may not be applied yet)
-    const retry = await supabase
+    // Retry without context columns (migration 017 may not be applied yet)
+    const retry1 = await supabase
       .from('user_bets')
-      .upsert(baseRow, {
+      .upsert({
+        ...baseRow,
+        team_abbrev: prediction.team_abbrev ?? null,
+        opponent_abbrev: prediction.opponent_abbrev ?? null,
+      }, {
         onConflict: 'user_id,game_date,player_id,stat_type',
       })
       .select('id')
       .single()
 
-    if (retry.error) {
-      console.error('Failed to place custom bet:', retry.error)
-      return null
+    if (retry1.error) {
+      // Retry without team columns too (migration 013 may not be applied)
+      const retry2 = await supabase
+        .from('user_bets')
+        .upsert(baseRow, {
+          onConflict: 'user_id,game_date,player_id,stat_type',
+        })
+        .select('id')
+        .single()
+
+      if (retry2.error) {
+        console.error('Failed to place custom bet:', retry2.error)
+        return null
+      }
+      data = retry2.data
+    } else {
+      data = retry1.data
     }
-    data = retry.data
   }
   return data
 }
@@ -186,6 +208,9 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
           }
         }
 
+        // Build basic context for toggle path (no kelly/sportsbook lines/confidence)
+        const toggleContext = buildBetContext(prediction, { source: 'prop_card_toggle' })
+
         const toggleBaseRow = {
             user_id: user.id,
             prediction_id: prediction.id,
@@ -208,23 +233,42 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
             ...toggleBaseRow,
             team_abbrev: prediction.team_abbrev ?? null,
             opponent_abbrev: prediction.opponent_abbrev ?? null,
+            bet_context: toggleContext,
+            user_confidence: null,
           }, {
             onConflict: 'user_id,game_date,player_id,stat_type',
           })
           .select('id')
           .single()
 
-        // Retry without new columns if migration not applied
+        // Retry without context columns if migration 017 not applied
         if (error) {
-          const retry = await supabase
+          const retry1 = await supabase
+            .from('user_bets')
+            .upsert({
+              ...toggleBaseRow,
+              team_abbrev: prediction.team_abbrev ?? null,
+              opponent_abbrev: prediction.opponent_abbrev ?? null,
+            }, {
+              onConflict: 'user_id,game_date,player_id,stat_type',
+            })
+            .select('id')
+            .single()
+          data = retry1.data
+          error = retry1.error
+        }
+
+        // Retry without team columns if migration 013 not applied
+        if (error) {
+          const retry2 = await supabase
             .from('user_bets')
             .upsert(toggleBaseRow, {
               onConflict: 'user_id,game_date,player_id,stat_type',
             })
             .select('id')
             .single()
-          data = retry.data
-          error = retry.error
+          data = retry2.data
+          error = retry2.error
         }
 
         if (error) {

@@ -46,6 +46,7 @@ python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 220
 |-----|---------|-------------|
 | `--train-seasons` | `22022 22023` | NBA season IDs for training data |
 | `--cal-season` | `22024` | NBA season ID for calibration holdout |
+| `--force-features` | None | Force-include features in all quantile lists for all models (e.g., `--force-features player_starter_prob`) |
 
 **Season ID format:** `2YYYY` where `YYYY` is the starting year. Examples:
 - `22022` = 2022-23 season

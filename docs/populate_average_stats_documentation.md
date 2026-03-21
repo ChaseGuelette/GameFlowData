@@ -55,7 +55,7 @@ Games where a player played fewer than 5 minutes (injury exits, garbage-time-onl
 
 ### B4: Minutes Stability
 - `min_floor_l5` — minimum minutes in last 5 games
-- `games_started_l5` — count of games with 20+ minutes in last 5 (starter proxy, threshold: `STARTER_MINUTES_THRESHOLD = 20`)
+- `games_started_l5` — count of games started in last 5. Uses actual `started` column from `player_game_stats` (populated from CDN boxscore `starter` field) with fallback to minutes proxy (`min >= 20`) when `started` is NULL. Historical data backfilled via `backfill_starter_data.py`.
 
 All computed with `shift(1)` to ensure no data leakage from the current game.
 
