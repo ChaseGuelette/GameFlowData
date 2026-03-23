@@ -461,7 +461,7 @@ class MLBBacktestHarness:
         implied_over = raw_over / booksum
         implied_under = raw_under / booksum
 
-        # BL blending
+        # BL blending — overwrite probs so edges and bet decisions use posteriors
         if self.bl_blender is not None:
             bl_result = self.bl_blender.blend_prediction(
                 samples=samples,
@@ -475,6 +475,8 @@ class MLBBacktestHarness:
             pred["bl_under_prob"] = bl_under_prob
             pred["bl_over_edge"] = bl_over_prob - implied_over
             pred["bl_under_edge"] = bl_under_prob - implied_under
+            over_prob = bl_over_prob
+            under_prob = bl_under_prob
 
         pred["line"] = line_val
         pred["over_odds"] = over_odds

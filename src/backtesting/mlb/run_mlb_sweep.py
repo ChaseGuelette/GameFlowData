@@ -452,6 +452,17 @@ def compute_edges_for_config(
         implied_over = raw_over / booksum
         implied_under = raw_under / booksum
 
+        # BL blending — overwrite probs so edges and bet decisions use posteriors
+        if bl_blender is not None:
+            bl_result = bl_blender.blend_prediction(
+                samples=samples,
+                line=line_val,
+                over_odds=over_odds,
+                under_odds=under_odds,
+            )
+            over_prob = bl_result["posterior_over"]
+            under_prob = bl_result["posterior_under"]
+
         row["line"] = line_val
         row["over_odds"] = over_odds
         row["under_odds"] = under_odds
@@ -463,14 +474,7 @@ def compute_edges_for_config(
         row["over_edge"] = over_prob - implied_over
         row["under_edge"] = under_prob - implied_under
 
-        # BL blending
         if bl_blender is not None:
-            bl_result = bl_blender.blend_prediction(
-                samples=samples,
-                line=line_val,
-                over_odds=over_odds,
-                under_odds=under_odds,
-            )
             row["bl_over_prob"] = bl_result["posterior_over"]
             row["bl_under_prob"] = bl_result["posterior_under"]
             row["bl_over_edge"] = bl_result["posterior_over"] - implied_over
