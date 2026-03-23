@@ -24,6 +24,7 @@ PREDICTION_COLS = [
     "line", "over_odds", "under_odds", "over_prob", "under_prob",
     "implied_over", "implied_under", "over_edge", "under_edge", "game_time",
     "bookmaker",  # Which bookmaker had the sharpest line
+    "prop_line",  # Inference-time prop_line feature value (for drift detection)
     # Feature columns for dashboard insights
     "feat_rest_days", "feat_is_back_to_back", "feat_games_last_7d",
     "feat_team_out_count", "feat_team_out_min_sum", "feat_opp_out_count",

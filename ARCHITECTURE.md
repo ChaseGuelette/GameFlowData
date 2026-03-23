@@ -82,6 +82,13 @@ GameFlowData/
 - Supports CLI format: `--edge-threshold pts=0.10 reb=0.07 ast=0.15` or global `--edge-threshold 0.05`
 - Used by backtesting harness, bet simulator, and paper trading
 
+**`combo_config.py`** — Centralized combo market definitions and stat↔market mappings.
+- `COMBO_DEFINITIONS` dict — maps combo stat keys (`pra`, `pr`, `pa`, `ra`) to their component stats and sportsbook market keys
+- `COMBO_STATS` set — quick membership check for combo stat keys
+- `BASE_STAT_TO_MARKET` — base stat→market mapping (pts, reb, ast only)
+- `STAT_TO_MARKET` / `MARKET_TO_STAT` — bidirectional mappings including both base and combo stats
+- Imported by: `monte_carlo.py`, `daily_runner.py`, `backtest_harness.py`, `edge_refresh_job.py`
+
 ### 1. Database Layer (`src/db/`)
 
 **`client.py`** — Singleton SQLAlchemy engine with connection pooling.
@@ -349,6 +356,7 @@ The modeling engine predicts the probability distribution of player stats.
     - Falls back to legacy post-hoc adjustment when copula params unavailable (backward compat)
 - **Zero-Inflation Handling:** `_build_extended_quantile_fn()` snaps quantile values below `ZERO_SNAP_THRESHOLD` (1e-3) to exactly 0. Ensures MC samples in the zero-mass region of discrete distributions (e.g., threes_per_min) map to 0 instead of tiny positive interpolated values. Works in both copula and non-copula paths.
 - **Combined Calibration Offsets (infrastructure, not deployed):** `_apply_combined_calibration()` applies per-stat per-quantile conformal offsets via piecewise-linear sample warping on the combined (minutes x rate) distribution. Loaded from `combined_calibration_offsets.json` via `load_combined_calibration_offsets()`. Backward-compatible no-op when file is absent. A/B backtest (Session 42) showed offsets improved calibration metrics but degraded betting ROI — offsets are NOT deployed to production. Code retained for future use if genuine calibration drift emerges.
+- **Combo Market Derivation (2026-03-21):** `derive_combo_samples()` module-level function derives combo stat predictions (PRA, P+R, P+A, R+A) by element-wise summing individual stat MC sample arrays. Correlations between stats are preserved because all share the same minutes draws via Gaussian copula. Combo samples are NOT stored to the database — always derived on-the-fly from base stat samples (pts, reb, ast) to save storage and avoid consistency issues. Returns `(combo_predictions_list, combo_samples_dict)`. Used by `daily_runner.py`, `backtest_harness.py`, and `edge_refresh_job.py`.
 - **Output:** Exact probabilities for any line (e.g., "Probability of 20+ points").
 - **Betting utilities:** `prob_over(line)`, `prob_under(line)`, `expected_value_over/under(line, odds)`.
 
@@ -398,8 +406,9 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 #### Daily Runner (`daily_runner.py`)
 
 - `DailyPredictionRunner` class — production inference pipeline.
-- Workflow: get today's games (NBA API ScoreboardV2) → filter injured players (`rapidapi_injuries`) → build features → batch predict (4 XGBoost calls) → enrich with opponents → fetch prop lines → calculate edges → return `(predictions_df, samples_dict)`.
+- Workflow: get today's games (NBA API ScoreboardV2) → filter injured players (`rapidapi_injuries`) → build features → batch predict (4 XGBoost calls) → derive combo samples (PRA/PR/PA/RA) → enrich with opponents → fetch prop lines → calculate edges → return `(predictions_df, samples_dict)`.
 - **Game Discovery:** Primary source is `nba_api.stats.endpoints.ScoreboardV2` (works for scheduled/future games). Falls back to `team_game_stats` DB query for past dates when NBA API is unavailable.
+- **Game Time Fallback (2026-03-21):** `_get_game_times_from_props()` method queries `raw_player_props_combined` for `commence_time` as a fallback when the game schedule doesn't provide game times. Used by both `daily_runner.py` and `edge_refresh_job.py` to ensure `game_time` is populated in `daily_predictions`.
 - **Injury Filtering:** Queries `rapidapi_injuries` table by `player_id` (integer matching). Uses most recent `report_date` on or before target date. Filters players with `status = 'Out'`.
 - **Batch Prediction:** Uses `predict_batch_for_date()` — 4 total XGBoost calls (1 minutes + 3 rates) for all players, instead of N per-player calls.
 - **Parallel Feature Building (optimized 2026-02-13):** Uses `ThreadPoolExecutor` with 8 workers to parallelize feature store queries. Runtime reduced from ~65s to ~5s (13x faster). Connection pool increased to handle concurrent queries.
@@ -410,7 +419,7 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 #### Prediction Storage (`prediction_store.py`)
 
 - `PredictionStore` class — stores and retrieves daily predictions and MC samples.
-- **Predictions:** Upserted to `daily_predictions` table via `psycopg2.extras.execute_values` with `ON CONFLICT DO UPDATE`. Stores quantiles, edges, implied probabilities, and prop line info.
+- **Predictions:** Upserted to `daily_predictions` table via `psycopg2.extras.execute_values` with `ON CONFLICT DO UPDATE`. Stores quantiles, edges, implied probabilities, prop line info, and `prop_line` (inference-time prop line value used for drift detection by edge refresh).
 - **MC Samples:** Gzip-compressed `float64` numpy arrays stored as PostgreSQL `BYTEA` in `daily_prediction_samples` table (~20-40KB per prediction for 10K samples).
 - **Retrieval:** `get_predictions()` for filtered queries, `get_samples()` for decompressing single arrays, `get_all_samples_for_date()` for bulk retrieval (returns `dict[(player_id, game_id, stat) -> np.ndarray]` used by edge refresh), `get_player_id_by_name()` for fuzzy name lookup.
 
@@ -453,6 +462,14 @@ A simulation environment to validate betting strategies.
     - **BL enabled (`--bl-tau`):** Devigged market prior + log-odds BL blending → edge = posterior_prob - devigged_market_prob. Adds diagnostic columns: `model_over/under`, `market_over/under`, `confidence`, `posterior_over/under`.
 - **Parameter Sweep:** `run_sweep.py` enables efficient grid search across BL tau, edge threshold, and Kelly fraction values by caching all shared data (features, lines, actuals, MC predictions/samples) and replaying only edge calculation + bet simulation per configuration.
 
+#### MLB Backtesting (`src/backtesting/mlb/`)
+
+| Module | Purpose |
+|--------|---------|
+| `run_mlb_sweep.py` | MLB parameter sweep — iterates dates, fetches pitcher schedules from `mlb_game_schedule`, builds features via `MLBFeatureStore.get_player_game_features()`, runs MC predictions, selects bets, resolves outcomes. Sweeps `(tau, edge_threshold, kelly_fraction, z_max)` grid. |
+
+**Key API:** `MLBFeatureStore.get_player_game_features()` expects: `player_id`, `game_id`, `game_date` (str), `team_id`, `opp_team_id`, `venue_id`, `season` (int), `is_home` (bool). Argument names differ from NBA feature store — do not use `as_of_date` or `opponent_id`.
+
 ### 8. Query Tools (`src/tools/`)
 
 | Module | Purpose |
@@ -481,16 +498,17 @@ A simulation environment to validate betting strategies.
 **Per-step retries and timeout tuning (2026-03-02):** `run_command()` now accepts `max_retries` and `retry_delay` parameters with exponential backoff. Critical steps get 2 retries (15s base delay, doubling each attempt). Per-step timeouts tuned to actual workload: Step 6 (rolling averages) increased from 10m→20m (most common timeout culprit), Step 7 (opponent allowed) increased to 15m, Steps 3-5 (non-critical) reduced to 5m. Global scheduler timeout increased from 30m→45m to accommodate retries.
 
 **`lines_job.py`** — Multiple-times-daily props and injuries scraping. Three modes:
-- **Full mode (`--live`):** `daily_game_lines_scraper.py` → `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `rapidapi_injury_backfill.py` → `link_injury_data.py` → `nba_linker_local.py incremental`.
+- **Full mode (`--live`):** `daily_game_lines_scraper.py` → `daily_player_props_scraper.py --live --combos --target-table raw_player_props_combined` → `rapidapi_injury_backfill.py` → `link_injury_data.py` → `nba_linker_local.py incremental`.
 - **Full parallel mode (`--live --parallel`):** Same steps but props path (game lines → props → linker) and injury path (injury scraper → injury linker) run concurrently via threads. Used at 12 PM and 4 PM ET. Runtime: ~45-55 seconds (was ~90 seconds sequential).
-- **Props-only mode (`--live --props-only`):** `daily_player_props_scraper.py --live --target-table raw_player_props_combined` → `nba_linker_local.py incremental`. Skips game lines and injuries for fast intra-day refreshes. Used every 5 minutes between inference windows.
+- **Props-only mode (`--live --props-only`):** `daily_player_props_scraper.py --live --combos --target-table raw_player_props_combined` → `nba_linker_local.py incremental`. Skips game lines and injuries for fast intra-day refreshes. Used every 5 minutes between inference windows.
+- **Combo markets (2026-03-21):** The `--combos` flag appends combo market keys (PRA, P+R, P+A, R+A) to the scraper's market list. These lines are stored in `raw_player_props_combined` alongside core prop markets.
 - Supports `--date`, `--dry-run`, `--skip-injuries`, `--skip-linker`, `--live`, `--props-only`, `--parallel`. Runtime: ~45-55 seconds (full parallel), ~25-30 seconds (props-only).
 
 **`inference_job.py`** — Full prediction generation. Loads model artifacts (latest `run_*` directory), initializes Monte Carlo predictor with 10K samples and Gaussian copula, checks upstream data freshness (warns if latest `game_date` in `player_average_game_stats` is before yesterday — stale data from a failed 9 AM job), generates predictions via `DailyPredictionRunner.run_for_date()`, stores to `daily_predictions` and `daily_prediction_samples` tables, **automatically places paper bets** on recommended predictions (via `PaperTrader.select_bets()` + `place_bets()`), sends Discord alert, and exports CSV backup. Runs twice daily (12:15 PM, 4:15 PM ET) to catch new player props. Supports `--date`, `--dry-run`, `--model-dir`, `--stats`, `--skip-bets`, `--skip-discord`, `--stale-warning`. Runtime: ~1-3 minutes.
 
 **Stale data handling (2026-03-02):** Inference never hard-fails on stale data — running with slightly stale rolling averages (L5 has 4/5 overlap, L15 has 14/15 overlap) is better than producing zero predictions. When stale data is detected (via DB check or `--stale-warning` flag from scheduler dependency gate), the job sets a `data_stale` flag, logs prominent warnings, sends a separate "Stale Data Warning" Discord alert, and completes normally.
 
-**`edge_refresh_job.py`** — Lightweight edge recalculation (~2-3 minutes). Loads stored predictions from `daily_predictions` and MC samples from `daily_prediction_samples` via `PredictionStore.get_all_samples_for_date()`, fetches fresh prop lines from `raw_player_props_combined` (24-hour snapshot_time cutoff for performance on multi-million row table), recalculates edges (empirical CDF) and Black-Litterman recommendations, upserts updated predictions. Self-contained — does NOT instantiate model pipeline or feature store. Exits gracefully with info-level "NO-OP" message if no samples exist (inference hasn't run yet — expected before first run of the day). **MC sample staleness check (2026-03-02):** If MC samples are >6 hours old, logs a warning and sends a Discord alert. **DFS paper trading runs as step 0 (before MC sample check)** — this ensures DFS entry resolution and placement runs every 10 minutes independently of whether model inference has occurred. **Line preservation (2026-03-05):** When fresh lines aren't available for a prediction (e.g., props pulled from the API), old line/odds/bookmaker values are preserved via `fillna()` fallback instead of being nulled out by the LEFT merge. **Skip paper trading (2026-03-05):** `--skip-paper` flag skips the paper trading step (bet selection + placement via `PaperTrader`). Used by the 5-minute silent cron runs to avoid timeouts — loading MC samples and running BL blending for every prediction was causing 45-minute hangs during game hours. Paper trading still runs during full inference jobs. Supports `--date`, `--dry-run`, `--stats`, `--skip-discord`, `--skip-paper`. Runs after each intra-day props scrape.
+**`edge_refresh_job.py`** — Lightweight edge recalculation (~2-3 minutes). Loads stored predictions from `daily_predictions` and MC samples from `daily_prediction_samples` via `PredictionStore.get_all_samples_for_date()`, derives combo samples on-the-fly from base stat samples (pts/reb/ast → pra/pr/pa/ra via `derive_combo_samples()`), fetches fresh prop lines from `raw_player_props_combined` (24-hour snapshot_time cutoff for performance on multi-million row table), recalculates edges (empirical CDF) and Black-Litterman recommendations, upserts updated predictions. Self-contained — does NOT instantiate model pipeline or feature store (except during selective re-inference). Exits gracefully with info-level "NO-OP" message if no samples exist (inference hasn't run yet — expected before first run of the day). **MC sample staleness check (2026-03-02):** If MC samples are >6 hours old, logs a warning and sends a Discord alert. **DFS paper trading runs as step 0 (before MC sample check)** — this ensures DFS entry resolution and placement runs every 10 minutes independently of whether model inference has occurred. **Line preservation (2026-03-05):** When fresh lines aren't available for a prediction (e.g., props pulled from the API), old line/odds/bookmaker values are preserved via `fillna()` fallback instead of being nulled out by the LEFT merge. **Skip paper trading (2026-03-05):** `--skip-paper` flag skips the paper trading step (bet selection + placement via `PaperTrader`). Used by the 5-minute silent cron runs to avoid timeouts — loading MC samples and running BL blending for every prediction was causing 45-minute hangs during game hours. Paper trading still runs during full inference jobs. **Prop line drift detection & selective re-inference (2026-03-23):** `detect_stale_predictions()` compares the `prop_line` value stored at inference time against the fresh line fetched each cycle. When drift >= 1.0 points (`DRIFT_THRESHOLD`), `reinfer_stale_players()` re-runs inference for ONLY those affected players (~5-20 out of 100+): loads model pipeline (lazy-cached at module level), builds fresh features via `FeatureStore`, runs batch XGBoost + MC sampling, replaces stale entries in `samples_dict`, re-derives combo samples, and upserts updated predictions + samples to DB. Takes ~10-30s when drift exists, ~0s when no drift. Disabled with `--skip-reinference` flag. Supports `--date`, `--dry-run`, `--stats`, `--skip-discord`, `--skip-paper`, `--skip-reinference`. Runs after each intra-day props scrape.
 
 **Line selection (2026-03-01 fix):** `fetch_fresh_lines()` partitions by `(player_id, game_id, market_key, bookmaker, line, outcome_label)` — the `line` in the partition ensures alt lines from the same bookmaker are treated as separate rows, preventing `MAX(line)` from conflating different line values. A `HAVING` clause requires both Over and Under odds to exist, eliminating orphan alt-line rows. The sharpest-book selection (`idxmin` on booksum) then naturally picks the primary line (lowest vig). Same fix applied to `daily_runner.py._get_current_lines()`.
 
@@ -533,7 +551,7 @@ Scheduled tasks registered via `scripts/setup_windows_tasks.ps1` (run as Adminis
 
 ### 10. Paper Trading (`src/paper_trading/`)
 
-Paper bet placement, outcome resolution, and P&L tracking. Bet placement is automated via `edge_refresh_job.py` (runs every 10 min, 11 AM–11 PM ET). Resolution is automated at two points: (1) `edge_refresh_job.py` resolves previous-day bets before placing new ones (via `resolve_all_pending(exclude_today=True)`), and (2) `daily_stats_job.py` resolves any remaining pending bets each morning. Manual CLI scripts also available for ad-hoc operations. Integrated with the Dashboard for visualization.
+Paper bet placement, outcome resolution, and P&L tracking. Supports base stats (pts, reb, ast) and combo stats (pra, pr, pa, ra). Bet placement is automated via `edge_refresh_job.py` (runs every 10 min, 11 AM–11 PM ET). Resolution is automated at two points: (1) `edge_refresh_job.py` resolves previous-day bets before placing new ones (via `resolve_all_pending(exclude_today=True)`), and (2) `daily_stats_job.py` resolves any remaining pending bets each morning. Manual CLI scripts also available for ad-hoc operations. Integrated with the Dashboard for visualization. Combo stat actuals are computed by summing component base stats (e.g., PRA = pts + reb + ast) during resolution.
 
 **Live game protection (2026-02-28):** `select_bets()` checks `commence_time` from `raw_player_props_combined` and skips games already in progress. Prevents false edges from comparing pre-game MC samples against mid-game lines.
 
@@ -577,6 +595,7 @@ dashboard/
 │   │   │   ├── account/page.tsx    # Profile + bankroll settings + community card
 │   │   │   ├── stats/page.tsx        # Data Vault — heatmap stat tables
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
+│   │   ├── api/ask/route.ts      # AI Q&A endpoint (auth-gated, rate-limited, Anthropic Claude Haiku)
 │   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback game list)
 │   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s ISR cache)
 │   │   ├── api/slate/route.tsx   # OG image generation for pick slates (auth-gated)
@@ -588,7 +607,7 @@ dashboard/
 │   │   ├── predictions/        # PropCard, PropGrid, FilterTabs, PlayOfTheDay, BookFilterDropdown
 │   │   ├── dfs/                # DfsTable, DfsFilters — DFS edge comparison
 │   │   ├── stats/              # HeatmapTable, StatTabs, CategoryTabs, WindowToggle, PositionFilter, OffDefToggle
-│   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary
+│   │   ├── analysis/           # AnalysisModal, Last5Chart, QuantileSummary, AskChat
 │   │   ├── history/            # BetCard, BetContextDetail, BetList, HistoryFilters, HistorySummary
 │   │   ├── performance/        # KPICard, BankrollChart, StatBreakdown
 │   │   ├── subscription/       # PricingCard (dormant, for future Stripe)
@@ -610,6 +629,7 @@ dashboard/
 │   │   └── utils.ts            # Formatting, edge tiers, headshot URLs, game status helpers
 │   ├── types/
 │   │   ├── predictions.ts      # TypeScript interfaces for predictions, bets, performance; StatType (pts/reb/ast/stl/blk/3pm), STAT_LABELS, STAT_COLORS
+│   │   ├── chat.ts             # ChatMessage, AskResponse types for AI Q&A
 │   │   ├── dfs.ts              # DFS line types, slip types, platform constants, MARKET_TO_STAT (6 markets), STAT_TO_MARKET
 │   │   ├── stats.ts            # Types for Data Vault (ColumnDef, StatRow, SortState)
 │   │   └── subscription.ts     # Subscription type definitions (dormant)
@@ -629,6 +649,8 @@ dashboard/
   - **Sportsbook Filter:** Multi-select checkbox dropdown (`BookFilterDropdown`) — all state-legal books checked by default. Unchecking a book excludes predictions only available at that book. Uses `excludedBooks: Set<string>` state; when any books are excluded, queries `raw_player_props_combined` with `.in('bookmaker', activeBooks)` to build availability set. "Select All" / "Clear All" toggle, closes on outside click or Escape. Button shows "All Books" or "Books (N)".
 - **Analysis Modal:** Click any prop card to see:
   - Last 5 games chart with performance history
+  - Model context insights (rest, injury, trend, consistency, average)
+  - **AI Q&A chat** — collapsible "Ask AI about this pick" section powered by Claude Haiku. Multi-turn conversation grounded in player data (extended game log, rolling averages, injury context, opponent defense, sportsbook lines). 20 questions/day rate limit. Suggested question chips on first open. Messages not persisted across modal close.
   - Quantile distribution summary with visual bar
   - Sportsbook line shopping with actual edge calculations
   - Kelly bet sizing calculator with bankroll input and fraction selection
@@ -638,7 +660,7 @@ dashboard/
 - **Line Shopping:** Shows all available bookmaker lines for each prop (filtered by state if set). For Over bets, lower lines are better; for Under bets, higher lines are better. Displays estimated probability and edge for each line. Lines are clickable — selecting a line recalculates the bet sizing section using that line's odds and model probability. Defaults to the best-edge line.
 - **Kelly Sizing:** Bankroll persisted cross-device via `useUserPreferences` hook (localStorage cache + Supabase `user_profiles` table). Preset Kelly fractions (Full, Half, Quarter, Eighth) or custom decimal input. Displays recommended bet size based on edge and odds from the selected sportsbook line.
 - **User Bet Tracking:** Two paths to record a bet: (1) Quick-take via PropCard checkmark — auto-selects best odds/book. (2) AnalysisModal "Take Bet" button — user selects a specific sportsbook line and edits the stake (pre-filled from Kelly recommendation). Both write to `user_bets` table with full context (direction, odds, book, model probability, edge, team_abbrev, opponent_abbrev). `placeBetCustom()` standalone function handles AnalysisModal path; `markBetTaken()` syncs the PropCard checkmark state. Syncs across devices via `useUserBets` hook with optimistic UI updates. Bets auto-resolve against actual game results via `UserBetResolver` in the daily stats job. Both paths also save a `bet_context` JSONB snapshot (quantiles, features, insights, probabilities, kelly sizing, sportsbook lines, source indicator) and optional `user_confidence` (1-5 stars, AnalysisModal only).
-- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. BetCards display matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` are available (graceful fallback for older bets). BetCards with saved context are expandable — clicking reveals the full analysis snapshot (quantile distribution, L5/season averages, model context insights, probabilities, Kelly recommendation, and confidence stars). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push) and **direction filters** (Both/Over/Under — independent per tab, filters by `bet_direction`). **Date range filter** with two `<input type="date">` pickers and quick preset buttons (7D, 30D, 90D, All) — shared across both tabs, defaults to last 30 days, re-fetches data on change. Subtitle dynamically shows the selected range (e.g., "Feb 11 – Mar 13"). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only. **Per-stat win rate cards** (PTS/REB/AST) displayed below the summary grid when resolved bet data exists. **Over/Under breakdown cards** show per-direction win rate, W-L record, and P&L (emerald badge for Over, orange for Under).
+- **History View (`/history`):** Two tabs — **My Bets** (default) and **Model History**. My Bets shows user's personal bet history from `user_bets` table (RLS-filtered), including pending (outstanding) bets awaiting resolution. BetCards display matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` are available (graceful fallback for older bets), and show "Taken {time}" from `placed_at` timestamp. BetCards with saved context are expandable — clicking reveals the full analysis snapshot (quantile distribution, L5/season averages, model context insights, probabilities, Kelly recommendation, and confidence stars). Model History shows paper trading results with bet source filter (Model Picks/All Bets). Both tabs have status filters (All/Pending/Won/Lost/Push) and **direction filters** (Both/Over/Under — independent per tab, filters by `bet_direction`). **Date range filter** with two `<input type="date">` pickers and quick preset buttons (7D, 30D, 90D, All) — shared across both tabs, defaults to last 30 days, re-fetches data on change. Subtitle dynamically shows the selected range (e.g., "Feb 11 – Mar 13"). Summary stats bar shows pending count when outstanding bets exist, win rate and P&L computed from resolved bets only. **Per-stat win rate cards** (PTS/REB/AST) displayed below the summary grid when resolved bet data exists. **Over/Under breakdown cards** show per-direction win rate, W-L record, and P&L (emerald badge for Over, orange for Under).
 - **Performance View (`/performance`):** Three tabs — **My Bets**, **Props**, and **DFS**. My Bets tab: personal KPI cards (bankroll, P&L, ROI, win rate), bankroll chart from cumulative user bet P&L, and stat breakdown. Props tab: model paper trading KPIs with bet source filter (Model Picks/All Bets), bankroll chart uses `prefs.initialBankroll` (user-configurable via Account page). DFS tab: KPI cards (bankroll, P&L, ROI, W-L-P record), bankroll chart from `dfs_paper_daily_log`, and slip type breakdown table.
 - **Player Avatars:** NBA headshots from CDN with fallback to inline SVG placeholder.
 - **Bankroll Tracking:** Navbar displays user's current bankroll from `useUserPreferences` hook (synced to `user_profiles.bankroll` via localStorage cache + Supabase DB). Account page provides dedicated Bankroll Settings card with Initial Bankroll (for ROI/growth calcs) and Current Bankroll (for bet sizing and Navbar display) inputs.
@@ -654,6 +676,13 @@ dashboard/
   - **Live Toggle:** "Pre-Game / + Live" toggle filters out started games by default. When enabled (orange), shows all picks including in-progress games.
   - Platform filter tabs, slip type selector (PP 2-Pick, UD 3/5-Pick, PP 5/6-Flex), stat filter (6 stats: Points, Rebounds, Assists, Steals, Blocks, Threes — dynamic from `STAT_LABELS`), +EV toggle, 3-way edge mode segmented control, KPI summary cards, and sortable table with mode-specific columns. Data fetched via `get_dfs_lines` and `get_sportsbook_lines` RPC functions. **Market mode works without predictions** — comparisons are built from DFS line data when no predictions exist (player_name/game_time from RPC join with `players` table and `commence_time`).
 - **Route Groups:** `(public)` for landing/picks/pricing/legal, `(auth)` for login/signup (redirects if already logged in), `(protected)` for dashboard/history/performance/account/stats/dfs (requires auth).
+- **Mobile Responsiveness:** All dashboard pages optimized for 375px+ screens. Key patterns:
+  - **Collapsible Filter Panel (Predictions):** 10+ filter controls hidden behind a "Filters" toggle on mobile (`sm:hidden` button with active filter count badge). `FilterTabs` (PTS/REB/AST/Combos) always visible as primary navigation. Filters stack vertically (`flex-col`) on mobile with `w-full` selects.
+  - **AnalysisModal:** Responsive padding (`p-2 sm:p-4` container, `p-4 sm:p-6` sections), stacking header (`flex-col sm:flex-row`), hidden avatar on small screens, `grid-cols-1 sm:grid-cols-2` bet sizing, stacking footer.
+  - **Page Headers:** All page headers (History, Performance, Stats) use `flex-col sm:flex-row` to stack title and controls on mobile.
+  - **KPI Grids:** `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4` pattern for single-column on phones.
+  - **Navbar Touch Targets:** Mobile nav links use `px-4 py-3` for 44px minimum touch targets.
+  - **Tables:** Existing `overflow-x-auto` horizontal scroll for data-heavy tables (DFS, heatmaps).
 
 **Data Sources:**
 - `daily_predictions` table — prediction quantiles, edges, implied probabilities, bookmaker (sharpest line source)
@@ -670,6 +699,7 @@ dashboard/
 - `team_play_types` table — Season-level Synergy play type data (30 teams x 11 play types x 2 groupings)
 - SQL view definitions version-controlled in `sql/views/` (player_stats_latest.sql, team_stats_latest.sql, defense_by_position_latest.sql). All views use deterministic `DISTINCT ON` with `game_id DESC` tiebreaker.
 - **RPC Functions:** `get_dfs_lines` scopes by `commence_time` range (not `::date` cast, not `daily_predictions`), enabling data availability before inference runs. Joins with `players` table for `player_name` and returns `game_time` (commence_time). Migration `004_fix_rpc_prediction_dependency.sql`. `get_sportsbook_lines_by_games(text[])` accepts game_id array with 24-hour snapshot_time cutoff for sub-second performance on the multi-million row `raw_player_props_combined` table. Returns all market types (no `market_key` filter — frontend filters via `MARKET_TO_STAT`). Dashboard fetches sportsbook lines in batches of 3 game_ids in parallel. Migrations `005_fast_sportsbook_rpc.sql`, `008_fix_rpc_game_id_dedup.sql`, `020_add_sportsbook_markets.sql`.
+- **RPC Statement Timeouts (2026-03-21):** `get_dfs_lines` and `get_game_commence_times` have `SET statement_timeout = '30s'` via `ALTER FUNCTION`. This overrides the Supabase `authenticated` role's default 8s timeout, which was causing empty-error `{}` failures on the DFS page (query takes ~9-14s on the 67M-row `raw_player_props_combined` table). `get_game_commence_times` was also rewritten to use `LATERAL LIMIT 1` joins for faster per-game_id lookups.
 - **NBA CDN Schedule API** — `/api/games` server-side route fetches today's games from `cdn.nba.com/static/json/staticData/scheduleLeagueV2.json`. Used as fallback when predictions haven't been generated yet (e.g., before inference runs). Maps tri-codes to full team names. 1-hour revalidation cache. Replaces previous `get_games_for_date` RPC which depended on the odds scraper having run.
 - **NBA CDN Live Scoreboard** — `/api/scoreboard` server-side route fetches `cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json`. Returns `Record<gameId, GameStatusInfo>` map with `gameStatus` (1=Pre, 2=Live, 3=Final), `gameStatusText` (e.g., "Q3 5:42"), `period`, and `gameClock`. 30-second ISR cache. Consumed by `useGameStatus` hook which polls every 30s when viewing today. Components fall back to time-based estimation when the scoreboard is unavailable or viewing historical dates.
 
@@ -858,7 +888,7 @@ DISCORD_CHANNEL_PERFORMANCE=...
 
 ### Betting Data
 - `raw_game_lines_staging`: Spreads and totals.
-- `raw_player_props_combined`: Player prop lines and odds (~25M rows). Includes:
+- `raw_player_props_combined`: Player prop lines and odds (~67M rows as of 2026-03-21). Includes:
   - **Core markets:** `player_points`, `player_rebounds`, `player_assists`, `player_threes`, `player_steals`, `player_blocks`, `player_turnovers`
   - **Combo markets (added 2026-01-31):** `player_points_rebounds_assists` (PRA), `player_points_rebounds`, `player_points_assists`, `player_rebounds_assists`, `player_blocks_steals`, `player_field_goals`
 

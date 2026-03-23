@@ -38,6 +38,7 @@ dashboard/
 │   │   │   ├── performance/page.tsx # Performance metrics
 │   │   │   ├── account/page.tsx    # Profile + bankroll settings + community card
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
+│   │   ├── api/ask/route.ts      # AI Q&A endpoint (auth-gated, rate-limited, Anthropic Claude Haiku)
 │   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback games)
 │   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s cache)
 │   │   ├── api/slate/route.tsx   # OG image generation for pick slates (auth-gated)
@@ -59,6 +60,7 @@ dashboard/
 │   │   │   └── PropGrid.tsx    # Grid layout for cards
 │   │   ├── analysis/           # Analysis components
 │   │   │   ├── AnalysisModal.tsx    # Detailed analysis modal
+│   │   │   ├── AskChat.tsx          # AI Q&A chat (collapsible, multi-turn)
 │   │   │   ├── Last5Chart.tsx       # Last 5 games chart
 │   │   │   └── QuantileSummary.tsx  # Quantile distribution
 │   │   ├── history/            # Bet history components
@@ -104,8 +106,9 @@ dashboard/
 │   │   ├── subscription.ts     # Subscription utils (dormant)
 │   │   └── utils.ts            # Utility functions (formatting, edge tiers, game status)
 │   ├── types/
-│   │   ├── predictions.ts      # TypeScript interfaces (Prediction, PaperBet, BetContext); StatType (pts/reb/ast/stl/blk/3pm), STAT_LABELS, STAT_COLORS
-│   │   ├── dfs.ts              # DFS line types, slip types, platform constants, MARKET_TO_STAT (6 markets), STAT_TO_MARKET
+│   │   ├── predictions.ts      # TypeScript interfaces (Prediction, PaperBet, BetContext); StatType (pts/reb/ast/stl/blk/3pm/pra/pr/pa/ra), STAT_LABELS, STAT_COLORS
+│   │   ├── chat.ts             # ChatMessage, AskResponse types for AI Q&A
+│   │   ├── dfs.ts              # DFS line types, slip types, platform constants, MARKET_TO_STAT (10 markets incl combos), STAT_TO_MARKET
 │   │   ├── stats.ts            # Data Vault types (ColumnDef, StatRow, SortState, PlayTypeCategory, PlayTypeGrouping)
 │   │   └── subscription.ts     # Subscription types (dormant)
 │   └── middleware.ts           # Auth redirect middleware
@@ -287,7 +290,7 @@ Multi-select checkbox dropdown for sportsbook filtering (added Session 66). Repl
 
 ### FilterTabs
 
-Stat type filtering with All/PTS/REB/AST options (THREES removed in Session 22).
+Stat type filtering with All/PTS/REB/AST/Combos options. "Combos" is a group filter that shows combo stat predictions (PRA, P+R, P+A, R+A). Exports `COMBO_STATS` set for use by the dashboard page's filter logic.
 
 ```tsx
 <FilterTabs
@@ -295,6 +298,10 @@ Stat type filtering with All/PTS/REB/AST options (THREES removed in Session 22).
   onFilterChange={(filter) => setFilter(filter)}
 />
 ```
+
+**Filter options:** `all` | `pts` | `reb` | `ast` | `combos`
+
+When `combos` is selected, predictions are filtered to those where `stat` is in `COMBO_STATS` (`pra`, `pr`, `pa`, `ra`).
 
 ### Matchup Filter
 
@@ -460,7 +467,7 @@ Individual prediction card with:
 ### AnalysisModal
 
 Detailed analysis popup with:
-- Last 5 games bar chart (from `player_game_stats` table)
+- Last 5 games bar chart (from `player_game_stats` table). For combo stats (PRA, P+R, P+A, R+A), computes values by summing component columns via `COMBO_COMPONENTS` mapping.
 - Quantile distribution summary with visual bar
 - Sportsbook line shopping with edge calculations
 - Kelly bet sizing calculator with bankroll input
@@ -814,6 +821,7 @@ Individual bet result display.
 Shows:
 - Player name and avatar
 - Matchup info ("LAL vs SAS") when `team_abbrev`/`opponent_abbrev` available (Session 68), with date
+- "Taken {time}" from `placed_at` timestamp (Session 83)
 - Stat badge
 - Over/Under direction with line
 - Sportsbook badge (when bookmaker recorded)
@@ -1344,13 +1352,13 @@ Devigging and market utilities (Session 49):
 
 ### Database
 
-**RPC Function:** `get_dfs_lines(target_date date)` — SECURITY DEFINER function returning latest DFS lines. Uses `ROW_NUMBER()` partitioned by (player_id, game_id, bookmaker, market_key, outcome_label) ordered by snapshot_time DESC. Handles game ID format mismatch via LPAD.
+**RPC Function:** `get_dfs_lines(target_date date)` — SECURITY DEFINER function returning latest DFS lines. Uses `ROW_NUMBER()` partitioned by (player_id, game_id, bookmaker, market_key, outcome_label) ordered by snapshot_time DESC. Handles game ID format mismatch via LPAD. Has `SET statement_timeout = '30s'` override (Session 83) — the `authenticated` role's 8s default was too short for this query on the 67M-row `raw_player_props_combined` table.
 
 **RPC Function:** `get_sportsbook_lines(target_date date)` — SECURITY DEFINER function returning latest non-DFS bookmaker lines for players with predictions on target date. Excludes DFS platforms (prizepicks, underdog, pick6, betr_us_dfs). Returns over_odds, under_odds, snapshot_time per player/game/bookmaker/market/line.
 
 **RPC Function:** `get_sportsbook_lines_by_games(text[])` — Accepts game_id array, returns all non-DFS sportsbook lines (no market_key filter since Session 80 / migration 020). 24-hour snapshot_time cutoff. Frontend filters to mapped markets via `MARKET_TO_STAT`. Returns threes (15+ books), steals (7+ books), blocks (8+ books) in addition to pts/reb/ast.
 
-**Index:** `idx_props_bookmaker_dfs` — Partial index for DFS bookmaker queries on 26M+ row table.
+**Index:** `idx_props_bookmaker_dfs` — Partial index for DFS bookmaker queries on 67M+ row table (was 26M at creation).
 
 **Index:** `idx_props_sportsbook_lookup` — Partial index for non-DFS sportsbook queries (excludes DFS platforms).
 
@@ -1437,6 +1445,45 @@ Cross-device sync for user-placed bets and preferences, replacing per-device loc
 - **Performance page** — Three tabs: "My Bets" (green), "Props", "DFS". My Bets shows KPIs, bankroll chart, and stat breakdown from `user_bets`. All bankroll chart calculations use `prefs.initialBankroll` instead of hardcoded 1000 (Session 73).
 - **Account page** — Bankroll Settings card with Initial Bankroll (ROI calcs) and Current Bankroll (bet sizing + Navbar) inputs. Both sync via `useUserPreferences` (Session 73).
 - **Navbar** — Shows user's current bankroll from `useUserPreferences` instead of paper trading daily log (Session 73).
+
+## Mobile Responsiveness (Session 82)
+
+All dashboard pages are optimized for mobile screens (375px+). The responsive strategy uses Tailwind's `sm:` breakpoint (640px) as the primary threshold.
+
+### Predictions Page — Collapsible Filter Panel
+
+The predictions page has 10+ filter controls (state selector, sportsbook filter, live toggle, model picks toggle, direction filter, slate builder, date selector, edge threshold, BL tau). On mobile these are hidden behind a "Filters" button (`sm:hidden`) with an active filter count badge. `FilterTabs` (PTS/REB/AST/Combos) remains always visible as primary navigation.
+
+**Key implementation details:**
+- `filtersOpen` state toggle (default collapsed on mobile)
+- Filters wrapped in `hidden sm:flex` container, toggled to `flex flex-col` on mobile
+- Select inputs use `w-full sm:w-auto` for full-width stacking
+- Visual separator (`border-t border-slate-700`) on mobile when expanded
+
+### AnalysisModal
+
+- Container padding: `p-2 sm:p-4` (edge margin for small screens)
+- Section padding: `p-4 sm:p-6` (all content sections)
+- Header: `flex-col sm:flex-row` stacking with avatar hidden on small screens (`hidden sm:block`)
+- Bet sizing grid: `grid-cols-1 sm:grid-cols-2`
+- Footer: `flex-col sm:flex-row items-stretch sm:items-center` for stacking Close + Take Bet
+
+### Page Headers (History, Performance, Stats)
+
+All page headers use `flex-col sm:flex-row sm:items-center sm:justify-between gap-3` to stack title and controls vertically on mobile.
+
+### KPI Grids (Performance)
+
+All three KPI grids (Props, DFS, My Bets) use `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4` for single-column on small phones.
+
+### Navbar Touch Targets
+
+Mobile nav links use `px-4 py-3` for proper 44px minimum touch targets (increased from `px-3 py-2`).
+
+### Out of Scope (Deferred)
+
+- **DfsTable / HeatmapTable card-based layouts** — Many-column tables use `overflow-x-auto` horizontal scroll for now
+- **BetCard minor crowding** — Functional as-is on mobile
 
 ## Future Enhancements
 

@@ -569,3 +569,31 @@ predictor = MonteCarloPredictor(
 | High hit rate but negative ROI | Overconfident edges | Raise `edge_threshold` |
 | Low outcomes happening unexpectedly | Not modeling blowouts/fouls | Enable `blowout_config` with higher `probability` |
 | REB specifically has issues | REB has no correlation to leverage | Use `variance_inflation` for REB (default: 1.15) |
+
+---
+
+## Combo Market Derivation
+
+The `derive_combo_samples()` function (module-level in `monte_carlo.py`) derives combo stat predictions from existing MC samples:
+
+| Combo | Components | Market Key |
+|-------|------------|------------|
+| PRA | pts + reb + ast | `player_points_rebounds_assists` |
+| P+R | pts + reb | `player_points_rebounds` |
+| P+A | pts + ast | `player_points_assists` |
+| R+A | reb + ast | `player_rebounds_assists` |
+
+**How it works:** Element-wise numpy sum of component sample arrays. Correlations between stats are preserved because all share the same minutes draws via Gaussian copula.
+
+**Storage:** Combo samples are NOT stored to the database — always derived on-the-fly from base stat samples (pts, reb, ast). This saves storage and avoids consistency issues.
+
+**Usage:**
+```python
+from src.models.monte_carlo import derive_combo_samples
+
+combo_preds, combo_samps = derive_combo_samples(samples_dict, predictions_list)
+predictions_list.extend(combo_preds)
+samples_dict.update(combo_samps)
+```
+
+Combo definitions are centralized in `src/config/combo_config.py`.

@@ -9,7 +9,9 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
 
+from src.config.combo_config import MARKET_TO_STAT, STAT_TO_MARKET
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
+from src.models.monte_carlo import derive_combo_samples
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,14 @@ class DailyPredictionRunner:
         predictions_list, samples_dict = self.predictor.predict_batch_for_date(
             features_df, stats=stats
         )
+
+        # 4b. Derive combo predictions from MC samples
+        combo_preds, combo_samps = derive_combo_samples(samples_dict, predictions_list)
+        predictions_list.extend(combo_preds)
+        samples_dict.update(combo_samps)
+        if combo_preds:
+            logger.info(f"Derived {len(combo_preds)} combo predictions ({len(combo_samps)} sample arrays)")
+
         predictions_df = pd.DataFrame(predictions_list)
 
         if predictions_df.empty:
@@ -233,6 +243,10 @@ class DailyPredictionRunner:
                 predictions_df.at[idx, "feat_player_avg_stat_l15"] = float(avg_l15) if avg_l15 is not None else None
                 predictions_df.at[idx, "feat_stat_l3_l15_ratio"] = float(ratio) if ratio is not None else None
                 predictions_df.at[idx, "feat_stat_std_l5"] = float(std) if std is not None else None
+
+                # Inference-time prop_line (used for drift detection in edge refresh)
+                pl = feat.get(f"prop_line_{s}")
+                predictions_df.at[idx, "prop_line"] = float(pl) if pl is not None and pl != 0 else None
 
             # Opponent abbreviation
             opp_id = row.get("opponent_id")
@@ -432,13 +446,19 @@ class DailyPredictionRunner:
                     for row in result
                 }
 
-            # Log if no times found in database
+            # Fallback to raw_player_props_combined if staging has no times
             if not time_lookup:
-                logger.warning(
-                    f"No game times found in raw_game_lines_staging for date {target_date}. "
-                    "Ensure lines_job ran before inference."
+                logger.info(
+                    f"No game times in raw_game_lines_staging for {target_date}, "
+                    "trying raw_player_props_combined..."
                 )
-                return games
+                time_lookup = self._get_game_times_from_props(games, target_date)
+                if not time_lookup:
+                    logger.warning(
+                        f"No game times found in any source for {target_date}. "
+                        "Dashboard will show TBD for game times."
+                    )
+                    return games
 
             # Enrich games with times
             enriched_count = 0
@@ -473,6 +493,53 @@ class DailyPredictionRunner:
                 "Dashboard will not display game times for these predictions."
             )
             return games
+
+    def _get_game_times_from_props(self, games: list[dict], target_date: date) -> dict:
+        """Fallback: get game times from raw_player_props_combined via game_id.
+
+        Uses LATERAL LIMIT 1 per game_id for fast lookup on the large table.
+        commence_time is the same across all snapshots for a given game.
+        """
+        game_ids = [g["game_id"] for g in games if g.get("game_id")]
+        if not game_ids:
+            return {}
+
+        query = text("""
+            SELECT g.gid as game_id, t.commence_time
+            FROM unnest(:game_ids) AS g(gid)
+            CROSS JOIN LATERAL (
+                SELECT rp.commence_time
+                FROM raw_player_props_combined rp
+                WHERE rp.game_id = g.gid
+                  AND rp.commence_time IS NOT NULL
+                  AND rp.snapshot_time > NOW() - interval '48 hours'
+                LIMIT 1
+            ) t
+        """)
+
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(query, {"game_ids": game_ids})
+                # Build game_id -> (home_team_id, away_team_id) reverse lookup
+                game_team_lookup = {}
+                for g in games:
+                    gid = g.get("game_id")
+                    if gid:
+                        game_team_lookup[gid] = (g.get("home_team_id"), g.get("away_team_id"))
+
+                time_lookup = {}
+                for row in result:
+                    gid, ct = row[0], row[1]
+                    teams = game_team_lookup.get(gid)
+                    if teams and ct:
+                        time_lookup[teams] = ct
+
+                if time_lookup:
+                    logger.info(f"Found {len(time_lookup)} game times from raw_player_props_combined")
+                return time_lookup
+        except Exception as e:
+            logger.warning(f"Props game time lookup failed: {e}")
+            return {}
 
     def _get_players_for_games(self, games: list[dict], target_date: date) -> list[dict]:
         """Get expected players for games (based on recent activity)."""
@@ -634,13 +701,7 @@ class DailyPredictionRunner:
         if not game_ids:
             return pd.DataFrame()
 
-        stat_to_market = {
-            "pts": "player_points",
-            "reb": "player_rebounds",
-            "ast": "player_assists",
-        }
-
-        markets = [stat_to_market[s] for s in stats if s in stat_to_market]
+        markets = [STAT_TO_MARKET[s] for s in stats if s in STAT_TO_MARKET]
 
         # Create both 10-digit and 8-digit versions of game_ids to search
         # raw_player_props_combined has mixed formats (some 8-digit, some 10-digit)
@@ -734,13 +795,8 @@ class DailyPredictionRunner:
         if samples are missing for a given prediction.
         """
         # Map market_key back to stat
-        market_to_stat = {
-            "player_points": "pts",
-            "player_rebounds": "reb",
-            "player_assists": "ast",
-        }
         lines_df = lines_df.copy()
-        lines_df["stat"] = lines_df["market_key"].map(market_to_stat)
+        lines_df["stat"] = lines_df["market_key"].map(MARKET_TO_STAT)
 
         # Merge (include bookmaker for tracking which book had best line)
         merge_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds"]

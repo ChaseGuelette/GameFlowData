@@ -8,11 +8,12 @@ import { Last5Chart } from './Last5Chart'
 import { QuantileSummary } from './QuantileSummary'
 import { type Prediction, type PlayerGameStats, type StatType, type BookmakerLine, type BetContext, STAT_LABELS } from '@/types/predictions'
 import { formatProb } from '@/lib/utils'
-import { generateInsights, type Insight } from '@/lib/insights'
+import { generateInsights } from '@/lib/insights'
 import { getAllowedBookmakers } from '@/lib/sportsbook-availability'
 import { estimateUnderProb, americanToImpliedProb, formatBookmaker } from '@/lib/dfs-utils'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 import { buildBetContext } from '@/lib/buildBetContext'
+import { AskChat } from './AskChat'
 
 export interface TakeBetData {
   book: string
@@ -33,10 +34,22 @@ interface AnalysisModalProps {
 }
 
 // Map stat type to column name in player_game_stats
-const STAT_COLUMN_MAP: Record<string, keyof PlayerGameStats> = {
+const STAT_COLUMN_MAP: Record<string, keyof PlayerGameStats | null> = {
   pts: 'pts',
   reb: 'reb',
   ast: 'ast',
+  pra: null,  // combo — computed from components
+  pr: null,
+  pa: null,
+  ra: null,
+}
+
+// Combo stat component definitions (for L5 chart summing)
+const COMBO_COMPONENTS: Record<string, (keyof PlayerGameStats)[]> = {
+  pra: ['pts', 'reb', 'ast'],
+  pr: ['pts', 'reb'],
+  pa: ['pts', 'ast'],
+  ra: ['reb', 'ast'],
 }
 
 // Map stat type to market_key in raw_player_props_combined
@@ -47,6 +60,10 @@ const STAT_TO_MARKET: Record<string, string> = {
   stl: 'player_steals',
   blk: 'player_blocks',
   '3pm': 'player_threes',
+  pra: 'player_points_rebounds_assists',
+  pr: 'player_points_rebounds',
+  pa: 'player_points_assists',
+  ra: 'player_rebounds_assists',
 }
 
 // DFS platforms to exclude from main dashboard sportsbook lines
@@ -253,12 +270,19 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
     : (Number.isFinite(prediction.implied_prob_under) ? prediction.implied_prob_under : 0)
 
   // Get stat values for chart
-  const statColumn = STAT_COLUMN_MAP[prediction.stat]
+  const statColumn = STAT_COLUMN_MAP[prediction.stat] ?? null
+  const comboComponents = COMBO_COMPONENTS[prediction.stat]
   const statLabel = STAT_LABELS[prediction.stat]
 
-  // Calculate L5 average for the relevant stat
+  // Calculate L5 average for the relevant stat (sum components for combos)
   const l5Avg = history.length > 0
-    ? history.reduce((sum, g) => sum + (Number(g[statColumn]) || 0), 0) / history.length
+    ? comboComponents
+      ? history.reduce((sum, g) =>
+          sum + comboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0), 0
+        ) / history.length
+      : statColumn
+        ? history.reduce((sum, g) => sum + (Number(g[statColumn]) || 0), 0) / history.length
+        : null
     : null
 
   // Process bookmaker lines: compute edge per line, sort by best edge
@@ -285,6 +309,9 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
       })
       .sort((a, b) => b.lineEdge - a.lineEdge)
   }, [bookmakerLines, prediction.q10, prediction.q25, prediction.q50, prediction.q75, prediction.q90, isOverBet, userState])
+
+  // Insights (memoized for reuse in both Model Context and AskChat)
+  const insights = useMemo(() => generateInsights(prediction), [prediction])
 
   // Take Bet state
   const [customStake, setCustomStake] = useState<string>('')
@@ -344,7 +371,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   }, [onClose])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
 
@@ -359,22 +386,23 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         </button>
 
         {/* Header */}
-        <div className="p-6 border-b border-slate-700">
-          <div className="flex items-center space-x-4">
+        <div className="p-4 sm:p-6 border-b border-slate-700">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
             <PlayerAvatar
               playerId={prediction.player_id}
               playerName={prediction.player_name || 'Unknown'}
               size="lg"
+              className="hidden sm:block"
             />
             <div className="flex-1">
-              <h2 className="text-2xl font-bold text-slate-50">
+              <h2 className="text-xl sm:text-2xl font-bold text-slate-50">
                 {prediction.player_name || `Player ${prediction.player_id}`}
               </h2>
               <p className="text-slate-400">
                 {prediction.team_abbrev || '???'} vs {prediction.opponent_abbrev || '???'}
               </p>
             </div>
-            <div className="text-right">
+            <div className="text-left sm:text-right">
               <Badge stat={prediction.stat} className="mb-1" />
               <div className="text-xl font-bold text-slate-50">
                 {direction} {prediction.prop_line}
@@ -384,7 +412,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         </div>
 
         {/* Last 5 Games */}
-        <div className="p-6 border-b border-slate-700">
+        <div className="p-4 sm:p-6 border-b border-slate-700">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-slate-50">Last 5 Games</h3>
             {l5Avg !== null && (
@@ -403,6 +431,10 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                 games={history}
                 stat={statColumn}
                 line={prediction.prop_line}
+                values={comboComponents
+                  ? history.map(g => comboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0))
+                  : undefined
+                }
               />
               {/* Stats table as fallback/supplement */}
               <div className="mt-4 overflow-x-auto">
@@ -414,24 +446,39 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                       <th className="text-center py-2 px-2">PTS</th>
                       <th className="text-center py-2 px-2">REB</th>
                       <th className="text-center py-2 px-2">AST</th>
+                      {comboComponents && (
+                        <th className="text-center py-2 px-2">{statLabel}</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
-                    {history.map((game, i) => (
+                    {history.map((game, i) => {
+                      const isComboComponent = (col: string) =>
+                        comboComponents?.includes(col as keyof PlayerGameStats) ?? false
+                      const highlightBase = prediction.stat === 'pts' || isComboComponent('pts')
+                      const highlightReb = prediction.stat === 'reb' || isComboComponent('reb')
+                      const highlightAst = prediction.stat === 'ast' || isComboComponent('ast')
+                      return (
                       <tr key={i} className="border-b border-slate-700/50">
                         <td className="py-2 px-2 text-slate-300">{game.game_date}</td>
                         <td className="text-center py-2 px-2 text-slate-400">{game.min}</td>
-                        <td className={`text-center py-2 px-2 ${prediction.stat === 'pts' ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
+                        <td className={`text-center py-2 px-2 ${highlightBase ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
                           {game.pts}
                         </td>
-                        <td className={`text-center py-2 px-2 ${prediction.stat === 'reb' ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
+                        <td className={`text-center py-2 px-2 ${highlightReb ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
                           {game.reb}
                         </td>
-                        <td className={`text-center py-2 px-2 ${prediction.stat === 'ast' ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
+                        <td className={`text-center py-2 px-2 ${highlightAst ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
                           {game.ast}
                         </td>
+                        {comboComponents && (
+                          <td className="text-center py-2 px-2 text-amber-400 font-semibold">
+                            {comboComponents.reduce((s, col) => s + (Number(game[col]) || 0), 0)}
+                          </td>
+                        )}
                       </tr>
-                    ))}
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -444,38 +491,44 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         </div>
 
         {/* Model Context / Insights */}
-        {(() => {
-          const insights = generateInsights(prediction)
-          if (insights.length === 0) return null
-
-          return (
-            <div className="p-6 border-b border-slate-700">
-              <h3 className="text-lg font-semibold text-slate-50 mb-3">Model Context</h3>
-              <div className="space-y-2">
-                {insights.map((insight, i) => (
-                  <div
-                    key={i}
-                    className={`flex items-center gap-2 text-sm ${
-                      insight.sentiment === 'positive'
-                        ? 'text-green-400'
-                        : insight.sentiment === 'negative'
-                          ? 'text-red-400'
-                          : 'text-slate-300'
-                    }`}
-                  >
-                    <span className="w-4 text-center">
-                      {insight.sentiment === 'positive' ? '✓' : insight.sentiment === 'negative' ? '⚠' : '•'}
-                    </span>
-                    <span>{insight.text}</span>
-                  </div>
-                ))}
-              </div>
+        {insights.length > 0 && (
+          <div className="p-4 sm:p-6 border-b border-slate-700">
+            <h3 className="text-lg font-semibold text-slate-50 mb-3">Model Context</h3>
+            <div className="space-y-2">
+              {insights.map((insight, i) => (
+                <div
+                  key={i}
+                  className={`flex items-center gap-2 text-sm ${
+                    insight.sentiment === 'positive'
+                      ? 'text-green-400'
+                      : insight.sentiment === 'negative'
+                        ? 'text-red-400'
+                        : 'text-slate-300'
+                  }`}
+                >
+                  <span className="w-4 text-center">
+                    {insight.sentiment === 'positive' ? '✓' : insight.sentiment === 'negative' ? '⚠' : '•'}
+                  </span>
+                  <span>{insight.text}</span>
+                </div>
+              ))}
             </div>
-          )
-        })()}
+          </div>
+        )}
+
+        {/* AI Q&A */}
+        <AskChat
+          prediction={prediction}
+          history={history}
+          insights={insights}
+          bookmakerLines={bookmakerLines}
+          isOverBet={isOverBet}
+          edge={edge}
+          probability={probability}
+        />
 
         {/* Sportsbook Lines */}
-        <div className="p-6 border-b border-slate-700">
+        <div className="p-4 sm:p-6 border-b border-slate-700">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-slate-50">
               Sportsbook Lines {userState && <span className="text-xs text-slate-500">({userState} only)</span>}
@@ -572,9 +625,9 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         </div>
 
         {/* Bet Sizing Calculator */}
-        <div className="p-6 border-b border-slate-700">
+        <div className="p-4 sm:p-6 border-b border-slate-700">
           <h3 className="text-lg font-semibold text-slate-50 mb-4">Bet Sizing</h3>
-          <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-sm text-slate-400 mb-1">Bankroll ($)</label>
               <input
@@ -639,7 +692,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         </div>
 
         {/* Quantile Summary */}
-        <div className="p-6 border-b border-slate-700">
+        <div className="p-4 sm:p-6 border-b border-slate-700">
           <h3 className="text-lg font-semibold text-slate-50 mb-4">Model Prediction Distribution</h3>
           <QuantileSummary
             q10={prediction.q10}
@@ -652,7 +705,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         </div>
 
         {/* Edge Summary — updates to reflect selected sportsbook line when available */}
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <div className="flex items-center justify-between">
             <div>
               <div className="text-slate-400 text-sm">Model Probability</div>
@@ -679,7 +732,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         </div>
 
         {/* Footer: Close + Confidence + Take Bet */}
-        <div className="p-6 pt-0 flex items-center gap-3">
+        <div className="p-4 sm:p-6 pt-0 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
           <button
             onClick={onClose}
             className="py-3 px-4 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-md font-medium transition-colors"
@@ -730,8 +783,18 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                   const stake = parseFloat(customStake) || 0
                   if (stake <= 0) return
 
+                  const l5Games = history.length > 0
+                    ? history.map(g => ({
+                        date: g.game_date,
+                        value: comboComponents
+                          ? comboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0)
+                          : statColumn ? (Number(g[statColumn]) || 0) : 0,
+                      }))
+                    : null
+
                   const betContext = buildBetContext(prediction, {
                     l5Avg: l5Avg,
+                    l5Games: l5Games,
                     kelly: sizingData.kellyPct > 0 ? {
                       fraction: kellyFraction,
                       recommended_stake: sizingData.recommendedBet,

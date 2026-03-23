@@ -125,6 +125,10 @@ export const MARKET_TO_STAT: Record<string, StatType> = {
   'player_steals': 'stl',
   'player_blocks': 'blk',
   'player_threes': '3pm',
+  'player_points_rebounds_assists': 'pra',
+  'player_points_rebounds': 'pr',
+  'player_points_assists': 'pa',
+  'player_rebounds_assists': 'ra',
 }
 
 export const STAT_TO_MARKET: Record<string, string> = {
@@ -134,4 +138,8 @@ export const STAT_TO_MARKET: Record<string, string> = {
   stl: 'player_steals',
   blk: 'player_blocks',
   '3pm': 'player_threes',
+  pra: 'player_points_rebounds_assists',
+  pr: 'player_points_rebounds',
+  pa: 'player_points_assists',
+  ra: 'player_rebounds_assists',
 }

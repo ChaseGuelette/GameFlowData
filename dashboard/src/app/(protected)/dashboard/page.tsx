@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { FilterTabs, type FilterOption } from '@/components/predictions/FilterTabs'
+import { FilterTabs, COMBO_STATS, type FilterOption } from '@/components/predictions/FilterTabs'
 import { PropGrid } from '@/components/predictions/PropGrid'
 import { PlayOfTheDay } from '@/components/predictions/PlayOfTheDay'
 import { AnalysisModal } from '@/components/analysis/AnalysisModal'
@@ -43,6 +43,7 @@ export default function DashboardPage() {
   const isToday = selectedDate === getToday()
   const gameStatusMap = useGameStatus(isToday)
 
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [excludedBooks, setExcludedBooks] = useState<Set<string>>(new Set())
   const [bookAvailability, setBookAvailability] = useState<Set<string> | null>(null)
 
@@ -456,7 +457,9 @@ export default function DashboardPage() {
       if (!showLive && !gs.isLive && p.game_time && new Date(p.game_time) <= new Date()) return false
     }
     if (showModelPicks && !p.is_recommended) return false
-    if (filter !== 'all' && p.stat !== filter) return false
+    if (filter === 'combos') {
+      if (!COMBO_STATS.has(p.stat)) return false
+    } else if (filter !== 'all' && p.stat !== filter) return false
     if (teamFilter !== 'all') {
       const matchupTeams = teamFilter.split(' vs ')
       if (!matchupTeams.includes(p.team_abbrev || '') && !matchupTeams.includes(p.opponent_abbrev || '')) {
@@ -515,129 +518,161 @@ export default function DashboardPage() {
             )}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {/* State Selector */}
-          <select
-            value={userState}
-            onChange={(e) => updatePref('userState', e.target.value)}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-          >
-            {US_STATES.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.value ? s.value : 'All States'}
-              </option>
-            ))}
-          </select>
-          {/* Sportsbook Filter */}
-          <BookFilterDropdown
-            excludedBooks={excludedBooks}
-            onChange={setExcludedBooks}
-            userState={userState}
-          />
-          {/* Live Betting Toggle */}
-          <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
-            <button
-              onClick={() => setShowLive(false)}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                !showLive
-                  ? 'bg-slate-700 text-slate-100'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Pre-Game
-            </button>
-            <button
-              onClick={() => setShowLive(true)}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                showLive
-                  ? 'bg-orange-600 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              + Live
-            </button>
-          </div>
-          {/* Model Picks Toggle */}
-          <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
-            <button
-              onClick={() => handleModelPicksToggle(false)}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                !showModelPicks
-                  ? 'bg-slate-700 text-slate-100'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              All Bets
-            </button>
-            <button
-              onClick={() => handleModelPicksToggle(true)}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                showModelPicks
-                  ? 'bg-green-600 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Model Picks
-            </button>
-          </div>
-          {/* Direction Filter */}
-          <DirectionFilter activeDirection={directionFilter} onDirectionChange={setDirectionFilter} />
-          {/* Build Slate Toggle */}
-          <button
-            onClick={() => {
-              setSlateMode(prev => !prev)
-              if (slateMode) setSelectedPicks(new Set())
-            }}
-            className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
-              slateMode
-                ? 'bg-blue-600 border-blue-500 text-white'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            {slateMode ? 'Exit Slate' : 'Build Slate'}
-          </button>
-          {/* Date Selector */}
-          <select
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-          >
-            {availableDates.map((date) => (
-              <option key={date} value={date}>
-                {date === getToday() ? `${formatDate(date)} (Today)` : formatDate(date)}
-              </option>
-            ))}
-          </select>
-          {/* Edge Threshold Filter */}
-          <select
-            value={edgeThreshold}
-            onChange={(e) => setEdgeThreshold(Number(e.target.value))}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-          >
-            <option value={0}>Edge: All</option>
-            <option value={0.03}>Edge: ≥3%</option>
-            <option value={0.05}>Edge: ≥5%</option>
-            <option value={0.07}>Edge: ≥7%</option>
-            <option value={0.09}>Edge: ≥9% (Model)</option>
-            <option value={0.10}>Edge: ≥10%</option>
-            <option value={0.15}>Edge: ≥15%</option>
-            <option value={0.20}>Edge: ≥20%</option>
-          </select>
-          {/* BL Tau Filter */}
-          <select
-            value={blTau === null ? 'none' : blTau}
-            onChange={(e) => setBlTau(e.target.value === 'none' ? null : Number(e.target.value))}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-          >
-            <option value="none">BL: Off</option>
-            <option value={0.03}>BL: τ=0.03</option>
-            <option value={0.05}>BL: τ=0.05</option>
-            <option value={0.10}>BL: τ=0.10</option>
-            <option value={0.15}>BL: τ=0.15</option>
-            <option value={0.25}>BL: τ=0.25</option>
-            <option value={0.50}>BL: τ=0.50 (Model)</option>
-          </select>
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
+          {/* FilterTabs (PTS/REB/AST) - always visible as primary nav */}
           <FilterTabs activeFilter={filter} onFilterChange={setFilter} />
+
+          {/* Mobile: Filters toggle button */}
+          <button
+            onClick={() => setFiltersOpen(prev => !prev)}
+            className="sm:hidden flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-100 transition-colors"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+              <path fillRule="evenodd" d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 0-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" clipRule="evenodd" />
+            </svg>
+            Filters
+            {(() => {
+              let count = 0
+              if (userState) count++
+              if (excludedBooks.size > 0) count++
+              if (showLive) count++
+              if (showModelPicks) count++
+              if (directionFilter !== 'both') count++
+              if (edgeThreshold !== 0.03) count++
+              if (blTau !== null) count++
+              if (selectedDate !== getToday()) count++
+              return count > 0 ? (
+                <span className="bg-blue-600 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                  {count}
+                </span>
+              ) : null
+            })()}
+          </button>
+
+          {/* Filter controls - hidden on mobile unless toggled, always visible on sm+ */}
+          <div className={`${filtersOpen ? 'flex' : 'hidden'} sm:flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 w-full sm:w-auto ${filtersOpen ? 'mt-2 pt-3 border-t border-slate-700 sm:mt-0 sm:pt-0 sm:border-0' : ''}`}>
+            {/* State Selector */}
+            <select
+              value={userState}
+              onChange={(e) => updatePref('userState', e.target.value)}
+              className="w-full sm:w-auto bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            >
+              {US_STATES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.value ? s.value : 'All States'}
+                </option>
+              ))}
+            </select>
+            {/* Sportsbook Filter */}
+            <BookFilterDropdown
+              excludedBooks={excludedBooks}
+              onChange={setExcludedBooks}
+              userState={userState}
+            />
+            {/* Live Betting Toggle */}
+            <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
+              <button
+                onClick={() => setShowLive(false)}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  !showLive
+                    ? 'bg-slate-700 text-slate-100'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Pre-Game
+              </button>
+              <button
+                onClick={() => setShowLive(true)}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  showLive
+                    ? 'bg-orange-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                + Live
+              </button>
+            </div>
+            {/* Model Picks Toggle */}
+            <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
+              <button
+                onClick={() => handleModelPicksToggle(false)}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  !showModelPicks
+                    ? 'bg-slate-700 text-slate-100'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                All Bets
+              </button>
+              <button
+                onClick={() => handleModelPicksToggle(true)}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  showModelPicks
+                    ? 'bg-green-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Model Picks
+              </button>
+            </div>
+            {/* Direction Filter */}
+            <DirectionFilter activeDirection={directionFilter} onDirectionChange={setDirectionFilter} />
+            {/* Build Slate Toggle */}
+            <button
+              onClick={() => {
+                setSlateMode(prev => !prev)
+                if (slateMode) setSelectedPicks(new Set())
+              }}
+              className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
+                slateMode
+                  ? 'bg-blue-600 border-blue-500 text-white'
+                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {slateMode ? 'Exit Slate' : 'Build Slate'}
+            </button>
+            {/* Date Selector */}
+            <select
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="w-full sm:w-auto bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            >
+              {availableDates.map((date) => (
+                <option key={date} value={date}>
+                  {date === getToday() ? `${formatDate(date)} (Today)` : formatDate(date)}
+                </option>
+              ))}
+            </select>
+            {/* Edge Threshold Filter */}
+            <select
+              value={edgeThreshold}
+              onChange={(e) => setEdgeThreshold(Number(e.target.value))}
+              className="w-full sm:w-auto bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            >
+              <option value={0}>Edge: All</option>
+              <option value={0.03}>Edge: ≥3%</option>
+              <option value={0.05}>Edge: ≥5%</option>
+              <option value={0.07}>Edge: ≥7%</option>
+              <option value={0.09}>Edge: ≥9% (Model)</option>
+              <option value={0.10}>Edge: ≥10%</option>
+              <option value={0.15}>Edge: ≥15%</option>
+              <option value={0.20}>Edge: ≥20%</option>
+            </select>
+            {/* BL Tau Filter */}
+            <select
+              value={blTau === null ? 'none' : blTau}
+              onChange={(e) => setBlTau(e.target.value === 'none' ? null : Number(e.target.value))}
+              className="w-full sm:w-auto bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            >
+              <option value="none">BL: Off</option>
+              <option value={0.03}>BL: τ=0.03</option>
+              <option value={0.05}>BL: τ=0.05</option>
+              <option value={0.10}>BL: τ=0.10</option>
+              <option value={0.15}>BL: τ=0.15</option>
+              <option value={0.25}>BL: τ=0.25</option>
+              <option value={0.50}>BL: τ=0.50 (Model)</option>
+            </select>
+          </div>
         </div>
       </div>
 

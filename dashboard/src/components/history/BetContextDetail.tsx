@@ -2,6 +2,15 @@
 
 import { type BetContext } from '@/types/predictions'
 import { QuantileSummary } from '@/components/analysis/QuantileSummary'
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  ReferenceLine,
+  ResponsiveContainer,
+  Cell,
+  Tooltip,
+} from 'recharts'
 
 interface BetContextDetailProps {
   context: BetContext
@@ -47,8 +56,74 @@ export function BetContextDetail({ context, userConfidence, line }: BetContextDe
         />
       </div>
 
-      {/* L5 + Season Averages */}
-      {(context.l5_avg != null || context.season_avg != null) && (
+      {/* L5 Games Chart + Season Average */}
+      {context.l5_games && context.l5_games.length > 0 ? (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-slate-400">Last 5 Games</span>
+            <div className="flex gap-3 text-xs">
+              {context.l5_avg != null && (
+                <span className="text-slate-400">
+                  L5 Avg: <span className="text-slate-200">{context.l5_avg.toFixed(1)}</span>
+                </span>
+              )}
+              {context.season_avg != null && (
+                <span className="text-slate-400">
+                  Season: <span className="text-slate-200">{context.season_avg.toFixed(1)}</span>
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="h-24">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={context.l5_games.map((g, i) => ({
+                  name: `G${i + 1}`,
+                  value: g.value,
+                  date: g.date,
+                  overLine: g.value >= line,
+                }))}
+                margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
+              >
+                <XAxis
+                  dataKey="name"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#94a3b8', fontSize: 10 }}
+                />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (active && payload && payload.length) {
+                      const item = payload[0].payload
+                      return (
+                        <div className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+                          <div className="text-slate-300">{item.date}</div>
+                          <div className="text-slate-50 font-semibold">{item.value}</div>
+                        </div>
+                      )
+                    }
+                    return null
+                  }}
+                />
+                <ReferenceLine
+                  y={line}
+                  stroke="#64748b"
+                  strokeDasharray="3 3"
+                  strokeWidth={1.5}
+                />
+                <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+                  {context.l5_games.map((g, i) => (
+                    <Cell
+                      key={`cell-${i}`}
+                      fill={g.value >= line ? '#22c55e' : '#ef4444'}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      ) : (context.l5_avg != null || context.season_avg != null) ? (
         <div className="flex gap-4 text-sm">
           {context.l5_avg != null && (
             <div className="text-slate-400">
@@ -61,7 +136,7 @@ export function BetContextDetail({ context, userConfidence, line }: BetContextDe
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
       {/* Insights */}
       {context.insights.length > 0 && (

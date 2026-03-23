@@ -133,7 +133,7 @@ export default function HistoryPage() {
 
       const { data, error } = await supabase
         .from('user_bets')
-        .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet, team_abbrev, opponent_abbrev, bet_context, user_confidence')
+        .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet, team_abbrev, opponent_abbrev, bet_context, user_confidence, placed_at')
         .gte('game_date', startDate)
         .lte('game_date', endDate)
         .order('game_date', { ascending: false })
@@ -159,6 +159,7 @@ export default function HistoryPage() {
           opponent_abbrev: row.opponent_abbrev ?? undefined,
           bet_context: row.bet_context ?? null,
           user_confidence: row.user_confidence ?? null,
+          placed_at: row.placed_at ?? null,
         }))
         setMyBets(mapped)
       }
@@ -214,7 +215,7 @@ export default function HistoryPage() {
     <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
       <div className="flex flex-col gap-4 mb-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold text-slate-50">Bet History</h1>
             <p className="text-slate-400">{formatDateLabel(startDate, endDate)}</p>
@@ -281,7 +282,7 @@ export default function HistoryPage() {
           </div>
         </div>
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           {activeTab === 'my_bets' ? (
             <DirectionFilter activeDirection={myBetsDirectionFilter} onDirectionChange={setMyBetsDirectionFilter} />
           ) : (

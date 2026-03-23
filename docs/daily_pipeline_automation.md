@@ -40,7 +40,7 @@ The daily pipeline is split into four jobs based on execution frequency:
 
 12:00 PM   lines_job.py --live --parallel (full scrape, parallel)
            Group A (props):    ├─ daily_game_lines_scraper.py
-                               ├─ daily_player_props_scraper.py --live --target-table raw_player_props_combined
+                               ├─ daily_player_props_scraper.py --live --combos --target-table raw_player_props_combined
                                └─ nba_linker_local.py incremental
            Group B (injuries): ├─ rapidapi_injury_backfill.py
               (concurrent)     └─ link_injury_data.py
@@ -166,7 +166,7 @@ When `--parallel` is set, Group A and Group B run concurrently:
 
 **Group A (props path — serial):**
 1. `daily_game_lines_scraper.py` - Fetch game lines from Odds API (skipped in `--props-only`)
-2. `daily_player_props_scraper.py --live --target-table raw_player_props_combined` - Fetch live player props
+2. `daily_player_props_scraper.py --live --combos --target-table raw_player_props_combined` - Fetch live player props (including combo markets: PRA, P+R, P+A, R+A)
 3. `nba_linker_local.py incremental` - Link new props to player/game IDs
 
 **Group B (injury path — serial, concurrent with Group A):**
@@ -185,7 +185,7 @@ Output is written to `logs/lines.log`.
 
 **Location:** `src/orchestration/edge_refresh_job.py`
 
-**Purpose:** Lightweight edge recalculation using stored MC samples and fresh prop lines. Does NOT re-run inference — no model loading, no feature engineering, no MC sampling.
+**Purpose:** Lightweight edge recalculation using stored MC samples and fresh prop lines. Includes selective re-inference for players whose prop lines have drifted significantly since inference time.
 
 **Schedule:** Every 5 minutes (+2 min offset from props scrape), 11 AM – 11 PM ET (~156 runs/day, silent on success)
 
@@ -214,6 +214,7 @@ python src/orchestration/edge_refresh_job.py --stats pts reb
 | `--stats STAT [STAT ...]` | Stats to refresh (defaults to `pts reb ast`) |
 | `--skip-discord` | Skip Discord alert |
 | `--skip-paper` | Skip paper trading step (bet selection + placement). Used by 5-min cron runs to avoid timeouts |
+| `--skip-reinference` | Skip prop_line drift detection and selective re-inference. Useful for debugging or when speed is critical |
 
 ### Pipeline Steps
 
@@ -221,23 +222,25 @@ python src/orchestration/edge_refresh_job.py --stats pts reb
 2. Load stored predictions from `daily_predictions` for target date
 3. Get unique game_ids from predictions
 4. Fetch fresh prop lines from `raw_player_props_combined` (sharpest book per player/game/market, 24h snapshot_time cutoff)
-5. Recalculate over/under probabilities from MC samples (empirical CDF)
-6. Compute implied probabilities from odds (multiplicative devigging)
-7. Recalculate raw edges (model prob - implied prob)
-8. Recalculate Black-Litterman blended probabilities and recommendations
-9. Upsert updated predictions to `daily_predictions`
-10. Export CSV backup
-11. **Resolve pending paper bets** from previous days (`exclude_today=True`) — prevents same-day false resolution
-12. **Place/update paper bets** for today's recommended predictions — skips games already in progress (checks `commence_time`)
+5. **Detect prop_line drift** — compare stored `prop_line` (from inference time) against fresh lines. If drift >= 1.0 points, trigger selective re-inference for affected players only (~5-20 out of 100+). Lazy-loads model pipeline once per process. Takes ~10-30s when drift exists, ~0s when no drift.
+6. Recalculate over/under probabilities from MC samples (empirical CDF)
+7. Compute implied probabilities from odds (multiplicative devigging)
+8. Recalculate raw edges (model prob - implied prob)
+9. Recalculate Black-Litterman blended probabilities and recommendations
+10. Upsert updated predictions to `daily_predictions`
+11. Export CSV backup
+12. **Resolve pending paper bets** from previous days (`exclude_today=True`) — prevents same-day false resolution
+13. **Place/update paper bets** for today's recommended predictions — skips games already in progress (checks `commence_time`)
 
 ### Key Design Decisions
 
-- **Self-contained:** Does NOT instantiate `DailyPredictionRunner` or load model/feature pipeline. Only uses `PredictionStore`, `BlackLittermanBlender`, and raw SQL queries.
+- **Mostly self-contained:** Does NOT instantiate `DailyPredictionRunner`. Uses `PredictionStore`, `BlackLittermanBlender`, and raw SQL queries for edge recalculation. Only loads model pipeline and feature store when selective re-inference is triggered (prop_line drift detected). Pipeline is lazy-loaded once per process and cached at module level.
 - **Graceful exit:** If no MC samples exist for the target date (inference hasn't run yet), exits with info-level "NO-OP" message and code 0 (expected before first inference of the day).
 - **MC sample staleness (2026-03-02):** If MC samples are >6 hours old, logs a warning and sends a Discord alert so operators know edge calculations use stale inference data.
 - **Feature preservation:** Loads existing predictions and only updates line/edge/BL columns. All `feat_*` columns and quantile predictions are preserved.
 - **Line preservation (2026-03-05 fix):** When fresh lines aren't available for a prediction (props no longer on the API), old line/odds/bookmaker values are preserved via `fillna()` fallback instead of being nulled out by the LEFT merge.
 - **Skip paper trading (2026-03-05):** `--skip-paper` flag skips paper bet selection and placement. The 5-minute silent cron runs use this to avoid 45-minute timeouts caused by loading MC samples and running BL blending for every prediction during game hours.
+- **Prop line drift detection (2026-03-23):** `detect_stale_predictions()` compares the `prop_line` column (stored at inference time) against fresh lines. When drift >= `DRIFT_THRESHOLD` (1.0 points), `reinfer_stale_players()` re-runs inference for only the affected players: builds fresh features via `FeatureStore`, runs batch XGBoost + MC sampling via lazy-cached `PlayerPropsModelPipeline`/`MonteCarloPredictor`, replaces stale entries in `samples_dict`, re-derives combo samples, and upserts updated predictions + samples to DB. Home team determination uses `raw_game_lines_staging`. Typically affects 5-20 players per cycle, taking ~10-30 seconds. Disabled via `--skip-reinference`.
 - **Line selection (2026-03-01 fix):** `fetch_fresh_lines()` partitions by `(player_id, game_id, market_key, bookmaker, line, outcome_label)` — including `line` in the partition ensures alt lines from the same bookmaker are separate rows. A `HAVING` clause requires both Over and Under odds. The sharpest-book selection (lowest booksum) naturally picks primary lines with matched odds. Previously, `MAX(line)` conflated alt lines, causing mismatched odds and stale line selection.
 
 ### Logs

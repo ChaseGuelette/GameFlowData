@@ -3,6 +3,7 @@ import { generateInsights } from '@/lib/insights'
 
 interface BuildBetContextOptions {
   l5Avg?: number | null
+  l5Games?: Array<{ date: string; value: number }> | null
   kelly?: {
     fraction: number
     recommended_stake: number
@@ -58,6 +59,7 @@ export function buildBetContext(prediction: Prediction, options: BuildBetContext
       q90: prediction.q90,
     },
     l5_avg: options.l5Avg ?? null,
+    l5_games: options.l5Games ?? null,
     season_avg: prediction.feat_player_avg_stat_season ?? null,
     features,
     insights: insights.map(i => ({ category: i.category, text: i.text, sentiment: i.sentiment })),

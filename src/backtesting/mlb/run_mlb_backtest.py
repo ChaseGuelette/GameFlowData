@@ -133,15 +133,61 @@ def main():
     result.to_csv(output_dir)
 
     # Print summary
+    m = result.metrics
     logger.info("=" * 60)
-    logger.info(f"MLB Backtest Results: {args.start} to {args.end}")
-    logger.info(f"  Total predictions: {len(result.predictions_df)}")
-    logger.info(f"  Total bets: {len(result.bets_df)}")
-    if hasattr(result.metrics, 'total_pnl'):
-        logger.info(f"  Total P&L: ${result.metrics.total_pnl:,.2f}")
-    if hasattr(result.metrics, 'roi_pct'):
-        logger.info(f"  ROI: {result.metrics.roi_pct:.1f}%")
-    logger.info(f"  Output: {output_dir}")
+    logger.info("MLB BACKTEST RESULTS")
+    logger.info("=" * 60)
+    logger.info(f"Period: {args.start} to {args.end}")
+    logger.info(f"Total predictions: {len(result.predictions_df)}")
+    logger.info("")
+    logger.info("BETTING")
+    logger.info(f"  Total bets:       {m.total_bets}")
+    logger.info(f"  Wins / Losses:    {m.wins}W / {m.losses}L / {m.pushes}P")
+    logger.info(f"  Hit rate:         {m.hit_rate:.1%}")
+    logger.info(f"  Total staked:     ${m.total_staked:,.2f}")
+    logger.info(f"  Total profit:     ${m.total_profit:+,.2f}")
+    logger.info(f"  ROI (on stakes):  {m.roi:+.2%}")
+    logger.info(f"  Return on capital:{m.return_on_capital:+.2%}")
+    logger.info(f"  Starting bank:    ${args.bankroll:,.0f}")
+    logger.info(f"  Ending bank:      ${args.bankroll + m.total_profit:,.0f}")
+    logger.info("")
+    logger.info("RISK")
+    logger.info(f"  Sharpe ratio:     {m.sharpe_ratio:.2f}")
+    logger.info(f"  Max drawdown:     {m.max_drawdown:.2%}")
+    logger.info(f"  Best win streak:  {m.win_streak}")
+    logger.info(f"  Worst loss streak:{m.loss_streak}")
+    if m.by_stat:
+        logger.info("")
+        logger.info("BY STAT")
+        for stat, data in m.by_stat.items():
+            logger.info(
+                f"  {stat.upper()}: {data.get('bets', 0)} bets, "
+                f"{data.get('hit_rate', 0):.1%} hit, "
+                f"ROI {data.get('roi', 0):+.2%}, "
+                f"P&L ${data.get('profit', 0):+,.2f}"
+            )
+    if m.by_edge_bucket:
+        logger.info("")
+        logger.info("BY EDGE BUCKET")
+        for bucket, data in m.by_edge_bucket.items():
+            if data.get("bets", 0) > 0:
+                logger.info(
+                    f"  {bucket}: {data['bets']} bets, "
+                    f"{data.get('hit_rate', 0):.1%} hit, "
+                    f"ROI {data.get('roi', 0):+.2%}"
+                )
+    if m.calibration_results:
+        logger.info("")
+        logger.info("CALIBRATION")
+        logger.info(f"  Overall gap: {m.overall_calibration_gap:.3f}")
+        for cal in m.calibration_results:
+            status = "OK" if abs(cal.gap) < 0.05 else "WARNING"
+            logger.info(
+                f"  Q{int(cal.quantile * 100):02d}: "
+                f"{cal.actual_coverage:.3f} (target {cal.target_coverage:.3f}) [{status}]"
+            )
+    logger.info("")
+    logger.info(f"Output: {output_dir}")
     logger.info("=" * 60)
 
 

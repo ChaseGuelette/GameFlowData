@@ -37,7 +37,7 @@ export function Navbar() {
   }
 
   const mobileNavLinkClasses = (path: string) => {
-    const base = 'block w-full px-3 py-2 rounded-md text-sm font-medium transition-colors'
+    const base = 'block w-full px-4 py-3 rounded-md text-sm font-medium transition-colors'
     if (isActive(path)) {
       return `${base} bg-blue-600 text-white`
     }

@@ -37,8 +37,17 @@ sys.path.append(str(PROJECT_ROOT))
 from dotenv import load_dotenv  # noqa: E402
 from sqlalchemy import bindparam, create_engine, text  # noqa: E402
 
+from src.config.combo_config import MARKET_TO_STAT, STAT_TO_MARKET  # noqa: E402
 from src.models.black_litterman import BlackLittermanBlender, BLConfig  # noqa: E402
+from src.models.monte_carlo import derive_combo_samples  # noqa: E402
 from src.models.prediction_store import PredictionStore  # noqa: E402
+
+# Drift detection: re-infer when prop_line moves >= threshold from inference time
+DRIFT_THRESHOLD = 1.0  # points
+
+# Module-level cache for lazy-loaded model pipeline + predictor
+_cached_pipeline = None
+_cached_predictor = None
 
 # Configure logging
 LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
@@ -60,13 +69,7 @@ DEFAULT_BL_TAU = 0.5
 DEFAULT_BL_Z_MAX = 1.0
 DEFAULT_BL_EDGE_THRESHOLD = 0.09
 
-STAT_TO_MARKET = {
-    "pts": "player_points",
-    "reb": "player_rebounds",
-    "ast": "player_assists",
-}
-
-MARKET_TO_STAT = {v: k for k, v in STAT_TO_MARKET.items()}
+# STAT_TO_MARKET and MARKET_TO_STAT imported from src.config.combo_config
 
 
 def _odds_to_prob(odds):
@@ -152,6 +155,347 @@ def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataF
     best_lines["stat"] = best_lines["market_key"].map(MARKET_TO_STAT)
 
     return best_lines.reset_index(drop=True)
+
+
+def detect_stale_predictions(
+    predictions_df: pd.DataFrame,
+    fresh_lines_df: pd.DataFrame,
+) -> list[tuple[int, str, str]]:
+    """Detect predictions where prop_line has drifted significantly from inference time.
+
+    Compares the inference-time prop_line (baked into MC samples) against the
+    current fresh line. Returns keys for predictions needing re-inference.
+
+    Args:
+        predictions_df: Stored predictions with prop_line column.
+        fresh_lines_df: Fresh lines from fetch_fresh_lines() with line column.
+
+    Returns:
+        List of (player_id, game_id, stat) tuples where drift >= DRIFT_THRESHOLD.
+    """
+    # Guard: if prop_line column doesn't exist, nothing to detect
+    if "prop_line" not in predictions_df.columns:
+        return []
+
+    # Only check base stats that have prop_line stored (not combos)
+    base_preds = predictions_df[
+        predictions_df["stat"].isin(["pts", "reb", "ast"])
+        & predictions_df["prop_line"].notna()
+    ].copy()
+
+    if base_preds.empty:
+        return []
+
+    fresh_subset = fresh_lines_df[["player_id", "game_id", "stat", "line"]].rename(
+        columns={"line": "fresh_line"}
+    )
+    merged = base_preds.merge(
+        fresh_subset,
+        on=["player_id", "game_id", "stat"],
+        how="inner",
+    )
+
+    merged["drift"] = (merged["fresh_line"] - merged["prop_line"]).abs()
+    stale = merged[merged["drift"] >= DRIFT_THRESHOLD]
+
+    if not stale.empty:
+        logger.info(
+            f"Drift detection: {len(stale)} predictions exceed {DRIFT_THRESHOLD}-pt threshold "
+            f"(max drift: {stale['drift'].max():.1f} pts)"
+        )
+        for _, row in stale.iterrows():
+            logger.info(
+                f"  {row.get('player_name', row['player_id'])} {row['stat']}: "
+                f"prop_line={row['prop_line']:.1f} → fresh={row['fresh_line']:.1f} "
+                f"(drift={row['drift']:.1f})"
+            )
+
+    return list(stale[["player_id", "game_id", "stat"]].itertuples(index=False, name=None))
+
+
+def _get_cached_pipeline_and_predictor():
+    """Lazy-load and cache the model pipeline + MC predictor.
+
+    Loads once per process lifetime (~2-3s), then reused for all subsequent
+    re-inference calls. Returns (pipeline, predictor).
+    """
+    global _cached_pipeline, _cached_predictor
+
+    if _cached_pipeline is not None and _cached_predictor is not None:
+        return _cached_pipeline, _cached_predictor
+
+    from src.models.monte_carlo import (
+        MonteCarloPredictor,
+        load_combined_calibration_offsets,
+        load_copula_params,
+    )
+    from src.models.quantile_trainer import PlayerPropsModelPipeline
+
+    artifacts_path = PROJECT_ROOT / "src" / "models" / "artifacts"
+
+    if (artifacts_path / "production" / "minutes_model.joblib").exists():
+        model_path = artifacts_path / "production"
+    elif (artifacts_path / "minutes_model.joblib").exists():
+        model_path = artifacts_path
+    else:
+        runs = sorted([
+            d for d in artifacts_path.iterdir()
+            if d.is_dir()
+            and d.name.startswith("nba_run_")
+            and not d.name.endswith("_incomplete")
+        ])
+        if not runs:
+            raise FileNotFoundError(f"No model found in {artifacts_path}")
+        model_path = runs[-1]
+
+    logger.info(f"Loading model pipeline for re-inference: {model_path.name}")
+    t0 = time.perf_counter()
+
+    # feature_store=None is fine — only used for training, not prediction
+    pipeline = PlayerPropsModelPipeline.load_all(str(model_path), None)
+
+    copula_params = load_copula_params(str(model_path))
+    cal_offsets = load_combined_calibration_offsets(str(model_path))
+    predictor = MonteCarloPredictor(
+        pipeline,
+        n_samples=10000,
+        copula_params=copula_params,
+        combined_calibration_offsets=cal_offsets,
+    )
+
+    logger.info(f"Pipeline loaded in {time.perf_counter() - t0:.1f}s")
+
+    _cached_pipeline = pipeline
+    _cached_predictor = predictor
+    return pipeline, predictor
+
+
+def _get_home_team_ids(engine, target_date: date) -> set[int]:
+    """Get home team IDs for today's games from odds staging data.
+
+    Returns set of home_team_id values.
+    """
+    from datetime import timedelta
+
+    utc_start = target_date
+    utc_end = target_date + timedelta(days=2)
+
+    query = text("""
+        WITH game_times AS (
+            SELECT DISTINCT ON (home_team, away_team)
+                home_team, away_team
+            FROM raw_game_lines_staging
+            WHERE commence_time >= CAST(:utc_start AS date)
+              AND commence_time < CAST(:utc_end AS date)
+              AND CAST(commence_time AT TIME ZONE 'US/Eastern' AS date) = CAST(:target_date AS date)
+            ORDER BY home_team, away_team, snapshot_time DESC
+        )
+        SELECT
+            t_home.team_id as home_team_id,
+            t_away.team_id as away_team_id
+        FROM game_times gt
+        JOIN teams t_home ON t_home.team_name = gt.home_team
+            OR (t_home.team_name = 'LA Clippers' AND gt.home_team = 'Los Angeles Clippers')
+        JOIN teams t_away ON t_away.team_name = gt.away_team
+            OR (t_away.team_name = 'LA Clippers' AND gt.away_team = 'Los Angeles Clippers')
+    """)
+
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query, {
+                "utc_start": utc_start,
+                "utc_end": utc_end,
+                "target_date": target_date,
+            })
+            # Build set of home team IDs
+            home_teams = set()
+            for row in result:
+                home_teams.add(int(row[0]))
+            return home_teams
+    except Exception as e:
+        logger.warning(f"Could not determine home teams: {e}")
+        return set()
+
+
+def reinfer_stale_players(
+    stale_keys: list[tuple[int, str, str]],
+    samples_dict: dict[tuple, np.ndarray],
+    predictions_df: pd.DataFrame,
+    engine,
+    target_date: date,
+    store: PredictionStore,
+) -> tuple[dict[tuple, np.ndarray], pd.DataFrame]:
+    """Re-run inference for players with stale prop_lines.
+
+    Builds fresh features (picking up current prop_lines), runs XGBoost
+    quantile prediction + MC sampling, and replaces stale entries in
+    samples_dict and predictions_df.
+
+    Args:
+        stale_keys: List of (player_id, game_id, stat) needing re-inference.
+        samples_dict: Current MC samples dict (modified in-place).
+        predictions_df: Current predictions DataFrame.
+        engine: SQLAlchemy engine.
+        target_date: Target prediction date.
+        store: PredictionStore for DB upserts.
+
+    Returns:
+        Updated (samples_dict, predictions_df).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from src.models.feature_store import FeatureStore
+
+    t0 = time.perf_counter()
+
+    # 1. Get unique (player_id, game_id) pairs and stale stats
+    player_games = list({(pid, gid) for pid, gid, _ in stale_keys})
+    stale_stats = list({stat for _, _, stat in stale_keys})
+
+    logger.info(
+        f"Re-inferring {len(stale_keys)} stale predictions "
+        f"({len(player_games)} players, stats: {stale_stats})"
+    )
+
+    # 2. Build player info from existing predictions
+    home_teams = _get_home_team_ids(engine, target_date)
+
+    players = []
+    seen = set()
+    for pid, gid in player_games:
+        if (pid, gid) in seen:
+            continue
+        seen.add((pid, gid))
+
+        row = predictions_df[
+            (predictions_df["player_id"] == pid)
+            & (predictions_df["game_id"] == gid)
+        ].iloc[0]
+
+        team_id = row.get("team_id")
+        opponent_id = row.get("opponent_id")
+        is_home = int(team_id) in home_teams if team_id and home_teams else None
+
+        players.append({
+            "player_id": pid,
+            "player_name": row.get("player_name"),
+            "game_id": gid,
+            "team_id": team_id,
+            "opponent_id": opponent_id,
+            "is_home": is_home,
+            "game_time": row.get("game_time"),
+        })
+
+    # 3. Build features (parallel, same as daily_runner._build_features_df)
+    feature_store = FeatureStore(engine)
+
+    def fetch_single(player: dict) -> pd.DataFrame | None:
+        try:
+            features = feature_store.get_player_game_features(
+                player_id=player["player_id"],
+                game_id=player["game_id"],
+                as_of_date=target_date,
+                team_id=player.get("team_id"),
+                opponent_id=player.get("opponent_id"),
+                is_home=player.get("is_home"),
+            )
+            if features is not None:
+                row_df = pd.DataFrame([features]) if isinstance(features, dict) else features
+                row_df["player_id"] = player["player_id"]
+                row_df["player_name"] = player["player_name"]
+                row_df["game_id"] = player["game_id"]
+                row_df["team_id"] = player["team_id"]
+                row_df["game_time"] = player.get("game_time")
+                return row_df
+        except Exception as e:
+            logger.error(f"Re-inference feature build failed for player {player['player_id']}: {e}")
+        return None
+
+    all_features = []
+    max_workers = min(8, len(players)) if players else 1
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fetch_single, p): p for p in players}
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                all_features.append(result)
+
+    if not all_features:
+        logger.warning("Re-inference: could not build features for any stale player")
+        return samples_dict, predictions_df
+
+    features_df = pd.concat(all_features, ignore_index=True)
+    logger.info(f"Built features for {len(features_df)} players in {time.perf_counter() - t0:.1f}s")
+
+    # 4. Run batch prediction (XGBoost + MC sampling)
+    _, predictor = _get_cached_pipeline_and_predictor()
+    new_preds_list, new_samples = predictor.predict_batch_for_date(features_df, stats=stale_stats)
+
+    if not new_samples:
+        logger.warning("Re-inference produced no samples")
+        return samples_dict, predictions_df
+
+    logger.info(f"Re-inferred {len(new_samples)} sample arrays")
+
+    # 5. Replace stale entries in samples_dict
+    for key, samp in new_samples.items():
+        samples_dict[key] = samp
+
+    # 6. Update predictions_df with new quantile values + fresh prop_line
+    new_preds_df = pd.DataFrame(new_preds_list)
+    quantile_cols = [
+        "pred_mean", "pred_std", "pred_median",
+        "pred_q10", "pred_q25", "pred_q50", "pred_q75", "pred_q90",
+    ]
+
+    for _, new_row in new_preds_df.iterrows():
+        mask = (
+            (predictions_df["player_id"] == new_row["player_id"])
+            & (predictions_df["game_id"] == new_row["game_id"])
+            & (predictions_df["stat"] == new_row["stat"])
+        )
+        if mask.any():
+            for col in quantile_cols:
+                if col in new_row:
+                    predictions_df.loc[mask, col] = new_row[col]
+
+            # Update prop_line from fresh features
+            feat_row = features_df[features_df["player_id"] == new_row["player_id"]]
+            if not feat_row.empty:
+                prop_line_col = f"prop_line_{new_row['stat']}"
+                pl = feat_row.iloc[0].get(prop_line_col)
+                if pl is not None and pl != 0:
+                    predictions_df.loc[mask, "prop_line"] = float(pl)
+
+    # 7. Re-derive combo samples for affected players
+    combo_preds, combo_samps = derive_combo_samples(samples_dict, [])
+    samples_dict.update(combo_samps)
+
+    # Update combo prediction quantiles in predictions_df
+    for pred in combo_preds:
+        mask = (
+            (predictions_df["player_id"] == pred["player_id"])
+            & (predictions_df["game_id"] == pred["game_id"])
+            & (predictions_df["stat"] == pred["stat"])
+        )
+        if mask.any():
+            for col in quantile_cols:
+                if col in pred:
+                    predictions_df.loc[mask, col] = pred[col]
+
+    if combo_samps:
+        logger.info(f"Re-derived {len(combo_samps)} combo sample arrays")
+
+    # 8. Persist updated samples + predictions to DB
+    store.store_samples(new_samples, target_date)
+    if combo_samps:
+        store.store_samples(combo_samps, target_date)
+
+    elapsed = time.perf_counter() - t0
+    logger.info(f"Re-inference complete: {len(new_samples)} predictions refreshed in {elapsed:.1f}s")
+
+    return samples_dict, predictions_df
 
 
 def recalculate_edges(
@@ -516,7 +860,38 @@ def backfill_game_times(engine, predictions: pd.DataFrame, target_date: date) ->
             time_lookup = {(row[0], row[1]): row[2] for row in result}
 
         if not time_lookup:
-            logger.info("No game times found in staging table for backfill")
+            logger.info("No game times in staging table, trying raw_player_props_combined...")
+            # Fallback: get times directly by game_id from props table
+            missing_game_ids = list(predictions.loc[missing_mask, "game_id"].unique())
+            if missing_game_ids:
+                props_query = text("""
+                    SELECT g.gid as game_id, t.commence_time
+                    FROM unnest(:game_ids) AS g(gid)
+                    CROSS JOIN LATERAL (
+                        SELECT rp.commence_time
+                        FROM raw_player_props_combined rp
+                        WHERE rp.game_id = g.gid
+                          AND rp.commence_time IS NOT NULL
+                          AND rp.snapshot_time > NOW() - interval '48 hours'
+                        LIMIT 1
+                    ) t
+                """)
+                with engine.connect() as conn:
+                    props_result = conn.execute(props_query, {"game_ids": missing_game_ids})
+                    props_time_map = {row[0]: row[1] for row in props_result}
+
+                if props_time_map:
+                    filled = 0
+                    for idx in predictions.index[missing_mask]:
+                        gid = predictions.at[idx, "game_id"]
+                        ct = props_time_map.get(gid)
+                        if ct is not None:
+                            predictions.at[idx, "game_time"] = ct
+                            filled += 1
+                    logger.info(f"Backfilled game_time for {filled}/{n_missing} predictions from props table")
+                    return predictions
+
+            logger.info("No game times found in any source for backfill")
             return predictions
 
         # Map game_id → (team_id, opponent_id) from predictions themselves.
@@ -589,6 +964,11 @@ def main():
         "--skip-discord",
         action="store_true",
         help="Skip Discord alert",
+    )
+    parser.add_argument(
+        "--skip-reinference",
+        action="store_true",
+        help="Skip re-inference of stale predictions (drift detection only logs, no re-run)",
     )
     args = parser.parse_args()
 
@@ -690,6 +1070,12 @@ def main():
             logger.warning(f"No predictions found for {target_date}. Exiting gracefully.")
             sys.exit(0)
 
+        # 2a. Derive combo samples from stored base stat samples
+        combo_preds, combo_samps = derive_combo_samples(samples_dict, [])
+        samples_dict.update(combo_samps)
+        if combo_samps:
+            logger.info(f"Derived {len(combo_samps)} combo sample arrays from base stats")
+
         logger.info(f"Loaded {len(predictions)} predictions, {len(samples_dict)} sample arrays")
 
         # 2b. Backfill missing game_time from staging table
@@ -721,6 +1107,27 @@ def main():
         if fresh_lines.empty:
             logger.warning("No fresh lines found. Exiting gracefully.")
             sys.exit(0)
+
+        # 5a. Detect prop_line drift and re-infer stale players
+        if not args.skip_reinference and "prop_line" in predictions.columns:
+            stale_keys = detect_stale_predictions(predictions, fresh_lines)
+
+            if stale_keys:
+                logger.info(
+                    f"Detected {len(stale_keys)} stale predictions — "
+                    "triggering selective re-inference..."
+                )
+                if not args.dry_run:
+                    samples_dict, predictions = reinfer_stale_players(
+                        stale_keys, samples_dict, predictions,
+                        engine, target_date, store,
+                    )
+                else:
+                    logger.info("[DRY RUN] Skipping re-inference")
+            else:
+                logger.info("Drift detection: all predictions within threshold")
+        elif args.skip_reinference:
+            logger.info("Re-inference skipped (--skip-reinference)")
 
         # 6. Recalculate edges + BL
         logger.info("Recalculating edges and BL recommendations...")

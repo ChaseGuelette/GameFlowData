@@ -5,6 +5,151 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-23 Session 84] — Prop Line Drift Detection & Selective Re-inference
+
+### Added
+
+- **Prop line drift detection** — `detect_stale_predictions()` in `edge_refresh_job.py` compares inference-time `prop_line` against fresh lines each edge refresh cycle. Triggers selective re-inference when drift >= 1.0 points.
+- **Selective re-inference** — `reinfer_stale_players()` re-runs XGBoost + MC sampling for ONLY affected players (~5-20 out of 100+) when prop lines drift. Lazy-loads model pipeline once per process (~2-3s first time, cached thereafter). Takes ~10-30s per cycle when drift exists.
+- **`--skip-reinference` CLI flag** — Disables drift detection and re-inference for debugging or speed-critical runs.
+- **`prop_line` column** — New `DOUBLE PRECISION` column in `daily_predictions` persists the inference-time prop line value for drift comparison.
+
+### Changed
+
+- **`prediction_store.py`** — Added `prop_line` to `PREDICTION_COLS` for DB persistence.
+- **`daily_runner.py`** — Maps `prop_line_{stat}` feature to `prop_line` column during `_map_features_to_predictions()` for base stats (pts, reb, ast).
+- **`edge_refresh_job.py`** — Inserted drift detection + selective re-inference step between "fetch fresh lines" and "recalculate edges". Added 4 new functions: `detect_stale_predictions()`, `_get_cached_pipeline_and_predictor()`, `_get_home_team_ids()`, `reinfer_stale_players()`.
+
+### Database Migrations
+
+- `add_prop_line_to_daily_predictions` — `ALTER TABLE daily_predictions ADD COLUMN IF NOT EXISTS prop_line DOUBLE PRECISION`
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/edge_refresh_job.py` | Modified — drift detection, selective re-inference, lazy pipeline caching, `--skip-reinference` flag |
+| `src/models/prediction_store.py` | Modified — added `prop_line` to PREDICTION_COLS |
+| `src/models/daily_runner.py` | Modified — map `prop_line_{stat}` to `prop_line` column |
+
+---
+
+## [2026-03-21 Session 83] — AI Q&A Chat in AnalysisModal
+
+### Added
+
+- **AI Q&A chat** — New collapsible "Ask AI about this pick" section in AnalysisModal. Multi-turn conversation powered by Claude Haiku 4.5, grounded in player-specific data. Suggested question chips for first-time use.
+- **`/api/ask` route** — Server-side API route with Supabase auth, in-memory rate limiting (20 questions/24hr rolling window per user), and 5 parallel data enrichment queries (extended game log, rolling averages, player injury, teammate injuries, opponent defense). Builds a rich system prompt and calls Anthropic's API.
+- **`AskChat` component** — Collapsible chat UI with scrollable message history, loading animation, 500-char input limit, AbortController for request cancellation on unmount, and remaining questions counter.
+- **`types/chat.ts`** — `ChatMessage` and `AskResponse` type definitions.
+
+### Changed
+
+- **AnalysisModal** — Extracted insights from inline IIFE to `useMemo` for reuse by both Model Context section and AskChat. Added AskChat between Model Context and Sportsbook Lines.
+
+### Fixed
+
+- **DFS page timeout** — `get_dfs_lines` RPC was returning empty `{}` error because query takes ~9-14s on 67M-row `raw_player_props_combined` but Supabase `authenticated` role has 8s `statement_timeout`. Applied `ALTER FUNCTION SET statement_timeout = '30s'` to both `get_dfs_lines` and `get_game_commence_times`.
+- **MLB sweep 0 predictions** — `run_mlb_sweep.py` produced 0 predictions across all 59 test dates due to 4 argument mismatches in `get_player_game_features()` call: `as_of_date` → `game_date`, `opponent_id` → `opp_team_id`, missing `venue_id`, missing `season`. Errors were silently caught at DEBUG level — changed to WARNING.
+- **Game time TBD display** — `game_time` was NULL for all predictions causing "TBD" display. Added `_get_game_times_from_props()` fallback in `daily_runner.py` and `edge_refresh_job.py`. Rewrote `get_game_commence_times` RPC to LATERAL LIMIT 1 pattern.
+- **Bet placed-at time** — BetCard now shows "Taken {time}" from `placed_at` timestamp.
+
+### Dependencies
+
+- Added `@anthropic-ai/sdk` to `dashboard/package.json`
+
+### Environment Variables
+
+- `ANTHROPIC_API_KEY` required in `.env.local` and Vercel
+
+### Database Migrations
+
+- `fix_game_commence_times_performance` — Rewrote `get_game_commence_times` RPC to LATERAL LIMIT 1 joins
+- `add_dfs_lines_timeout_override` — `ALTER FUNCTION` to set 30s statement_timeout on `get_dfs_lines` and `get_game_commence_times`
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/types/chat.ts` | Created — ChatMessage, AskResponse types |
+| `dashboard/src/app/api/ask/route.ts` | Created — AI Q&A API route (auth, rate limit, data enrichment, Anthropic call) |
+| `dashboard/src/components/analysis/AskChat.tsx` | Created — collapsible chat UI component |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — extracted insights to useMemo, added AskChat section |
+| `dashboard/package.json` | Modified — added @anthropic-ai/sdk dependency |
+| `src/backtesting/mlb/run_mlb_sweep.py` | Modified — fixed 4 argument mismatches, added venue_id to query, warning-level error logging |
+| `src/models/daily_runner.py` | Modified — added `_get_game_times_from_props()` fallback method |
+| `src/orchestration/edge_refresh_job.py` | Modified — added props fallback in `backfill_game_times()` |
+| `dashboard/src/types/predictions.ts` | Modified — added `placed_at` field to PaperBet interface |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — added `placed_at` to query and mapping |
+| `dashboard/src/components/history/BetCard.tsx` | Modified — display placed_at time |
+
+---
+
+## [2026-03-21 Session 82] — Mobile Optimization
+
+### Changed
+
+- **Predictions page collapsible filters** — 10+ filter controls hidden behind "Filters" toggle on mobile with active filter count badge. FilterTabs stays always visible. Filters stack vertically with full-width selects.
+- **AnalysisModal responsive layout** — Responsive padding (`p-2 sm:p-4` / `p-4 sm:p-6`), stacking header, hidden avatar on small screens, single-column bet sizing grid, stacking footer.
+- **History page responsive header** — Header and filter rows stack vertically on mobile via `flex-col sm:flex-row`.
+- **Performance page responsive layout** — Header stacks on mobile. KPI grids use `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4`.
+- **Stats page responsive filters** — Controls and player filter rows stack on mobile. Search input full-width on small screens.
+- **Navbar touch targets** — Mobile nav link padding increased to `px-4 py-3` for 44px minimum touch targets.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — collapsible mobile filter panel with badge |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — responsive header, grid, footer, padding |
+| `dashboard/src/app/(protected)/history/page.tsx` | Modified — stacking header and filter rows |
+| `dashboard/src/app/(protected)/performance/page.tsx` | Modified — stacking header, responsive KPI grids |
+| `dashboard/src/app/(protected)/stats/page.tsx` | Modified — stacking filter controls, responsive search |
+| `dashboard/src/components/layout/Navbar.tsx` | Modified — larger mobile touch targets |
+
+---
+
+## [2026-03-21 Session 81] — Combo Markets (PRA, P+R, P+A, R+A)
+
+### Added
+
+- **Centralized combo config** — New `src/config/combo_config.py` with `COMBO_DEFINITIONS`, `COMBO_STATS`, `STAT_TO_MARKET`, `MARKET_TO_STAT`. Single source of truth for combo stat↔market mappings imported by all pipeline modules.
+- **`derive_combo_samples()`** — New module-level function in `monte_carlo.py`. Element-wise sums individual stat MC sample arrays to produce combo predictions. Preserves correlations via shared Gaussian copula minutes draws. Combo samples are NOT stored to DB — always derived on-the-fly from base samples.
+- **Combo line scraping** — Added `--combos` flag to scraper commands in `lines_job.py` (full and props-only modes). Appends combo market keys to the scraper's market list.
+- **Dashboard "Combos" filter** — `FilterTabs.tsx` has new "Combos" group filter. `COMBO_STATS` set exported for use by dashboard page filter logic.
+- **4 new StatType members** — `pra`, `pr`, `pa`, `ra` with labels (Pts+Reb+Ast, Pts+Reb, Pts+Ast, Reb+Ast) and colors (amber, teal, indigo, emerald).
+
+### Changed
+
+- **Daily runner** — Calls `derive_combo_samples()` after batch prediction. Uses centralized `STAT_TO_MARKET`/`MARKET_TO_STAT` imports replacing local dicts.
+- **Backtest harness** — Derives combo samples in prediction path. `_get_actuals()` computes combo actuals by summing component columns. Uses centralized market mappings.
+- **Paper trader + user bet resolver** — Extended `SUPPORTED_STATS` to include combos. SQL WHERE clause includes combo stats. Resolution computes combo actuals from component base stats.
+- **Edge refresh job** — Derives combo samples from stored base stat samples on-the-fly. Uses centralized market mappings.
+- **AnalysisModal** — Handles combo stats in L5 chart by summing component columns via `COMBO_COMPONENTS` mapping. Shows combo total column in stats table.
+- **Last5Chart** — Accepts optional `values` prop for pre-computed combo values and nullable `stat` prop.
+- **DFS types** — Added combo entries to `MARKET_TO_STAT` and `STAT_TO_MARKET` in `dfs.ts`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/config/combo_config.py` | Created — centralized combo definitions and market mappings |
+| `src/models/monte_carlo.py` | Modified — added `derive_combo_samples()` function |
+| `src/models/daily_runner.py` | Modified — combo derivation call, centralized imports |
+| `src/backtesting/backtest_harness.py` | Modified — combo samples, actuals, centralized imports |
+| `src/paper_trading/paper_trader.py` | Modified — combo stats support, actuals |
+| `src/paper_trading/user_bet_resolver.py` | Modified — combo actuals |
+| `src/orchestration/edge_refresh_job.py` | Modified — combo sample derivation, centralized imports |
+| `src/orchestration/lines_job.py` | Modified — `--combos` flag on scraper commands |
+| `dashboard/src/types/predictions.ts` | Modified — 4 new StatType members, labels, colors |
+| `dashboard/src/types/dfs.ts` | Modified — 4 new combo market mappings |
+| `dashboard/src/components/predictions/FilterTabs.tsx` | Modified — "Combos" group filter, COMBO_STATS export |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — combo group filter logic |
+| `dashboard/src/components/analysis/AnalysisModal.tsx` | Modified — combo L5 chart, market mappings |
+| `dashboard/src/components/analysis/Last5Chart.tsx` | Modified — nullable stat, values prop |
+
+---
+
 ## [2026-03-21 Session 80] — DFS Edge Finder: Threes/Steals/Blocks
 
 ### Added

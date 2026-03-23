@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm as sp_norm
 
+from src.config.combo_config import COMBO_DEFINITIONS
+
 if TYPE_CHECKING:
     pass  # Type imports removed with THREES model archival
 
@@ -855,6 +857,79 @@ class MonteCarloPredictor:
                 )
 
         return pd.DataFrame(results)
+
+
+def derive_combo_samples(
+    samples_dict: dict[tuple, np.ndarray],
+    predictions_list: list[dict],
+) -> tuple[list[dict], dict[tuple, np.ndarray]]:
+    """
+    Derive combo market predictions by summing individual stat MC samples.
+
+    Correlations between stats are preserved because all share the same
+    minutes draws (via Gaussian copula).
+
+    Args:
+        samples_dict: Dict mapping (player_id, game_id, stat) -> samples array
+        predictions_list: List of prediction dicts (used for metadata lookup)
+
+    Returns:
+        (combo_predictions, combo_samples) where:
+        - combo_predictions: list of prediction dicts for combo stats
+        - combo_samples: dict mapping (player_id, game_id, combo_stat) -> summed samples
+    """
+    combo_predictions: list[dict] = []
+    combo_samples: dict[tuple, np.ndarray] = {}
+
+    # Get unique (player_id, game_id) pairs
+    player_games: set[tuple] = set()
+    for pid, gid, _stat in samples_dict:
+        player_games.add((pid, gid))
+
+    # Look up metadata from existing predictions
+    meta_lookup: dict[tuple, dict] = {}
+    for p in predictions_list:
+        key = (p["player_id"], p["game_id"], p["stat"])
+        meta_lookup[key] = p
+
+    for pid, gid in player_games:
+        for combo_stat, defn in COMBO_DEFINITIONS.items():
+            components = defn["components"]
+            component_samples = []
+            for comp in components:
+                s = samples_dict.get((pid, gid, comp))
+                if s is None:
+                    break
+                component_samples.append(s)
+
+            if len(component_samples) != len(components):
+                continue  # Missing a component stat — skip
+
+            combined = sum(component_samples)  # Element-wise numpy sum
+
+            # Get metadata from any component prediction
+            meta_key = (pid, gid, components[0])
+            meta = meta_lookup.get(meta_key, {})
+
+            combo_predictions.append({
+                "player_id": pid,
+                "player_name": meta.get("player_name"),
+                "game_id": gid,
+                "team_id": meta.get("team_id"),
+                "game_time": meta.get("game_time"),
+                "stat": combo_stat,
+                "pred_mean": float(combined.mean()),
+                "pred_std": float(combined.std()),
+                "pred_median": float(np.median(combined)),
+                "pred_q10": float(np.percentile(combined, 10)),
+                "pred_q25": float(np.percentile(combined, 25)),
+                "pred_q50": float(np.percentile(combined, 50)),
+                "pred_q75": float(np.percentile(combined, 75)),
+                "pred_q90": float(np.percentile(combined, 90)),
+            })
+            combo_samples[(pid, gid, combo_stat)] = combined
+
+    return combo_predictions, combo_samples
 
 
 def compute_copula_params_from_data(df: pd.DataFrame) -> dict:

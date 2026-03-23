@@ -14,23 +14,28 @@ import { type PlayerGameStats } from '@/types/predictions'
 
 interface Last5ChartProps {
   games: PlayerGameStats[]
-  stat: keyof PlayerGameStats
+  stat: keyof PlayerGameStats | null
   line: number
+  /** Override per-game values (used for combo stats where value is computed from components) */
+  values?: number[]
 }
 
-export function Last5Chart({ games, stat, line }: Last5ChartProps) {
+export function Last5Chart({ games, stat, line, values }: Last5ChartProps) {
   // Transform data for chart
-  const data = games.map((game, index) => ({
-    name: `G${index + 1}`,
-    value: Number(game[stat]) || 0,
-    date: game.game_date,
-    overLine: Number(game[stat]) >= line,
-  }))
+  const data = games.map((game, index) => {
+    const value = values ? values[index] : (stat ? Number(game[stat]) || 0 : 0)
+    return {
+      name: `G${index + 1}`,
+      value,
+      date: game.game_date,
+      overLine: value >= line,
+    }
+  })
 
   // Calculate y-axis domain
-  const values = data.map((d) => d.value)
-  const maxValue = Math.max(...values, line)
-  const minValue = Math.min(...values, 0)
+  const chartValues = data.map((d) => d.value)
+  const maxValue = Math.max(...chartValues, line)
+  const minValue = Math.min(...chartValues, 0)
   const padding = (maxValue - minValue) * 0.1
   const yMax = Math.ceil(maxValue + padding)
   const yMin = Math.max(0, Math.floor(minValue - padding))

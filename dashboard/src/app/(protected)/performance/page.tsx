@@ -449,7 +449,7 @@ export default function PerformancePage() {
   return (
     <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-50">Performance</h1>
           <p className="text-slate-400">
@@ -513,7 +513,7 @@ export default function PerformancePage() {
             </div>
           ) : (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <KPICard
                   label={betSource === 'model' ? 'Model P&L Bankroll' : 'Current Bankroll'}
                   value={`$${displayBankroll.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
@@ -551,7 +551,7 @@ export default function PerformancePage() {
           ) : (
             <div className="space-y-6">
               {/* DFS KPI Cards */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <KPICard
                   label="DFS Bankroll"
                   value={`$${dfsKpis.bankroll.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
@@ -656,7 +656,7 @@ export default function PerformancePage() {
             </div>
           ) : (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <KPICard
                   label="My Bankroll"
                   value={`$${(prefs.initialBankroll + myBetsKpis.pnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}

@@ -204,7 +204,7 @@ def main():
 
     if args.live:
         group_a.append((
-            f"{exe} src/scrapers/daily_player_props_scraper.py --live --target-table raw_player_props_combined",
+            f"{exe} src/scrapers/daily_player_props_scraper.py --live --combos --target-table raw_player_props_combined",
             "Scraping Player Props (Live)",
         ))
     else:

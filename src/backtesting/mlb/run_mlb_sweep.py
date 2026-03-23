@@ -234,7 +234,8 @@ def _process_date_shared(
     # Get games
     query = text("""
         SELECT s.game_id, s.home_team_id, s.away_team_id,
-               s.probable_pitcher_home_id, s.probable_pitcher_away_id
+               s.probable_pitcher_home_id, s.probable_pitcher_away_id,
+               s.venue_id
         FROM mlb_game_schedule s
         WHERE s.game_date = :game_date
           AND s.status != 'Cancelled'
@@ -258,6 +259,7 @@ def _process_date_shared(
                     "team_id": game[f"{side}_team_id"],
                     "opponent_id": game[f"{opp_side}_team_id"],
                     "is_home": is_home,
+                    "venue_id": game.get("venue_id", 0),
                 })
 
     # Generate predictions
@@ -270,9 +272,11 @@ def _process_date_shared(
                 features = feature_store.get_player_game_features(
                     player_id=pitcher["player_id"],
                     game_id=pitcher["game_id"],
-                    as_of_date=game_date,
+                    game_date=str(game_date),
                     team_id=pitcher["team_id"],
-                    opponent_id=pitcher["opponent_id"],
+                    opp_team_id=pitcher["opponent_id"],
+                    venue_id=pitcher.get("venue_id", 0),
+                    season=game_date.year,
                     is_home=pitcher["is_home"],
                 )
                 if features is None:
@@ -302,7 +306,7 @@ def _process_date_shared(
                     samples=pred.samples,
                 ))
             except Exception as e:
-                logger.debug(f"Error predicting pitcher {pitcher['player_id']}: {e}")
+                logger.warning(f"Error predicting pitcher {pitcher['player_id']}: {e}")
 
     # Fetch lines for all players on this date
     game_ids = [g["game_id"] for g in games]
@@ -515,6 +519,7 @@ def run_single_config(
     )
 
     all_prediction_rows = []
+    all_actuals_rows: list[dict] = []
 
     for game_date in game_dates:
         preds = date_predictions.get(game_date)
@@ -532,10 +537,27 @@ def run_single_config(
         day_df = pd.DataFrame(day_rows)
         all_prediction_rows.append(day_df)
 
-        # Feed to simulator
+        # Collect actuals for resolution
+        for row in day_rows:
+            if row.get("actual") is not None:
+                all_actuals_rows.append({
+                    "player_id": row["player_id"],
+                    "game_id": row["game_id"],
+                    "stat": row["stat"],
+                    "actual_value": row["actual"],
+                })
+
+        # Resolve pending bets from previous days before placing new ones
+        if all_actuals_rows:
+            simulator.resolve_bets(pd.DataFrame(all_actuals_rows))
+
+        # Feed to simulator (place new bets)
         simulator.evaluate_predictions(day_df, game_date)
 
-    # Resolve bets with actuals
+    # Final resolution for last day's bets
+    if all_actuals_rows:
+        simulator.resolve_bets(pd.DataFrame(all_actuals_rows))
+
     if all_prediction_rows:
         predictions_df = pd.concat(all_prediction_rows, ignore_index=True)
     else:
@@ -569,22 +591,29 @@ def print_comparison_table(
     starting_bankroll: float = 10000.0,
 ) -> None:
     header = (
-        f"\n{'=' * 100}\n"
+        f"\n{'=' * 120}\n"
         f"MLB BACKTEST SWEEP  ({start_date} to {end_date})\n"
         f"Phase 0-1: {total_dates} dates, {total_predictions} predictions ({phase01_time:.1f}s)\n"
         f"Starting bankroll: ${starting_bankroll:,.0f}\n"
-        f"{'=' * 100}\n"
+        f"{'=' * 120}\n"
     )
     print(header)
 
-    fmt = "{:>3}  {:<45} {:>5} {:>7} {:>8} {:>9} {:>7} {:>6}"
-    print(fmt.format("#", "Config", "Bets", "HitRate", "ROI", "Profit", "Sharpe", "Time"))
-    print(fmt.format("---", "-" * 45, "-----", "-------", "--------", "---------", "-------", "------"))
+    fmt = "{:>3}  {:<40} {:>5} {:>7} {:>8} {:>9} {:>10} {:>7} {:>7} {:>6}"
+    print(fmt.format(
+        "#", "Config", "Bets", "HitRate", "ROI", "Profit",
+        "Staked", "Sharpe", "MaxDD", "Time",
+    ))
+    print(fmt.format(
+        "---", "-" * 40, "-----", "-------", "--------", "---------",
+        "----------", "-------", "-------", "------",
+    ))
 
     for i, r in enumerate(results, 1):
         m = r.metrics
         roi_str = f"{m.roi:+.2%}" if m.roi != 0 else "0.00%"
         profit_str = f"${m.total_profit:+,.0f}" if m.total_profit != 0 else "$0"
+        staked_str = f"${m.total_staked:,.0f}" if m.total_staked != 0 else "$0"
         print(fmt.format(
             i,
             r.config.label,
@@ -592,19 +621,50 @@ def print_comparison_table(
             f"{m.hit_rate:.1%}",
             roi_str,
             profit_str,
+            staked_str,
             f"{m.sharpe_ratio:.2f}",
+            f"{m.max_drawdown:.1%}",
             f"{r.elapsed_seconds:.1f}s",
         ))
 
-    print(f"\n{'=' * 100}")
+    # Per-stat breakdown
+    print(f"\n{'─' * 120}")
+    print("PER-STAT BREAKDOWN")
+    print(f"{'─' * 120}")
+    stat_labels = []
+    for r in results:
+        if r.metrics.by_stat:
+            stat_labels = list(r.metrics.by_stat.keys())
+            break
+
+    if stat_labels:
+        header_parts = [f"{s.upper():>16}" for s in stat_labels]
+        print(f"{'#':>3}  {'Config':<40} " + " ".join(header_parts))
+        print(f"{'---':>3}  {'-' * 40} " + " ".join(["-" * 16] * len(stat_labels)))
+
+        for i, r in enumerate(results, 1):
+            parts = []
+            for s in stat_labels:
+                stat_data = r.metrics.by_stat.get(s, {})
+                roi = stat_data.get("roi", 0)
+                bets = stat_data.get("bets", 0)
+                hit = stat_data.get("hit_rate", 0)
+                parts.append(f"{roi:+.1%}({bets},{hit:.0%})")
+            print(f"{i:>3}  {r.config.label:<40} " + " ".join(f"{p:>16}" for p in parts))
+
+    # Summary
+    print(f"\n{'=' * 120}")
     if results:
         best_roi = max(results, key=lambda r: r.metrics.roi)
         best_sharpe = max(results, key=lambda r: r.metrics.sharpe_ratio)
+        most_bets = max(results, key=lambda r: r.metrics.total_bets)
         best_roi_idx = results.index(best_roi) + 1
         best_sharpe_idx = results.index(best_sharpe) + 1
+        most_bets_idx = results.index(most_bets) + 1
         print(f"Best ROI:    #{best_roi_idx} ({best_roi.config.label}) = {best_roi.metrics.roi:+.2%}")
         print(f"Best Sharpe: #{best_sharpe_idx} ({best_sharpe.config.label}) = {best_sharpe.metrics.sharpe_ratio:.2f}")
-    print(f"{'=' * 100}\n")
+        print(f"Most bets:   #{most_bets_idx} ({most_bets.config.label}) = {most_bets.metrics.total_bets}")
+    print(f"{'=' * 120}\n")
 
 
 def save_results(
@@ -642,7 +702,7 @@ def save_results(
             "elapsed_seconds": round(r.elapsed_seconds, 2),
         })
 
-        csv_rows.append({
+        row = {
             "tau": r.config.tau,
             "z_max": r.config.z_max,
             "edge_threshold": r.config.edge_threshold,
@@ -653,12 +713,23 @@ def save_results(
             "pushes": m.pushes,
             "hit_rate": round(m.hit_rate, 4),
             "roi": round(m.roi, 4),
+            "return_on_capital": round(m.return_on_capital, 4),
             "total_profit": round(m.total_profit, 2),
             "total_staked": round(m.total_staked, 2),
             "sharpe_ratio": round(m.sharpe_ratio, 3),
             "max_drawdown": round(m.max_drawdown, 4),
+            "win_streak": m.win_streak,
+            "loss_streak": m.loss_streak,
             "elapsed_seconds": round(r.elapsed_seconds, 2),
-        })
+        }
+
+        # Add per-stat columns
+        for stat, stat_data in m.by_stat.items():
+            row[f"{stat}_bets"] = stat_data.get("bets", 0)
+            row[f"{stat}_roi"] = round(stat_data.get("roi", 0), 4)
+            row[f"{stat}_hit_rate"] = round(stat_data.get("hit_rate", 0), 4)
+
+        csv_rows.append(row)
 
         # Per-config subdirectory
         tau_label = "no_BL" if r.config.tau is None else f"tau{r.config.tau}"
@@ -816,7 +887,8 @@ def main():
         m = result.metrics
         logger.info(
             f"  -> {m.total_bets} bets, HitRate={m.hit_rate:.1%}, "
-            f"ROI={m.roi:+.2%}, Sharpe={m.sharpe_ratio:.2f} ({result.elapsed_seconds:.1f}s)"
+            f"ROI={m.roi:+.2%}, Profit=${m.total_profit:+,.0f}, "
+            f"Sharpe={m.sharpe_ratio:.2f}, MaxDD={m.max_drawdown:.1%} ({result.elapsed_seconds:.1f}s)"
         )
 
     # Output

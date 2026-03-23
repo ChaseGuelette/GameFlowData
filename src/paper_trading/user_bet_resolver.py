@@ -88,12 +88,22 @@ class UserBetResolver:
             )
 
             if did_not_play or zero_minutes:
-                actuals_lookup[player_id] = {"pts": None, "reb": None, "ast": None}
-            else:
                 actuals_lookup[player_id] = {
-                    "pts": float(row["pts"]) if pd.notna(row["pts"]) else None,
-                    "reb": float(row["reb"]) if pd.notna(row["reb"]) else None,
-                    "ast": float(row["ast"]) if pd.notna(row["ast"]) else None,
+                    "pts": None, "reb": None, "ast": None,
+                    "pra": None, "pr": None, "pa": None, "ra": None,
+                }
+            else:
+                pts_val = float(row["pts"]) if pd.notna(row["pts"]) else None
+                reb_val = float(row["reb"]) if pd.notna(row["reb"]) else None
+                ast_val = float(row["ast"]) if pd.notna(row["ast"]) else None
+                actuals_lookup[player_id] = {
+                    "pts": pts_val,
+                    "reb": reb_val,
+                    "ast": ast_val,
+                    "pra": (pts_val + reb_val + ast_val) if all(v is not None for v in [pts_val, reb_val, ast_val]) else None,
+                    "pr": (pts_val + reb_val) if all(v is not None for v in [pts_val, reb_val]) else None,
+                    "pa": (pts_val + ast_val) if all(v is not None for v in [pts_val, ast_val]) else None,
+                    "ra": (reb_val + ast_val) if all(v is not None for v in [reb_val, ast_val]) else None,
                 }
 
         # Resolve each bet

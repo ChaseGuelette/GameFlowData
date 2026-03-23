@@ -23,33 +23,34 @@ class TestFindLatestModelDir:
         assert result == tmp_path
 
     def test_finds_latest_run_directory(self, tmp_path):
-        """Test finds the most recent run_* subdirectory."""
-        (tmp_path / "run_20240101").mkdir()
-        (tmp_path / "run_20240201").mkdir()
-        (tmp_path / "run_20240301").mkdir()
+        """Test finds the most recent nba_run_* subdirectory."""
+        (tmp_path / "nba_run_20240101").mkdir()
+        (tmp_path / "nba_run_20240201").mkdir()
+        (tmp_path / "nba_run_20240301").mkdir()
 
         result = find_latest_model_dir(str(tmp_path))
-        assert result.name == "run_20240301"
+        assert result.name == "nba_run_20240301"
 
     def test_raises_if_no_run_dirs(self, tmp_path):
-        """Test error when no run_* directories exist."""
+        """Test error when no nba_run_* directories exist."""
         (tmp_path / "other_dir").mkdir()
-        with pytest.raises(FileNotFoundError, match="No run_\\* directories found"):
+        with pytest.raises(FileNotFoundError, match="No nba_run_\\* directories found"):
             find_latest_model_dir(str(tmp_path))
 
     def test_ignores_non_run_directories(self, tmp_path):
-        """Test ignores directories not starting with run_."""
+        """Test ignores directories not starting with nba_run_."""
         (tmp_path / "output_123").mkdir()
+        (tmp_path / "nba_run_20240101").mkdir()
         (tmp_path / "run_20240101").mkdir()
         (tmp_path / "logs").mkdir()
 
         result = find_latest_model_dir(str(tmp_path))
-        assert result.name == "run_20240101"
+        assert result.name == "nba_run_20240101"
 
     def test_model_files_take_priority_over_run_dirs(self, tmp_path):
-        """Test base dir with model files is preferred over run_* subdirs."""
+        """Test base dir with model files is preferred over nba_run_* subdirs."""
         (tmp_path / "minutes_model.joblib").touch()
-        (tmp_path / "run_20240101").mkdir()
+        (tmp_path / "nba_run_20240101").mkdir()
 
         result = find_latest_model_dir(str(tmp_path))
         assert result == tmp_path

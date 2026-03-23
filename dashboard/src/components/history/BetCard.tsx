@@ -64,6 +64,9 @@ export function BetCard({ bet, onRemove }: BetCardProps) {
               {bet.team_abbrev && bet.opponent_abbrev
                 ? `${bet.team_abbrev} vs ${bet.opponent_abbrev} • ${bet.game_date}`
                 : bet.game_date}
+              {bet.placed_at && (
+                <span className="text-slate-500"> • Taken {new Date(bet.placed_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+              )}
             </div>
           </div>
         </div>

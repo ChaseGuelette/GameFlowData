@@ -18,7 +18,9 @@ from sqlalchemy import bindparam, text
 
 from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
+from src.config.combo_config import COMBO_DEFINITIONS, MARKET_TO_STAT, STAT_TO_MARKET
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
+from src.models.monte_carlo import derive_combo_samples
 
 if TYPE_CHECKING:
     from src.config.stat_config import StatConfigSet
@@ -338,6 +340,11 @@ class BacktestHarness:
             logger.error(f"Error in batch prediction for {game_date}: {e}")
             return None, pd.DataFrame()
 
+        # Derive combo predictions from MC samples
+        combo_preds, combo_samps = derive_combo_samples(prediction_samples, predictions_list)
+        predictions_list.extend(combo_preds)
+        prediction_samples.update(combo_samps)
+
         # Add game_date to each prediction
         for pred in predictions_list:
             pred["game_date"] = game_date
@@ -470,12 +477,7 @@ class BacktestHarness:
         if not game_ids:
             return pd.DataFrame()
 
-        stat_to_market = {
-            "pts": "player_points",
-            "reb": "player_rebounds",
-            "ast": "player_assists",
-        }
-        markets = [stat_to_market[s] for s in self.stats if s in stat_to_market]
+        markets = [STAT_TO_MARKET[s] for s in self.stats if s in STAT_TO_MARKET]
 
         # Get lines from snapshot closest to but before inference cutoff
         # Production inference runs at 6:30 PM ET (~23:30 UTC EST / 22:30 UTC EDT)
@@ -539,12 +541,7 @@ class BacktestHarness:
 
         Returns dict[date, DataFrame] with the same columns as _get_lines_for_date.
         """
-        stat_to_market = {
-            "pts": "player_points",
-            "reb": "player_rebounds",
-            "ast": "player_assists",
-        }
-        markets = [stat_to_market[s] for s in self.stats if s in stat_to_market]
+        markets = [STAT_TO_MARKET[s] for s in self.stats if s in STAT_TO_MARKET]
 
         # Get all game dates in range first
         date_query = text("""
@@ -680,13 +677,8 @@ class BacktestHarness:
         the devigged market prior in log-odds space. Otherwise, raw empirical CDF
         probabilities are used (original behavior).
         """
-        market_to_stat = {
-            "player_points": "pts",
-            "player_rebounds": "reb",
-            "player_assists": "ast",
-        }
         lines_df = lines_df.copy()
-        lines_df["stat"] = lines_df["market_key"].map(market_to_stat)
+        lines_df["stat"] = lines_df["market_key"].map(MARKET_TO_STAT)
 
         # Merge predictions with lines (one-to-many: each prediction gets one row per bookmaker/line)
         line_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds"]
@@ -895,9 +887,19 @@ class BacktestHarness:
         if df.empty:
             return pd.DataFrame(columns=["player_id", "game_id", "stat", "actual_value"])
 
+        # Add combo actuals as computed columns
+        for combo_stat, defn in COMBO_DEFINITIONS.items():
+            cols = defn["components"]
+            if all(c in df.columns for c in cols):
+                df[combo_stat] = sum(df[c] for c in cols)
+
+        value_vars = ["pts", "reb", "ast"] + [
+            s for s in COMBO_DEFINITIONS if s in df.columns
+        ]
+
         melted = df.melt(
             id_vars=["player_id", "game_id"],
-            value_vars=["pts", "reb", "ast"],
+            value_vars=value_vars,
             var_name="stat",
             value_name="actual_value",
         )

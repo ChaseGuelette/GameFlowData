@@ -3,7 +3,9 @@
 import { cn } from '@/lib/utils'
 import { type StatType, STAT_LABELS } from '@/types/predictions'
 
-type FilterOption = 'all' | StatType
+type FilterOption = 'all' | 'combos' | StatType
+
+export const COMBO_STATS = new Set<StatType>(['pra', 'pr', 'pa', 'ra'])
 
 interface FilterTabsProps {
   activeFilter: FilterOption
@@ -16,6 +18,7 @@ const filters: { value: FilterOption; label: string }[] = [
   { value: 'pts', label: STAT_LABELS.pts },
   { value: 'reb', label: STAT_LABELS.reb },
   { value: 'ast', label: STAT_LABELS.ast },
+  { value: 'combos', label: 'Combos' },
 ]
 
 export function FilterTabs({ activeFilter, onFilterChange, className }: FilterTabsProps) {

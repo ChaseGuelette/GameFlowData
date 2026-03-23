@@ -225,7 +225,7 @@ export default function StatsPage() {
       </div>
 
       {/* Controls row */}
-      <div className="flex flex-wrap items-center gap-3 mb-4">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:gap-3 mb-4">
         {/* Window toggle (hidden for Consistency and Play Types which are windowless) */}
         {!(mainTab === 'players' && playerCategory === 'consistency') && mainTab !== 'playTypes' && (
           <WindowToggle active={activeWindow} onChange={handleWindowChange} />
@@ -261,14 +261,14 @@ export default function StatsPage() {
 
       {/* Player-specific filters row */}
       {mainTab === 'players' && (
-        <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:gap-3 mb-4">
           {/* Search */}
           <input
             type="text"
             placeholder="Search player..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-1.5 border border-slate-700 focus:outline-none focus:border-blue-500 w-48"
+            className="bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-1.5 border border-slate-700 focus:outline-none focus:border-blue-500 w-full sm:w-48"
           />
 
           {/* Team dropdown */}

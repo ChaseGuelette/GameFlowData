@@ -1,4 +1,4 @@
-export type StatType = 'pts' | 'reb' | 'ast' | 'stl' | 'blk' | '3pm'
+export type StatType = 'pts' | 'reb' | 'ast' | 'stl' | 'blk' | '3pm' | 'pra' | 'pr' | 'pa' | 'ra'
 
 export interface Prediction {
   id: number
@@ -107,6 +107,7 @@ export interface PaperTradingSummary {
 export interface BetContext {
   quantiles: { q10: number; q25: number; q50: number; q75: number; q90: number }
   l5_avg?: number | null
+  l5_games?: Array<{ date: string; value: number }> | null
   season_avg?: number | null
   features: Record<string, number | boolean | string | null>
   insights: Array<{ category: string; text: string; sentiment: string }>
@@ -150,6 +151,7 @@ export interface PaperBet {
   opponent_abbrev?: string
   bet_context?: BetContext | null
   user_confidence?: number | null
+  placed_at?: string | null
 }
 
 export interface DailyPerformance {
@@ -183,6 +185,10 @@ export const STAT_LABELS: Record<StatType, string> = {
   stl: 'Steals',
   blk: 'Blocks',
   '3pm': 'Threes',
+  pra: 'Pts+Reb+Ast',
+  pr: 'Pts+Reb',
+  pa: 'Pts+Ast',
+  ra: 'Reb+Ast',
 }
 
 // Stat colors for badges
@@ -193,4 +199,8 @@ export const STAT_COLORS: Record<StatType, string> = {
   stl: 'bg-orange-500',
   blk: 'bg-red-500',
   '3pm': 'bg-cyan-500',
+  pra: 'bg-amber-500',
+  pr: 'bg-teal-500',
+  pa: 'bg-indigo-500',
+  ra: 'bg-emerald-500',
 }
