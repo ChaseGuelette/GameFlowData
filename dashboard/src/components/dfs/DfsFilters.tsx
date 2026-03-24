@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { DFS_SLIP_TYPES, DFS_PLATFORM_NAMES, type EdgeMode } from '@/types/dfs'
 import { type StatType, STAT_LABELS } from '@/types/predictions'
@@ -52,112 +53,134 @@ export function DfsFilters({
   showLive,
   onShowLiveChange,
 }: DfsFiltersProps) {
+  const [filtersOpen, setFiltersOpen] = useState(false)
+
   return (
-    <div className="flex flex-wrap items-center gap-3">
-      {/* Edge mode toggle */}
-      <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg">
-        {edgeModes.map((m) => (
-          <button
-            key={m.value}
-            onClick={() => onEdgeModeChange(m.value)}
-            className={cn(
-              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
-              edgeMode === m.value
-                ? m.activeColor
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
-            )}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
+    <div className="space-y-3">
+      {/* Always visible: edge mode toggle + mobile filter button */}
+      <div className="flex items-center gap-3">
+        <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg overflow-x-auto scrollbar-hide">
+          {edgeModes.map((m) => (
+            <button
+              key={m.value}
+              onClick={() => onEdgeModeChange(m.value)}
+              className={cn(
+                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
+                edgeMode === m.value
+                  ? m.activeColor
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
 
-      {/* Platform filter tabs */}
-      <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg">
-        {platforms.map((p) => (
-          <button
-            key={p.value}
-            onClick={() => onPlatformChange(p.value)}
-            className={cn(
-              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
-              platformFilter === p.value
-                ? 'bg-blue-600 text-white'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
-            )}
-          >
-            {p.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Slip type selector */}
-      <select
-        value={slipType}
-        onChange={(e) => onSlipTypeChange(e.target.value)}
-        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-      >
-        {Object.entries(DFS_SLIP_TYPES).map(([key, slip]) => (
-          <option key={key} value={key}>
-            {slip.label} ({slip.payout})
-          </option>
-        ))}
-      </select>
-
-      {/* Stat filter tabs */}
-      <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg">
-        {stats.map((s) => (
-          <button
-            key={s.value}
-            onClick={() => onStatChange(s.value)}
-            className={cn(
-              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
-              statFilter === s.value
-                ? 'bg-blue-600 text-white'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
-            )}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-
-      {/* +EV Only toggle */}
-      <button
-        onClick={() => onEvOnlyChange(!evOnly)}
-        className={cn(
-          'px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors',
-          evOnly
-            ? 'bg-green-600 border-green-500 text-white'
-            : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-        )}
-      >
-        +EV Only
-      </button>
-
-      {/* Live betting toggle */}
-      <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg">
         <button
-          onClick={() => onShowLiveChange(false)}
+          onClick={() => setFiltersOpen(!filtersOpen)}
           className={cn(
-            'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
-            !showLive
-              ? 'bg-slate-700 text-slate-100'
-              : 'text-slate-400 hover:text-slate-200'
+            'sm:hidden px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors',
+            filtersOpen
+              ? 'bg-blue-600 border-blue-500 text-white'
+              : 'bg-slate-800 border-slate-700 text-slate-300'
           )}
         >
-          Pre-Game
+          Filters {filtersOpen ? '−' : '+'}
         </button>
+      </div>
+
+      {/* Collapsible on mobile, always visible on sm+ */}
+      <div className={cn(
+        filtersOpen ? 'flex' : 'hidden',
+        'sm:flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center gap-3'
+      )}>
+        {/* Platform filter tabs */}
+        <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg overflow-x-auto scrollbar-hide max-w-full">
+          {platforms.map((p) => (
+            <button
+              key={p.value}
+              onClick={() => onPlatformChange(p.value)}
+              className={cn(
+                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
+                platformFilter === p.value
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Slip type selector */}
+        <select
+          value={slipType}
+          onChange={(e) => onSlipTypeChange(e.target.value)}
+          className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+        >
+          {Object.entries(DFS_SLIP_TYPES).map(([key, slip]) => (
+            <option key={key} value={key}>
+              {slip.label} ({slip.payout})
+            </option>
+          ))}
+        </select>
+
+        {/* Stat filter tabs */}
+        <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg overflow-x-auto scrollbar-hide max-w-full">
+          {stats.map((s) => (
+            <button
+              key={s.value}
+              onClick={() => onStatChange(s.value)}
+              className={cn(
+                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
+                statFilter === s.value
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {/* +EV Only toggle */}
         <button
-          onClick={() => onShowLiveChange(true)}
+          onClick={() => onEvOnlyChange(!evOnly)}
           className={cn(
-            'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
-            showLive
-              ? 'bg-orange-600 text-white'
-              : 'text-slate-400 hover:text-slate-200'
+            'px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors whitespace-nowrap',
+            evOnly
+              ? 'bg-green-600 border-green-500 text-white'
+              : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
           )}
         >
-          + Live
+          +EV Only
         </button>
+
+        {/* Live betting toggle */}
+        <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg">
+          <button
+            onClick={() => onShowLiveChange(false)}
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
+              !showLive
+                ? 'bg-slate-700 text-slate-100'
+                : 'text-slate-400 hover:text-slate-200'
+            )}
+          >
+            Pre-Game
+          </button>
+          <button
+            onClick={() => onShowLiveChange(true)}
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
+              showLive
+                ? 'bg-orange-600 text-white'
+                : 'text-slate-400 hover:text-slate-200'
+            )}
+          >
+            + Live
+          </button>
+        </div>
       </div>
     </div>
   )

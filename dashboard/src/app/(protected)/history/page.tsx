@@ -9,6 +9,7 @@ import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFi
 import { DirectionFilter, type DirectionFilterValue } from '@/components/shared/DirectionFilter'
 import { type PaperBet } from '@/types/predictions'
 import { cn } from '@/lib/utils'
+import { useSport } from '@/contexts/SportContext'
 
 // Extended type to include is_recommended and bookmaker from joined daily_predictions
 interface PaperBetWithRecommended extends PaperBet {
@@ -37,6 +38,7 @@ function formatDateLabel(start: string, end: string): string {
 }
 
 export default function HistoryPage() {
+  const { sport, config } = useSport()
   const [bets, setBets] = useState<PaperBetWithRecommended[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<StatusFilter>('all')
@@ -75,7 +77,7 @@ export default function HistoryPage() {
       const supabase = createClient()
 
       const { data: betsData, error: betsError } = await supabase
-        .from('paper_bets')
+        .from(config.paperBetsTable)
         .select('id, prediction_id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl')
         .gte('game_date', startDate)
         .lte('game_date', endDate)
@@ -87,7 +89,7 @@ export default function HistoryPage() {
 
         // Fetch is_recommended and bookmaker for these predictions
         const { data: predictionsData } = await supabase
-          .from('daily_predictions')
+          .from(config.predictionsTable)
           .select('id, is_recommended, bookmaker')
           .in('id', predictionIds)
 
@@ -121,7 +123,7 @@ export default function HistoryPage() {
     }
 
     fetchData()
-  }, [startDate, endDate])
+  }, [startDate, endDate, sport, config.paperBetsTable, config.predictionsTable])
 
   // Fetch user bets when switching to My Bets tab or date range changes
   useEffect(() => {

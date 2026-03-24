@@ -5,12 +5,15 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter, usePathname } from 'next/navigation'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
+import { useSport } from '@/contexts/SportContext'
+import type { Sport } from '@/lib/sport-config'
 
 export function Navbar() {
   const router = useRouter()
   const pathname = usePathname()
   const supabase = createClient()
   const { prefs, loading: prefsLoading } = useUserPreferences()
+  const { sport, setSport, config } = useSport()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   useEffect(() => {
@@ -55,22 +58,43 @@ export function Navbar() {
               <span className="text-lg font-semibold text-slate-50">GameFlow</span>
             </Link>
 
+            {/* Sport Toggle */}
+            <div className="flex items-center bg-slate-900 rounded-lg p-0.5">
+              {(['nba', 'mlb'] as Sport[]).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setSport(s)}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-colors ${
+                    sport === s
+                      ? 'bg-blue-600 text-white'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {s.toUpperCase()}
+                </button>
+              ))}
+            </div>
+
             <div className="hidden md:flex items-center space-x-1">
               <Link href="/dashboard" className={navLinkClasses('/dashboard')}>
                 Props
               </Link>
-              <Link href="/dfs" className={navLinkClasses('/dfs')}>
-                DFS
-              </Link>
+              {config.features.dfs && (
+                <Link href="/dfs" className={navLinkClasses('/dfs')}>
+                  DFS
+                </Link>
+              )}
               <Link href="/history" className={navLinkClasses('/history')}>
                 History
               </Link>
               <Link href="/performance" className={navLinkClasses('/performance')}>
                 Performance
               </Link>
-              <Link href="/stats" className={navLinkClasses('/stats')}>
-                Data Vault
-              </Link>
+              {config.features.statsVault && (
+                <Link href="/stats" className={navLinkClasses('/stats')}>
+                  Data Vault
+                </Link>
+              )}
             </div>
           </div>
 
@@ -123,18 +147,22 @@ export function Navbar() {
           <Link href="/dashboard" className={mobileNavLinkClasses('/dashboard')}>
             Props
           </Link>
-          <Link href="/dfs" className={mobileNavLinkClasses('/dfs')}>
-            DFS
-          </Link>
+          {config.features.dfs && (
+            <Link href="/dfs" className={mobileNavLinkClasses('/dfs')}>
+              DFS
+            </Link>
+          )}
           <Link href="/history" className={mobileNavLinkClasses('/history')}>
             History
           </Link>
           <Link href="/performance" className={mobileNavLinkClasses('/performance')}>
             Performance
           </Link>
-          <Link href="/stats" className={mobileNavLinkClasses('/stats')}>
-            Data Vault
-          </Link>
+          {config.features.statsVault && (
+            <Link href="/stats" className={mobileNavLinkClasses('/stats')}>
+              Data Vault
+            </Link>
+          )}
 
           {!prefsLoading && (
             <div className="px-3 py-2 border-t border-slate-700 mt-2 pt-2">

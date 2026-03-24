@@ -1,4 +1,10 @@
-export type StatType = 'pts' | 'reb' | 'ast' | 'stl' | 'blk' | '3pm' | 'pra' | 'pr' | 'pa' | 'ra'
+// NBA stat types
+export type NBAStatType = 'pts' | 'reb' | 'ast' | 'stl' | 'blk' | '3pm' | 'pra' | 'pr' | 'pa' | 'ra'
+
+// MLB stat types
+export type MLBStatType = 'pitcher_strikeouts' | 'batter_hits' | 'batter_total_bases' | 'batter_home_runs' | 'batter_rbis' | 'batter_runs_scored'
+
+export type StatType = NBAStatType | MLBStatType
 
 export interface Prediction {
   id: number
@@ -179,6 +185,7 @@ export interface StatPerformance {
 
 // Helper to get stat display name
 export const STAT_LABELS: Record<StatType, string> = {
+  // NBA
   pts: 'Points',
   reb: 'Rebounds',
   ast: 'Assists',
@@ -189,10 +196,18 @@ export const STAT_LABELS: Record<StatType, string> = {
   pr: 'Pts+Reb',
   pa: 'Pts+Ast',
   ra: 'Reb+Ast',
+  // MLB
+  pitcher_strikeouts: 'Strikeouts',
+  batter_hits: 'Hits',
+  batter_total_bases: 'Total Bases',
+  batter_home_runs: 'Home Runs',
+  batter_rbis: 'RBIs',
+  batter_runs_scored: 'Runs',
 }
 
 // Stat colors for badges
 export const STAT_COLORS: Record<StatType, string> = {
+  // NBA
   pts: 'bg-blue-500',
   reb: 'bg-green-500',
   ast: 'bg-purple-500',
@@ -203,4 +218,11 @@ export const STAT_COLORS: Record<StatType, string> = {
   pr: 'bg-teal-500',
   pa: 'bg-indigo-500',
   ra: 'bg-emerald-500',
+  // MLB
+  pitcher_strikeouts: 'bg-red-600',
+  batter_hits: 'bg-green-600',
+  batter_total_bases: 'bg-blue-600',
+  batter_home_runs: 'bg-yellow-500',
+  batter_rbis: 'bg-orange-600',
+  batter_runs_scored: 'bg-violet-500',
 }

@@ -131,23 +131,23 @@ export function HeatmapTable({
 
   return (
     <div className="relative max-h-[calc(100vh-280px)] overflow-auto rounded-lg border border-slate-700">
-      <table className="w-full text-xs border-collapse">
+      <table className="w-full text-[10px] sm:text-xs border-collapse">
         <thead className="sticky top-0 z-20 bg-slate-800">
           <tr>
             {/* Sticky name column header */}
-            <th className="sticky left-0 z-30 bg-slate-800 px-3 py-2 text-left text-slate-300 font-medium border-b border-r border-slate-700 min-w-[160px]">
+            <th className="sticky left-0 z-30 bg-slate-800 px-2 sm:px-3 py-2 text-left text-slate-300 font-medium border-b border-r border-slate-700 min-w-[100px] sm:min-w-[160px]">
               {nameLabel}
             </th>
             {showPosition && (
-              <th className="sticky left-[160px] z-30 bg-slate-800 px-2 py-2 text-center text-slate-300 font-medium border-b border-r border-slate-700 min-w-[40px]">
+              <th className="sticky left-[100px] sm:left-[160px] z-30 bg-slate-800 px-1.5 sm:px-2 py-2 text-center text-slate-300 font-medium border-b border-r border-slate-700 min-w-[32px] sm:min-w-[40px]">
                 Pos
               </th>
             )}
             {showTeam && (
               <th
                 className={cn(
-                  'sticky z-30 bg-slate-800 px-2 py-2 text-center text-slate-300 font-medium border-b border-r border-slate-700 min-w-[48px]',
-                  showPosition ? 'left-[200px]' : 'left-[160px]'
+                  'sticky z-30 bg-slate-800 px-1.5 sm:px-2 py-2 text-center text-slate-300 font-medium border-b border-r border-slate-700 min-w-[40px] sm:min-w-[48px]',
+                  showPosition ? 'left-[132px] sm:left-[200px]' : 'left-[100px] sm:left-[160px]'
                 )}
               >
                 Team
@@ -170,19 +170,19 @@ export function HeatmapTable({
           {sortedRows.map((row) => (
             <tr key={row.id} className="hover:bg-slate-800/50 border-b border-slate-800">
               {/* Sticky name cell */}
-              <td className="sticky left-0 z-10 bg-slate-900 px-3 py-1.5 text-slate-200 font-medium border-r border-slate-800 whitespace-nowrap">
+              <td className="sticky left-0 z-10 bg-slate-900 px-2 sm:px-3 py-1.5 text-slate-200 font-medium border-r border-slate-800 whitespace-nowrap">
                 {row.name}
               </td>
               {showPosition && (
-                <td className="sticky left-[160px] z-10 bg-slate-900 px-2 py-1.5 text-center text-slate-400 border-r border-slate-800">
+                <td className="sticky left-[100px] sm:left-[160px] z-10 bg-slate-900 px-1.5 sm:px-2 py-1.5 text-center text-slate-400 border-r border-slate-800">
                   {row.position || '—'}
                 </td>
               )}
               {showTeam && (
                 <td
                   className={cn(
-                    'sticky z-10 bg-slate-900 px-2 py-1.5 text-center text-slate-400 border-r border-slate-800',
-                    showPosition ? 'left-[200px]' : 'left-[160px]'
+                    'sticky z-10 bg-slate-900 px-1.5 sm:px-2 py-1.5 text-center text-slate-400 border-r border-slate-800',
+                    showPosition ? 'left-[132px] sm:left-[200px]' : 'left-[100px] sm:left-[160px]'
                   )}
                 >
                   {row.teamAbbrev || '—'}
@@ -197,7 +197,7 @@ export function HeatmapTable({
                   <td
                     key={col.key}
                     className={cn(
-                      'px-2 py-1.5 text-center tabular-nums whitespace-nowrap',
+                      'px-1.5 sm:px-2 py-1.5 text-center tabular-nums whitespace-nowrap',
                       raw != null ? getHeatmapClass(p, !!col.invertHeatmap) : 'text-slate-600'
                     )}
                   >
@@ -234,12 +234,12 @@ const legendTiers = [
 
 export function HeatmapLegend() {
   return (
-    <div className="flex items-center gap-2 text-xs text-slate-400">
-      <span>Percentile:</span>
+    <div className="flex items-center gap-2 text-xs text-slate-400 overflow-x-auto scrollbar-hide">
+      <span className="whitespace-nowrap">Percentile:</span>
       {legendTiers.map((tier) => (
         <span
           key={tier.label}
-          className={cn('px-2 py-0.5 rounded', tier.className)}
+          className={cn('px-2 py-0.5 rounded whitespace-nowrap', tier.className)}
         >
           {tier.label}
         </span>

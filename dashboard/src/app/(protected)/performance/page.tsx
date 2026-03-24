@@ -9,6 +9,7 @@ import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFi
 import { cn } from '@/lib/utils'
 import { type DailyPerformance, type StatPerformance, type PaperBet, type StatType } from '@/types/predictions'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
+import { useSport } from '@/contexts/SportContext'
 
 type PerformanceTab = 'props' | 'dfs' | 'my_bets'
 
@@ -58,6 +59,7 @@ const SLIP_TYPE_LABELS: Record<string, string> = {
 }
 
 export default function PerformancePage() {
+  const { sport, config } = useSport()
   const { prefs } = useUserPreferences()
   const [dailyData, setDailyData] = useState<DailyPerformance[]>([])
   const [allBets, setAllBets] = useState<PaperBetWithRecommended[]>([])
@@ -82,7 +84,7 @@ export default function PerformancePage() {
 
       // Fetch daily performance log (for bankroll chart)
       const { data: logData, error: logError } = await supabase
-        .from('paper_trading_daily_log')
+        .from(config.dailyLogTable)
         .select('game_date, total_bets, bets_won, bets_lost, bets_push, total_staked, total_pnl, cumulative_pnl, bankroll_after, roi_pct')
         .order('game_date', { ascending: true })
 
@@ -95,7 +97,7 @@ export default function PerformancePage() {
 
       // Fetch all resolved bets
       const { data: betsData, error: betsError } = await supabase
-        .from('paper_bets')
+        .from(config.paperBetsTable)
         .select('id, prediction_id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl')
         .in('status', ['won', 'lost', 'push'])
         .order('game_date', { ascending: true })
@@ -106,7 +108,7 @@ export default function PerformancePage() {
 
         // Fetch is_recommended for these predictions
         const { data: predictionsData } = await supabase
-          .from('daily_predictions')
+          .from(config.predictionsTable)
           .select('id, is_recommended')
           .in('id', predictionIds)
 
@@ -131,7 +133,7 @@ export default function PerformancePage() {
     }
 
     fetchData()
-  }, [])
+  }, [sport, config.dailyLogTable, config.paperBetsTable, config.predictionsTable])
 
   // Fetch DFS data when tab switches to DFS
   useEffect(() => {
@@ -485,17 +487,19 @@ export default function PerformancePage() {
             >
               Props
             </button>
-            <button
-              onClick={() => setActiveTab('dfs')}
-              className={cn(
-                'px-3 py-1.5 rounded text-sm font-medium transition-colors',
-                activeTab === 'dfs'
-                  ? 'bg-indigo-600 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
-              )}
-            >
-              DFS
-            </button>
+            {config.features.dfs && (
+              <button
+                onClick={() => setActiveTab('dfs')}
+                className={cn(
+                  'px-3 py-1.5 rounded text-sm font-medium transition-colors',
+                  activeTab === 'dfs'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                )}
+              >
+                DFS
+              </button>
+            )}
           </div>
           {/* Bet Source Filter (props only) */}
           {activeTab === 'props' && (

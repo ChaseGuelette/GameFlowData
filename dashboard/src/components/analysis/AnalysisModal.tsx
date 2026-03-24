@@ -14,6 +14,7 @@ import { estimateUnderProb, americanToImpliedProb, formatBookmaker } from '@/lib
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 import { buildBetContext } from '@/lib/buildBetContext'
 import { AskChat } from './AskChat'
+import { useSport } from '@/contexts/SportContext'
 
 export interface TakeBetData {
   book: string
@@ -99,6 +100,7 @@ const KELLY_OPTIONS = [
 ]
 
 export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalProps) {
+  const { config } = useSport()
   const [history, setHistory] = useState<PlayerGameStats[]>([])
   const [bookmakerLines, setBookmakerLines] = useState<BookmakerLine[]>([])
   const [loading, setLoading] = useState(true)
@@ -147,6 +149,11 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
 
   useEffect(() => {
     async function fetchHistory() {
+      // player_game_stats is NBA-only for now
+      if (config.sport !== 'nba') {
+        setLoading(false)
+        return
+      }
       const supabase = createClient()
       const { data, error } = await supabase
         .from('player_game_stats')
@@ -157,33 +164,28 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         .limit(5)
 
       if (!error && data) {
-        console.log('Last 5 games data:', data)
         setHistory(data.reverse()) // Chronological order for chart
-      } else {
-        console.error('Error fetching history:', error)
       }
       setLoading(false)
     }
 
     async function fetchBookmakerLines() {
+      // raw_player_props_combined is NBA-only
+      if (config.sport !== 'nba') {
+        setLinesLoading(false)
+        return
+      }
+
       const supabase = createClient()
       const marketKey = STAT_TO_MARKET[prediction.stat]
 
       // Skip if no game_id
       if (!prediction.game_id) {
-        console.log('No game_id available for bookmaker lookup')
         setLinesLoading(false)
         return
       }
 
-      console.log('Fetching bookmaker lines:', {
-        player_id: prediction.player_id,
-        game_id: prediction.game_id,
-        market_key: marketKey,
-      })
-
       // Get bookmaker lines for this player/stat/game
-      // Both tables use the same NBA game_id format (e.g., "0022500771")
       const { data, error } = await supabase
         .from('raw_player_props_combined')
         .select('bookmaker, line, outcome_label, odds_american, snapshot_time')
@@ -441,13 +443,13 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-slate-400 border-b border-slate-700">
-                      <th className="text-left py-2 px-2">Date</th>
-                      <th className="text-center py-2 px-2">MIN</th>
-                      <th className="text-center py-2 px-2">PTS</th>
-                      <th className="text-center py-2 px-2">REB</th>
-                      <th className="text-center py-2 px-2">AST</th>
+                      <th className="text-left py-2 px-1.5 sm:px-2">Date</th>
+                      <th className="text-center py-2 px-1.5 sm:px-2">MIN</th>
+                      <th className="text-center py-2 px-1.5 sm:px-2">PTS</th>
+                      <th className="text-center py-2 px-1.5 sm:px-2">REB</th>
+                      <th className="text-center py-2 px-1.5 sm:px-2">AST</th>
                       {comboComponents && (
-                        <th className="text-center py-2 px-2">{statLabel}</th>
+                        <th className="text-center py-2 px-1.5 sm:px-2">{statLabel}</th>
                       )}
                     </tr>
                   </thead>
@@ -460,19 +462,19 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                       const highlightAst = prediction.stat === 'ast' || isComboComponent('ast')
                       return (
                       <tr key={i} className="border-b border-slate-700/50">
-                        <td className="py-2 px-2 text-slate-300">{game.game_date}</td>
-                        <td className="text-center py-2 px-2 text-slate-400">{game.min}</td>
-                        <td className={`text-center py-2 px-2 ${highlightBase ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
+                        <td className="py-2 px-1.5 sm:px-2 text-slate-300">{game.game_date}</td>
+                        <td className="text-center py-2 px-1.5 sm:px-2 text-slate-400">{game.min}</td>
+                        <td className={`text-center py-2 px-1.5 sm:px-2 ${highlightBase ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
                           {game.pts}
                         </td>
-                        <td className={`text-center py-2 px-2 ${highlightReb ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
+                        <td className={`text-center py-2 px-1.5 sm:px-2 ${highlightReb ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
                           {game.reb}
                         </td>
-                        <td className={`text-center py-2 px-2 ${highlightAst ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
+                        <td className={`text-center py-2 px-1.5 sm:px-2 ${highlightAst ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
                           {game.ast}
                         </td>
                         {comboComponents && (
-                          <td className="text-center py-2 px-2 text-amber-400 font-semibold">
+                          <td className="text-center py-2 px-1.5 sm:px-2 text-amber-400 font-semibold">
                             {comboComponents.reduce((s, col) => s + (Number(game[col]) || 0), 0)}
                           </td>
                         )}
@@ -517,15 +519,17 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         )}
 
         {/* AI Q&A */}
-        <AskChat
-          prediction={prediction}
-          history={history}
-          insights={insights}
-          bookmakerLines={bookmakerLines}
-          isOverBet={isOverBet}
-          edge={edge}
-          probability={probability}
-        />
+        {config.features.askChat && (
+          <AskChat
+            prediction={prediction}
+            history={history}
+            insights={insights}
+            bookmakerLines={bookmakerLines}
+            isOverBet={isOverBet}
+            edge={edge}
+            probability={probability}
+          />
+        )}
 
         {/* Sportsbook Lines */}
         <div className="p-4 sm:p-6 border-b border-slate-700">

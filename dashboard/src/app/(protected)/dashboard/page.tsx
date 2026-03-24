@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { FilterTabs, COMBO_STATS, type FilterOption } from '@/components/predictions/FilterTabs'
+import { FilterTabs, type FilterOption } from '@/components/predictions/FilterTabs'
 import { PropGrid } from '@/components/predictions/PropGrid'
 import { PlayOfTheDay } from '@/components/predictions/PlayOfTheDay'
 import { AnalysisModal } from '@/components/analysis/AnalysisModal'
@@ -11,7 +11,6 @@ import { TonightsGames, type GameInfo } from '@/components/predictions/TonightsG
 import { type Prediction } from '@/types/predictions'
 import { getToday, formatDate, calculateBLConfidence, blendProbability, getGameStatus } from '@/lib/utils'
 import { useGameStatus } from '@/lib/hooks/useGameStatus'
-import { TEAM_ABBREV, TEAM_NAME_TO_ABBREV } from '@/lib/constants'
 import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS } from '@/lib/sportsbook-availability'
 import { BookFilterDropdown } from '@/components/predictions/BookFilterDropdown'
 import { STAT_TO_MARKET } from '@/types/dfs'
@@ -19,8 +18,10 @@ import { useUserBets, placeBetCustom } from '@/lib/hooks/useUserBets'
 import { type TakeBetData } from '@/components/analysis/AnalysisModal'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 import { DirectionFilter, type DirectionFilterValue } from '@/components/shared/DirectionFilter'
+import { useSport } from '@/contexts/SportContext'
 
 export default function DashboardPage() {
+  const { sport, config } = useSport()
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<FilterOption>('all')
@@ -176,24 +177,26 @@ export default function DashboardPage() {
     const supabase = createClient()
 
     // Safety net: fetch "Out" player IDs from injury table to filter client-side
-    // Catches players the backend edge_refresh might not have cleaned up yet
+    // Only applies to sports with injury tracking enabled
     let outPlayerIds = new Set<number>()
-    try {
-      const { data: injuryData } = await supabase
-        .from('rapidapi_injuries')
-        .select('player_id')
-        .eq('status', 'Out')
-        .eq('report_date', date)
-        .not('player_id', 'is', null)
-      if (injuryData) {
-        outPlayerIds = new Set(injuryData.map(r => r.player_id))
+    if (config.features.injuries) {
+      try {
+        const { data: injuryData } = await supabase
+          .from('rapidapi_injuries')
+          .select('player_id')
+          .eq('status', 'Out')
+          .eq('report_date', date)
+          .not('player_id', 'is', null)
+        if (injuryData) {
+          outPlayerIds = new Set(injuryData.map(r => r.player_id))
+        }
+      } catch {
+        // Table may not be accessible via RLS — silently continue
       }
-    } catch {
-      // Table may not be accessible via RLS — silently continue
     }
 
     const { data: predictionsData, error: predictionsError } = await supabase
-      .from('daily_predictions')
+      .from(config.predictionsTable)
       .select('*')
       .eq('prediction_date', date)
       .not('line', 'is', null)
@@ -225,8 +228,8 @@ export default function DashboardPage() {
           q90: p.pred_q90,
           pred_mean: p.pred_mean,
           pred_std: p.pred_std,
-          team_abbrev: TEAM_ABBREV[p.team_id] || 'UNK',
-          opponent_abbrev: TEAM_ABBREV[p.opponent_id] || 'UNK',
+          team_abbrev: config.teams[p.team_id] || p.feat_opp_abbrev?.split?.('@')?.[0] || 'UNK',
+          opponent_abbrev: config.teams[p.opponent_id] || p.feat_opp_abbrev || 'UNK',
         }))
 
       // Backfill missing game_time: if any prediction for a game has game_time,
@@ -275,45 +278,61 @@ export default function DashboardPage() {
       }
 
       setPredictions(mappedPredictions)
-      if (mappedPredictions.length === 0) {
-        // Fallback: fetch today's games from NBA CDN schedule
+      if (mappedPredictions.length === 0 && config.features.scoreboard) {
         await fetchFallbackGames(date)
       } else {
         setFallbackGames([])
       }
     } else {
       setPredictions([])
-      // Fallback: fetch today's games from NBA CDN schedule
-      await fetchFallbackGames(date)
+      if (config.features.scoreboard) {
+        await fetchFallbackGames(date)
+      }
     }
 
     setLoading(false)
-  }, [])
+  }, [config, fetchFallbackGames])
 
-  // Initial load: fetch available dates
+  // Initial load: fetch available dates (re-runs when sport changes)
   useEffect(() => {
     async function fetchInitialData() {
       const supabase = createClient()
 
-      // Fetch available dates using RPC function (efficient distinct query)
-      const { data: datesData, error: datesError } = await supabase
-        .rpc('get_prediction_dates', { days_back: 30 })
+      let uniqueDates: string[] = []
 
-      if (!datesError && datesData) {
-        const uniqueDates = datesData.map((d: { prediction_date: string }) => d.prediction_date)
-
-        // Always include today so it's selectable even before predictions exist
-        const today = getToday()
-        if (!uniqueDates.includes(today)) {
-          uniqueDates.unshift(today)
+      if (sport === 'nba') {
+        // Use optimized RPC for NBA
+        const { data: datesData, error: datesError } = await supabase
+          .rpc('get_prediction_dates', { days_back: 30 })
+        if (!datesError && datesData) {
+          uniqueDates = datesData.map((d: { prediction_date: string }) => d.prediction_date)
         }
-        setAvailableDates(uniqueDates)
-        // selectedDate is already initialized to getToday(), so don't change it
+      } else {
+        // Direct query for other sports
+        const { data: datesData } = await supabase
+          .from(config.predictionsTable)
+          .select('prediction_date')
+          .order('prediction_date', { ascending: false })
+          .limit(30)
+        if (datesData) {
+          uniqueDates = [...new Set(datesData.map((d: { prediction_date: string }) => d.prediction_date))]
+        }
       }
+
+      // Always include today so it's selectable even before predictions exist
+      const today = getToday()
+      if (!uniqueDates.includes(today)) {
+        uniqueDates.unshift(today)
+      }
+      setAvailableDates(uniqueDates)
     }
 
     fetchInitialData()
-  }, [])
+    // Reset to today when sport changes
+    setSelectedDate(getToday())
+    setFilter('all')
+    setTeamFilter('all')
+  }, [sport, config.predictionsTable])
 
   // Fetch predictions when selectedDate changes
   useEffect(() => {
@@ -402,8 +421,8 @@ export default function DashboardPage() {
     if (fallbackGames.length > 0) {
       // Derive from game lines staging (team full names → abbreviations)
       return fallbackGames.map(g => {
-        const home = TEAM_NAME_TO_ABBREV[g.home_team] || g.home_team
-        const away = TEAM_NAME_TO_ABBREV[g.away_team] || g.away_team
+        const home = config.teamNameToAbbrev[g.home_team] || g.home_team
+        const away = config.teamNameToAbbrev[g.away_team] || g.away_team
         const teams = [home, away].sort() as [string, string]
         const key = `${teams[0]} vs ${teams[1]}`
         return { matchupKey: key, teams, gameTime: g.commence_time || null, gameId: null, predictionCount: 0 }
@@ -458,7 +477,7 @@ export default function DashboardPage() {
     }
     if (showModelPicks && !p.is_recommended) return false
     if (filter === 'combos') {
-      if (!COMBO_STATS.has(p.stat)) return false
+      if (!config.comboStats.has(p.stat)) return false
     } else if (filter !== 'all' && p.stat !== filter) return false
     if (teamFilter !== 'all') {
       const matchupTeams = teamFilter.split(' vs ')
@@ -519,8 +538,8 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
-          {/* FilterTabs (PTS/REB/AST) - always visible as primary nav */}
-          <FilterTabs activeFilter={filter} onFilterChange={setFilter} />
+          {/* FilterTabs - always visible as primary nav */}
+          <FilterTabs activeFilter={filter} onFilterChange={setFilter} tabs={config.filterTabs} />
 
           {/* Mobile: Filters toggle button */}
           <button
@@ -677,7 +696,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Tonight's Games Strip */}
-      {!loading && (
+      {!loading && config.features.scoreboard && (
         <TonightsGames
           games={tonightsGames}
           activeMatchup={teamFilter}

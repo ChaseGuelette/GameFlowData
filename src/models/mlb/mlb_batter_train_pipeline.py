@@ -202,22 +202,15 @@ class MLBBatterTrainingOrchestrator:
 
     def _run_negbin_pipeline(self, train_df, cal_df, train_seasons, cal_season, cal_end_date):
         """Train NegBin model for count stats (hits, TB, RBI, runs)."""
-        from src.models.negbin_model import NegBinConfig, NegBinModel
+        from scipy.stats import nbinom as _nbinom
 
-        negbin_config = NegBinConfig(
-            n_estimators=1000,
-            max_depth=5,
-            learning_rate=0.03,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_weight=3,
-            early_stopping_rounds=50,
-        )
+        from src.models.mlb.mlb_batter_feature_store import BATTER_STAT_MARKET_KEY
+        from src.models.negbin_model import NegBinModel
 
         model_name = f"batter_{self.stat}"
 
-        # Step 3: Feature selection (single feature set — NegBin has one mu model)
-        logger.info("Step 3: Running feature selection for NegBin mu model...")
+        # Step 3: Feature selection — NLL-based (single feature set for NegBin)
+        logger.info("Step 3: Running NLL-based feature selection for NegBin model...")
         excluded = {
             "game_id", "player_id", "game_date", "season", "team_id",
             "opp_team_id", "actual", "player_name",
@@ -229,17 +222,17 @@ class MLBBatterTrainingOrchestrator:
 
         valid_df = train_df[train_df["actual"].notna() & (train_df["actual"] >= 0)].fillna(0)
 
-        # Run feature selection once for the mu target (Q50 proxy)
         selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
-        per_q_selected = selector.select_features_per_quantile(
+        selected_features = selector.select_features_nll(
             valid_df, "actual", candidates, model_name=f"Batter {self.stat}"
         )
-        # Union all per-quantile features into a single set
-        all_selected: set[str] = set()
-        for feats in per_q_selected.values():
-            all_selected.update(feats)
-        selected_features = sorted(all_selected)
-        logger.info("NegBin feature set: %d features (union of per-quantile)", len(selected_features))
+        logger.info("NegBin feature set: %d features (NLL-based)", len(selected_features))
+
+        X_train = valid_df[selected_features].fillna(0)
+        y_train = valid_df["actual"]
+
+        # Step 4: Hyperparameter tuning (optional)
+        negbin_config = self._resolve_negbin_config(X_train, y_train)
 
         # Step 5: Train
         display_name = model_name.upper().replace("_", " ")
@@ -247,66 +240,231 @@ class MLBBatterTrainingOrchestrator:
         print(f"TRAINING MLB {display_name} NEGBIN MODEL")
         print("=" * 60)
 
-        X_train = valid_df[selected_features].fillna(0)
-        y_train = valid_df["actual"]
-
         model = NegBinModel(config=negbin_config, model_name=model_name)
         fit_info = model.fit(X_train, y_train)
         logger.info("Fit info: %s", fit_info)
 
-        # Step 6-7: Calibration via sampling
-        logger.info("Step 6-7: Computing calibration coverage via sampling...")
+        # Step 6-7: PMF-based calibration (vectorized, ~5 sec)
+        logger.info("Step 6-7: Computing PMF-based calibration metrics...")
         cal_valid = cal_df[cal_df["actual"].notna() & (cal_df["actual"] >= 0)].fillna(0)
         X_cal = cal_valid[selected_features].fillna(0)
         y_cal = cal_valid["actual"].values
 
-        quantile_levels = [0.10, 0.25, 0.50, 0.75, 0.90]
-        N_MC = 10_000
+        mu, alpha = model.predict_params(X_cal)
+        cal_report = self._compute_negbin_calibration(
+            y_cal, mu, alpha, cal_valid, self.stat
+        )
 
-        # Batch: sample for each calibration row and compute empirical quantiles
-        rng = np.random.RandomState(42)
-        reports = []
-        for q in quantile_levels:
-            hits = 0
-            for i in range(len(X_cal)):
-                row_samples = model.sample(X_cal.iloc[[i]], n_samples=N_MC, rng=rng)
-                quantile_val = np.percentile(row_samples, q * 100)
-                if y_cal[i] <= quantile_val:
-                    hits += 1
-            coverage = hits / len(X_cal) if len(X_cal) > 0 else 0.0
-            gap = coverage - q
-            reports.append({
-                "quantile": q,
-                "coverage": float(coverage),
-                "target": q,
-                "gap": float(gap),
-            })
-            logger.info("  Q%.2f: coverage=%.3f [gap=%+.3f]", q, coverage, gap)
+        # Log key metrics
+        logger.info("  Mean NLL: %.4f", cal_report["mean_nll"])
+        logger.info("  Bias: predicted_mu=%.3f, actual_mean=%.3f, ratio=%.4f",
+                     cal_report["mean_predicted_mu"], cal_report["mean_actual"],
+                     cal_report["mu_actual_ratio"])
+        logger.info("  Zero fraction: predicted=%.3f, actual=%.3f, gap=%+.3f",
+                     cal_report["predicted_zero_frac"], cal_report["actual_zero_frac"],
+                     cal_report["zero_frac_gap"])
+        for entry in cal_report.get("prop_line_calibration", []):
+            logger.info("  Line %.1f: model_over=%.3f, actual_over=%.3f, gap=%+.3f (n=%d)",
+                         entry["line"], entry["model_over_rate"], entry["actual_over_rate"],
+                         entry["gap"], entry["n"])
+        logger.info("  Mu percentiles: %s", cal_report.get("mu_percentiles"))
+        logger.info("  Alpha percentiles: %s", cal_report.get("alpha_percentiles"))
 
-        # Step 8: Sanity check
-        logger.info("Step 8: Sanity check...")
+        # Step 8: Sanity check — show (mu, alpha, P(over line), actual)
+        logger.info("Step 8: Sanity check (distributional parameters)...")
+        market_key = BATTER_STAT_MARKET_KEY.get(self.stat, f"batter_{self.stat}")
+        prop_line_col = f"prop_line_{market_key}"
+
         sample_size = min(5, len(cal_valid))
-        sample_rows = cal_valid.sample(sample_size, random_state=42)
-        for _, row in sample_rows.iterrows():
-            row_X = pd.DataFrame([{f: row.get(f, 0) for f in selected_features}])
-            row_samples = model.sample(row_X, n_samples=N_MC, rng=rng)
-            actual = row["actual"]
-            q10 = np.percentile(row_samples, 10)
-            q50 = np.percentile(row_samples, 50)
-            q90 = np.percentile(row_samples, 90)
+        sample_indices = np.random.RandomState(42).choice(len(cal_valid), sample_size, replace=False)
+        for i in sample_indices:
+            mu_i, alpha_i = mu[i], alpha[i]
+            actual_i = y_cal[i]
+
+            # P(over line) via scipy CDF
+            line_val = cal_valid.iloc[i].get(prop_line_col, 0)
+            if line_val and line_val > 0:
+                n_param = 1.0 / alpha_i
+                p_param = n_param / (n_param + mu_i)
+                p_over = 1.0 - _nbinom.cdf(line_val, n_param, p_param)
+            else:
+                p_over = float("nan")
+
             logger.info(
-                "  Player %s: Q50=%.1f, Q10=%.1f, Q90=%.1f, Actual=%.0f",
-                row.get("player_id", "?"), q50, q10, q90, actual,
+                "  Row %d: mu=%.2f, alpha=%.2f, P(over %.1f)=%.3f, actual=%.0f",
+                i, mu_i, alpha_i, line_val if line_val else 0, p_over, actual_i,
             )
-            if q10 < 0 or q50 < 0:
-                raise ValueError(f"Negative quantile prediction: Q10={q10}, Q50={q50}")
+            if mu_i < 0:
+                raise ValueError(f"Negative mu prediction: mu={mu_i}")
 
         # Step 9: Save
         logger.info("Step 9: Saving artifacts...")
         model.save(self.run_dir)
         self._save_feature_manifest({"negbin": selected_features})
-        self._save_calibration_report({f"batter_{self.stat}": reports})
+        self._save_calibration_report({f"batter_{self.stat}": cal_report})
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
+
+    # ------------------------------------------------------------------
+    # NegBin Hyperparameter Tuning
+    # ------------------------------------------------------------------
+
+    def _resolve_negbin_config(self, X: pd.DataFrame, y: pd.Series) -> "NegBinConfig":
+        """Resolve NegBin hyperparameters: tune if enabled, else use defaults."""
+        from src.models.negbin_model import NegBinConfig
+
+        if not self.tune_hyperparams:
+            logger.info("Step 4: Hyperparameter tuning DISABLED, using defaults")
+            return NegBinConfig(
+                n_estimators=1000,
+                max_depth=5,
+                learning_rate=0.03,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                min_child_weight=3,
+                early_stopping_rounds=50,
+            )
+
+        from src.models.negbin_tuner import NegBinHyperparameterTuner
+
+        logger.info("Step 4: Running Optuna hyperparameter tuning (%d trials)...", self.tuning_trials)
+
+        tuner = NegBinHyperparameterTuner(
+            n_trials=self.tuning_trials,
+            val_fraction=0.15,
+            pruning=True,
+            random_state=42,
+        )
+        best_config = tuner.tune(X, y)
+
+        # Save tuning results to run directory
+        tuner.save_best_config(self.run_dir / "best_hyperparams.json")
+        logger.info(
+            "Tuning complete: val NLL=%.4f, depth=%d, lr=%.4f, n_est=%d",
+            tuner.best_nll, best_config.max_depth,
+            best_config.learning_rate, best_config.n_estimators,
+        )
+
+        return best_config
+
+    # ------------------------------------------------------------------
+    # NegBin PMF-based Calibration
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_negbin_calibration(
+        y_actual: np.ndarray,
+        mu: np.ndarray,
+        alpha: np.ndarray,
+        cal_df: pd.DataFrame,
+        stat: str,
+    ) -> dict:
+        """Compute calibration metrics using the NegBin PMF/CDF directly.
+
+        Returns a dict with: mean_nll, bias metrics, zero fraction comparison,
+        per-prop-line calibration, binned P(over) calibration, and distribution stats.
+        """
+        from scipy.stats import nbinom as _nbinom
+
+        from src.models.mlb.mlb_batter_feature_store import BATTER_STAT_MARKET_KEY
+
+        n_samples = len(y_actual)
+        y_int = y_actual.astype(int)
+
+        # NB parameters: n = 1/alpha, p = n/(n+mu)
+        n_param = 1.0 / np.clip(alpha, 1e-10, None)
+        p_param = n_param / (n_param + np.clip(mu, 1e-10, None))
+        p_param = np.clip(p_param, 1e-10, 1 - 1e-10)
+
+        # --- Mean NLL ---
+        log_probs = _nbinom.logpmf(y_int, n_param, p_param)
+        log_probs = np.where(np.isfinite(log_probs), log_probs, -100)
+        mean_nll = -float(np.mean(log_probs))
+
+        # --- Bias ---
+        mean_predicted_mu = float(np.mean(mu))
+        mean_actual = float(np.mean(y_actual))
+        mu_actual_ratio = mean_predicted_mu / max(mean_actual, 1e-6)
+
+        # --- Zero fraction ---
+        predicted_zero_frac = float(np.mean(_nbinom.pmf(0, n_param, p_param)))
+        actual_zero_frac = float(np.mean(y_actual == 0))
+        zero_frac_gap = predicted_zero_frac - actual_zero_frac
+
+        # --- Per-prop-line calibration ---
+        market_key = BATTER_STAT_MARKET_KEY.get(stat, f"batter_{stat}")
+        prop_line_col = f"prop_line_{market_key}"
+        prop_line_calibration = []
+
+        if prop_line_col in cal_df.columns:
+            lines = cal_df[prop_line_col].values
+            unique_lines = sorted(set(lines[lines > 0]))
+
+            for line_val in unique_lines:
+                mask = lines == line_val
+                if mask.sum() < 20:
+                    continue
+
+                # Model P(Y >= line) = 1 - CDF(line - 1)  [for integer line]
+                # But prop lines can be X.5, so P(over X.5) = P(Y >= ceil(X.5)) = 1 - CDF(floor(X.5))
+                threshold = int(np.floor(line_val))
+                model_over = 1.0 - _nbinom.cdf(threshold, n_param[mask], p_param[mask])
+                model_over_rate = float(np.mean(model_over))
+
+                actual_over_rate = float(np.mean(y_actual[mask] > line_val))
+
+                prop_line_calibration.append({
+                    "line": float(line_val),
+                    "model_over_rate": round(model_over_rate, 4),
+                    "actual_over_rate": round(actual_over_rate, 4),
+                    "gap": round(model_over_rate - actual_over_rate, 4),
+                    "n": int(mask.sum()),
+                })
+
+        # --- Binned calibration (P(over) in decile bins) ---
+        # Compute P(over) for each row using its prop line
+        binned_calibration = []
+        if prop_line_col in cal_df.columns:
+            lines = cal_df[prop_line_col].values
+            has_line_mask = lines > 0
+            if has_line_mask.sum() > 50:
+                thresholds = np.floor(lines[has_line_mask]).astype(int)
+                p_over = 1.0 - _nbinom.cdf(thresholds, n_param[has_line_mask], p_param[has_line_mask])
+                actual_over = (y_actual[has_line_mask] > lines[has_line_mask]).astype(float)
+
+                # Bin into deciles
+                bin_edges = np.arange(0, 1.1, 0.1)
+                for j in range(len(bin_edges) - 1):
+                    lo, hi = bin_edges[j], bin_edges[j + 1]
+                    in_bin = (p_over >= lo) & (p_over < hi)
+                    if in_bin.sum() < 5:
+                        continue
+                    binned_calibration.append({
+                        "bin_lo": round(float(lo), 2),
+                        "bin_hi": round(float(hi), 2),
+                        "mean_predicted": round(float(np.mean(p_over[in_bin])), 4),
+                        "mean_actual": round(float(np.mean(actual_over[in_bin])), 4),
+                        "n": int(in_bin.sum()),
+                    })
+
+        # --- Distribution stats ---
+        pcts = [10, 25, 50, 75, 90]
+        mu_percentiles = {f"P{p}": round(float(np.percentile(mu, p)), 3) for p in pcts}
+        alpha_percentiles = {f"P{p}": round(float(np.percentile(alpha, p)), 3) for p in pcts}
+
+        return {
+            "mean_nll": round(mean_nll, 4),
+            "mean_predicted_mu": round(mean_predicted_mu, 4),
+            "mean_actual": round(mean_actual, 4),
+            "mu_actual_ratio": round(mu_actual_ratio, 4),
+            "predicted_zero_frac": round(predicted_zero_frac, 4),
+            "actual_zero_frac": round(actual_zero_frac, 4),
+            "zero_frac_gap": round(zero_frac_gap, 4),
+            "prop_line_calibration": prop_line_calibration,
+            "binned_calibration": binned_calibration,
+            "mu_percentiles": mu_percentiles,
+            "alpha_percentiles": alpha_percentiles,
+            "n_calibration_samples": n_samples,
+        }
 
     # ------------------------------------------------------------------
     # Artifact Saving Helpers

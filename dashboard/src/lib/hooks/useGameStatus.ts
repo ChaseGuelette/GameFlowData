@@ -2,17 +2,20 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { type GameStatusInfo } from '@/types/predictions'
+import { useSport } from '@/contexts/SportContext'
 
 export type GameStatusMap = Map<string, GameStatusInfo>
 
 const POLL_INTERVAL_MS = 30_000
 
 export function useGameStatus(isToday: boolean): GameStatusMap {
+  const { config } = useSport()
   const [statusMap, setStatusMap] = useState<GameStatusMap>(new Map())
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
-    if (!isToday) {
+    // Only poll scoreboard for sports that support it
+    if (!isToday || !config.features.scoreboard) {
       setStatusMap(new Map())
       return
     }
@@ -41,7 +44,7 @@ export function useGameStatus(isToday: boolean): GameStatusMap {
         intervalRef.current = null
       }
     }
-  }, [isToday])
+  }, [isToday, config.features.scoreboard])
 
   return statusMap
 }

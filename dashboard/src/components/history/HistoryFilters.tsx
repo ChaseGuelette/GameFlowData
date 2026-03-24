@@ -20,13 +20,13 @@ const FILTERS: { value: StatusFilter; label: string }[] = [
 
 export function HistoryFilters({ activeFilter, onFilterChange }: HistoryFiltersProps) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide">
       {FILTERS.map((filter) => (
         <button
           key={filter.value}
           onClick={() => onFilterChange(filter.value)}
           className={cn(
-            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+            'px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap',
             activeFilter === filter.value
               ? 'bg-blue-600 text-white'
               : 'bg-slate-700 text-slate-300 hover:bg-slate-600'

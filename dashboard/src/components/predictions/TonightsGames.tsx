@@ -3,26 +3,7 @@ import Image from 'next/image'
 import { getGameStatus } from '@/lib/utils'
 import { type GameStatusInfo } from '@/types/predictions'
 import { type GameStatusMap } from '@/lib/hooks/useGameStatus'
-
-// Reverse map: abbreviation → NBA team ID (for logo URLs)
-const ABBREV_TO_ID: Record<string, number> = {
-  ATL: 1610612737, BOS: 1610612738, BKN: 1610612751,
-  CHA: 1610612766, CHI: 1610612741, CLE: 1610612739,
-  DAL: 1610612742, DEN: 1610612743, DET: 1610612765,
-  GSW: 1610612744, HOU: 1610612745, IND: 1610612754,
-  LAC: 1610612746, LAL: 1610612747, MEM: 1610612763,
-  MIA: 1610612748, MIL: 1610612749, MIN: 1610612750,
-  NOP: 1610612740, NYK: 1610612752, OKC: 1610612760,
-  ORL: 1610612753, PHI: 1610612755, PHX: 1610612756,
-  POR: 1610612757, SAC: 1610612758, SAS: 1610612759,
-  TOR: 1610612761, UTA: 1610612762, WAS: 1610612764,
-}
-
-function teamLogoUrl(abbrev: string): string {
-  const id = ABBREV_TO_ID[abbrev]
-  if (!id) return ''
-  return `https://cdn.nba.com/logos/nba/${id}/global/L/logo.svg`
-}
+import { useSport } from '@/contexts/SportContext'
 
 export interface GameInfo {
   matchupKey: string
@@ -48,6 +29,7 @@ function formatGameTimeLocal(gameTime: string | null): string {
 }
 
 export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday, gameStatusMap }: TonightsGamesProps) {
+  const { config } = useSport()
   const statusMap = gameStatusMap ?? new Map<string, GameStatusInfo>()
   const scrollRef = useRef<HTMLDivElement>(null)
   const isDragging = useRef(false)
@@ -124,8 +106,8 @@ export function TonightsGames({ games, activeMatchup, onSelectMatchup, isToday, 
         {games.map((g) => {
           const time = formatGameTimeLocal(g.gameTime)
           const isActive = activeMatchup === g.matchupKey
-          const logo1 = teamLogoUrl(g.teams[0])
-          const logo2 = teamLogoUrl(g.teams[1])
+          const logo1 = config.getTeamLogoUrl(g.teams[0])
+          const logo2 = config.getTeamLogoUrl(g.teams[1])
           const status = getGameStatus(g.gameId ?? undefined, g.gameTime, statusMap)
 
           return (

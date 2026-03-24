@@ -54,8 +54,11 @@ export function formatProb(prob: number): string {
   return `${(prob * 100).toFixed(1)}%`
 }
 
-// Get NBA player headshot URL
-export function getHeadshotUrl(playerId: number): string {
+// Get player headshot URL (defaults to NBA, pass sport for others)
+export function getHeadshotUrl(playerId: number, sport: 'nba' | 'mlb' = 'nba'): string {
+  if (sport === 'mlb') {
+    return `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${playerId}/headshot/67/current`
+  }
   return `https://cdn.nba.com/headshots/nba/latest/1040x760/${playerId}.png`
 }
 

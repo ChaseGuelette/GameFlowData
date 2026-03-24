@@ -2,7 +2,8 @@
 
 import Image from 'next/image'
 import { useState } from 'react'
-import { getHeadshotUrl, PLACEHOLDER_AVATAR } from '@/lib/utils'
+import { PLACEHOLDER_AVATAR } from '@/lib/utils'
+import { useSport } from '@/contexts/SportContext'
 
 interface PlayerAvatarProps {
   playerId: number
@@ -29,6 +30,7 @@ export function PlayerAvatar({
   size = 'md',
   className = '',
 }: PlayerAvatarProps) {
+  const { config } = useSport()
   const [hasError, setHasError] = useState(false)
 
   return (
@@ -36,7 +38,7 @@ export function PlayerAvatar({
       className={`relative rounded-full overflow-hidden bg-slate-700 ${sizeClasses[size]} ${className}`}
     >
       <Image
-        src={hasError ? PLACEHOLDER_AVATAR : getHeadshotUrl(playerId)}
+        src={hasError ? PLACEHOLDER_AVATAR : config.getHeadshotUrl(playerId)}
         alt={playerName}
         width={imageSizes[size]}
         height={imageSizes[size]}
