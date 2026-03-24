@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-24 Session 87] — Finish-Feature: PTS Model Fix Verification
+
+### Verified
+
+- **All code changes from Session 86** — Q50 sanity check in `paper_trader.py` and `daily_runner.py`, `MIN_MINUTES_FOR_STATS = 8` in both populate scripts. All confirmed in place.
+- **Manual steps completed** — Rolling average rebuild (8-min threshold), model retrain (`nba_run_20260323_212931`), and backtest (63% hit rate, 28.96% ROI) all done.
+- **719 tests passed**, ruff clean.
+
+### Changed
+
+- **Documentation updates** — Updated `populate_average_stats_documentation.md` (MIN_MINUTES 5→8), ACTIONITEMS.md (removed completed rolling averages item), session doc.
+
+---
+
 ## [2026-03-23 Session 86] — PTS Model Fix: Sanity Check, MIN_MINUTES, Retrain
 
 ### Fixed

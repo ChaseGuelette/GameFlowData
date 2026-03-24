@@ -205,16 +205,13 @@ class MLBBatterTrainingOrchestrator:
         from src.models.negbin_model import NegBinConfig, NegBinModel
 
         negbin_config = NegBinConfig(
-            mu_n_estimators=1000,
-            mu_max_depth=5,
-            mu_learning_rate=0.03,
-            mu_subsample=0.8,
-            mu_colsample_bytree=0.8,
-            mu_min_child_weight=3,
-            mu_early_stopping_rounds=50,
-            alpha_n_estimators=500,
-            alpha_max_depth=3,
-            alpha_learning_rate=0.05,
+            n_estimators=1000,
+            max_depth=5,
+            learning_rate=0.03,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            min_child_weight=3,
+            early_stopping_rounds=50,
         )
 
         model_name = f"batter_{self.stat}"

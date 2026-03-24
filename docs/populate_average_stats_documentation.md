@@ -25,9 +25,9 @@ Each table includes:
 - `_count_games_in_window(df, group_cols, days)` counts calendar-window prior games.
 - Insert functions use DELETE + batch INSERT with fresh connections per batch (PgBouncer-compatible).
 
-## Minimum-Minutes Filter (`MIN_MINUTES_FOR_STATS = 5`)
+## Minimum-Minutes Filter (`MIN_MINUTES_FOR_STATS = 8`)
 
-Games where a player played fewer than 5 minutes (injury exits, garbage-time-only appearances) are NaN-masked before computing rolling averages. This prevents a 1-minute injury exit from dragging down L5 averages and corrupting min_floor.
+Games where a player played fewer than 8 minutes (injury exits, garbage-time-only appearances) are NaN-masked before computing rolling averages. This prevents short appearances from dragging down L5 averages and corrupting min_floor. Raised from 5 to 8 in Session 86 (2026-03-23) to exclude garbage-time cameos while still allowing the minutes model to predict low-minutes games correctly.
 
 **What is filtered:**
 - All rolling stat averages (L5, L15, SZN)
@@ -41,7 +41,7 @@ Games where a player played fewer than 5 minutes (injury exits, garbage-time-onl
 - `games_last_7d` — calendar-window game count
 - `games_l5` / `games_l15` / `games_szn` — game counts in each window
 
-**Implementation:** A boolean mask `min_mask = shifted_min >= 5` is applied via `.where(min_mask)` to the shifted stat values before rolling window computation. NaN values from masking are naturally skipped by pandas rolling functions (`min_periods` still applies to non-NaN values). If all prior games in a window are < 5 min, the rolling average is NaN (handled by feature store's COALESCE defaults).
+**Implementation:** A boolean mask `min_mask = shifted_min >= 8` is applied via `.where(min_mask)` to the shifted stat values before rolling window computation. NaN values from masking are naturally skipped by pandas rolling functions (`min_periods` still applies to non-NaN values). If all prior games in a window are < 8 min, the rolling average is NaN (handled by feature store's COALESCE defaults).
 
 ## B2/B3/B4 Features (14 columns)
 

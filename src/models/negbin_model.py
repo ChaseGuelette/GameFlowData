@@ -6,10 +6,14 @@ samples integer counts via inverse CDF.  Unlike TruncatedNegBinModel
 — making it appropriate for MLB batter stats (hits, TB, RBI, runs)
 where ~40 % of games produce zero.
 
-Architecture:
-    - Two XGBoost regressors predicting log(mu) and log(alpha)
+Architecture (v2 — distributional regression):
+    - Single XGBoost booster with custom NB NLL objective
+    - Jointly learns both distributional parameters (r, p)
+    - Response functions: exp(·) for r > 0, sigmoid(·) for p ∈ (0,1)
     - MLE-based global parameter estimation for initialisation
     - Inverse CDF sampling via scipy.stats.nbinom.ppf
+
+Backward-compatible with v1 (two-separate-XGBRegressor) artifacts.
 """
 
 from __future__ import annotations
@@ -24,17 +28,151 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 from scipy.optimize import minimize
+from scipy.special import digamma, gammaln, polygamma
 from scipy.stats import nbinom
 from sklearn.model_selection import train_test_split
 
 logger = logging.getLogger(__name__)
 
 
+# ======================================================================
+# NB NLL custom objective (no PyTorch needed)
+# ======================================================================
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    """Numerically stable sigmoid."""
+    x = np.clip(x, -500, 500)
+    return np.clip(1.0 / (1.0 + np.exp(-x)), 1e-6, 1 - 1e-6)
+
+
+def _nb_nll(y: np.ndarray, r: np.ndarray, p: np.ndarray) -> np.ndarray:
+    """Per-sample NB negative log-likelihood.
+
+    NegBin(y | r, p): P(Y=y) = C(y+r-1,y) p^r (1-p)^y
+    NLL = -(lgamma(r+y) - lgamma(r) - lgamma(y+1) + r log(p) + y log(1-p))
+    """
+    return -(
+        gammaln(r + y) - gammaln(r) - gammaln(y + 1)
+        + r * np.log(np.clip(p, 1e-10, None))
+        + y * np.log(np.clip(1 - p, 1e-10, None))
+    )
+
+
+def _nb_objective(predt: np.ndarray, dtrain: xgb.DMatrix):
+    """XGBoost custom objective for NB distributional regression.
+
+    predt: shape (n_samples, 2) — raw predictions [raw_r, raw_p].
+    Returns (grad, hess) each shape (n_samples, 2).
+    """
+    y = dtrain.get_label()
+    n = len(y)
+
+    # Reshape — XGBoost passes flat when num_target=2
+    if predt.ndim == 1:
+        predt = predt.reshape(n, 2)
+
+    raw_r = predt[:, 0]
+    raw_p = predt[:, 1]
+
+    # Apply response functions
+    r = np.exp(np.clip(raw_r, -10, 10))  # r > 0
+    p = _sigmoid(raw_p)                   # 0 < p < 1
+
+    # Clamp for numerical stability
+    r = np.clip(r, 1e-4, 1e4)
+
+    # ------------------------------------------------------------------
+    # Gradients of NLL w.r.t. (r, p)
+    # ------------------------------------------------------------------
+    #   dNLL/dr = -(digamma(r+y) - digamma(r) + log(p))
+    #   dNLL/dp = -(r/p - y/(1-p))
+    grad_r_param = -(digamma(r + y) - digamma(r) + np.log(np.clip(p, 1e-10, None)))
+    grad_p_param = -(r / np.clip(p, 1e-10, None) - y / np.clip(1 - p, 1e-10, None))
+
+    # ------------------------------------------------------------------
+    # Hessians of NLL w.r.t. (r, p)
+    # ------------------------------------------------------------------
+    #   d2NLL/dr2 = -(trigamma(r+y) - trigamma(r))  [always >= 0]
+    #   d2NLL/dp2 = r/p^2 + y/(1-p)^2               [always > 0]
+    hess_r_param = -(polygamma(1, r + y) - polygamma(1, r))
+    hess_p_param = r / np.clip(p ** 2, 1e-10, None) + y / np.clip((1 - p) ** 2, 1e-10, None)
+
+    # ------------------------------------------------------------------
+    # Chain rule for response functions: raw → param
+    # ------------------------------------------------------------------
+    # For exp: dr/d(raw_r) = r,  d2r/d(raw_r)2 = r
+    #   grad_raw_r = grad_r_param * r
+    #   hess_raw_r = hess_r_param * r^2 + grad_r_param * r
+    #
+    # For sigmoid: dp/d(raw_p) = p(1-p),  d2p/d(raw_p)2 = p(1-p)(1-2p)
+    #   grad_raw_p = grad_p_param * p(1-p)
+    #   hess_raw_p = hess_p_param * (p(1-p))^2 + grad_p_param * p(1-p)(1-2p)
+
+    # r chain rule (exp response)
+    grad_raw_r = grad_r_param * r
+    hess_raw_r = hess_r_param * (r ** 2) + grad_r_param * r
+
+    # p chain rule (sigmoid response)
+    sp = p * (1 - p)
+    grad_raw_p = grad_p_param * sp
+    hess_raw_p = hess_p_param * (sp ** 2) + grad_p_param * sp * (1 - 2 * p)
+
+    # XGBoost requires positive hessians
+    hess_raw_r = np.maximum(hess_raw_r, 1e-6)
+    hess_raw_p = np.maximum(hess_raw_p, 1e-6)
+
+    # Handle NaN/Inf
+    grad_raw_r = np.nan_to_num(grad_raw_r, nan=0.0, posinf=10.0, neginf=-10.0)
+    grad_raw_p = np.nan_to_num(grad_raw_p, nan=0.0, posinf=10.0, neginf=-10.0)
+    hess_raw_r = np.nan_to_num(hess_raw_r, nan=1e-6, posinf=100.0, neginf=1e-6)
+    hess_raw_p = np.nan_to_num(hess_raw_p, nan=1e-6, posinf=100.0, neginf=1e-6)
+
+    # Clip extreme gradients for stability
+    grad_raw_r = np.clip(grad_raw_r, -50, 50)
+    grad_raw_p = np.clip(grad_raw_p, -50, 50)
+
+    grad = np.column_stack([grad_raw_r, grad_raw_p])
+    hess = np.column_stack([hess_raw_r, hess_raw_p])
+
+    return grad, hess
+
+
+def _nb_eval_metric(predt: np.ndarray, dtrain: xgb.DMatrix):
+    """Custom eval metric: mean NB NLL."""
+    y = dtrain.get_label()
+    n = len(y)
+
+    if predt.ndim == 1:
+        predt = predt.reshape(n, 2)
+
+    r = np.exp(np.clip(predt[:, 0], -10, 10))
+    p = _sigmoid(predt[:, 1])
+    r = np.clip(r, 1e-4, 1e4)
+
+    nll = _nb_nll(y, r, p)
+    nll = nll[np.isfinite(nll)]
+
+    return "nb_nll", float(np.mean(nll))
+
+
+# ======================================================================
+# Config
+# ======================================================================
+
 @dataclass
 class NegBinConfig:
     """Configuration for the standard Negative Binomial model."""
 
-    # XGBoost parameters for mu model
+    # XGBoost distributional regression parameters (single multi-output model)
+    n_estimators: int = 1000
+    max_depth: int = 5
+    learning_rate: float = 0.03
+    subsample: float = 0.8
+    colsample_bytree: float = 0.8
+    min_child_weight: int = 3
+    early_stopping_rounds: int = 50
+
+    # Legacy fields — kept for backward-compat with old configs/metadata
     mu_n_estimators: int = 1000
     mu_max_depth: int = 5
     mu_learning_rate: float = 0.03
@@ -42,8 +180,6 @@ class NegBinConfig:
     mu_colsample_bytree: float = 0.8
     mu_min_child_weight: int = 3
     mu_early_stopping_rounds: int = 50
-
-    # XGBoost parameters for alpha model (simpler — less variable)
     alpha_n_estimators: int = 500
     alpha_max_depth: int = 3
     alpha_learning_rate: float = 0.05
@@ -54,14 +190,18 @@ class NegBinConfig:
     val_size: float = 0.15
 
     # Clamping ranges for predictions
-    log_mu_min: float = -3.0  # mu >= ~0.05  (lower than truncated — need small mu for low-count stats)
-    log_mu_max: float = 3.0   # mu <= ~20
+    log_mu_min: float = -3.0   # mu >= ~0.05
+    log_mu_max: float = 3.0    # mu <= ~20
     log_alpha_min: float = -2.0  # alpha >= ~0.14
     log_alpha_max: float = 2.0   # alpha <= ~7.4
 
     # Random state
     random_state: int = 42
 
+
+# ======================================================================
+# Model
+# ======================================================================
 
 class NegBinModel:
     """Predicts parameters of a standard (non-truncated) negative binomial.
@@ -70,7 +210,13 @@ class NegBinModel:
         mu   — mean of the distribution (mu > 0)
         alpha — overdispersion (alpha > 0; variance = mu + alpha * mu^2)
 
-    Two XGBoost regressors predict log(mu) and log(alpha) from features.
+    v2: A single XGBoost booster with custom NB NLL objective jointly
+    learns both distributional parameters (total_count r, probs p) via
+    multi-output training.  Response functions (exp, sigmoid) map raw
+    predictions to valid parameter ranges.
+
+    Inference requires only xgboost + scipy (no PyTorch).
+
     Samples are drawn via ``scipy.stats.nbinom.ppf`` (inverse CDF).
     """
 
@@ -81,13 +227,18 @@ class NegBinModel:
     ):
         self.config = config or NegBinConfig()
         self.model_name = model_name
-        self.mu_model: xgb.XGBRegressor | None = None
-        self.alpha_model: xgb.XGBRegressor | None = None
         self.feature_names: list[str] = []
 
         # MLE-fitted global parameters (used as fallback / regularisation)
         self._global_alpha: float = 1.0
         self._global_mu: float = 1.0
+
+        # v2: native XGBoost booster (distributional regression)
+        self._native_booster: xgb.Booster | None = None
+
+        # v1 (legacy): separate mu/alpha XGBRegressors
+        self.mu_model: xgb.XGBRegressor | None = None
+        self.alpha_model: xgb.XGBRegressor | None = None
 
     # ------------------------------------------------------------------
     # Fitting
@@ -141,7 +292,10 @@ class NegBinModel:
         y: pd.Series,
         sample_weight: np.ndarray | None = None,
     ) -> dict:
-        """Fit the standard NegBin model.
+        """Fit the NegBin model via distributional regression.
+
+        Uses a single XGBoost booster with a custom NB NLL objective
+        to jointly learn both distributional parameters (r, p).
 
         Args:
             X: Feature DataFrame.
@@ -165,31 +319,28 @@ class NegBinModel:
         logger.info("Target stats: mean=%.3f, var=%.3f, zero_frac=%.3f",
                      y_np.mean(), y_np.var(), (y_np == 0).mean())
 
-        # Stage 1: Global MLE
+        # Stage 1: Global MLE for initialisation + fallback
         self._global_mu, self._global_alpha = self._fit_global_params(y_np)
 
-        # Stage 2: Prepare XGBoost targets
-        # mu target: the expected value for each observation.
-        # For a standard NegBin the MLE mu == sample mean, so we use y
-        # directly (with epsilon for log stability on zeros).
-        EPSILON = 0.01
-        log_mu_target = np.log(y_np + EPSILON)
+        # Convert global (mu, alpha) → (r, p) for base_margin
+        r_init = 1.0 / self._global_alpha
+        p_init = r_init / (r_init + self._global_mu)
 
-        # alpha target: residual-based overdispersion estimate
-        mu_baseline = y_np.mean()
-        residuals_sq = (y_np - mu_baseline) ** 2
-        overdispersion_ratio = residuals_sq / (mu_baseline ** 2 + 1e-6)
-        log_alpha_target = np.log(np.clip(overdispersion_ratio, 0.1, 10.0))
+        # Raw start values (inverse of response functions)
+        raw_r_init = float(np.log(max(r_init, 1e-4)))
+        raw_p_init = float(np.log(max(p_init, 1e-6) / max(1 - p_init, 1e-6)))  # logit
+
+        logger.info(
+            "Init: r=%.3f (raw=%.3f), p=%.3f (raw=%.3f)",
+            r_init, raw_r_init, p_init, raw_p_init,
+        )
 
         # Train/val split (preserve temporal order)
-        split = train_test_split(
-            X,
-            log_mu_target,
-            log_alpha_target,
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y_np,
             test_size=self.config.val_size,
             shuffle=False,
         )
-        X_train, X_val, y_mu_train, y_mu_val, y_alpha_train, y_alpha_val = split
 
         if sample_weight is not None:
             sw_train, _ = train_test_split(
@@ -200,56 +351,65 @@ class NegBinModel:
         else:
             sw_train = None
 
-        # Stage 3: Train mu model
-        logger.info("Training mu model...")
-        self.mu_model = xgb.XGBRegressor(
-            objective="reg:squarederror",
-            n_estimators=self.config.mu_n_estimators,
-            max_depth=self.config.mu_max_depth,
-            learning_rate=self.config.mu_learning_rate,
-            subsample=self.config.mu_subsample,
-            colsample_bytree=self.config.mu_colsample_bytree,
-            min_child_weight=self.config.mu_min_child_weight,
-            random_state=self.config.random_state,
-            n_jobs=-1,
-        )
-        self.mu_model.fit(
-            X_train,
-            y_mu_train,
-            eval_set=[(X_val, y_mu_val)],
-            sample_weight=sw_train,
-            verbose=False,
+        # Build DMatrices with base_margin
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+        dval = xgb.DMatrix(X_val, label=y_val)
+
+        base_margin_train = np.tile([raw_r_init, raw_p_init], (len(X_train), 1)).reshape(-1)
+        base_margin_val = np.tile([raw_r_init, raw_p_init], (len(X_val), 1)).reshape(-1)
+        dtrain.set_base_margin(base_margin_train)
+        dval.set_base_margin(base_margin_val)
+
+        if sw_train is not None:
+            dtrain.set_weight(sw_train)
+
+        # XGBoost params for multi-output distributional regression
+        params = {
+            "max_depth": self.config.max_depth,
+            "learning_rate": self.config.learning_rate,
+            "subsample": self.config.subsample,
+            "colsample_bytree": self.config.colsample_bytree,
+            "min_child_weight": self.config.min_child_weight,
+            "num_target": 2,
+            "base_score": 0,
+            "disable_default_eval_metric": True,
+            "tree_method": "hist",
+            "seed": self.config.random_state,
+        }
+
+        logger.info("Training distributional NegBin model (num_target=2)...")
+        self._native_booster = xgb.train(
+            params,
+            dtrain,
+            num_boost_round=self.config.n_estimators,
+            evals=[(dtrain, "train"), (dval, "val")],
+            obj=_nb_objective,
+            custom_metric=_nb_eval_metric,
+            early_stopping_rounds=self.config.early_stopping_rounds,
+            verbose_eval=50,
         )
 
-        mu_train_pred = np.exp(self.mu_model.predict(X_train))
-        mu_val_pred = np.exp(self.mu_model.predict(X_val))
+        # Log validation metrics
+        val_pred = self._native_booster.predict(dval)
+        if val_pred.ndim == 1:
+            val_pred = val_pred.reshape(-1, 2)
+        val_r = np.exp(np.clip(val_pred[:, 0], -10, 10))
+        val_p = _sigmoid(val_pred[:, 1])
+        val_mu = val_r * (1 - val_p) / np.clip(val_p, 1e-10, None)
+        val_alpha = 1.0 / np.clip(val_r, 1e-10, None)
+
         logger.info(
-            "  Train mu: pred_mean=%.3f, val mu: pred_mean=%.3f",
-            mu_train_pred.mean(), mu_val_pred.mean(),
+            "Val predictions: mu_mean=%.3f, alpha_mean=%.3f, actual_mean=%.3f",
+            val_mu.mean(), val_alpha.mean(), y_val.mean(),
         )
 
-        # Stage 4: Train alpha model
-        logger.info("Training alpha model...")
-        self.alpha_model = xgb.XGBRegressor(
-            objective="reg:squarederror",
-            n_estimators=self.config.alpha_n_estimators,
-            max_depth=self.config.alpha_max_depth,
-            learning_rate=self.config.alpha_learning_rate,
-            subsample=self.config.alpha_subsample,
-            colsample_bytree=self.config.alpha_colsample_bytree,
-            random_state=self.config.random_state,
-            n_jobs=-1,
-        )
-        self.alpha_model.fit(
-            X_train,
-            y_alpha_train,
-            eval_set=[(X_val, y_alpha_val)],
-            sample_weight=sw_train,
-            verbose=False,
-        )
+        # Store base_margin init values for save/load
+        self._raw_r_init = raw_r_init
+        self._raw_p_init = raw_p_init
 
-        alpha_val_pred = np.exp(self.alpha_model.predict(X_val))
-        logger.info("  Val alpha: pred_mean=%.3f", alpha_val_pred.mean())
+        # Clear legacy models
+        self.mu_model = None
+        self.alpha_model = None
 
         return {
             "global_mu": self._global_mu,
@@ -270,9 +430,6 @@ class NegBinModel:
             mu  — shape (n,), mean of NegBin
             alpha — shape (n,), dispersion
         """
-        if self.mu_model is None or self.alpha_model is None:
-            raise ValueError("Model not fitted. Call fit() first.")
-
         # Align features
         missing_cols = set(self.feature_names) - set(X.columns)
         if missing_cols:
@@ -280,25 +437,55 @@ class NegBinModel:
 
         X_aligned = X.reindex(columns=self.feature_names, fill_value=0)
 
-        log_mu = self.mu_model.predict(X_aligned)
-        log_alpha = self.alpha_model.predict(X_aligned)
+        if self._native_booster is not None:
+            # v2 path: native booster with (r, p) output
+            dmat = xgb.DMatrix(X_aligned)
 
-        # Handle NaN/Inf
-        log_mu = np.nan_to_num(
-            log_mu,
-            nan=np.log(self._global_mu),
-            posinf=self.config.log_mu_max,
-            neginf=self.config.log_mu_min,
-        )
-        log_alpha = np.nan_to_num(
-            log_alpha,
-            nan=np.log(self._global_alpha),
-            posinf=self.config.log_alpha_max,
-            neginf=self.config.log_alpha_min,
-        )
+            # Set base margin for prediction
+            raw_r_init = getattr(self, "_raw_r_init", 0.0)
+            raw_p_init = getattr(self, "_raw_p_init", 0.0)
+            base_margin = np.tile([raw_r_init, raw_p_init], (len(X_aligned), 1)).reshape(-1)
+            dmat.set_base_margin(base_margin)
 
-        mu = np.exp(np.clip(log_mu, self.config.log_mu_min, self.config.log_mu_max))
-        alpha = np.exp(np.clip(log_alpha, self.config.log_alpha_min, self.config.log_alpha_max))
+            raw_preds = self._native_booster.predict(dmat)
+            if raw_preds.ndim == 1:
+                raw_preds = raw_preds.reshape(-1, 2)
+
+            # Apply response functions
+            r = np.exp(np.clip(raw_preds[:, 0], -10, 10))
+            p = _sigmoid(raw_preds[:, 1])
+
+            # Convert (r, p) → (mu, alpha)
+            mu = r * (1 - p) / np.clip(p, 1e-10, None)
+            alpha = 1.0 / np.clip(r, 1e-10, None)
+
+        elif self.mu_model is not None and self.alpha_model is not None:
+            # v1 path: legacy separate regressors
+            log_mu = self.mu_model.predict(X_aligned)
+            log_alpha = self.alpha_model.predict(X_aligned)
+
+            log_mu = np.nan_to_num(
+                log_mu,
+                nan=np.log(self._global_mu),
+                posinf=self.config.log_mu_max,
+                neginf=self.config.log_mu_min,
+            )
+            log_alpha = np.nan_to_num(
+                log_alpha,
+                nan=np.log(self._global_alpha),
+                posinf=self.config.log_alpha_max,
+                neginf=self.config.log_alpha_min,
+            )
+
+            mu = np.exp(np.clip(log_mu, self.config.log_mu_min, self.config.log_mu_max))
+            alpha = np.exp(np.clip(log_alpha, self.config.log_alpha_min, self.config.log_alpha_max))
+
+        else:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        # Clamp to config ranges
+        mu = np.clip(mu, np.exp(self.config.log_mu_min), np.exp(self.config.log_mu_max))
+        alpha = np.clip(alpha, np.exp(self.config.log_alpha_min), np.exp(self.config.log_alpha_max))
 
         return mu, alpha
 
@@ -380,42 +567,66 @@ class NegBinModel:
     def save(self, directory: Path | str) -> None:
         """Save model artifacts to *directory*.
 
-        Files produced::
-            {model_name}_mu_model.joblib
-            {model_name}_alpha_model.joblib
-            {model_name}_negbin_meta.json
+        v2 format::
+            {model_name}_xgblss_booster.json   — native XGBoost booster
+            {model_name}_negbin_meta.json       — metadata + config
         """
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
 
-        joblib.dump(self.mu_model, directory / f"{self.model_name}_mu_model.joblib")
-        joblib.dump(self.alpha_model, directory / f"{self.model_name}_alpha_model.joblib")
+        if self._native_booster is not None:
+            # v2: save native booster
+            booster_path = directory / f"{self.model_name}_xgblss_booster.json"
+            self._native_booster.save_model(str(booster_path))
+        elif self.mu_model is not None and self.alpha_model is not None:
+            # v1 fallback: save legacy joblib models
+            joblib.dump(self.mu_model, directory / f"{self.model_name}_mu_model.joblib")
+            joblib.dump(self.alpha_model, directory / f"{self.model_name}_alpha_model.joblib")
 
         metadata = {
             "model_name": self.model_name,
+            "model_version": 2 if self._native_booster is not None else 1,
             "feature_names": self.feature_names,
             "global_mu": self._global_mu,
             "global_alpha": self._global_alpha,
+            "distribution": "NegativeBinomial",
+            "n_dist_params": 2,
+            "param_names": ["total_count", "probs"],
+            "response_fns": ["exp", "sigmoid"],
+            "raw_r_init": getattr(self, "_raw_r_init", 0.0),
+            "raw_p_init": getattr(self, "_raw_p_init", 0.0),
             "config": {
+                "n_estimators": self.config.n_estimators,
+                "max_depth": self.config.max_depth,
+                "learning_rate": self.config.learning_rate,
+                "subsample": self.config.subsample,
+                "colsample_bytree": self.config.colsample_bytree,
+                "min_child_weight": self.config.min_child_weight,
+                "early_stopping_rounds": self.config.early_stopping_rounds,
+                "log_mu_min": self.config.log_mu_min,
+                "log_mu_max": self.config.log_mu_max,
+                "log_alpha_min": self.config.log_alpha_min,
+                "log_alpha_max": self.config.log_alpha_max,
+                # Legacy fields for backward compat
                 "mu_n_estimators": self.config.mu_n_estimators,
                 "mu_max_depth": self.config.mu_max_depth,
                 "mu_learning_rate": self.config.mu_learning_rate,
                 "alpha_n_estimators": self.config.alpha_n_estimators,
                 "alpha_max_depth": self.config.alpha_max_depth,
-                "log_mu_min": self.config.log_mu_min,
-                "log_mu_max": self.config.log_mu_max,
-                "log_alpha_min": self.config.log_alpha_min,
-                "log_alpha_max": self.config.log_alpha_max,
             },
         }
         with open(directory / f"{self.model_name}_negbin_meta.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
-        logger.info("Saved NegBinModel (%s) to %s", self.model_name, directory)
+        logger.info("Saved NegBinModel v%d (%s) to %s",
+                     metadata["model_version"], self.model_name, directory)
 
     @classmethod
     def load(cls, directory: Path | str, model_name: str = "negbin") -> NegBinModel:
-        """Load model from *directory*."""
+        """Load model from *directory*.
+
+        Supports both v2 (native booster) and v1 (joblib) formats.
+        """
         directory = Path(directory)
 
         with open(directory / f"{model_name}_negbin_meta.json") as f:
@@ -423,6 +634,13 @@ class NegBinModel:
 
         cfg = metadata.get("config", {})
         config = NegBinConfig(
+            n_estimators=cfg.get("n_estimators", 1000),
+            max_depth=cfg.get("max_depth", 5),
+            learning_rate=cfg.get("learning_rate", 0.03),
+            subsample=cfg.get("subsample", 0.8),
+            colsample_bytree=cfg.get("colsample_bytree", 0.8),
+            min_child_weight=cfg.get("min_child_weight", 3),
+            early_stopping_rounds=cfg.get("early_stopping_rounds", 50),
             mu_n_estimators=cfg.get("mu_n_estimators", 1000),
             mu_max_depth=cfg.get("mu_max_depth", 5),
             mu_learning_rate=cfg.get("mu_learning_rate", 0.03),
@@ -439,10 +657,20 @@ class NegBinModel:
         model._global_mu = metadata["global_mu"]
         model._global_alpha = metadata["global_alpha"]
 
-        model.mu_model = joblib.load(directory / f"{model_name}_mu_model.joblib")
-        model.alpha_model = joblib.load(directory / f"{model_name}_alpha_model.joblib")
+        # Try v2 format first (native booster)
+        booster_path = directory / f"{model_name}_xgblss_booster.json"
+        if booster_path.exists():
+            model._native_booster = xgb.Booster()
+            model._native_booster.load_model(str(booster_path))
+            model._raw_r_init = metadata.get("raw_r_init", 0.0)
+            model._raw_p_init = metadata.get("raw_p_init", 0.0)
+            logger.info("Loaded NegBinModel v2 (%s) from %s", model_name, directory)
+        else:
+            # v1 fallback: legacy joblib models
+            model.mu_model = joblib.load(directory / f"{model_name}_mu_model.joblib")
+            model.alpha_model = joblib.load(directory / f"{model_name}_alpha_model.joblib")
+            logger.info("Loaded NegBinModel v1 (%s) from %s", model_name, directory)
 
-        logger.info("Loaded NegBinModel (%s) from %s", model_name, directory)
         return model
 
     @staticmethod
