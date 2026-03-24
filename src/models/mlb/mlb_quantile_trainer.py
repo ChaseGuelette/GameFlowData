@@ -1,7 +1,7 @@
-"""MLB Pitcher K quantile model pipeline.
+"""MLB quantile model pipeline.
 
 Wraps the existing QuantileModelSuite with MLB-specific configuration.
-No minutes decomposition — pitcher strikeouts are predicted directly.
+No minutes decomposition — stats are predicted directly.
 """
 
 from __future__ import annotations
@@ -32,16 +32,23 @@ MLB_PITCHER_K_CONFIG = QuantileModelConfig(
 
 
 class MLBPitcherKPipeline:
-    """Single quantile model for pitcher strikeouts (no minutes decomposition).
+    """Single quantile model for MLB stats (no minutes decomposition).
 
     Unlike NBA's PlayerPropsModelPipeline which combines minutes + rate models,
-    this pipeline trains a single QuantileModelSuite directly on SO counts.
+    this pipeline trains a single QuantileModelSuite directly on stat counts.
     """
 
-    def __init__(self, config: QuantileModelConfig | None = None):
+    def __init__(
+        self,
+        config: QuantileModelConfig | None = None,
+        model_name: str = "pitcher_k",
+        target_col: str = "actual_so",
+    ):
         self.config = config or MLB_PITCHER_K_CONFIG
         self.model: QuantileModelSuite | None = None
         self.feature_names: dict[float, list[str]] = {}
+        self.model_name = model_name
+        self.target_col = target_col
 
     def train(
         self,
@@ -49,10 +56,10 @@ class MLBPitcherKPipeline:
         feature_names_per_quantile: dict[float, list[str]] | None = None,
         sample_weight: pd.Series | None = None,
     ) -> dict:
-        """Train pitcher K quantile models.
+        """Train quantile models.
 
         Args:
-            df: Training DataFrame with PITCHER_K_FEATURES + 'actual_so'.
+            df: Training DataFrame with features + target_col.
             feature_names_per_quantile: Per-quantile feature sets. If None,
                 uses PITCHER_K_FEATURES for all quantiles.
             sample_weight: Optional sample weights.
@@ -60,8 +67,9 @@ class MLBPitcherKPipeline:
         Returns:
             Dict of {quantile: training_results}.
         """
+        display_name = self.model_name.upper().replace("_", " ")
         print("\n" + "=" * 60)
-        print("TRAINING MLB PITCHER K MODEL")
+        print(f"TRAINING MLB {display_name} MODEL")
         print("=" * 60)
 
         # Default: same features for all quantiles
@@ -88,10 +96,10 @@ class MLBPitcherKPipeline:
             per_q_available[q] = [f for f in feat_list if f in df.columns]
             print(f"  Q{q:.2f}: {len(per_q_available[q])} features")
 
-        # Filter to valid rows (starter actually pitched)
-        valid_mask = df["actual_so"].notna() & (df["actual_so"] >= 0)
+        # Filter to valid rows
+        valid_mask = df[self.target_col].notna() & (df[self.target_col] >= 0)
         X = df.loc[valid_mask, available_features].fillna(0)
-        y = df.loc[valid_mask, "actual_so"]
+        y = df.loc[valid_mask, self.target_col]
 
         w = None
         if sample_weight is not None:
@@ -106,10 +114,10 @@ class MLBPitcherKPipeline:
         return results
 
     def predict(self, features_df: pd.DataFrame) -> pd.DataFrame:
-        """Predict quantiles for pitcher K.
+        """Predict quantiles.
 
         Args:
-            features_df: DataFrame with PITCHER_K_FEATURES columns.
+            features_df: DataFrame with feature columns.
 
         Returns:
             DataFrame with columns ['q10', 'q25', 'q50', 'q75', 'q90'].
@@ -123,27 +131,31 @@ class MLBPitcherKPipeline:
         path = Path(directory)
         path.mkdir(parents=True, exist_ok=True)
 
+        model_file = f"{self.model_name}_model.joblib"
+        config_file = f"{self.model_name}_feature_config.joblib"
+
         if self.model:
-            self.model.save(str(path / "pitcher_k_model.joblib"))
+            self.model.save(str(path / model_file))
 
         joblib.dump(
             {"feature_names": self.feature_names},
-            path / "pitcher_k_feature_config.joblib",
+            path / config_file,
         )
-        print(f"MLB Pitcher K pipeline saved to {directory}")
+        display_name = self.model_name.upper().replace("_", " ")
+        print(f"MLB {display_name} pipeline saved to {directory}")
 
     @classmethod
-    def load(cls, directory: str) -> MLBPitcherKPipeline:
+    def load(cls, directory: str, model_name: str = "pitcher_k") -> MLBPitcherKPipeline:
         """Load model and feature config from directory."""
         path = Path(directory)
 
-        pipeline = cls()
+        pipeline = cls(model_name=model_name)
 
-        model_path = path / "pitcher_k_model.joblib"
+        model_path = path / f"{model_name}_model.joblib"
         if model_path.exists():
             pipeline.model = QuantileModelSuite.load(str(model_path))
 
-        config_path = path / "pitcher_k_feature_config.joblib"
+        config_path = path / f"{model_name}_feature_config.joblib"
         if config_path.exists():
             config = joblib.load(config_path)
             pipeline.feature_names = config["feature_names"]

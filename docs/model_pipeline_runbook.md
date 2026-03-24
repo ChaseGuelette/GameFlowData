@@ -46,6 +46,13 @@ python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 220
 |-----|---------|-------------|
 | `--train-seasons` | `22022 22023` | NBA season IDs for training data |
 | `--cal-season` | `22024` | NBA season ID for calibration holdout |
+| `--cal-end-date` | None | Cutoff date for calibration data (YYYY-MM-DD). Reserves later dates for backtesting. |
+| `--hyperparams-path` | None | Path to existing hyperparams JSON to load (skips tuning). Use this to lock hyperparams during retrain. |
+| `--tune` | False | Enable Optuna hyperparameter tuning before training |
+| `--tuning-trials` | 50 | Number of Optuna trials |
+| `--retrain-stats` | None | Surgically retrain only these stat rate models (e.g., `--retrain-stats reb ast`). Requires `--base-model-dir`. |
+| `--retrain-minutes` | False | Surgically retrain only the minutes model. Requires `--base-model-dir`. |
+| `--base-model-dir` | None | Path to existing production pipeline for surgical retrain (e.g., `src/models/artifacts/production`). |
 | `--force-features` | None | Force-include features in all quantile lists for all models (e.g., `--force-features player_starter_prob`) |
 
 **Season ID format:** `2YYYY` where `YYYY` is the starting year. Examples:

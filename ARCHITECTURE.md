@@ -176,8 +176,8 @@ Serves as the bridge between NBA and sportsbook data:
 
 | Module | Purpose |
 |--------|---------|
-| `populate_average_stats.py` | Computes L5, L15, season-to-date rolling averages for players and teams. Full recalculation for historical backfills. Filters out games < 5 min (`MIN_MINUTES_FOR_STATS`) from stat rolling averages to prevent injury exits from corrupting features. Uses DELETE + batch INSERT (PgBouncer-compatible). |
-| `populate_average_stats_incremental.py` | Lightweight daily version — only processes players who played on target date. Uses batch UPSERT. Same min-minutes filter as full script. Queries actual season game count for correct `games_szn`. Runtime: ~1s vs ~28min for full script. |
+| `populate_average_stats.py` | Computes L5, L15, season-to-date rolling averages for players and teams. Full recalculation for historical backfills. Filters out games < 8 min (`MIN_MINUTES_FOR_STATS`, raised from 5 in 2026-03-23) from stat rolling averages to prevent injury exits and garbage-time appearances from corrupting features. Uses DELETE + batch INSERT (PgBouncer-compatible). |
+| `populate_average_stats_incremental.py` | Lightweight daily version — only processes players who played on target date. Uses batch UPSERT. Same 8-min filter as full script. Queries actual season game count for correct `games_szn`. Runtime: ~1s vs ~28min for full script. |
 | `backfill_opponent_allowed.py` | Computes opponent defensive metrics by position → `team_allowed_by_position` table. Rolling windows use `.mean()` (per-game averages). |
 | `backfill_opponent_allowed_incremental.py` | Lightweight daily version — only processes last 30 days with 15-day lookback buffer. Runs as Step 7 in `daily_stats_job.py`. |
 | `backfill_league_priors.py` | Computes league-wide Bayesian priors → `league_priors_history` table. |
@@ -406,7 +406,7 @@ Anchors the model's overconfident probability estimates to the market's well-cal
 #### Daily Runner (`daily_runner.py`)
 
 - `DailyPredictionRunner` class — production inference pipeline.
-- Workflow: get today's games (NBA API ScoreboardV2) → filter injured players (`rapidapi_injuries`) → build features → batch predict (4 XGBoost calls) → derive combo samples (PRA/PR/PA/RA) → enrich with opponents → fetch prop lines → calculate edges → return `(predictions_df, samples_dict)`.
+- Workflow: get today's games (NBA API ScoreboardV2) → filter injured players (`rapidapi_injuries`) → build features → batch predict (4 XGBoost calls) → derive combo samples (PRA/PR/PA/RA) → enrich with opponents → fetch prop lines → calculate edges → map features → compute BL recommendations (with Q50 vs L5 sanity check) → return `(predictions_df, samples_dict)`.
 - **Game Discovery:** Primary source is `nba_api.stats.endpoints.ScoreboardV2` (works for scheduled/future games). Falls back to `team_game_stats` DB query for past dates when NBA API is unavailable.
 - **Game Time Fallback (2026-03-21):** `_get_game_times_from_props()` method queries `raw_player_props_combined` for `commence_time` as a fallback when the game schedule doesn't provide game times. Used by both `daily_runner.py` and `edge_refresh_job.py` to ensure `game_time` is populated in `daily_predictions`.
 - **Injury Filtering:** Queries `rapidapi_injuries` table by `player_id` (integer matching). Uses most recent `report_date` on or before target date. Filters players with `status = 'Out'`.
@@ -595,7 +595,7 @@ dashboard/
 │   │   │   ├── account/page.tsx    # Profile + bankroll settings + community card
 │   │   │   ├── stats/page.tsx        # Data Vault — heatmap stat tables
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
-│   │   ├── api/ask/route.ts      # AI Q&A endpoint (auth-gated, rate-limited, Anthropic Claude Haiku)
+│   │   ├── api/ask/route.ts      # AI Q&A endpoint (auth-gated, rate-limited, Anthropic Claude Haiku, position-aware, enriched injuries)
 │   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback game list)
 │   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s ISR cache)
 │   │   ├── api/slate/route.tsx   # OG image generation for pick slates (auth-gated)
@@ -650,7 +650,7 @@ dashboard/
 - **Analysis Modal:** Click any prop card to see:
   - Last 5 games chart with performance history
   - Model context insights (rest, injury, trend, consistency, average)
-  - **AI Q&A chat** — collapsible "Ask AI about this pick" section powered by Claude Haiku. Multi-turn conversation grounded in player data (extended game log, rolling averages, injury context, opponent defense, sportsbook lines). 20 questions/day rate limit. Suggested question chips on first open. Messages not persisted across modal close.
+  - **AI Q&A chat** — collapsible "Ask AI about this pick" section powered by Claude Haiku. Multi-turn conversation grounded in player data (numbered 10-game log with oreb/dreb/tov/fga/fta, rolling averages, player position from `players` table, enriched teammate injuries with position + L15 averages, opponent defense filtered by team_id and position group G/W/B, sportsbook lines). 20 questions/day rate limit. Suggested question chips on first open. Messages not persisted across modal close.
   - Quantile distribution summary with visual bar
   - Sportsbook line shopping with actual edge calculations
   - Kelly bet sizing calculator with bankroll input and fraction selection
@@ -712,7 +712,7 @@ cd dashboard && npm run lint   # ESLint check
 
 | Module | Purpose |
 |--------|---------|
-| `paper_trader.py` | Core `PaperTrader` class — bet selection (with live game filter), Kelly sizing, outcome resolution, daily log updates |
+| `paper_trader.py` | Core `PaperTrader` class — bet selection (with live game filter + Q50/L5 sanity check), Kelly sizing, outcome resolution, daily log updates |
 | `user_bet_resolver.py` | `UserBetResolver` — resolves user-placed bets (from dashboard checkmark) against actual game stats. Mirrors `PaperTrader.resolve_bets()` logic for `user_bets` table. Called from `daily_stats_job.py` after paper bet resolution. |
 | `place_bets.py` | CLI to place paper bets from daily predictions |
 | `resolve_bets.py` | CLI to resolve bets using actual game results |
@@ -744,11 +744,12 @@ python src/paper_trading/backfill_paper_bets.py --start X --end Y  # Backfill + 
 ```
 
 **Bet Selection Logic:**
-- Query `daily_predictions` for target date (pts, reb, ast stats)
-- Filter predictions where `over_edge` or `under_edge` exceeds threshold (default 5%)
+- Query `daily_predictions` for target date (pts, reb, ast, pra, pr, pa, ra stats)
+- Filter predictions where `over_edge` or `under_edge` exceeds threshold (default 9% BL edge)
 - Choose direction with higher edge
+- **Q50 vs L5 sanity check (2026-03-23):** Rejects under bets where `pred_q50` is 30%+ below `feat_player_avg_stat_l5`. Prevents fake edges from minutes×rate decomposition under-predicting variable-minutes players. `MAX_Q50_DIVERGENCE = 0.30`.
 - Calculate stake via fractional Kelly (default 12.5%)
-- Cap at max 5% of bankroll per bet
+- Cap at max bet % of bankroll per bet (default: no cap, true Kelly sizing)
 
 **Resolution Logic:**
 - Fetch actual stats from `player_game_stats`

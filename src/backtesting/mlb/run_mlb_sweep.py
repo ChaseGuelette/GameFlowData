@@ -60,17 +60,20 @@ class SweepConfig:
     edge_threshold: float
     kelly_fraction: float
     z_max: float = 1.0
+    max_weight: float = 0.50
 
     @property
     def label(self) -> str:
         if self.tau is None:
             return f"no_BL | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
-        return f"tau={self.tau} z_max={self.z_max} | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
+        mw = f" mw={self.max_weight}" if self.max_weight != 0.50 else ""
+        return f"tau={self.tau} z_max={self.z_max}{mw} | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
 
     def to_dict(self) -> dict:
         return {
             "tau": self.tau,
             "z_max": self.z_max,
+            "max_weight": self.max_weight,
             "edge_threshold": self.edge_threshold,
             "kelly_fraction": self.kelly_fraction,
         }
@@ -96,15 +99,22 @@ def build_sweep_grid(
     edge_thresholds: list[float],
     kelly_fractions: list[float],
     z_max_values: list[float] | None = None,
+    max_weight_values: list[float] | None = None,
 ) -> list[SweepConfig]:
     if z_max_values is None:
         z_max_values = [1.0]
+    if max_weight_values is None:
+        max_weight_values = [0.50]
 
     configs = []
-    for tau, edge, kelly, z_max in itertools.product(tau_values, edge_thresholds, kelly_fractions, z_max_values):
-        if tau is None and z_max != z_max_values[0]:
+    for tau, edge, kelly, z_max, mw in itertools.product(
+        tau_values, edge_thresholds, kelly_fractions, z_max_values, max_weight_values,
+    ):
+        if tau is None and (z_max != z_max_values[0] or mw != max_weight_values[0]):
             continue
-        configs.append(SweepConfig(tau=tau, edge_threshold=edge, kelly_fraction=kelly, z_max=z_max))
+        configs.append(SweepConfig(
+            tau=tau, edge_threshold=edge, kelly_fraction=kelly, z_max=z_max, max_weight=mw,
+        ))
     return configs
 
 
@@ -511,7 +521,7 @@ def run_single_config(
     # Create BL blender for this config
     bl_blender = None
     if config.tau is not None:
-        bl_blender = BlackLittermanBlender(BLConfig(tau=config.tau, z_max=config.z_max))
+        bl_blender = BlackLittermanBlender(BLConfig(tau=config.tau, z_max=config.z_max, max_weight=config.max_weight))
 
     # Create simulator
     simulator = BetSimulator(
@@ -709,6 +719,7 @@ def save_results(
         row = {
             "tau": r.config.tau,
             "z_max": r.config.z_max,
+            "max_weight": r.config.max_weight,
             "edge_threshold": r.config.edge_threshold,
             "kelly_fraction": r.config.kelly_fraction,
             "total_bets": m.total_bets,
@@ -799,6 +810,8 @@ def main():
     parser.add_argument("--edge", type=float, nargs="+", default=[0.05, 0.08, 0.10])
     parser.add_argument("--kelly", type=float, nargs="+", default=[0.125])
     parser.add_argument("--z-max", type=float, nargs="+", default=[1.0])
+    parser.add_argument("--max-weight", type=float, nargs="+", default=[0.50],
+                        help="BL max blending weight (0.50=default, higher=more model influence)")
 
     # Model / data
     parser.add_argument("--model-dir", type=str, default="src/models/mlb/artifacts")
@@ -829,7 +842,7 @@ def main():
     start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
     end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
 
-    configs = build_sweep_grid(tau_values, args.edge, args.kelly, args.z_max)
+    configs = build_sweep_grid(tau_values, args.edge, args.kelly, args.z_max, args.max_weight)
     logger.info(f"Sweep grid: {len(configs)} configurations")
 
     if args.output_dir:

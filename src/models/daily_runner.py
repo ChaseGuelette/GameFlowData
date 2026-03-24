@@ -20,6 +20,9 @@ DEFAULT_BL_TAU = 0.5
 DEFAULT_BL_Z_MAX = 1.0
 DEFAULT_BL_EDGE_THRESHOLD = 0.09
 
+# Q50 vs L5 sanity check: reject under recs where Q50 is 30%+ below player L5 avg
+MAX_Q50_DIVERGENCE = 0.30
+
 
 class DailyPredictionRunner:
     """
@@ -104,11 +107,11 @@ class DailyPredictionRunner:
         else:
             logger.warning("No prop lines found for today's games. Skipping edge calculation.")
 
-        # 8. Compute BL-blended recommendations ("Model Picks")
-        predictions_df = self._compute_bl_recommendations(predictions_df, samples_dict)
-
-        # 9. Map feature values to predictions for dashboard insights
+        # 8. Map feature values to predictions for dashboard insights
         predictions_df = self._map_features_to_predictions(predictions_df, features_df)
+
+        # 9. Compute BL-blended recommendations ("Model Picks")
+        predictions_df = self._compute_bl_recommendations(predictions_df, samples_dict)
 
         return predictions_df, samples_dict
 
@@ -937,8 +940,24 @@ class DailyPredictionRunner:
                 # Mark as recommended if max BL edge meets threshold
                 max_bl_edge = max(bl_over_edge, bl_under_edge)
                 if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
-                    predictions_df.at[idx, "is_recommended"] = True
-                    recommended_count += 1
+                    # Q50 vs L5 sanity check: reject under recs with divergent predictions
+                    skip = False
+                    rec_direction = "under" if bl_under_edge > bl_over_edge else "over"
+                    if rec_direction == "under":
+                        feat_l5 = row.get("feat_player_avg_stat_l5")
+                        pred_q50 = row.get("pred_q50")
+                        if feat_l5 and pred_q50 and feat_l5 > 0:
+                            divergence = (feat_l5 - pred_q50) / feat_l5
+                            if divergence > MAX_Q50_DIVERGENCE:
+                                logger.warning(
+                                    f"SANITY CHECK: Skipping {row.get('player_name', '?')} "
+                                    f"{row['stat']} under rec — Q50={pred_q50:.1f} is "
+                                    f"{divergence:.0%} below L5={feat_l5:.1f}"
+                                )
+                                skip = True
+                    if not skip:
+                        predictions_df.at[idx, "is_recommended"] = True
+                        recommended_count += 1
 
             bl_computed += 1
 

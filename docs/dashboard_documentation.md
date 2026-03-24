@@ -38,7 +38,7 @@ dashboard/
 │   │   │   ├── performance/page.tsx # Performance metrics
 │   │   │   ├── account/page.tsx    # Profile + bankroll settings + community card
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
-│   │   ├── api/ask/route.ts      # AI Q&A endpoint (auth-gated, rate-limited, Anthropic Claude Haiku)
+│   │   ├── api/ask/route.ts      # AI Q&A endpoint (auth-gated, rate-limited, Anthropic Claude Haiku, position-aware, enriched injuries)
 │   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback games)
 │   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s cache)
 │   │   ├── api/slate/route.tsx   # OG image generation for pick slates (auth-gated)
@@ -514,6 +514,15 @@ Detailed analysis popup with:
    - Calls `onTakeBet(prediction, { book, odds, line, stake, modelProb, edge, direction })`
    - Button disables after placement, shows "Bet Taken!"
    - Dashboard wires this to `placeBetCustom()` + `markBetTaken()` to record in `user_bets` and sync PropCard checkmark
+
+5. **AI Q&A Chat (Session 83, enriched Session 85)** — Collapsible "Ask AI about this pick" section powered by Claude Haiku 4.5. Multi-turn conversation grounded in player-specific data:
+   - **API Route:** `POST /api/ask` — auth-gated, 20 questions/24hr rolling rate limit per user
+   - **Data Enrichment (4 parallel + 3 sequential queries):**
+     - Parallel: 10-game log (pts/reb/ast/stl/blk/3pm/oreb/dreb/tov/fga/fta), rolling averages (L3/L5/L15/SZN), player injury status + report_date, player position from `players` table
+     - Sequential: team_id lookup, teammate injuries (enriched with position + L15 averages from `players` + `player_average_game_stats`), opponent defense from `team_allowed_by_position` (filtered by team_id + position group G/W/B)
+   - **System Prompt:** Structured context with player position, numbered game log (compact dates, oreb breakdown), rolling averages, enriched teammate injuries, opponent defense, sportsbook lines, model quantiles/edges
+   - **UI (AskChat component):** Suggested question chips, scrollable message history, 500-char input, AbortController for cleanup, remaining questions counter
+   - Messages not persisted across modal close
 
 ### PlayerAvatar
 

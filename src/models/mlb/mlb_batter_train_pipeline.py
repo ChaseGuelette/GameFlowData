@@ -100,7 +100,9 @@ class MLBBatterTrainingOrchestrator:
         cal_df = self.feature_store.get_training_dataset(seasons=[cal_season], stat=self.stat)
         cal_df = self.feature_store.enrich_with_matchup_features(cal_df)
         if cal_end_date:
-            cal_df = cal_df[cal_df["game_date"] <= cal_end_date].reset_index(drop=True)
+            from datetime import datetime as _dt
+            _cutoff = _dt.strptime(cal_end_date, "%Y-%m-%d").date() if isinstance(cal_end_date, str) else cal_end_date
+            cal_df = cal_df[cal_df["game_date"] <= _cutoff].reset_index(drop=True)
         logger.info("Calibration data: %d rows", len(cal_df))
 
         if self.is_binary:
@@ -199,24 +201,26 @@ class MLBBatterTrainingOrchestrator:
     # ------------------------------------------------------------------
 
     def _run_negbin_pipeline(self, train_df, cal_df, train_seasons, cal_season, cal_end_date):
-        """Train quantile model for count stats."""
-        from src.models.mlb.mlb_quantile_trainer import MLBPitcherKPipeline
-        from src.models.quantile_trainer import QuantileModelConfig
+        """Train NegBin model for count stats (hits, TB, RBI, runs)."""
+        from src.models.negbin_model import NegBinConfig, NegBinModel
 
-        config = QuantileModelConfig(
-            quantiles=(0.10, 0.25, 0.50, 0.75, 0.90),
-            n_estimators=1000,
-            max_depth=5,
-            learning_rate=0.03,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_weight=3,
-            early_stopping_rounds=50,
-            val_fraction=0.15,
+        negbin_config = NegBinConfig(
+            mu_n_estimators=1000,
+            mu_max_depth=5,
+            mu_learning_rate=0.03,
+            mu_subsample=0.8,
+            mu_colsample_bytree=0.8,
+            mu_min_child_weight=3,
+            mu_early_stopping_rounds=50,
+            alpha_n_estimators=500,
+            alpha_max_depth=3,
+            alpha_learning_rate=0.05,
         )
 
-        # Step 3: Feature selection
-        logger.info("Step 3: Running per-quantile feature selection...")
+        model_name = f"batter_{self.stat}"
+
+        # Step 3: Feature selection (single feature set — NegBin has one mu model)
+        logger.info("Step 3: Running feature selection for NegBin mu model...")
         excluded = {
             "game_id", "player_id", "game_date", "season", "team_id",
             "opp_team_id", "actual", "player_name",
@@ -227,79 +231,83 @@ class MLBBatterTrainingOrchestrator:
         ]
 
         valid_df = train_df[train_df["actual"].notna() & (train_df["actual"] >= 0)].fillna(0)
+
+        # Run feature selection once for the mu target (Q50 proxy)
         selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
-        selected = selector.select_features_per_quantile(
+        per_q_selected = selector.select_features_per_quantile(
             valid_df, "actual", candidates, model_name=f"Batter {self.stat}"
         )
-
-        for q, feats in selected.items():
-            logger.info("  Q%.2f: %d features selected", q, len(feats))
+        # Union all per-quantile features into a single set
+        all_selected: set[str] = set()
+        for feats in per_q_selected.values():
+            all_selected.update(feats)
+        selected_features = sorted(all_selected)
+        logger.info("NegBin feature set: %d features (union of per-quantile)", len(selected_features))
 
         # Step 5: Train
-        logger.info("Step 5: Training quantile models...")
-        # Rename actual -> actual_so temporarily so the pipeline works
-        # (MLBPitcherKPipeline expects 'actual_so')
-        train_copy = valid_df.rename(columns={"actual": "actual_so"})
-        pipeline = MLBPitcherKPipeline(config=config)
-        pipeline.train(train_copy, feature_names_per_quantile=selected)
+        display_name = model_name.upper().replace("_", " ")
+        print("\n" + "=" * 60)
+        print(f"TRAINING MLB {display_name} NEGBIN MODEL")
+        print("=" * 60)
 
-        # Step 6: Calibrate on holdout
-        logger.info("Step 6: Computing calibration offsets...")
-        model = pipeline.model
+        X_train = valid_df[selected_features].fillna(0)
+        y_train = valid_df["actual"]
+
+        model = NegBinModel(config=negbin_config, model_name=model_name)
+        fit_info = model.fit(X_train, y_train)
+        logger.info("Fit info: %s", fit_info)
+
+        # Step 6-7: Calibration via sampling
+        logger.info("Step 6-7: Computing calibration coverage via sampling...")
         cal_valid = cal_df[cal_df["actual"].notna() & (cal_df["actual"] >= 0)].fillna(0)
-        X_cal = cal_valid[model.all_feature_names].fillna(0)
+        X_cal = cal_valid[selected_features].fillna(0)
         y_cal = cal_valid["actual"].values
 
-        preds = model.predict_quantiles(X_cal)
-        for q in model.config.quantiles:
-            pred_col = f"q{int(q * 100):02d}"
-            pred_vals = preds[pred_col].values
-            coverage = (y_cal <= pred_vals).mean()
-            gap = abs(coverage - q)
+        quantile_levels = [0.10, 0.25, 0.50, 0.75, 0.90]
+        N_MC = 10_000
 
-            if gap > model.RECALIBRATION_GAP_THRESHOLD:
-                residuals = y_cal - pred_vals
-                delta = float(np.quantile(residuals, q))
-                model.calibration_offsets[q] = delta
-                recal_coverage = (y_cal <= (pred_vals + delta)).mean()
-                logger.info("  Q%.2f: coverage=%.3f -> %.3f (delta=%+.4f)", q, coverage, recal_coverage, delta)
-            else:
-                model.calibration_offsets[q] = 0.0
-                logger.info("  Q%.2f: coverage=%.3f (OK)", q, coverage)
-
-        # Step 7: Calibration report
-        logger.info("Step 7: Evaluating calibration...")
-        preds = model.predict_quantiles(X_cal)
+        # Batch: sample for each calibration row and compute empirical quantiles
+        rng = np.random.RandomState(42)
         reports = []
-        for q in model.config.quantiles:
-            pred_col = f"q{int(q * 100):02d}"
-            coverage = float((y_cal <= preds[pred_col].values).mean())
+        for q in quantile_levels:
+            hits = 0
+            for i in range(len(X_cal)):
+                row_samples = model.sample(X_cal.iloc[[i]], n_samples=N_MC, rng=rng)
+                quantile_val = np.percentile(row_samples, q * 100)
+                if y_cal[i] <= quantile_val:
+                    hits += 1
+            coverage = hits / len(X_cal) if len(X_cal) > 0 else 0.0
             gap = coverage - q
-            offset = model.calibration_offsets.get(q, 0.0)
             reports.append({
-                "quantile": q, "coverage": coverage, "target": q,
-                "gap": float(gap), "calibration_offset": offset,
+                "quantile": q,
+                "coverage": float(coverage),
+                "target": q,
+                "gap": float(gap),
             })
             logger.info("  Q%.2f: coverage=%.3f [gap=%+.3f]", q, coverage, gap)
 
         # Step 8: Sanity check
         logger.info("Step 8: Sanity check...")
         sample_size = min(5, len(cal_valid))
-        sample = cal_valid.sample(sample_size, random_state=42)
-        for _, row in sample.iterrows():
-            feats = pd.DataFrame([{f: row.get(f, 0) for f in model.all_feature_names}])
-            pred = model.predict_quantiles(feats)
+        sample_rows = cal_valid.sample(sample_size, random_state=42)
+        for _, row in sample_rows.iterrows():
+            row_X = pd.DataFrame([{f: row.get(f, 0) for f in selected_features}])
+            row_samples = model.sample(row_X, n_samples=N_MC, rng=rng)
             actual = row["actual"]
+            q10 = np.percentile(row_samples, 10)
+            q50 = np.percentile(row_samples, 50)
+            q90 = np.percentile(row_samples, 90)
             logger.info(
-                "  Player %d: Q50=%.1f, Q10=%.1f, Q90=%.1f, Actual=%.0f",
-                row["player_id"], pred["q50"].iloc[0], pred["q10"].iloc[0],
-                pred["q90"].iloc[0], actual,
+                "  Player %s: Q50=%.1f, Q10=%.1f, Q90=%.1f, Actual=%.0f",
+                row.get("player_id", "?"), q50, q10, q90, actual,
             )
+            if q10 < 0 or q50 < 0:
+                raise ValueError(f"Negative quantile prediction: Q10={q10}, Q50={q50}")
 
         # Step 9: Save
         logger.info("Step 9: Saving artifacts...")
-        pipeline.save(str(self.run_dir))
-        self._save_feature_manifest(selected)
+        model.save(self.run_dir)
+        self._save_feature_manifest({"negbin": selected_features})
         self._save_calibration_report({f"batter_{self.stat}": reports})
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
 

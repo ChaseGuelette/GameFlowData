@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 # Supported stat types (base + combo)
 SUPPORTED_STATS = {"pts", "reb", "ast", "pra", "pr", "pa", "ra"}
 
+# Q50 vs L5 sanity check: reject under bets where Q50 is 30%+ below player L5 avg
+MAX_Q50_DIVERGENCE = 0.30
+
 
 def _get_env_float(name: str, default: float) -> float:
     """Get float from environment variable."""
@@ -300,7 +303,9 @@ class PaperTrader:
                 implied_over,
                 implied_under,
                 over_edge,
-                under_edge
+                under_edge,
+                pred_q50,
+                feat_player_avg_stat_l5
             FROM daily_predictions
             WHERE prediction_date = :game_date
               AND stat IN ('pts', 'reb', 'ast', 'pra', 'pr', 'pa', 'ra')
@@ -393,6 +398,20 @@ class PaperTrader:
 
             if direction is None:
                 continue
+
+            # Q50 vs L5 sanity check — reject under bets with absurdly low predictions
+            if direction == "under":
+                feat_l5 = row.get("feat_player_avg_stat_l5")
+                pred_q50 = row.get("pred_q50")
+                if feat_l5 and pred_q50 and feat_l5 > 0:
+                    divergence = (feat_l5 - pred_q50) / feat_l5
+                    if divergence > MAX_Q50_DIVERGENCE:
+                        player_name = row["player_name"]
+                        logger.warning(
+                            f"SANITY CHECK: Skipping {player_name} {stat} under — "
+                            f"Q50={pred_q50:.1f} is {divergence:.0%} below L5={feat_l5:.1f}"
+                        )
+                        continue
 
             # Filter extreme odds
             if pd.isna(odds) or odds < self.min_odds or odds > self.max_odds:

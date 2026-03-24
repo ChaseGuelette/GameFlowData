@@ -1,44 +1,40 @@
 # GameFlowData — Roadmap
 
-## Session Summary (2026-03-23 — Session 84)
+## Session Summary (2026-03-23 — Session 86)
 
 ### What We Did
 
-**Prop Line Drift Detection & Selective Re-inference (1 migration, 3 files modified)**
+**PTS Model Fix: Sanity Check, MIN_MINUTES, Retrain (4 files modified + model promotion)**
 
-`prop_line_*` features are the #1 most important features in the production XGBoost model across all quantiles. They get baked into MC samples at inference time (12:15 PM and 4:15 PM ET), but by game time (7-10 PM ET) the prop lines may have moved 1-3+ points. Previously, the edge refresh job recalculated edges using fresh lines for probability math, but the underlying MC distribution was still anchored to stale prop_line values from hours earlier.
+PTS model degraded severely: 44.8% win rate (30% last 7d), -$15,203 PnL over 14 days. REB and AST were healthy. Root cause: minutes×rate decomposition creating absurdly low Q50 predictions for variable-minutes players, generating fake under edges.
 
-1. **DB Migration** — Added `prop_line DOUBLE PRECISION` column to `daily_predictions` to persist the inference-time prop line value.
+1. **Q50 vs L5 sanity check** — Added `MAX_Q50_DIVERGENCE = 0.30` in both `paper_trader.py` (bet selection) and `daily_runner.py` (BL recommendations). Rejects under bets/recs where model Q50 is 30%+ below the player's L5 average.
 
-2. **Prediction Store** — Added `prop_line` to `PREDICTION_COLS` so inference-time prop_line values are stored via upsert.
+2. **MIN_MINUTES_FOR_STATS 5 → 8** — Raised in both `populate_average_stats.py` and `populate_average_stats_incremental.py`. Excludes garbage-time appearances (<8 min) from rolling stat averages while still allowing the model to predict low-minutes games correctly.
 
-3. **Daily Runner** — Maps `prop_line_{stat}` from feature row to `prop_line` column during `_map_features_to_predictions()` for base stats (pts, reb, ast).
+3. **Model retrained & promoted** — `nba_run_20260323_212931` with locked production hyperparams, fresh data. Backtest (Mar 18-23): 63% hit rate, 28.96% ROI (PTS 42.43%, REB 34.14%). Old model backed up to `production_old_20260323`.
 
-4. **Edge Refresh Job** — Major enhancement with 4 new functions:
-   - `detect_stale_predictions()` — Compares stored `prop_line` against fresh lines. Returns stale keys when drift >= 1.0 points.
-   - `_get_cached_pipeline_and_predictor()` — Lazy-loads `PlayerPropsModelPipeline` and `MonteCarloPredictor` once per process lifecycle. Cached at module level.
-   - `_get_home_team_ids()` — Queries `raw_game_lines_staging` for home team determination during re-inference.
-   - `reinfer_stale_players()` — Re-runs inference for ONLY affected players (~5-20 out of 100+): builds fresh features, runs batch XGBoost + MC sampling, replaces stale entries, re-derives combo samples, upserts to DB. Takes ~10-30s.
-   - `--skip-reinference` CLI flag to disable.
+4. **MLB batter train pipeline fix** — `cal_end_date` string→date type mismatch in `mlb_batter_train_pipeline.py`.
 
 ### Remaining Action Items
 
-1. **Deploy to Vercel** — push all dashboard changes (AI Q&A, combo markets, DFS 6-stat support, mobile optimization, security headers, error boundaries, auth, query narrowing). Set `ANTHROPIC_API_KEY` env var.
-2. **Stripe integration** — subscribe page, customer portal, webhook
-3. **MLB pipeline** — train pitcher K model, build daily runner, backtesting harness. MLB sweep script now fixed — ready to rerun.
-4. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
-5. **Clean up `production_old_20260210/`** — remove old model backup
-6. **Future: Pagination** — Add pagination to history/performance pages (see SCALING.md Tier 1)
-7. **Future: Client-side caching** — React Query for cross-page data caching (see SCALING.md Tier 2)
-8. **Future: Database indexes** — Composite indexes on `raw_player_props_combined`, `paper_bets`, `user_bets` (see SCALING.md). CAUTION: `raw_player_props_combined` has 67M+ rows — NEVER use `CREATE INDEX` (non-concurrent) via Supabase migrations on this table.
-9. **Fix pre-existing test** — `test_finds_latest_run_directory` fails because `find_latest_model_dir` now expects `nba_run_*` prefix but test creates `run_*` dirs
-10. **Future: Card-based mobile layouts** — DfsTable/HeatmapTable card-based layouts for small screens (currently using horizontal scroll)
-11. **Backtest combo validation** — Run a short backtest with combo stats to validate edges and resolution
-12. **Future: Persist AI chat** — Consider persisting chat history per player/stat to Supabase for returning users
-13. **Future: Redis rate limiting** — Replace in-memory rate limit map with Redis for multi-instance deployments
-14. **Future: DFS query optimization** — `get_dfs_lines` still takes ~9-14s. Long-term fix: optimize the query itself, or archive old rows from `raw_player_props_combined` (67M+ rows)
-15. **Drop unused index** — `idx_props_dfs_latest` index still exists in DB from failed optimization attempt — should be dropped
-16. **Tune drift threshold** — Monitor re-inference frequency in production. If triggering too often (>30 players/cycle), increase `DRIFT_THRESHOLD` from 1.0 to 1.5 or 2.0.
+1. **Rebuild rolling averages** — Run `python -m src.processing.populate_average_stats --table player` to apply 8-min threshold to historical data. (Required before next production inference.)
+2. **Deploy to Vercel** — push all dashboard changes (AI Q&A, combo markets, DFS 6-stat support, mobile optimization, security headers, error boundaries, auth, query narrowing). Set `ANTHROPIC_API_KEY` env var.
+3. **Stripe integration** — subscribe page, customer portal, webhook
+4. **MLB pipeline** — train batter hits/total_bases models (in progress), train pitcher K model, build daily runner, backtesting harness.
+5. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+6. **Clean up old model backups** — `production_old_20260210/` and `production_old_20260323/` can be removed once new model is validated in live trading
+7. **Future: Pagination** — Add pagination to history/performance pages (see SCALING.md Tier 1)
+8. **Future: Client-side caching** — React Query for cross-page data caching (see SCALING.md Tier 2)
+9. **Future: Database indexes** — Composite indexes on `raw_player_props_combined`, `paper_bets`, `user_bets` (see SCALING.md). CAUTION: `raw_player_props_combined` has 67M+ rows — NEVER use `CREATE INDEX` (non-concurrent) via Supabase migrations on this table.
+10. **Fix pre-existing test** — `test_finds_latest_run_directory` fails because `find_latest_model_dir` now expects `nba_run_*` prefix but test creates `run_*` dirs
+11. **Future: Card-based mobile layouts** — DfsTable/HeatmapTable card-based layouts for small screens (currently using horizontal scroll)
+12. **Backtest combo validation** — Run a short backtest with combo stats to validate edges and resolution
+13. **Future: Persist AI chat** — Consider persisting chat history per player/stat to Supabase for returning users
+14. **Future: Redis rate limiting** — Replace in-memory rate limit map with Redis for multi-instance deployments
+15. **Future: DFS query optimization** — `get_dfs_lines` still takes ~9-14s. Long-term fix: optimize the query itself, or archive old rows from `raw_player_props_combined` (67M+ rows)
+16. **Drop unused index** — `idx_props_dfs_latest` index still exists in DB from failed optimization attempt — should be dropped
+17. **Tune drift threshold** — Monitor re-inference frequency in production. If triggering too often (>30 players/cycle), increase `DRIFT_THRESHOLD` from 1.0 to 1.5 or 2.0.
 
 ---
 

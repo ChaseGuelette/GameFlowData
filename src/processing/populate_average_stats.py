@@ -38,7 +38,7 @@ BATCH_SIZE = 100
 # B2/B3/B4 feature configuration
 B3_B4_STATS = ["min", "pts", "reb", "ast", "fg3m"]
 STARTER_MINUTES_THRESHOLD = 20  # No start_position col in DB; proxy via minutes
-MIN_MINUTES_FOR_STATS = 5
+MIN_MINUTES_FOR_STATS = 8
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

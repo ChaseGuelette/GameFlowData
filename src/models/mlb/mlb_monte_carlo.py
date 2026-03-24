@@ -1,22 +1,23 @@
-"""MLB Monte Carlo predictor for pitcher strikeouts.
+"""MLB Monte Carlo predictors.
 
-Adapted from src/models/monte_carlo.py but simplified:
-- No minutes-rate decomposition (pitcher K predicted directly)
-- No copula (single stat, no correlation to model)
-- Integer-valued output (floor at 0, round to integers)
+Contains two predictors:
+- MLBMonteCarloPredictor: Quantile-interpolation sampler for pitcher Ks
+- MLBNegBinPredictor:     NegBin-distribution sampler for batter count stats
 
-Reuses PropPrediction from the NBA monte_carlo module (sport-agnostic).
+Both produce PropPrediction objects compatible with the backtest harness.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from src.models.monte_carlo import PropPrediction
+from src.models.negbin_model import NegBinModel
 
 from .mlb_quantile_trainer import MLBPitcherKPipeline
 
@@ -231,6 +232,100 @@ class MLBMonteCarloPredictor:
     def _prepare_features(self, features: dict) -> pd.DataFrame:
         """Prepare feature dict as DataFrame for model input."""
         feature_names = self.pipeline.model.all_feature_names
+        row = {f: features.get(f, 0) for f in feature_names}
+        df = pd.DataFrame([row])
+        df = df.apply(pd.to_numeric, errors="coerce").fillna(0).astype(np.float32)
+        return df
+
+
+# ======================================================================
+# NegBin predictor for batter count stats
+# ======================================================================
+
+
+class MLBNegBinPredictor:
+    """Monte Carlo predictor backed by a NegBinModel.
+
+    For each player-game, draws ``n_samples`` from the fitted NegBin
+    distribution and derives quantiles / point estimates from the samples.
+    """
+
+    def __init__(
+        self,
+        model: NegBinModel,
+        stat: str = "hits",
+        n_samples: int = 10_000,
+        random_state: int = 42,
+    ):
+        self.model = model
+        self.stat = stat
+        self.n_samples = n_samples
+        self.rng = np.random.RandomState(random_state)
+
+    # ------------------------------------------------------------------
+    # Construction helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_directory(
+        cls,
+        directory: str | Path,
+        stat: str,
+        n_samples: int = 10_000,
+        random_state: int = 42,
+    ) -> MLBNegBinPredictor:
+        """Load a NegBinModel from *directory* and wrap it."""
+        model_name = f"batter_{stat}"
+        model = NegBinModel.load(directory, model_name=model_name)
+        return cls(model=model, stat=stat, n_samples=n_samples, random_state=random_state)
+
+    # ------------------------------------------------------------------
+    # Prediction
+    # ------------------------------------------------------------------
+
+    def predict(
+        self,
+        player_id: int,
+        game_id: int,
+        features: dict,
+    ) -> PropPrediction:
+        """Generate MC prediction for a single batter."""
+        X = self._prepare_features(features)
+        samples = self.model.sample(X, n_samples=self.n_samples, rng=self.rng).flatten()
+
+        return PropPrediction(
+            player_id=player_id,
+            game_id=str(game_id),
+            stat=self.stat,
+            mean=float(samples.mean()),
+            median=float(np.median(samples)),
+            q10=float(np.percentile(samples, 10)),
+            q25=float(np.percentile(samples, 25)),
+            q50=float(np.percentile(samples, 50)),
+            q75=float(np.percentile(samples, 75)),
+            q90=float(np.percentile(samples, 90)),
+            samples=samples,
+        )
+
+    def predict_batch(
+        self,
+        player_games: list[tuple[int, int, dict]],
+    ) -> list[PropPrediction]:
+        """Batch predict for multiple batter-games."""
+        if not player_games:
+            return []
+
+        results: list[PropPrediction] = []
+        for player_id, game_id, features in player_games:
+            results.append(self.predict(player_id, game_id, features))
+        return results
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _prepare_features(self, features: dict) -> pd.DataFrame:
+        feature_names = self.model.feature_names
         row = {f: features.get(f, 0) for f in feature_names}
         df = pd.DataFrame([row])
         df = df.apply(pd.to_numeric, errors="coerce").fillna(0).astype(np.float32)

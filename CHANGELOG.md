@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-23 Session 86] — PTS Model Fix: Sanity Check, MIN_MINUTES, Retrain
+
+### Fixed
+
+- **PTS model degradation** — PTS had 44.8% win rate (30% last 7d), -$15,203 PnL over 14 days while REB (66.7%, +$12K) and AST (60%, +$3K) were healthy. Root cause: minutes×rate decomposition creating absurdly low Q50 predictions for variable-minutes players, generating fake under edges.
+- **MLB batter train pipeline** — `cal_end_date` type mismatch: CLI passes string but `game_date` column is `datetime.date`. Added `strptime` parse before comparison.
+
+### Added
+
+- **Q50 vs L5 sanity check** — New `MAX_Q50_DIVERGENCE = 0.30` constant. Rejects under bets/recommendations where `pred_q50` is 30%+ below the player's L5 average (`feat_player_avg_stat_l5`). Applied in both `paper_trader.py` (bet selection) and `daily_runner.py` (BL recommendations). Backtested: reduces PTS PnL from -$15,203 to -$386.
+
+### Changed
+
+- **MIN_MINUTES_FOR_STATS 5 → 8** — Raised minimum minutes threshold in both `populate_average_stats.py` and `populate_average_stats_incremental.py`. Games under 8 minutes are now excluded from rolling stat averages (L3/L5/L15/SZN). Schedule features (rest_days, games_last_7d) still count all games.
+- **daily_runner step order** — Swapped steps 8 and 9: feature mapping now runs before BL recommendations so `feat_player_avg_stat_l5` is available for the sanity check.
+- **Model retrained** — New production model `nba_run_20260323_212931` with locked hyperparams from previous production. Backtest (Mar 18-23): 63% hit rate, 28.96% ROI (PTS 42.43%, REB 34.14%). Old model backed up to `production_old_20260323`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/paper_trading/paper_trader.py` | Modified — added `pred_q50`/`feat_player_avg_stat_l5` to SELECT, Q50 sanity check |
+| `src/models/daily_runner.py` | Modified — Q50 sanity check in BL recommendations, swapped step 8/9 order |
+| `src/processing/populate_average_stats.py` | Modified — `MIN_MINUTES_FOR_STATS = 8` |
+| `src/processing/populate_average_stats_incremental.py` | Modified — `MIN_MINUTES_FOR_STATS = 8` |
+| `src/models/mlb/mlb_batter_train_pipeline.py` | Modified — `cal_end_date` string→date parse fix |
+| `src/models/artifacts/production/` | Replaced — new model `nba_run_20260323_212931` |
+
+---
+
+## [2026-03-23 Session 85] — AI Q&A Data Enrichment Fix
+
+### Fixed
+
+- **Opponent defense query** — Was missing `team_id` filter, returning a random team's defensive stats. Now looks up opponent `team_id` via `team_game_stats.team_abbreviation` and filters `team_allowed_by_position` by both `team_id` and position group.
+- **Position group mapping** — Was using `started` boolean to guess Starters/Bench, which didn't match actual `team_allowed_by_position` groups (G/W/B). Now maps player's `position_group` (Guard/Forward/Big) from `players` table to the correct defense group.
+- **Game log row confusion** — Dense tabular format caused LLM to misattribute stats to wrong games. Added `#N` numbering, compact dates (`3/22` vs `2026-03-22`), and compact matchup format (`vs HOU`).
+- **Broken parallel query #4** — Used `undefined!` hack and never returned useful data. Replaced with player position lookup from `players` table.
+
+### Added
+
+- **Player position** in system prompt header (from `players.primary_position`).
+- **Enriched teammate injuries** — Now shows position, L15 averages (min/pts/reb/ast), and report date for each injured teammate. Batch-lookups from `players` + `player_average_game_stats`.
+- **Injury report dates** — Both player and teammate injury queries now include `report_date` for freshness context.
+- **Extended game log columns** — Added `oreb`, `dreb`, `tov`, `fga`, `fta` to the game log query and display.
+
+### Changed
+
+- **Parallel queries reduced from 5 to 4** — Removed broken opponent defense parallel query (now sequential with proper filters). Replaced broken teammate injury placeholder with player position lookup.
+- **Game log format** — Numbered rows, compact dates, oreb breakdown, Started/Bench labels.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/app/api/ask/route.ts` | Modified — all query, enrichment, and formatting changes |
+
+---
+
 ## [2026-03-23 Session 84] — Prop Line Drift Detection & Selective Re-inference
 
 ### Added

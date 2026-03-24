@@ -55,7 +55,7 @@ PLAYER_BASIC_STATS = [
 
 B3_B4_STATS = ["min", "pts", "reb", "ast", "fg3m"]
 STARTER_MINUTES_THRESHOLD = 20
-MIN_MINUTES_FOR_STATS = 5
+MIN_MINUTES_FOR_STATS = 8
 
 # Player advanced stat mapping: source column → target name
 PLAYER_ADVANCED_MAPPING = {

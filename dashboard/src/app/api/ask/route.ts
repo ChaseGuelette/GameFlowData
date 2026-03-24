@@ -59,6 +59,19 @@ interface AskRequestBody {
   }
 }
 
+// --- Helpers ---
+function formatShortDate(dateStr: string): string {
+  const parts = dateStr.split('-')
+  if (parts.length === 3) return `${parseInt(parts[1])}/${parseInt(parts[2])}`
+  return dateStr
+}
+
+const POSITION_GROUP_TO_DEFENSE: Record<string, string> = {
+  'Guard': 'G',
+  'Forward': 'W',
+  'Big': 'B',
+}
+
 // --- Build system prompt ---
 function buildSystemPrompt(
   prediction: Prediction,
@@ -72,6 +85,7 @@ function buildSystemPrompt(
   isOverBet: boolean,
   edge: number,
   probability: number,
+  playerPosition: string | null,
 ): string {
   const stat = prediction.stat
   const statLabel = STAT_LABELS[stat] || stat.toUpperCase()
@@ -79,23 +93,31 @@ function buildSystemPrompt(
   const combo = isComboStat(stat)
   const components = COMBO_COMPONENTS[stat]
 
-  // Game log table
+  // Game log — numbered rows with compact format
   let gameLogSection = 'No recent game data available.'
   if (gameLog.length > 0) {
-    const header = combo
-      ? 'Date       | MIN | PTS | REB | AST | ' + statLabel
-      : 'Date       | MIN | PTS | REB | AST | STL | BLK | 3PM | W/L | Started | Matchup'
+    const rows = gameLog.map((g: Record<string, unknown>, i: number) => {
+      const num = `#${i + 1}`
+      const shortDate = formatShortDate(String(g.game_date || ''))
 
-    const rows = gameLog.map((g: Record<string, unknown>) => {
-      const base = `${g.game_date} | ${g.min ?? '-'} | ${g.pts ?? '-'} | ${g.reb ?? '-'} | ${g.ast ?? '-'}`
+      // Compact matchup: "vs HOU" or "@ BOS" from "MIA vs. HOU"
+      const matchup = String(g.matchup || '')
+      const matchParts = matchup.split(/\s+(vs\.?|@)\s+/)
+      const oppStr = matchParts.length >= 3
+        ? `${matchParts[1].replace('.', '')} ${matchParts[2]}`
+        : matchup
+
+      const oreb = g.oreb ?? 0
+      const base = `${num.padEnd(4)}${shortDate.padEnd(6)}${oppStr.padEnd(8)}| ${String(g.min ?? '-').padEnd(3)} MIN | ${String(g.pts ?? '-')} PTS | ${g.reb ?? '-'} REB (${oreb} OREB) | ${g.ast ?? '-'} AST`
+
       if (combo) {
         const total = (components || []).reduce((s: number, c: string) => s + (Number(g[c]) || 0), 0)
-        return `${base} | ${total}`
+        return `${base} | ${statLabel}=${total} | ${g.wl ?? '-'} | ${g.started ? 'Started' : 'Bench'}`
       }
-      return `${base} | ${g.stl ?? '-'} | ${g.blk ?? '-'} | ${g.fg3m ?? '-'} | ${g.wl ?? '-'} | ${g.started ? 'Y' : 'N'} | ${g.matchup ?? '-'}`
+      return `${base} | ${g.stl ?? '-'} STL | ${g.blk ?? '-'} BLK | ${g.fg3m ?? '-'} 3PM | ${g.tov ?? '-'} TOV | ${g.fga ?? '-'} FGA | ${g.fta ?? '-'} FTA | ${g.wl ?? '-'} | ${g.started ? 'Started' : 'Bench'}`
     })
 
-    gameLogSection = `LAST ${gameLog.length} GAMES:\n${header}\n${rows.join('\n')}`
+    gameLogSection = `LAST ${gameLog.length} GAMES (most recent first):\n${rows.join('\n')}`
   }
 
   // Rolling averages
@@ -122,15 +144,19 @@ function buildSystemPrompt(
     avgSection = `ROLLING AVERAGES:\n${lines.join('\n')}`
   }
 
-  // Injury context
+  // Injury context — with report dates and enriched teammate data
   let injurySection = ''
   if (playerInjury) {
-    injurySection += `PLAYER INJURY STATUS: ${playerInjury.status} - ${playerInjury.reason || 'No reason listed'}${playerInjury.injury_detail ? ` (${playerInjury.injury_detail})` : ''}\n`
+    const reportStr = playerInjury.report_date ? ` (reported ${formatShortDate(String(playerInjury.report_date))})` : ''
+    injurySection += `PLAYER INJURY STATUS: ${playerInjury.status} - ${playerInjury.reason || 'No reason listed'}${playerInjury.injury_detail ? ` (${playerInjury.injury_detail})` : ''}${reportStr}\n`
   }
   if (teammateInjuries.length > 0) {
     injurySection += 'TEAMMATE INJURIES:\n'
     for (const inj of teammateInjuries) {
-      injurySection += `  ${inj.player} - ${inj.status}: ${inj.reason || 'Unknown'}${inj.injury_detail ? ` (${inj.injury_detail})` : ''}\n`
+      const pos = inj._position ? ` (${inj._position})` : ''
+      const stats = inj._avg_stats ? ` — ${inj._avg_stats}` : ''
+      const reportStr = inj.report_date ? ` [reported ${formatShortDate(String(inj.report_date))}]` : ''
+      injurySection += `  ${inj.player}${pos} - ${inj.status}: ${inj.reason || 'Unknown'}${inj.injury_detail ? ` (${inj.injury_detail})` : ''}${stats}${reportStr}\n`
     }
   }
 
@@ -175,9 +201,11 @@ function buildSystemPrompt(
   Prop Line: ${prediction.prop_line}
   Model Direction: ${direction} (probability ${(probability * 100).toFixed(1)}%, edge ${(edge * 100).toFixed(1)}%)`
 
+  const positionStr = playerPosition ? `\nPOSITION: ${playerPosition}` : ''
+
   return `You are a sharp NBA analytics assistant for the GameFlowData platform. The user is analyzing a player prop bet and has questions.
 
-PLAYER: ${prediction.player_name || 'Unknown'} (${prediction.team_abbrev || '???'})
+PLAYER: ${prediction.player_name || 'Unknown'} (${prediction.team_abbrev || '???'})${positionStr}
 OPPONENT: ${prediction.opponent_abbrev || '???'}
 STAT: ${statLabel}
 BET: ${direction} ${prediction.prop_line}
@@ -237,14 +265,12 @@ export async function POST(request: NextRequest) {
 
   const { prediction, insights, bookmakerLines, isOverBet, edge, probability } = playerContext
 
-  // --- Data enrichment: 5 parallel queries ---
-  const today = prediction.prediction_date || new Date().toISOString().split('T')[0]
-
-  const [gameLogRes, rollingAvgRes, playerInjuryRes, teammateInjuryRes, oppDefenseRes] = await Promise.all([
-    // 1. Extended game log (last 10)
+  // --- Data enrichment: 4 parallel queries ---
+  const [gameLogRes, rollingAvgRes, playerInjuryRes, playerPosRes] = await Promise.all([
+    // 1. Extended game log (last 10) — includes oreb, dreb, tov, fga, fta
     supabase
       .from('player_game_stats')
-      .select('game_date, pts, reb, ast, fg3m, min, matchup, wl, started, stl, blk')
+      .select('game_date, pts, reb, ast, fg3m, min, matchup, wl, started, stl, blk, oreb, dreb, tov, fga, fta')
       .eq('player_id', prediction.player_id)
       .gt('min', 0)
       .order('game_date', { ascending: false })
@@ -258,91 +284,136 @@ export async function POST(request: NextRequest) {
       .order('game_date', { ascending: false })
       .limit(1),
 
-    // 3. Player's own injury status
+    // 3. Player's own injury status (with report_date)
     supabase
       .from('rapidapi_injuries')
-      .select('status, reason, injury_detail')
+      .select('status, reason, injury_detail, report_date')
       .eq('player_id', prediction.player_id)
       .order('report_date', { ascending: false })
       .limit(1),
 
-    // 4. Teammate injuries (OUT or Questionable, same team)
-    // We need team_id — get it from player_game_stats first
+    // 4. Player position
     supabase
-      .from('rapidapi_injuries')
-      .select('player, status, reason, injury_detail')
-      .eq('nba_team_id', prediction.team_abbrev ? undefined! : 0) // placeholder — handled below
-      .in('status', ['Out', 'Questionable'])
-      .order('report_date', { ascending: false })
-      .limit(10),
-
-    // 5. Opponent defense — need opp team_id and position
-    supabase
-      .from('team_allowed_by_position')
-      .select('position_group, pts_allowed_l5, pts_allowed_l15, reb_allowed_l5, reb_allowed_l15, ast_allowed_l5, ast_allowed_l15, stl_allowed_l5, stl_allowed_l15, blk_allowed_l5, blk_allowed_l15, threes_allowed_l5, threes_allowed_l15')
-      .order('game_date', { ascending: false })
-      .limit(5),
+      .from('players')
+      .select('primary_position, position_group')
+      .eq('player_id', prediction.player_id)
+      .limit(1),
   ])
 
-  // Process teammate injuries differently — use the player's team from the game log
+  // Player position from query #4
+  const playerPosition = playerPosRes.data?.[0]?.primary_position || null
+  const playerPositionGroup = playerPosRes.data?.[0]?.position_group || null
+
+  // Process teammate injuries — look up team_id, then enrich with position + avg stats
   let teammateInjuries: Array<Record<string, unknown>> = []
-  if (gameLogRes.data && gameLogRes.data.length > 0) {
-    // Get the player's team_id from player_game_stats
-    const teamLookup = await supabase
-      .from('player_game_stats')
-      .select('team_id')
-      .eq('player_id', prediction.player_id)
-      .order('game_date', { ascending: false })
-      .limit(1)
+  const teamLookup = await supabase
+    .from('player_game_stats')
+    .select('team_id')
+    .eq('player_id', prediction.player_id)
+    .order('game_date', { ascending: false })
+    .limit(1)
 
-    if (teamLookup.data?.[0]?.team_id) {
-      const teamId = teamLookup.data[0].team_id
-      const injRes = await supabase
-        .from('rapidapi_injuries')
-        .select('player, status, reason, injury_detail')
-        .eq('nba_team_id', teamId)
-        .neq('player_id', prediction.player_id)
-        .in('status', ['Out', 'Questionable'])
-        .order('report_date', { ascending: false })
-        .limit(10)
+  const playerTeamId = teamLookup.data?.[0]?.team_id
 
-      if (injRes.data) {
-        // Deduplicate by player name (keep latest)
-        const seen = new Set<string>()
-        teammateInjuries = injRes.data.filter(row => {
-          if (seen.has(row.player)) return false
-          seen.add(row.player)
-          return true
-        })
+  if (playerTeamId) {
+    const injRes = await supabase
+      .from('rapidapi_injuries')
+      .select('player, player_id, status, reason, injury_detail, report_date')
+      .eq('nba_team_id', playerTeamId)
+      .neq('player_id', prediction.player_id)
+      .in('status', ['Out', 'Questionable'])
+      .order('report_date', { ascending: false })
+      .limit(15)
+
+    if (injRes.data) {
+      // Deduplicate by player name (keep latest)
+      const seen = new Set<string>()
+      teammateInjuries = injRes.data.filter(row => {
+        if (seen.has(row.player)) return false
+        seen.add(row.player)
+        return true
+      })
+
+      // Enrich injured teammates with position + recent averages
+      const injuredPlayerIds = teammateInjuries
+        .map(t => t.player_id as number)
+        .filter(Boolean)
+
+      if (injuredPlayerIds.length > 0) {
+        const [posRes, avgRes] = await Promise.all([
+          supabase
+            .from('players')
+            .select('player_id, primary_position')
+            .in('player_id', injuredPlayerIds),
+          supabase
+            .from('player_average_game_stats')
+            .select('player_id, avg_min_l15, avg_pts_l15, avg_reb_l15, avg_ast_l15')
+            .in('player_id', injuredPlayerIds)
+            .order('game_date', { ascending: false }),
+        ])
+
+        // Build lookup maps
+        const posMap = new Map<number, string>()
+        for (const p of posRes.data || []) {
+          posMap.set(p.player_id, p.primary_position)
+        }
+
+        // For averages, keep only the most recent row per player
+        const avgMap = new Map<number, Record<string, unknown>>()
+        for (const a of avgRes.data || []) {
+          if (!avgMap.has(a.player_id)) {
+            avgMap.set(a.player_id, a)
+          }
+        }
+
+        // Enrich each teammate injury
+        for (const inj of teammateInjuries) {
+          const pid = inj.player_id as number
+          if (posMap.has(pid)) {
+            inj._position = posMap.get(pid)
+          }
+          const avg = avgMap.get(pid)
+          if (avg) {
+            const min = Number(avg.avg_min_l15)
+            const pts = Number(avg.avg_pts_l15)
+            const reb = Number(avg.avg_reb_l15)
+            const ast = Number(avg.avg_ast_l15)
+            if (!isNaN(min)) {
+              inj._avg_stats = `avg ${min.toFixed(1)} min, ${pts.toFixed(1)} pts, ${reb.toFixed(1)} reb, ${ast.toFixed(1)} ast`
+            }
+          }
+        }
       }
     }
   }
 
-  // Process opponent defense — look up opponent's team_id and find position
+  // Process opponent defense — look up opponent team_id, use player position for group
   let oppDefense: Record<string, unknown> | null = null
-  if (prediction.game_id) {
-    // Get opponent team_id from the matchup
-    const oppTeamLookup = await supabase
-      .from('player_game_stats')
-      .select('team_id, matchup, started')
-      .eq('player_id', prediction.player_id)
-      .order('game_date', { ascending: false })
+  const oppAbbrev = prediction.opponent_abbrev || prediction.feat_opp_team_abbrev
+  if (oppAbbrev) {
+    // Map player position_group (Guard/Forward/Big) to defense group (G/W/B)
+    const defPosGroup = playerPositionGroup
+      ? POSITION_GROUP_TO_DEFENSE[playerPositionGroup] || 'G'
+      : 'G'
+
+    // Look up opponent team_id from team_game_stats
+    const oppTeamRes = await supabase
+      .from('team_game_stats')
+      .select('team_id')
+      .eq('team_abbreviation', oppAbbrev)
       .limit(1)
 
-    const playerStarted = oppTeamLookup.data?.[0]?.started
-    const posGroup = playerStarted ? 'Starters' : 'Bench'
-
-    // Fetch opponent team_id from feat_opp_team_abbrev if available
-    if (prediction.feat_opp_team_abbrev) {
+    const oppTeamId = oppTeamRes.data?.[0]?.team_id
+    if (oppTeamId) {
       const oppDefRes = await supabase
         .from('team_allowed_by_position')
         .select('*')
-        .eq('position_group', posGroup)
+        .eq('team_id', oppTeamId)
+        .eq('position_group', defPosGroup)
         .order('game_date', { ascending: false })
-        .limit(30)
+        .limit(1)
 
-      // Find the row matching the opponent — check available data
-      if (oppDefRes.data && oppDefRes.data.length > 0) {
+      if (oppDefRes.data?.[0]) {
         oppDefense = oppDefRes.data[0] as Record<string, unknown>
       }
     }
@@ -365,6 +436,7 @@ export async function POST(request: NextRequest) {
     isOverBet,
     edge,
     probability,
+    playerPosition,
   )
 
   // Build messages (keep last 5 from conversation history)
