@@ -67,6 +67,7 @@ JOB_NAMES = {
     "edge_refresh_job.py": "Edge Refresh",
     "test_job.py": "System Test",
     "mlb_daily_stats_job.py": "MLB Daily Stats",
+    "mlb_lines_job.py": "MLB Lines Scraper",
     "mlb_inference_job.py": "MLB Inference",
 }
 
@@ -496,6 +497,16 @@ def run_mlb_daily_stats_retry():
     run_job("mlb_daily_stats_job.py")
 
 
+def run_mlb_lines_full():
+    """Run MLB full lines scrape (game lines + props + linker)."""
+    run_job("mlb_lines_job.py", extra_args="--live --parallel")
+
+
+def run_mlb_lines_props_only():
+    """Run MLB props-only scrape (props + linker, silent on success)."""
+    run_job("mlb_lines_job.py", extra_args="--live --props-only", silent_on_success=True)
+
+
 def run_mlb_inference():
     """Run MLB inference, checking if MLB daily stats succeeded first."""
     if not check_dependency("mlb_daily_stats_job.py", max_age_hours=8):
@@ -625,12 +636,44 @@ def main():
         name="MLB Daily Stats Retry (10:30 AM ET)",
     )
 
+    # 12:00 PM ET - MLB full lines scrape (game lines + props + linker)
+    scheduler.add_job(
+        run_mlb_lines_full,
+        CronTrigger(hour=12, minute=0),
+        id="mlb_lines_full_noon",
+        name="MLB Full Lines (12 PM ET)",
+    )
+
+    # 1:00 PM ET - MLB props-only refresh before afternoon games
+    scheduler.add_job(
+        run_mlb_lines_props_only,
+        CronTrigger(hour=13, minute=0),
+        id="mlb_lines_props_1pm",
+        name="MLB Props Only (1 PM ET)",
+    )
+
     # 1:30 PM ET - MLB inference (afternoon/evening games)
     scheduler.add_job(
         run_mlb_inference,
         CronTrigger(hour=13, minute=30),
         id="mlb_inference_1pm",
         name="MLB Inference (1:30 PM ET)",
+    )
+
+    # 5:00 PM ET - MLB full lines scrape (catch new evening props)
+    scheduler.add_job(
+        run_mlb_lines_full,
+        CronTrigger(hour=17, minute=0),
+        id="mlb_lines_full_5pm",
+        name="MLB Full Lines (5 PM ET)",
+    )
+
+    # 6:00 PM ET - MLB props-only refresh before evening games
+    scheduler.add_job(
+        run_mlb_lines_props_only,
+        CronTrigger(hour=18, minute=0),
+        id="mlb_lines_props_6pm",
+        name="MLB Props Only (6 PM ET)",
     )
 
     # 6:30 PM ET - MLB inference refresh (evening games)

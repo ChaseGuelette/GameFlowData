@@ -77,6 +77,11 @@ export default function PerformancePage() {
   const [myBets, setMyBets] = useState<PaperBet[]>([])
   const [myBetsLoading, setMyBetsLoading] = useState(false)
 
+  // Reset my bets cache when sport changes so it re-fetches
+  useEffect(() => {
+    setMyBets([])
+  }, [sport])
+
   // Fetch props data
   useEffect(() => {
     async function fetchData() {
@@ -180,6 +185,7 @@ export default function PerformancePage() {
       const { data, error } = await supabase
         .from('user_bets')
         .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet')
+        .in('stat_type', config.statTypes)
         .in('status', ['won', 'lost', 'push'])
         .order('game_date', { ascending: true })
 
@@ -207,7 +213,7 @@ export default function PerformancePage() {
     }
 
     fetchMyBets()
-  }, [activeTab, myBets.length])
+  }, [activeTab, myBets.length, sport, config.statTypes])
 
   // Filter bets based on source (Model Picks = is_recommended from daily_predictions)
   const filteredBets = useMemo(() => {

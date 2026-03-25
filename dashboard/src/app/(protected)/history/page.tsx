@@ -136,6 +136,7 @@ export default function HistoryPage() {
       const { data, error } = await supabase
         .from('user_bets')
         .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet, team_abbrev, opponent_abbrev, bet_context, user_confidence, placed_at')
+        .in('stat_type', config.statTypes)
         .gte('game_date', startDate)
         .lte('game_date', endDate)
         .order('game_date', { ascending: false })
@@ -170,7 +171,7 @@ export default function HistoryPage() {
     }
 
     fetchMyBets()
-  }, [activeTab, startDate, endDate])
+  }, [activeTab, startDate, endDate, sport, config.statTypes])
 
   // Filter bets by source (Model Picks = is_recommended from daily_predictions)
   const sourcedBets = betSource === 'model'
