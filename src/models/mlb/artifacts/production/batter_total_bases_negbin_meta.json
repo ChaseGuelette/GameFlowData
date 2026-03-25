@@ -1,0 +1,44 @@
+{
+  "model_name": "batter_total_bases",
+  "model_version": 2,
+  "feature_names": [
+    "at_bats",
+    "batter_iso_szn",
+    "prop_line_batter_total_bases",
+    "batter_woba_szn",
+    "batter_wrc_plus_szn",
+    "batter_babip_szn"
+  ],
+  "global_mu": 1.3663221363577658,
+  "global_alpha": 1.0200978688855882,
+  "distribution": "NegativeBinomial",
+  "n_dist_params": 2,
+  "param_names": [
+    "total_count",
+    "probs"
+  ],
+  "response_fns": [
+    "exp",
+    "sigmoid"
+  ],
+  "raw_r_init": -0.019898572581115177,
+  "raw_p_init": -0.33202113049391785,
+  "config": {
+    "n_estimators": 1829,
+    "max_depth": 3,
+    "learning_rate": 0.0508673408613097,
+    "subsample": 0.941254386696344,
+    "colsample_bytree": 0.8706400698231067,
+    "min_child_weight": 6,
+    "early_stopping_rounds": 38,
+    "log_mu_min": -3.0,
+    "log_mu_max": 3.0,
+    "log_alpha_min": -2.0,
+    "log_alpha_max": 2.0,
+    "mu_n_estimators": 1000,
+    "mu_max_depth": 5,
+    "mu_learning_rate": 0.03,
+    "alpha_n_estimators": 500,
+    "alpha_max_depth": 3
+  }
+}

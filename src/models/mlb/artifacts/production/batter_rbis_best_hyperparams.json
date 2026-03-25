@@ -1,0 +1,42 @@
+{
+    "best_params": {
+        "max_depth": 6,
+        "min_child_weight": 17,
+        "learning_rate": 0.012125384670463897,
+        "n_estimators": 1021,
+        "subsample": 0.8558188367322875,
+        "colsample_bytree": 0.9377698149399664,
+        "early_stopping_rounds": 30
+    },
+    "best_val_nll": 0.8325457036382448,
+    "n_trials": 100,
+    "study_name": "negbin_tuning_20260324_223932",
+    "timestamp": "2026-03-24T22:57:37.055802",
+    "config": {
+        "n_estimators": 1021,
+        "max_depth": 6,
+        "learning_rate": 0.012125384670463897,
+        "subsample": 0.8558188367322875,
+        "colsample_bytree": 0.9377698149399664,
+        "min_child_weight": 17,
+        "early_stopping_rounds": 30,
+        "mu_n_estimators": 1000,
+        "mu_max_depth": 5,
+        "mu_learning_rate": 0.03,
+        "mu_subsample": 0.8,
+        "mu_colsample_bytree": 0.8,
+        "mu_min_child_weight": 3,
+        "mu_early_stopping_rounds": 50,
+        "alpha_n_estimators": 500,
+        "alpha_max_depth": 3,
+        "alpha_learning_rate": 0.05,
+        "alpha_subsample": 0.8,
+        "alpha_colsample_bytree": 0.8,
+        "val_size": 0.15,
+        "log_mu_min": -3.0,
+        "log_mu_max": 3.0,
+        "log_alpha_min": -2.0,
+        "log_alpha_max": 2.0,
+        "random_state": 42
+    }
+}

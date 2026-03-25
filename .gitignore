@@ -75,9 +75,12 @@ output/social/
 node_modules/
 node_modules\
 
-# Ignore model training runs but keep production model
+# Ignore model training runs but keep production models
 src/models/artifacts/run_*/
 !src/models/artifacts/production/
+src/models/mlb/artifacts/mlb_run_*/
+!src/models/mlb/artifacts/production/
+!src/models/mlb/artifacts/production/**
 
 #Ignore backtest results
 backtest_results/

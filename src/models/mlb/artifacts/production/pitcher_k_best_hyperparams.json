@@ -1,0 +1,25 @@
+{
+    "best_params": {
+        "max_depth": 3,
+        "min_child_weight": 4,
+        "learning_rate": 0.013867436349562737,
+        "n_estimators": 245,
+        "subsample": 0.6099384446254078,
+        "colsample_bytree": 0.9089055063392543,
+        "reg_alpha": 6.400020898654012e-06,
+        "reg_lambda": 0.04340090587273964,
+        "early_stopping_rounds": 36
+    },
+    "best_calibration_gap": 0.021978021978021955,
+    "n_trials": 100,
+    "study_name": "quantile_tuning_20260313_195924",
+    "timestamp": "2026-03-13T20:02:03.919572",
+    "quantiles": [
+        0.1,
+        0.25,
+        0.5,
+        0.75,
+        0.9
+    ],
+    "per_quantile": false
+}
