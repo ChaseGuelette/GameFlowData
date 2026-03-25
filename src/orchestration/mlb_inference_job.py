@@ -205,7 +205,16 @@ def main():
             try:
                 import os
                 if os.getenv("DISCORD_BOT_TOKEN"):
-                    logger.info("Discord MLB alerts not yet implemented — skipping")
+                    from src.discord_bot.alerts import send_predictions_alert_sync
+
+                    logger.info("Sending MLB Discord alert...")
+                    success = send_predictions_alert_sync(preds, target_date, sport="mlb")
+                    if success:
+                        logger.info("MLB Discord alert sent successfully")
+                    else:
+                        logger.warning("MLB Discord alert failed (non-fatal)")
+                else:
+                    logger.debug("Discord not configured, skipping alert")
             except Exception as e:
                 logger.warning(f"Discord alert failed: {e} (non-fatal)")
 

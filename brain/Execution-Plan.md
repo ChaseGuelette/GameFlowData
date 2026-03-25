@@ -14,7 +14,7 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 |------|------|--------|--------------|---------|
 | 1.1 | Finish MLB batter pipeline | completed | None | NLL feature selection, PMF calibration, Optuna tuner built. Pipeline ready for training. |
 | 1.2 | Train pitcher K model | completed | Data backfills | Artifact exists (`run_20260313_195757`), backtested with good results. |
-| 1.3 | Train batter hits/total_bases models | in_progress | 1.1 | Pipeline ready. Run with `--tune --tuning-trials 100` for initial training. |
+| 1.3 | Train batter hits/total_bases models | in_progress | 1.1 | Pipeline code complete for all 5 stats (hits/TB/RBI/runs/HR). Binomial model built for hits (Session 4). Training commands ready — not yet executed. |
 | 1.4 | Build MLB daily runner | completed | 1.2, 1.3 | `src/models/mlb/mlb_daily_runner.py` is production-ready — game discovery, pitcher K predictions, batter predictions scaffolded, prop lines, edge calc, paper bets. Mirrors NBA architecture. |
 | 1.5 | Build MLB paper trading | completed | 1.4 | `src/paper_trading/mlb_paper_trader.py` — full bet selection, placement, and resolution. |
 | 1.6 | Run MLB backtests | completed | 1.2, 1.3 | Backtests completed and validated. |

@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { TEAM_ABBREV } from '@/lib/constants'
+import { useSport } from '@/contexts/SportContext'
 import { StatTabs } from '@/components/stats/StatTabs'
 import { CategoryTabs } from '@/components/stats/CategoryTabs'
 import { WindowToggle } from '@/components/stats/WindowToggle'
@@ -58,7 +59,19 @@ const teamOptions = Object.entries(TEAM_ABBREV)
   .sort()
 
 export default function StatsPage() {
+  const { config } = useSport()
   const supabase = createClient()
+
+  if (config.sport !== 'nba') {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-slate-200 mb-2">Data Vault</h2>
+          <p className="text-slate-400">The Data Vault is currently available for NBA only.</p>
+        </div>
+      </div>
+    )
+  }
 
   // ─── Tab state ──────────────────────────────────────────────────
   const [mainTab, setMainTab] = useState<StatsMainTab>('players')

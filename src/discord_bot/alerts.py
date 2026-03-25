@@ -31,24 +31,31 @@ def _get_best_side(row: pd.Series) -> tuple[str, float]:
         return "Under", under_edge
 
 
-def _build_alert_embed(predictions_df: pd.DataFrame, prediction_date: date) -> dict:
+def _build_alert_embed(
+    predictions_df: pd.DataFrame,
+    prediction_date: date,
+    sport: str = "nba",
+) -> dict:
     """Build Discord embed payload for alert.
 
     Args:
         predictions_df: DataFrame with predictions
         prediction_date: Date of predictions
+        sport: Sport identifier ("nba" or "mlb")
 
     Returns:
         Discord embed dict
     """
+    sport_upper = sport.upper()
+    sport_colors = {"nba": 0xFFD700, "mlb": 0x002D72}  # Gold / MLB blue
     embed = {
-        "title": "Daily Predictions Ready!",
-        "description": f"Top picks for {prediction_date.strftime('%B %d, %Y')}",
-        "color": 0xFFD700,  # Gold
+        "title": f"{sport_upper} Predictions Ready!",
+        "description": f"Top {sport_upper} picks for {prediction_date.strftime('%B %d, %Y')}",
+        "color": sport_colors.get(sport, 0xFFD700),
         "timestamp": datetime.utcnow().isoformat(),
         "fields": [],
         "footer": {
-            "text": "Use /picks for full list | /player <name> for details",
+            "text": f"{sport_upper} | /picks for full list | /player <name> for details",
         },
     }
 
@@ -90,6 +97,7 @@ async def send_predictions_alert(
     predictions_df: pd.DataFrame,
     prediction_date: date | None = None,
     channel_id: str | None = None,
+    sport: str = "nba",
 ) -> bool:
     """Send predictions alert to Discord channel.
 
@@ -99,7 +107,8 @@ async def send_predictions_alert(
     Args:
         predictions_df: DataFrame with predictions (must have player_name, stat, line, over_edge, under_edge)
         prediction_date: Date of predictions (defaults to today)
-        channel_id: Discord channel ID (defaults to DISCORD_CHANNEL_ALERTS env var)
+        channel_id: Discord channel ID (defaults to sport-specific predictions channel)
+        sport: Sport identifier ("nba" or "mlb")
 
     Returns:
         True if alert was sent successfully, False otherwise
@@ -115,9 +124,14 @@ async def send_predictions_alert(
         logger.warning("DISCORD_BOT_TOKEN not configured, skipping alert")
         return False
 
-    channel_id = channel_id or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+    # Route to sport-specific channel (fall back to shared channel)
     if not channel_id:
-        logger.warning("DISCORD_CHANNEL_PREDICTIONS not configured, skipping alert")
+        if sport == "mlb":
+            channel_id = os.getenv("DISCORD_MLB_CHANNEL_PREDICTIONS") or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+        else:
+            channel_id = os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+    if not channel_id:
+        logger.warning("No predictions channel configured, skipping alert")
         return False
 
     # Filter to high-edge predictions (>=9%)
@@ -128,7 +142,7 @@ async def send_predictions_alert(
     ].copy() if not predictions_df.empty else predictions_df
 
     # Build embed
-    embed = _build_alert_embed(filtered, prediction_date)
+    embed = _build_alert_embed(filtered, prediction_date, sport=sport)
 
     # Send via Discord API
     url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
@@ -158,6 +172,7 @@ def send_predictions_alert_sync(
     predictions_df: pd.DataFrame,
     prediction_date: date | None = None,
     channel_id: str | None = None,
+    sport: str = "nba",
 ) -> bool:
     """Synchronous wrapper for send_predictions_alert.
 
@@ -167,6 +182,7 @@ def send_predictions_alert_sync(
         predictions_df: DataFrame with predictions
         prediction_date: Date of predictions (defaults to today)
         channel_id: Discord channel ID
+        sport: Sport identifier ("nba" or "mlb")
 
     Returns:
         True if alert was sent successfully, False otherwise
@@ -179,14 +195,14 @@ def send_predictions_alert_sync(
             loop = asyncio.get_running_loop()
             # We're in an async context, need to use run_coroutine_threadsafe
             future = asyncio.run_coroutine_threadsafe(
-                send_predictions_alert(predictions_df, prediction_date, channel_id),
+                send_predictions_alert(predictions_df, prediction_date, channel_id, sport=sport),
                 loop,
             )
             return future.result(timeout=30)
         except RuntimeError:
             # No event loop running, use asyncio.run
             return asyncio.run(
-                send_predictions_alert(predictions_df, prediction_date, channel_id)
+                send_predictions_alert(predictions_df, prediction_date, channel_id, sport=sport)
             )
 
     except Exception as e:
@@ -415,6 +431,7 @@ def _build_pnl_summary_embed(
     bankroll: float,
     daily_pnl: float,
     total_pnl: float,
+    sport: str = "nba",
 ) -> dict:
     """Build Discord embed for daily P&L summary.
 
@@ -448,8 +465,9 @@ def _build_pnl_summary_embed(
     if pushes > 0:
         record += f"-{pushes}P"
 
+    sport_upper = sport.upper()
     embed = {
-        "title": f"{pnl_emoji} Daily Performance Summary",
+        "title": f"{pnl_emoji} {sport_upper} Daily Performance Summary",
         "color": color,
         "timestamp": datetime.utcnow().isoformat(),
         "fields": [
@@ -475,7 +493,7 @@ def _build_pnl_summary_embed(
             },
         ],
         "footer": {
-            "text": "Paper Trading | GameFlowData",
+            "text": f"{sport_upper} Paper Trading | GameFlowData",
         },
     }
 
@@ -497,6 +515,7 @@ async def send_pnl_summary(
     daily_pnl: float,
     total_pnl: float,
     channel_id: str | None = None,
+    sport: str = "nba",
 ) -> bool:
     """Send daily P&L summary to Discord performance channel.
 
@@ -505,7 +524,8 @@ async def send_pnl_summary(
         bankroll: Current bankroll balance
         daily_pnl: Today's P&L
         total_pnl: Cumulative P&L
-        channel_id: Discord channel ID (defaults to DISCORD_CHANNEL_PERFORMANCE)
+        channel_id: Discord channel ID (defaults to sport-specific performance channel)
+        sport: Sport identifier ("nba" or "mlb")
 
     Returns:
         True if alert was sent successfully, False otherwise
@@ -518,9 +538,13 @@ async def send_pnl_summary(
         logger.warning("DISCORD_BOT_TOKEN not configured, skipping P&L summary")
         return False
 
-    channel_id = channel_id or os.getenv("DISCORD_CHANNEL_PERFORMANCE")
     if not channel_id:
-        logger.warning("DISCORD_CHANNEL_PERFORMANCE not configured, skipping P&L summary")
+        if sport == "mlb":
+            channel_id = os.getenv("DISCORD_MLB_CHANNEL_PERFORMANCE") or os.getenv("DISCORD_CHANNEL_PERFORMANCE")
+        else:
+            channel_id = os.getenv("DISCORD_CHANNEL_PERFORMANCE")
+    if not channel_id:
+        logger.warning("No performance channel configured, skipping P&L summary")
         return False
 
     # Build embed
@@ -529,6 +553,7 @@ async def send_pnl_summary(
         bankroll=bankroll,
         daily_pnl=daily_pnl,
         total_pnl=total_pnl,
+        sport=sport,
     )
 
     # Send via Discord API
@@ -561,6 +586,7 @@ def send_pnl_summary_sync(
     daily_pnl: float,
     total_pnl: float,
     channel_id: str | None = None,
+    sport: str = "nba",
 ) -> bool:
     """Synchronous wrapper for send_pnl_summary.
 
@@ -570,6 +596,7 @@ def send_pnl_summary_sync(
         daily_pnl: Today's P&L
         total_pnl: Cumulative P&L
         channel_id: Discord channel ID
+        sport: Sport identifier ("nba" or "mlb")
 
     Returns:
         True if alert was sent successfully, False otherwise
@@ -581,7 +608,7 @@ def send_pnl_summary_sync(
             loop = asyncio.get_running_loop()
             future = asyncio.run_coroutine_threadsafe(
                 send_pnl_summary(
-                    resolution_result, bankroll, daily_pnl, total_pnl, channel_id
+                    resolution_result, bankroll, daily_pnl, total_pnl, channel_id, sport=sport
                 ),
                 loop,
             )
@@ -589,7 +616,7 @@ def send_pnl_summary_sync(
         except RuntimeError:
             return asyncio.run(
                 send_pnl_summary(
-                    resolution_result, bankroll, daily_pnl, total_pnl, channel_id
+                    resolution_result, bankroll, daily_pnl, total_pnl, channel_id, sport=sport
                 )
             )
 

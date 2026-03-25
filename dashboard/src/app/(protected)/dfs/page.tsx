@@ -13,11 +13,24 @@ import {
 import { TEAM_ABBREV } from '@/lib/constants'
 import { getToday, formatDate } from '@/lib/utils'
 import { estimateOverProb, estimateUnderProb, calcAllSlipEvs, devig, computeVig } from '@/lib/dfs-utils'
+import { useSport } from '@/contexts/SportContext'
 
 // Normalize game_id to 10-digit zero-padded format to match RPC LPAD output
 const padGameId = (id: string) => id.padStart(10, '0')
 
 export default function DfsPage() {
+  const { config } = useSport()
+
+  if (config.sport !== 'nba') {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-slate-200 mb-2">DFS Edge Finder</h2>
+          <p className="text-slate-400">DFS analysis is currently available for NBA only.</p>
+        </div>
+      </div>
+    )
+  }
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [dfsLines, setDfsLines] = useState<DfsLine[]>([])
   const [sportsbookLines, setSportsbookLines] = useState<SportsbookLine[]>([])
