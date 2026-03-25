@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-25 Session 90] — MLB Lines Job + Pitcher K Fix + First MLB Predictions
+
+### Added
+
+- **MLB lines job** (`src/orchestration/mlb_lines_job.py`) — New orchestration script that scrapes MLB game lines and player props from The Odds API, then runs the incremental linker. Supports `--live`, `--props-only`, `--parallel` modes mirroring NBA `lines_job.py`. Without this, MLB inference generated predictions but had no prop lines to calculate edges against.
+- **MLB lines scheduler entries** — 4 new cron jobs: full lines at 12 PM and 5 PM ET, props-only refresh at 1 PM and 6 PM ET. Lines run before inference (1:30 PM, 6:30 PM) to ensure edges are calculated.
+
+### Fixed
+
+- **MLB pitcher K inference failure** — `mlb_daily_runner.py` passed `as_of_date` and `opponent_id` to `MLBFeatureStore.get_player_game_features()` which expects `game_date` and `opp_team_id`. Also missing `venue_id` and `season` params. Fixed arg names and added venue_id/season to pitcher dict construction.
+
+### Deployed
+
+- **First MLB predictions generated** — 481 predictions (120 batters × 4 stats + 1 pitcher K), 974 prop lines matched, 19 BL-recommended picks, 16 paper bets placed for Opening Day 2026-03-25.
+- Pushed to Railway: MLB lines job + pitcher fix + scheduler entries.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/mlb_lines_job.py` | Created — MLB props + game lines scraping orchestrator |
+| `src/orchestration/scheduler.py` | Modified — 4 new MLB lines cron entries, `mlb_lines_job.py` in JOB_NAMES |
+| `src/models/mlb/mlb_daily_runner.py` | Modified — pitcher feature store arg fix + venue_id/season in pitcher dicts |
+
+---
+
 ## [2026-03-25 Session 89] — Position-Matched Injury Features + Under-Bet Sanity Improvements
 
 ### Added

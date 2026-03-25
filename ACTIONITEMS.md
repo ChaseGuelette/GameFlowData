@@ -1,5 +1,32 @@
 # GameFlowData — Roadmap
 
+## Session Summary (2026-03-25 — Session 90)
+
+### What We Did
+
+**MLB Lines Job + Pitcher K Fix + First MLB Predictions Live**
+
+1. **Diagnosed missing MLB predictions** — Inference job was running but producing 0 edges because no MLB prop lines existed. The MLB lines scraper (`mlb_daily_player_props_scraper.py`, `mlb_daily_game_lines_scraper.py`) existed but had no orchestration job or scheduler entry.
+2. **Built `mlb_lines_job.py`** — New orchestration script mirroring NBA `lines_job.py`. Supports `--live`, `--props-only`, `--parallel`. Runs game lines scraper + props scraper + incremental linker.
+3. **Added 4 MLB lines cron entries** — Full scrape at 12 PM/5 PM ET, props-only at 1 PM/6 PM ET. Lines run before inference at 1:30 PM/6:30 PM.
+4. **Fixed pitcher K inference** — `as_of_date` → `game_date`, `opponent_id` → `opp_team_id`, added missing `venue_id` and `season` to pitcher dict construction.
+5. **First MLB predictions generated** — 481 predictions, 974 prop lines, 19 recommended, 16 paper bets placed for Opening Day.
+6. **Committed and pushed** — Railway auto-deploying with all MLB pipeline fixes.
+
+### Remaining Action Items
+
+1. **Retrain NBA model with position injury features** — 3-way comparison (force all 4, force best 2, selector-only). Backtest each.
+2. **Deploy to Vercel** — push all dashboard changes (sanity warnings, position injury insights, AI Q&A enrichment, MLB games fix, combo markets, etc). Set `ANTHROPIC_API_KEY` env var.
+3. **Monitor MLB pipeline tomorrow** — Verify full automated cycle: daily stats (10 AM) → lines (12 PM) → inference (1:30 PM) → lines refresh (5 PM) → inference refresh (6:30 PM).
+4. **MLB pitcher K coverage** — Only 1 pitcher predicted today (schedule had 1 probable starter). Check if `mlb_game_schedule` is getting probable pitcher IDs populated correctly.
+5. **Stripe integration** — subscribe page, customer portal, webhook
+6. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+7. **Clean up old model backups** — `production_old_20260210/` and `production_old_20260323/`
+8. **Fix pre-existing test** — `test_finds_latest_run_directory`
+9. **Drop unused index** — `idx_props_dfs_latest`
+
+---
+
 ## Session Summary (2026-03-25 — Session 89)
 
 ### What We Did

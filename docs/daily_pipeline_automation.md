@@ -17,6 +17,16 @@ The daily pipeline is split into four jobs based on execution frequency:
 
 **Note:** Inference job optimized from ~3 min to ~16 sec in Session 27 via parallel feature building and prop lines query optimization.
 
+**MLB Pipeline (added Session 90, 2026-03-25):**
+
+| Job | Schedule (ET) | Purpose | Runtime |
+|-----|---------------|---------|---------|
+| `mlb_daily_stats_job.py` | 10:00 AM | MLB game results from last night | TBD |
+| `mlb_daily_stats_job.py` (retry) | 10:30 AM | Auto-retry if 10 AM failed | TBD |
+| `mlb_lines_job.py --live --parallel` | 12:00 PM, 5:00 PM | Full MLB lines scrape (game lines + props + linker) | ~30-60 sec |
+| `mlb_lines_job.py --live --props-only` | 1:00 PM, 6:00 PM | MLB props-only refresh before inference | ~20-30 sec |
+| `mlb_inference_job.py` | 1:30 PM, 6:30 PM | MLB predictions + edges + paper bets | ~65 sec |
+
 **API Budget:** 5M credits/month. Current schedule uses ~6,400/day (~200K/month) — 4% of quota.
 
 **Discord Alerts:** High-frequency jobs (props-only, edge refresh) only send Discord alerts on failure (`silent_on_success`). Full scrapes, inference, and daily stats always alert.
