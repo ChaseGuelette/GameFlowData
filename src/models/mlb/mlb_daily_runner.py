@@ -196,6 +196,8 @@ class MLBDailyPredictionRunner:
                     "is_home": True,
                     "game_time": game_time,
                     "opp_abbrev": game.get("away_team_abbrev"),
+                    "venue_id": game.get("venue_id"),
+                    "season": game.get("season"),
                 })
 
             # Away pitcher
@@ -209,6 +211,8 @@ class MLBDailyPredictionRunner:
                     "is_home": False,
                     "game_time": game_time,
                     "opp_abbrev": game.get("home_team_abbrev"),
+                    "venue_id": game.get("venue_id"),
+                    "season": game.get("season"),
                 })
 
         return pitchers
@@ -328,9 +332,11 @@ class MLBDailyPredictionRunner:
                 features = self.pitcher_feature_store.get_player_game_features(
                     player_id=pitcher["player_id"],
                     game_id=pitcher["game_id"],
-                    as_of_date=target_date,
+                    game_date=str(target_date),
                     team_id=pitcher.get("team_id"),
-                    opponent_id=pitcher.get("opponent_id"),
+                    opp_team_id=pitcher.get("opponent_id"),
+                    venue_id=pitcher.get("venue_id") or 0,
+                    season=pitcher.get("season") or target_date.year,
                     is_home=pitcher.get("is_home"),
                 )
                 return pitcher, features
