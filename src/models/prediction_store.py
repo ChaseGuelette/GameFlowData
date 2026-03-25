@@ -31,9 +31,20 @@ PREDICTION_COLS = [
     "feat_player_is_questionable", "feat_player_is_probable",
     "feat_player_avg_stat_l3", "feat_player_avg_stat_l5", "feat_player_avg_stat_l15",
     "feat_stat_l3_l15_ratio", "feat_stat_std_l5", "feat_opp_abbrev",
+    # B5: Position-matched injury features
+    "feat_team_out_same_pos_count", "feat_team_out_same_pos_min_sum",
+    "feat_team_out_same_pos_usg_sum", "feat_team_out_same_pos_starter_sum",
+    # Game context features for AI Q&A enrichment
+    "feat_line_spread", "feat_line_total", "feat_is_home",
+    "feat_player_starter_prob", "feat_player_avg_usg_pct_l5",
+    "feat_team_avg_pace_l5", "feat_opp_avg_pace_l5",
+    "feat_opp_avg_def_rtg_l5",
+    "feat_player_avg_min_l3", "feat_player_min_floor_l5", "feat_player_min_std_l5",
     # Black-Litterman blended values for "Model Picks"
     "bl_over_prob", "bl_under_prob", "bl_over_edge", "bl_under_edge",
     "bl_confidence", "is_recommended",
+    # Sanity check flag — warning reason(s) if prediction looks suspect
+    "sanity_flag",
 ]
 
 

@@ -22,6 +22,8 @@ DEFAULT_BL_EDGE_THRESHOLD = 0.09
 
 # Q50 vs L5 sanity check: reject under recs where Q50 is 30%+ below player L5 avg
 MAX_Q50_DIVERGENCE = 0.30
+# L5 vs line sanity check: reject under recs where L5 average is above the line
+L5_ABOVE_LINE_MARGIN = 0.0
 
 
 class DailyPredictionRunner:
@@ -207,6 +209,15 @@ class DailyPredictionRunner:
             "feat_player_is_questionable", "feat_player_is_probable",
             "feat_player_avg_stat_l3", "feat_player_avg_stat_l5", "feat_player_avg_stat_l15",
             "feat_stat_l3_l15_ratio", "feat_stat_std_l5", "feat_opp_abbrev",
+            # B5: Position-matched injury features
+            "feat_team_out_same_pos_count", "feat_team_out_same_pos_min_sum",
+            "feat_team_out_same_pos_usg_sum", "feat_team_out_same_pos_starter_sum",
+            # Game context for AI Q&A
+            "feat_line_spread", "feat_line_total", "feat_is_home",
+            "feat_player_starter_prob", "feat_player_avg_usg_pct_l5",
+            "feat_team_avg_pace_l5", "feat_opp_avg_pace_l5",
+            "feat_opp_avg_def_rtg_l5",
+            "feat_player_avg_min_l3", "feat_player_min_floor_l5", "feat_player_min_std_l5",
         ]
         for col in feat_cols:
             predictions_df[col] = None
@@ -231,6 +242,36 @@ class DailyPredictionRunner:
             predictions_df.at[idx, "feat_opp_out_count"] = int(feat.get("opp_out_count", 0) or 0)
             predictions_df.at[idx, "feat_player_is_questionable"] = bool(feat.get("player_is_questionable", 0))
             predictions_df.at[idx, "feat_player_is_probable"] = bool(feat.get("player_is_probable", 0))
+
+            # B5: Position-matched injury opportunity
+            predictions_df.at[idx, "feat_team_out_same_pos_count"] = int(feat.get("team_out_same_pos_count", 0) or 0)
+            predictions_df.at[idx, "feat_team_out_same_pos_min_sum"] = float(feat.get("team_out_same_pos_min_sum", 0) or 0)
+            predictions_df.at[idx, "feat_team_out_same_pos_usg_sum"] = float(feat.get("team_out_same_pos_usg_sum", 0) or 0)
+            predictions_df.at[idx, "feat_team_out_same_pos_starter_sum"] = float(feat.get("team_out_same_pos_starter_sum", 0) or 0)
+
+            # Game context (same for all stats on a given player-game)
+            ls = feat.get("line_spread")
+            predictions_df.at[idx, "feat_line_spread"] = float(ls) if ls is not None else None
+            lt = feat.get("line_total")
+            predictions_df.at[idx, "feat_line_total"] = float(lt) if lt is not None else None
+            ih = feat.get("is_home")
+            predictions_df.at[idx, "feat_is_home"] = bool(ih) if ih is not None else None
+            sp = feat.get("player_starter_prob")
+            predictions_df.at[idx, "feat_player_starter_prob"] = float(sp) if sp is not None else None
+            usg = feat.get("player_avg_usg_pct_l5")
+            predictions_df.at[idx, "feat_player_avg_usg_pct_l5"] = float(usg) if usg is not None else None
+            tp = feat.get("team_avg_pace_l5")
+            predictions_df.at[idx, "feat_team_avg_pace_l5"] = float(tp) if tp is not None else None
+            op = feat.get("opp_avg_pace_l5")
+            predictions_df.at[idx, "feat_opp_avg_pace_l5"] = float(op) if op is not None else None
+            dr = feat.get("opp_avg_def_rtg_l5")
+            predictions_df.at[idx, "feat_opp_avg_def_rtg_l5"] = float(dr) if dr is not None else None
+            ml3 = feat.get("player_avg_min_l3")
+            predictions_df.at[idx, "feat_player_avg_min_l3"] = float(ml3) if ml3 is not None else None
+            mf = feat.get("player_min_floor_l5")
+            predictions_df.at[idx, "feat_player_min_floor_l5"] = float(mf) if mf is not None else None
+            ms = feat.get("player_min_std_l5")
+            predictions_df.at[idx, "feat_player_min_std_l5"] = float(ms) if ms is not None else None
 
             # B3: Stat-specific averages/trends
             if stat in ("pts", "reb", "ast"):
@@ -889,6 +930,7 @@ class DailyPredictionRunner:
         predictions_df["bl_under_edge"] = None
         predictions_df["bl_confidence"] = None
         predictions_df["is_recommended"] = False
+        predictions_df["sanity_flag"] = None  # Will contain warning reason if flagged
 
         if samples_dict is None or not samples_dict:
             logger.warning("No MC samples available for BL blending. Skipping BL computation.")
@@ -940,19 +982,31 @@ class DailyPredictionRunner:
                 # Mark as recommended if max BL edge meets threshold
                 max_bl_edge = max(bl_over_edge, bl_under_edge)
                 if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
-                    # Q50 vs L5 sanity check: reject under recs with divergent predictions
+                    # Sanity checks for under recommendations
                     skip = False
                     rec_direction = "under" if bl_under_edge > bl_over_edge else "over"
                     if rec_direction == "under":
                         feat_l5 = row.get("feat_player_avg_stat_l5")
                         pred_q50 = row.get("pred_q50")
-                        if feat_l5 and pred_q50 and feat_l5 > 0:
+                        line = row.get("line")
+
+                        # Check 1: Q50 divergence
+                        if pd.notna(feat_l5) and pd.notna(pred_q50) and feat_l5 > 0:
                             divergence = (feat_l5 - pred_q50) / feat_l5
                             if divergence > MAX_Q50_DIVERGENCE:
                                 logger.warning(
-                                    f"SANITY CHECK: Skipping {row.get('player_name', '?')} "
+                                    f"SANITY CHECK [Q50]: Skipping {row.get('player_name', '?')} "
                                     f"{row['stat']} under rec — Q50={pred_q50:.1f} is "
                                     f"{divergence:.0%} below L5={feat_l5:.1f}"
+                                )
+                                skip = True
+
+                        # Check 2: L5 above line
+                        if not skip and pd.notna(feat_l5) and feat_l5 > 0 and pd.notna(line) and line > 0:
+                            if feat_l5 >= line * (1 + L5_ABOVE_LINE_MARGIN):
+                                logger.warning(
+                                    f"SANITY CHECK [L5>LINE]: Skipping {row.get('player_name', '?')} "
+                                    f"{row['stat']} under rec — L5 avg={feat_l5:.1f} >= line={line:.1f}"
                                 )
                                 skip = True
                     if not skip:
@@ -965,5 +1019,36 @@ class DailyPredictionRunner:
             f"Computed BL blending for {bl_computed} predictions, "
             f"{recommended_count} marked as recommended (edge >= {DEFAULT_BL_EDGE_THRESHOLD*100:.0f}%)"
         )
+
+        # Set sanity_flag on ALL under-leaning predictions for dashboard warnings
+        flagged_count = 0
+        for idx, row in predictions_df.iterrows():
+            under_edge = row.get("under_edge", 0) or 0
+            over_edge = row.get("over_edge", 0) or 0
+            if under_edge <= over_edge:
+                continue  # Not under-leaning
+
+            feat_l5 = row.get("feat_player_avg_stat_l5")
+            pred_q50 = row.get("pred_q50")
+            line = row.get("line")
+            flags = []
+
+            # Flag 1: Q50 divergence
+            if pd.notna(feat_l5) and pd.notna(pred_q50) and feat_l5 > 0:
+                divergence = (feat_l5 - pred_q50) / feat_l5
+                if divergence > MAX_Q50_DIVERGENCE:
+                    flags.append(f"q50_divergence:{divergence:.0%}")
+
+            # Flag 2: L5 above line
+            if pd.notna(feat_l5) and feat_l5 > 0 and pd.notna(line) and line > 0:
+                if feat_l5 >= line * (1 + L5_ABOVE_LINE_MARGIN):
+                    flags.append(f"l5_above_line:{feat_l5:.1f}>{line:.1f}")
+
+            if flags:
+                predictions_df.at[idx, "sanity_flag"] = "|".join(flags)
+                flagged_count += 1
+
+        if flagged_count:
+            logger.info(f"Sanity-flagged {flagged_count} under-leaning predictions")
 
         return predictions_df

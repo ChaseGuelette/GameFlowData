@@ -38,8 +38,8 @@ dashboard/
 │   │   │   ├── performance/page.tsx # Performance metrics
 │   │   │   ├── account/page.tsx    # Profile + bankroll settings + community card
 │   │   │   └── subscribe/page.tsx  # Redirects to /dashboard
-│   │   ├── api/ask/route.ts      # AI Q&A endpoint (auth-gated, rate-limited, Anthropic Claude Haiku, position-aware, enriched injuries)
-│   │   ├── api/games/route.ts    # NBA CDN schedule proxy (fallback games)
+│   │   ├── api/ask/route.ts      # AI Q&A endpoint (auth-gated, rate-limited, Anthropic Claude Haiku, enriched with game context/pace/matchup history/opponent injuries)
+│   │   ├── api/games/route.ts    # NBA/MLB schedule proxy (sport-aware fallback games)
 │   │   ├── api/scoreboard/route.ts # NBA CDN live scoreboard proxy (30s cache)
 │   │   ├── api/slate/route.tsx   # OG image generation for pick slates (auth-gated)
 │   │   ├── auth/callback/route.ts # Auth callback for email confirmation

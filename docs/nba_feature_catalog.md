@@ -165,6 +165,17 @@ Source: `rapidapi_injuries` (status = 'Out') cross-referenced with `player_avera
 | `opp_out_count` | ALL | Number of opponent players listed Out |
 | `opp_out_min_sum` | ALL | Sum of Out opponents' avg minutes (L5) |
 
+### Injury Context — Position-Matched (B5, added Session 89)
+
+Source: `rapidapi_injuries` cross-referenced with `player_position_history` (G/W/B groups) and `player_average_game_stats`
+
+| Feature | Models | Signal |
+|---------|--------|--------|
+| `team_out_same_pos_count` | ALL | Number of Out teammates in same position group (G/W/B) |
+| `team_out_same_pos_min_sum` | ALL | Sum of those players' avg minutes (L5) — volume of opportunity |
+| `team_out_same_pos_usg_sum` | ALL | Sum of those players' avg usage% (L5) — shot creation vacuum |
+| `team_out_same_pos_starter_sum` | ALL | Sum of `games_started_l5 / 5.0` — distinguishes starter out (1.0) from bench depth (0.1) |
+
 ### Injury Context — Player Status
 
 Source: `rapidapi_injuries`
