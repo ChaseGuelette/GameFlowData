@@ -6,7 +6,7 @@ import { PlayerAvatar } from '@/components/shared/PlayerAvatar'
 import { Badge, EdgeBadge } from '@/components/shared/Badge'
 import { Last5Chart } from './Last5Chart'
 import { QuantileSummary } from './QuantileSummary'
-import { type Prediction, type PlayerGameStats, type StatType, type BookmakerLine, type BetContext, STAT_LABELS } from '@/types/predictions'
+import { type Prediction, type PlayerGameStats, type BookmakerLine, type BetContext, STAT_LABELS } from '@/types/predictions'
 import { formatProb } from '@/lib/utils'
 import { generateInsights } from '@/lib/insights'
 import { getAllowedBookmakers } from '@/lib/sportsbook-availability'
@@ -53,7 +53,7 @@ const COMBO_COMPONENTS: Record<string, (keyof PlayerGameStats)[]> = {
   ra: ['reb', 'ast'],
 }
 
-// Map stat type to market_key in raw_player_props_combined
+// Map stat type to market_key in raw_player_props_combined (NBA) / mlb_raw_player_props (MLB)
 const STAT_TO_MARKET: Record<string, string> = {
   pts: 'player_points',
   reb: 'player_rebounds',
@@ -65,6 +65,23 @@ const STAT_TO_MARKET: Record<string, string> = {
   pr: 'player_points_rebounds',
   pa: 'player_points_assists',
   ra: 'player_rebounds_assists',
+  // MLB — market_key = stat type (identity mapping)
+  pitcher_strikeouts: 'pitcher_strikeouts',
+  batter_hits: 'batter_hits',
+  batter_total_bases: 'batter_total_bases',
+  batter_home_runs: 'batter_home_runs',
+  batter_rbis: 'batter_rbis',
+  batter_runs_scored: 'batter_runs_scored',
+}
+
+// MLB stat → table + column for game history
+const MLB_STAT_HISTORY: Record<string, { table: string; column: string }> = {
+  pitcher_strikeouts: { table: 'mlb_player_game_stats_pitching', column: 'so' },
+  batter_hits: { table: 'mlb_player_game_stats_batting', column: 'h' },
+  batter_total_bases: { table: 'mlb_player_game_stats_batting', column: 'tb' },
+  batter_home_runs: { table: 'mlb_player_game_stats_batting', column: 'hr' },
+  batter_rbis: { table: 'mlb_player_game_stats_batting', column: 'rbi' },
+  batter_runs_scored: { table: 'mlb_player_game_stats_batting', column: 'r' },
 }
 
 // DFS platforms to exclude from main dashboard sportsbook lines
@@ -102,6 +119,7 @@ const KELLY_OPTIONS = [
 export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalProps) {
   const { config } = useSport()
   const [history, setHistory] = useState<PlayerGameStats[]>([])
+  const [mlbHistoryValues, setMlbHistoryValues] = useState<number[]>([])
   const [bookmakerLines, setBookmakerLines] = useState<BookmakerLine[]>([])
   const [loading, setLoading] = useState(true)
   const [linesLoading, setLinesLoading] = useState(true)
@@ -149,12 +167,36 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
 
   useEffect(() => {
     async function fetchHistory() {
-      // player_game_stats is NBA-only for now
-      if (config.sport !== 'nba') {
+      const supabase = createClient()
+
+      if (config.sport === 'mlb') {
+        const mlbStat = MLB_STAT_HISTORY[prediction.stat]
+        if (!mlbStat) { setLoading(false); return }
+
+        const isPitching = mlbStat.table === 'mlb_player_game_stats_pitching'
+        const col = mlbStat.column
+
+        // Query the right table — use select('*') to avoid template string type issues
+        const query = isPitching
+          ? supabase.from('mlb_player_game_stats_pitching').select('game_date, so')
+              .eq('player_id', prediction.player_id).eq('did_not_play', false)
+              .order('game_date', { ascending: false }).limit(5)
+          : supabase.from('mlb_player_game_stats_batting').select('game_date, h, tb, hr, rbi, r')
+              .eq('player_id', prediction.player_id).eq('did_not_play', false)
+              .order('game_date', { ascending: false }).limit(5)
+
+        const { data, error } = await query
+
+        if (!error && data) {
+          const reversed = [...data].reverse()
+          setHistory(reversed.map((row) => ({ game_date: (row as { game_date: string }).game_date } as PlayerGameStats)))
+          setMlbHistoryValues(reversed.map((row) => Number((row as Record<string, unknown>)[col]) || 0))
+        }
         setLoading(false)
         return
       }
-      const supabase = createClient()
+
+      // NBA
       const { data, error } = await supabase
         .from('player_game_stats')
         .select('game_date, pts, reb, ast, fg3m, min')
@@ -170,12 +212,6 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
     }
 
     async function fetchBookmakerLines() {
-      // raw_player_props_combined is NBA-only
-      if (config.sport !== 'nba') {
-        setLinesLoading(false)
-        return
-      }
-
       const supabase = createClient()
       const marketKey = STAT_TO_MARKET[prediction.stat]
 
@@ -185,15 +221,25 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         return
       }
 
+      // Pick the right props table for the sport
+      const propsTable = config.sport === 'mlb' ? 'mlb_raw_player_props' : 'raw_player_props_combined'
+
       // Get bookmaker lines for this player/stat/game
-      const { data, error } = await supabase
-        .from('raw_player_props_combined')
+      let query = supabase
+        .from(propsTable)
         .select('bookmaker, line, outcome_label, odds_american, snapshot_time')
         .eq('player_id', prediction.player_id)
         .eq('game_id', prediction.game_id)
         .eq('market_key', marketKey)
         .not('bookmaker', 'in', `(${DFS_BOOKMAKERS.join(',')})`)
         .order('bookmaker')
+
+      // MLB props may have unlinked rows — filter to linked only
+      if (config.sport === 'mlb') {
+        query = query.not('player_id', 'is', null)
+      }
+
+      const { data, error } = await query
 
       if (error) {
         console.error('Error fetching bookmaker lines:', error)
@@ -278,13 +324,15 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
 
   // Calculate L5 average for the relevant stat (sum components for combos)
   const l5Avg = history.length > 0
-    ? comboComponents
-      ? history.reduce((sum, g) =>
-          sum + comboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0), 0
-        ) / history.length
-      : statColumn
-        ? history.reduce((sum, g) => sum + (Number(g[statColumn]) || 0), 0) / history.length
-        : null
+    ? config.sport === 'mlb' && mlbHistoryValues.length > 0
+      ? mlbHistoryValues.reduce((s, v) => s + v, 0) / mlbHistoryValues.length
+      : comboComponents
+        ? history.reduce((sum, g) =>
+            sum + comboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0), 0
+          ) / history.length
+        : statColumn
+          ? history.reduce((sum, g) => sum + (Number(g[statColumn]) || 0), 0) / history.length
+          : null
     : null
 
   // Process bookmaker lines: compute edge per line, sort by best edge
@@ -433,9 +481,12 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                 games={history}
                 stat={statColumn}
                 line={prediction.prop_line}
-                values={comboComponents
-                  ? history.map(g => comboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0))
-                  : undefined
+                values={
+                  config.sport === 'mlb' && mlbHistoryValues.length > 0
+                    ? mlbHistoryValues
+                    : comboComponents
+                      ? history.map(g => comboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0))
+                      : undefined
                 }
               />
               {/* Stats table as fallback/supplement */}
@@ -444,17 +495,33 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                   <thead>
                     <tr className="text-slate-400 border-b border-slate-700">
                       <th className="text-left py-2 px-1.5 sm:px-2">Date</th>
-                      <th className="text-center py-2 px-1.5 sm:px-2">MIN</th>
-                      <th className="text-center py-2 px-1.5 sm:px-2">PTS</th>
-                      <th className="text-center py-2 px-1.5 sm:px-2">REB</th>
-                      <th className="text-center py-2 px-1.5 sm:px-2">AST</th>
-                      {comboComponents && (
+                      {config.sport === 'mlb' ? (
                         <th className="text-center py-2 px-1.5 sm:px-2">{statLabel}</th>
+                      ) : (
+                        <>
+                          <th className="text-center py-2 px-1.5 sm:px-2">MIN</th>
+                          <th className="text-center py-2 px-1.5 sm:px-2">PTS</th>
+                          <th className="text-center py-2 px-1.5 sm:px-2">REB</th>
+                          <th className="text-center py-2 px-1.5 sm:px-2">AST</th>
+                          {comboComponents && (
+                            <th className="text-center py-2 px-1.5 sm:px-2">{statLabel}</th>
+                          )}
+                        </>
                       )}
                     </tr>
                   </thead>
                   <tbody>
                     {history.map((game, i) => {
+                      if (config.sport === 'mlb') {
+                        return (
+                          <tr key={i} className="border-b border-slate-700/50">
+                            <td className="py-2 px-1.5 sm:px-2 text-slate-300">{game.game_date}</td>
+                            <td className="text-center py-2 px-1.5 sm:px-2 text-slate-50 font-medium">
+                              {mlbHistoryValues[i] ?? '—'}
+                            </td>
+                          </tr>
+                        )
+                      }
                       const isComboComponent = (col: string) =>
                         comboComponents?.includes(col as keyof PlayerGameStats) ?? false
                       const highlightBase = prediction.stat === 'pts' || isComboComponent('pts')

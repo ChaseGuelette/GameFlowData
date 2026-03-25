@@ -34,6 +34,25 @@ interface DfsTableProps {
   edgeMode: EdgeMode
 }
 
+function SortHeader({ label, sortKeyValue, className, sortKey, sortAsc, onSort }: {
+  label: string; sortKeyValue: SortKey; className?: string;
+  sortKey: SortKey; sortAsc: boolean; onSort: (key: SortKey) => void;
+}) {
+  return (
+    <th
+      className={`py-3 px-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-200 select-none ${className ?? ''}`}
+      onClick={() => onSort(sortKeyValue)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {sortKey === sortKeyValue && (
+          <span className="text-blue-400">{sortAsc ? '\u25B2' : '\u25BC'}</span>
+        )}
+      </span>
+    </th>
+  )
+}
+
 export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>('edge')
   const [sortAsc, setSortAsc] = useState(false)
@@ -110,20 +129,6 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
         return 0
     }
   })
-
-  const SortHeader = ({ label, sortKeyValue, className }: { label: string; sortKeyValue: SortKey; className?: string }) => (
-    <th
-      className={`py-3 px-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-200 select-none ${className ?? ''}`}
-      onClick={() => handleSort(sortKeyValue)}
-    >
-      <span className="inline-flex items-center gap-1">
-        {label}
-        {sortKey === sortKeyValue && (
-          <span className="text-blue-400">{sortAsc ? '\u25B2' : '\u25BC'}</span>
-        )}
-      </span>
-    </th>
-  )
 
   if (rows.length === 0) {
     const emptyMessages: Record<EdgeMode, { title: string; subtitle: string }> = {
@@ -276,16 +281,16 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
           <table className="w-full text-sm">
             <thead className="border-b border-slate-700">
               <tr>
-                <SortHeader label="Player" sortKeyValue="player" />
-                <SortHeader label="Stat" sortKeyValue="stat" />
-                <SortHeader label="Platform" sortKeyValue="platform" />
-                <SortHeader label="Sharp" sortKeyValue="sharp_line" className="text-center" />
-                <SortHeader label="DFS" sortKeyValue="dfs_line" className="text-center" />
-                <SortHeader label="Diff" sortKeyValue="diff" className="text-center" />
-                <SortHeader label="Pick" sortKeyValue="direction" className="text-center" />
-                <SortHeader label="Model %" sortKeyValue="model_prob" className="text-center" />
-                <SortHeader label="B/E" sortKeyValue="break_even" className="text-center" />
-                <SortHeader label="Edge" sortKeyValue="edge" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Player" sortKeyValue="player" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Stat" sortKeyValue="stat" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Platform" sortKeyValue="platform" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Sharp" sortKeyValue="sharp_line" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="DFS" sortKeyValue="dfs_line" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Diff" sortKeyValue="diff" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Pick" sortKeyValue="direction" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Model %" sortKeyValue="model_prob" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="B/E" sortKeyValue="break_even" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Edge" sortKeyValue="edge" className="text-center" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700/50">
@@ -327,17 +332,17 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
           <table className="w-full text-sm">
             <thead className="border-b border-slate-700">
               <tr>
-                <SortHeader label="Player" sortKeyValue="player" />
-                <SortHeader label="Stat" sortKeyValue="stat" />
-                <SortHeader label="Platform" sortKeyValue="platform" />
-                <SortHeader label="DFS Line" sortKeyValue="dfs_line" className="text-center" />
-                <SortHeader label="Pick" sortKeyValue="direction" className="text-center" />
-                <SortHeader label="Market %" sortKeyValue="market_prob" className="text-center" />
-                <SortHeader label="Books" sortKeyValue="books" className="text-center" />
-                <SortHeader label="Sharp Line" sortKeyValue="sharp_line" className="text-center" />
-                <SortHeader label="Line Diff" sortKeyValue="diff" className="text-center" />
-                <SortHeader label="B/E" sortKeyValue="break_even" className="text-center" />
-                <SortHeader label="Edge" sortKeyValue="edge" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Player" sortKeyValue="player" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Stat" sortKeyValue="stat" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Platform" sortKeyValue="platform" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="DFS Line" sortKeyValue="dfs_line" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Pick" sortKeyValue="direction" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Market %" sortKeyValue="market_prob" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Books" sortKeyValue="books" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Sharp Line" sortKeyValue="sharp_line" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Line Diff" sortKeyValue="diff" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="B/E" sortKeyValue="break_even" className="text-center" />
+                <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Edge" sortKeyValue="edge" className="text-center" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700/50">
@@ -389,16 +394,16 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
         <table className="w-full text-sm">
           <thead className="border-b border-slate-700">
             <tr>
-              <SortHeader label="Player" sortKeyValue="player" />
-              <SortHeader label="Stat" sortKeyValue="stat" />
-              <SortHeader label="Platform" sortKeyValue="platform" />
-              <SortHeader label="DFS Line" sortKeyValue="dfs_line" className="text-center" />
-              <SortHeader label="Pick" sortKeyValue="direction" className="text-center" />
-              <SortHeader label="Model %" sortKeyValue="model_prob" className="text-center" />
-              <SortHeader label="Market %" sortKeyValue="market_prob" className="text-center" />
-              <SortHeader label="Books" sortKeyValue="books" className="text-center" />
-              <SortHeader label="B/E" sortKeyValue="break_even" className="text-center" />
-              <SortHeader label="Edge" sortKeyValue="edge" className="text-center" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Player" sortKeyValue="player" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Stat" sortKeyValue="stat" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Platform" sortKeyValue="platform" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="DFS Line" sortKeyValue="dfs_line" className="text-center" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Pick" sortKeyValue="direction" className="text-center" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Model %" sortKeyValue="model_prob" className="text-center" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Market %" sortKeyValue="market_prob" className="text-center" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Books" sortKeyValue="books" className="text-center" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="B/E" sortKeyValue="break_even" className="text-center" />
+              <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Edge" sortKeyValue="edge" className="text-center" />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50">

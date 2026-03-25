@@ -218,7 +218,7 @@ export default function PerformancePage() {
   }, [allBets, betSource])
 
   // Calculate aggregate KPIs from filtered bets
-  const { totalPnl, totalStaked, totalWins, totalLosses, overallRoi, winRate } = useMemo(() => {
+  const { totalPnl, totalWins, totalLosses, overallRoi, winRate } = useMemo(() => {
     const wins = filteredBets.filter(b => b.status === 'won').length
     const losses = filteredBets.filter(b => b.status === 'lost').length
     const pnl = filteredBets.reduce((sum, b) => sum + (b.pnl || 0), 0)
@@ -285,25 +285,25 @@ export default function PerformancePage() {
       dailyPnlMap.set(date, (dailyPnlMap.get(date) || 0) + (bet.pnl || 0))
     }
 
-    // Get sorted unique dates
+    // Get sorted unique dates and compute prefix sums without mutation
     const dates = Array.from(dailyPnlMap.keys()).sort()
-    let cumulativePnl = 0
+    const dailyPnls = dates.map(date => dailyPnlMap.get(date) || 0)
+    const cumulativePnls = dailyPnls.reduce<number[]>((acc, pnl) => {
+      acc.push((acc.length > 0 ? acc[acc.length - 1] : 0) + pnl)
+      return acc
+    }, [])
 
-    return dates.map(date => {
-      const dayPnl = dailyPnlMap.get(date) || 0
-      cumulativePnl += dayPnl
-      return {
-        game_date: date,
-        total_pnl: dayPnl,
-        cumulative_pnl: cumulativePnl,
-        bankroll_after: prefs.initialBankroll + cumulativePnl,
-        total_bets: 0, // Not used in chart
-        bets_won: 0,
-        bets_lost: 0,
-        total_staked: 0,
-        roi_pct: 0
-      } as DailyPerformance
-    })
+    return dates.map((date, i) => ({
+      game_date: date,
+      total_pnl: dailyPnls[i],
+      cumulative_pnl: cumulativePnls[i],
+      bankroll_after: prefs.initialBankroll + cumulativePnls[i],
+      total_bets: 0,
+      bets_won: 0,
+      bets_lost: 0,
+      total_staked: 0,
+      roi_pct: 0
+    } as DailyPerformance))
   }, [dailyData, filteredBets, betSource, prefs.initialBankroll])
 
   // Calculate display bankroll based on filter
@@ -395,23 +395,23 @@ export default function PerformancePage() {
     }
 
     const dates = Array.from(dailyPnlMap.keys()).sort()
-    let cumulativePnl = 0
+    const dailyPnls = dates.map(date => dailyPnlMap.get(date) || 0)
+    const cumulativePnls = dailyPnls.reduce<number[]>((acc, pnl) => {
+      acc.push((acc.length > 0 ? acc[acc.length - 1] : 0) + pnl)
+      return acc
+    }, [])
 
-    return dates.map(date => {
-      const dayPnl = dailyPnlMap.get(date) || 0
-      cumulativePnl += dayPnl
-      return {
-        game_date: date,
-        total_pnl: dayPnl,
-        cumulative_pnl: cumulativePnl,
-        bankroll_after: prefs.initialBankroll + cumulativePnl,
-        total_bets: 0,
-        bets_won: 0,
-        bets_lost: 0,
-        total_staked: 0,
-        roi_pct: 0,
-      } as DailyPerformance
-    })
+    return dates.map((date, i) => ({
+      game_date: date,
+      total_pnl: dailyPnls[i],
+      cumulative_pnl: cumulativePnls[i],
+      bankroll_after: prefs.initialBankroll + cumulativePnls[i],
+      total_bets: 0,
+      bets_won: 0,
+      bets_lost: 0,
+      total_staked: 0,
+      roi_pct: 0,
+    } as DailyPerformance))
   }, [myBets, prefs.initialBankroll])
 
   // My Bets stat breakdown

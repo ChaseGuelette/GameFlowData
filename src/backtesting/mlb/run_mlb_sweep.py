@@ -36,9 +36,9 @@ from src.backtesting.mlb.mlb_backtest_harness import STAT_ACTUALS
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
 from src.db.client import get_engine
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
+from src.models.mlb.mlb_batter_feature_store import MLBBatterFeatureStore
 from src.models.mlb.mlb_feature_store import MLBFeatureStore
-from src.models.mlb.mlb_monte_carlo import MLBMonteCarloPredictor
-from src.models.mlb.mlb_quantile_trainer import MLBPitcherKPipeline
+from src.models.mlb.mlb_model_suite import MLBModelSuite
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +46,15 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("MLBBacktestSweep")
+
+# Mapping from sweep stat key → batter feature store short stat name
+BATTER_STAT_FS_MAP: dict[str, str] = {
+    "batter_hits": "hits",
+    "batter_total_bases": "total_bases",
+    "batter_rbis": "rbis",
+    "batter_runs_scored": "runs",
+    "batter_home_runs": "home_runs",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +133,7 @@ def build_sweep_grid(
 
 @dataclass
 class DatePrediction:
-    """Cached prediction for one pitcher on one date (pre-edge)."""
+    """Cached prediction for one player on one date (pre-edge)."""
 
     game_date: date
     player_id: int
@@ -149,8 +158,9 @@ class DatePrediction:
 
 def run_shared_phases(
     engine,
-    feature_store: MLBFeatureStore,
-    predictor: MLBMonteCarloPredictor,
+    pitcher_feature_store: MLBFeatureStore,
+    batter_feature_store: MLBBatterFeatureStore | None,
+    suite: MLBModelSuite,
     start_date: date,
     end_date: date,
     stats: list[str],
@@ -214,7 +224,8 @@ def run_shared_phases(
     for i, game_date in enumerate(game_dates):
         try:
             preds, lines = _process_date_shared(
-                engine, feature_store, predictor, game_date, stats, bookmakers,
+                engine, pitcher_feature_store, batter_feature_store, suite,
+                game_date, stats, bookmakers,
             )
             if preds:
                 date_predictions[game_date] = preds
@@ -234,8 +245,9 @@ def run_shared_phases(
 
 def _process_date_shared(
     engine,
-    feature_store: MLBFeatureStore,
-    predictor: MLBMonteCarloPredictor,
+    pitcher_feature_store: MLBFeatureStore,
+    batter_feature_store: MLBBatterFeatureStore | None,
+    suite: MLBModelSuite,
     game_date: date,
     stats: list[str],
     bookmakers: list[str],
@@ -245,7 +257,7 @@ def _process_date_shared(
     query = text("""
         SELECT s.game_id, s.home_team_id, s.away_team_id,
                s.probable_pitcher_home_id, s.probable_pitcher_away_id,
-               s.venue_id
+               s.venue_id, s.season
         FROM mlb_game_schedule s
         WHERE s.game_date = :game_date
           AND s.status != 'Cancelled'
@@ -270,53 +282,108 @@ def _process_date_shared(
                     "opponent_id": game[f"{opp_side}_team_id"],
                     "is_home": is_home,
                     "venue_id": game.get("venue_id", 0),
+                    "season": game.get("season", game_date.year),
                 })
 
     # Generate predictions
     predictions = []
-    pitcher_stats = [s for s in stats if s.startswith("pitcher_")]
+
+    # --- Pitcher predictions (routed through suite) ---
+    pitcher_stats = [s for s in stats if s.startswith("pitcher_") and suite.has_stat(s)]
 
     if pitcher_stats and pitchers:
         for pitcher in pitchers:
             try:
-                features = feature_store.get_player_game_features(
+                features = pitcher_feature_store.get_player_game_features(
                     player_id=pitcher["player_id"],
                     game_id=pitcher["game_id"],
                     game_date=str(game_date),
                     team_id=pitcher["team_id"],
                     opp_team_id=pitcher["opponent_id"],
                     venue_id=pitcher.get("venue_id", 0),
-                    season=game_date.year,
+                    season=pitcher["season"],
                     is_home=pitcher["is_home"],
                 )
                 if features is None:
                     continue
 
-                pred = predictor.predict(
-                    player_id=pitcher["player_id"],
-                    game_id=pitcher["game_id"],
-                    features=features,
-                )
-
-                predictions.append(DatePrediction(
-                    game_date=game_date,
-                    player_id=pred.player_id,
-                    game_id=int(pred.game_id),
-                    team_id=pitcher["team_id"],
-                    opponent_id=pitcher["opponent_id"],
-                    stat=pred.stat,
-                    model_type="quantile",
-                    pred_mean=pred.mean,
-                    pred_median=pred.median,
-                    pred_q10=pred.q10,
-                    pred_q25=pred.q25,
-                    pred_q50=pred.q50,
-                    pred_q75=pred.q75,
-                    pred_q90=pred.q90,
-                    samples=pred.samples,
-                ))
+                for p_stat in pitcher_stats:
+                    pred = suite.predict(
+                        p_stat,
+                        player_id=pitcher["player_id"],
+                        game_id=pitcher["game_id"],
+                        features=features,
+                    )
+                    predictions.append(DatePrediction(
+                        game_date=game_date,
+                        player_id=pred.player_id,
+                        game_id=int(pred.game_id),
+                        team_id=pitcher["team_id"],
+                        opponent_id=pitcher["opponent_id"],
+                        stat=pred.stat,
+                        model_type="quantile",
+                        pred_mean=pred.mean,
+                        pred_median=pred.median,
+                        pred_q10=pred.q10,
+                        pred_q25=pred.q25,
+                        pred_q50=pred.q50,
+                        pred_q75=pred.q75,
+                        pred_q90=pred.q90,
+                        samples=pred.samples,
+                    ))
             except Exception as e:
                 logger.warning(f"Error predicting pitcher {pitcher['player_id']}: {e}")
+
+    # --- Batter predictions (batch features per stat per date) ---
+    batter_stats = [s for s in stats if s.startswith("batter_") and suite.has_stat(s)]
+
+    if batter_stats and batter_feature_store is not None:
+        for batter_stat in batter_stats:
+            short_stat = BATTER_STAT_FS_MAP.get(batter_stat)
+            if short_stat is None:
+                logger.warning(f"No feature-store mapping for {batter_stat}, skipping")
+                continue
+
+            try:
+                features_df = batter_feature_store.get_features_for_date(
+                    str(game_date), stat=short_stat,
+                )
+            except Exception as e:
+                logger.warning(f"Error loading batter features for {batter_stat} on {game_date}: {e}")
+                continue
+
+            if features_df.empty:
+                continue
+
+            for _, row in features_df.iterrows():
+                try:
+                    player_id = int(row["player_id"])
+                    game_id_val = int(row["game_id"])
+                    features = row.to_dict()
+
+                    pred = suite.predict(batter_stat, player_id, game_id_val, features)
+
+                    predictions.append(DatePrediction(
+                        game_date=game_date,
+                        player_id=pred.player_id,
+                        game_id=int(pred.game_id),
+                        team_id=int(row.get("team_id", 0)),
+                        opponent_id=int(row.get("opp_team_id", 0)),
+                        stat=batter_stat,
+                        model_type=suite.get_model_type(batter_stat),
+                        pred_mean=pred.mean,
+                        pred_median=pred.median,
+                        pred_q10=pred.q10,
+                        pred_q25=pred.q25,
+                        pred_q50=pred.q50,
+                        pred_q75=pred.q75,
+                        pred_q90=pred.q90,
+                        samples=pred.samples,
+                    ))
+                except Exception as e:
+                    logger.warning(
+                        f"Error predicting {batter_stat} for player {row.get('player_id', '?')}: {e}"
+                    )
 
     # Fetch lines for all players on this date
     game_ids = [g["game_id"] for g in games]
@@ -774,21 +841,33 @@ def save_results(
 # ---------------------------------------------------------------------------
 
 def find_latest_model_dir(base_dir: str) -> Path:
+    """Find the best model directory for the suite.
+
+    Priority:
+    1. production/ subdirectory (unified suite location)
+    2. Model files directly in base_dir (legacy)
+    3. Latest mlb_run_* directory
+    """
     base = Path(base_dir)
     if not base.exists():
         raise FileNotFoundError(f"Artifacts directory not found: {base}")
 
+    # 1. Check production/ first (where unified suite lives)
+    prod = base / "production"
+    if prod.exists() and prod.is_dir():
+        return prod
+
+    # 2. Legacy: model files directly in base_dir
     if (base / "pitcher_k_model.joblib").exists():
         return base
-    if (base / "production" / "pitcher_k_model.joblib").exists():
-        return base / "production"
 
+    # 3. Scan mlb_run_* directories, pick latest
     runs = sorted([
         d for d in base.iterdir()
         if d.is_dir() and d.name.startswith("mlb_run_") and not d.name.endswith("_incomplete")
     ])
     if not runs:
-        raise FileNotFoundError(f"No mlb_run_* directories found in {base}")
+        raise FileNotFoundError(f"No model directories found in {base}")
     return runs[-1]
 
 
@@ -853,13 +932,17 @@ def main():
 
     # Initialize
     engine = get_engine()
-    feature_store = MLBFeatureStore(engine)
+    pitcher_feature_store = MLBFeatureStore(engine)
 
     model_path = find_latest_model_dir(args.model_dir)
-    logger.info(f"Using model: {model_path}")
+    logger.info(f"Using model directory: {model_path}")
 
-    pipeline = MLBPitcherKPipeline.load(str(model_path))
-    predictor = MLBMonteCarloPredictor(pipeline, n_samples=args.n_samples)
+    suite = MLBModelSuite.from_directory(model_path, n_samples=args.n_samples)
+    logger.info(f"Suite loaded stats: {suite.available_stats}")
+
+    # Only create batter feature store if we have batter stats to predict
+    has_batter_stats = any(s.startswith("batter_") and suite.has_stat(s) for s in args.stats)
+    batter_feature_store = MLBBatterFeatureStore(engine) if has_batter_stats else None
 
     # Phase 0 + 1
     logger.info("=" * 60)
@@ -869,8 +952,9 @@ def main():
 
     game_dates, date_predictions, date_lines, date_actuals = run_shared_phases(
         engine=engine,
-        feature_store=feature_store,
-        predictor=predictor,
+        pitcher_feature_store=pitcher_feature_store,
+        batter_feature_store=batter_feature_store,
+        suite=suite,
         start_date=start_date,
         end_date=end_date,
         stats=args.stats,

@@ -1,10 +1,11 @@
 """MLB Monte Carlo predictors.
 
-Contains two predictors:
+Contains three predictors:
 - MLBMonteCarloPredictor: Quantile-interpolation sampler for pitcher Ks
 - MLBNegBinPredictor:     NegBin-distribution sampler for batter count stats
+- MLBBinomialPredictor:   Binomial sampler for batter hits (hits in at-bats)
 
-Both produce PropPrediction objects compatible with the backtest harness.
+All produce PropPrediction objects compatible with the backtest harness.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.models.binomial_model import BinomialModel
 from src.models.monte_carlo import PropPrediction
 from src.models.negbin_model import NegBinModel
 
@@ -323,6 +325,87 @@ class MLBNegBinPredictor:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _prepare_features(self, features: dict) -> pd.DataFrame:
+        feature_names = self.model.feature_names
+        row = {f: features.get(f, 0) for f in feature_names}
+        df = pd.DataFrame([row])
+        df = df.apply(pd.to_numeric, errors="coerce").fillna(0).astype(np.float32)
+        return df
+
+
+class MLBBinomialPredictor:
+    """Monte Carlo predictor backed by a BinomialModel.
+
+    For each player-game, draws ``n_samples`` from the fitted Binomial(n, p)
+    distribution where n = at-bats (from features) and p = learned hit probability.
+    """
+
+    def __init__(
+        self,
+        model: BinomialModel,
+        stat: str = "batter_hits",
+        n_samples: int = 10_000,
+        random_state: int = 42,
+        at_bats_feature: str = "projected_ab",
+    ):
+        self.model = model
+        self.stat = stat
+        self.n_samples = n_samples
+        self.rng = np.random.RandomState(random_state)
+        self.at_bats_feature = at_bats_feature
+
+    @classmethod
+    def from_directory(
+        cls,
+        directory: str | Path,
+        stat: str = "hits",
+        n_samples: int = 10_000,
+        random_state: int = 42,
+    ) -> MLBBinomialPredictor:
+        """Load a BinomialModel from *directory* and wrap it."""
+        model_name = f"batter_{stat}"
+        model = BinomialModel.load(directory, model_name=model_name)
+        return cls(model=model, stat=stat, n_samples=n_samples, random_state=random_state)
+
+    def predict(
+        self,
+        player_id: int,
+        game_id: int,
+        features: dict,
+    ) -> PropPrediction:
+        """Generate MC prediction for a single batter's hits."""
+        X = self._prepare_features(features)
+        at_bats = np.array([max(features.get(self.at_bats_feature, 3.5), 1.0)])
+
+        samples = self.model.sample(X, at_bats, n_samples=self.n_samples, rng=self.rng).flatten()
+
+        return PropPrediction(
+            player_id=player_id,
+            game_id=str(game_id),
+            stat=self.stat,
+            mean=float(samples.mean()),
+            median=float(np.median(samples)),
+            q10=float(np.percentile(samples, 10)),
+            q25=float(np.percentile(samples, 25)),
+            q50=float(np.percentile(samples, 50)),
+            q75=float(np.percentile(samples, 75)),
+            q90=float(np.percentile(samples, 90)),
+            samples=samples,
+        )
+
+    def predict_batch(
+        self,
+        player_games: list[tuple[int, int, dict]],
+    ) -> list[PropPrediction]:
+        """Batch predict for multiple batter-games."""
+        if not player_games:
+            return []
+
+        results: list[PropPrediction] = []
+        for player_id, game_id, features in player_games:
+            results.append(self.predict(player_id, game_id, features))
+        return results
 
     def _prepare_features(self, features: dict) -> pd.DataFrame:
         feature_names = self.model.feature_names

@@ -88,6 +88,7 @@ BATTER_BASE_FEATURES: list[str] = [
 # Per-stat extensions
 BATTER_HITS_FEATURES: list[str] = BATTER_BASE_FEATURES + [
     "park_hits_factor", "prop_line_batter_hits",
+    "projected_ab",
 ]
 BATTER_HR_FEATURES: list[str] = BATTER_BASE_FEATURES + [
     "park_hr_factor", "batter_avg_hr_vs_hand_l20",
@@ -223,6 +224,9 @@ class MLBBatterFeatureStore:
 
                 -- Target
                 bgs.{target_col} AS actual,
+
+                -- At-bats (for binomial model)
+                COALESCE(bgs.ab, 0) AS at_bats,
 
                 -- Game context
                 CASE WHEN gs.home_team_id = bgs.team_id THEN 1 ELSE 0 END AS is_home,
@@ -404,6 +408,13 @@ class MLBBatterFeatureStore:
             else 1.0,
             axis=1,
         )
+
+        # Projected AB for binomial model (use rolling avg, avoid leakage)
+        if "batter_avg_ab_l5" in df.columns:
+            df["projected_ab"] = df["batter_avg_ab_l5"].clip(lower=1.0).fillna(3.5)
+        else:
+            df["projected_ab"] = 3.5
+
         return df
 
     # ------------------------------------------------------------------
@@ -481,6 +492,9 @@ class MLBBatterFeatureStore:
             else 1.0
         )
 
+        # Projected AB for binomial model
+        features["projected_ab"] = max(features.get("batter_avg_ab_l5", 3.5), 1.0)
+
         return features
 
     # ------------------------------------------------------------------
@@ -506,6 +520,9 @@ class MLBBatterFeatureStore:
 
                 -- Target (for backtesting evaluation)
                 bgs.{target_col} AS actual,
+
+                -- At-bats (for binomial model)
+                COALESCE(bgs.ab, 0) AS at_bats,
 
                 -- Game context
                 CASE WHEN gs.home_team_id = bgs.team_id THEN 1 ELSE 0 END AS is_home,

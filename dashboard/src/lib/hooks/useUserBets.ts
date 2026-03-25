@@ -44,7 +44,7 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
   }
 
   // Try with all columns first, fall back progressively if migrations not applied
-  let { data, error } = await supabase
+  const { data: initialData, error } = await supabase
     .from('user_bets')
     .upsert({
       ...baseRow,
@@ -86,12 +86,11 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
         console.error('Failed to place custom bet:', retry2.error)
         return null
       }
-      data = retry2.data
-    } else {
-      data = retry1.data
+      return retry2.data
     }
+    return retry1.data
   }
-  return data
+  return initialData
 }
 
 // Calculate Kelly stake as fraction of bankroll (same logic as AnalysisModal)

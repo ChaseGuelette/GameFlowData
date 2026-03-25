@@ -188,7 +188,7 @@ export const MLB_CONFIG: SportConfig = {
     statsVault: false,
     askChat: false,
     injuries: false,
-    scoreboard: false,
+    scoreboard: true,
   },
   columns: {
     q10: 'pred_q10',

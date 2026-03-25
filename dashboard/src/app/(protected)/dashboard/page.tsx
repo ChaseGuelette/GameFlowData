@@ -387,12 +387,6 @@ export default function DashboardPage() {
     })
   }, [userState])
 
-  // Get unique matchups from predictions for dropdown (e.g., "LAL vs SAS")
-  const availableMatchups = [...new Set(predictions.map(p => {
-    const teams = [p.team_abbrev || 'UNK', p.opponent_abbrev || 'UNK'].sort()
-    return `${teams[0]} vs ${teams[1]}`
-  }))].sort()
-
   // Derive tonight's games from predictions, or fallback to game lines
   const tonightsGames: GameInfo[] = (() => {
     if (predictions.length > 0) {

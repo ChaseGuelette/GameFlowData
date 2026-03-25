@@ -606,39 +606,39 @@ def main():
     )
 
     # ==============================================================
-    # MLB Jobs (April–October only)
+    # MLB Jobs
     # ==============================================================
 
     # 10:00 AM ET - MLB daily stats (results from last night)
     scheduler.add_job(
         run_mlb_daily_stats,
-        CronTrigger(hour=10, minute=0, month='4-10'),
+        CronTrigger(hour=10, minute=0),
         id="mlb_daily_stats",
-        name="MLB Daily Stats (10 AM ET, Apr-Oct)",
+        name="MLB Daily Stats (10 AM ET)",
     )
 
     # 10:30 AM ET - Retry MLB daily stats if 10 AM failed
     scheduler.add_job(
         run_mlb_daily_stats_retry,
-        CronTrigger(hour=10, minute=30, month='4-10'),
+        CronTrigger(hour=10, minute=30),
         id="mlb_daily_stats_retry",
-        name="MLB Daily Stats Retry (10:30 AM ET, Apr-Oct)",
+        name="MLB Daily Stats Retry (10:30 AM ET)",
     )
 
-    # 1:00 PM ET - MLB inference (afternoon/evening games)
+    # 1:30 PM ET - MLB inference (afternoon/evening games)
     scheduler.add_job(
         run_mlb_inference,
-        CronTrigger(hour=13, minute=30, month='4-10'),
+        CronTrigger(hour=13, minute=30),
         id="mlb_inference_1pm",
-        name="MLB Inference (1:30 PM ET, Apr-Oct)",
+        name="MLB Inference (1:30 PM ET)",
     )
 
     # 6:30 PM ET - MLB inference refresh (evening games)
     scheduler.add_job(
         run_mlb_inference,
-        CronTrigger(hour=18, minute=30, month='4-10'),
+        CronTrigger(hour=18, minute=30),
         id="mlb_inference_6pm",
-        name="MLB Inference (6:30 PM ET, Apr-Oct)",
+        name="MLB Inference (6:30 PM ET)",
     )
 
     # Log scheduled jobs

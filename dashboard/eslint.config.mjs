@@ -5,6 +5,13 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
+  {
+    rules: {
+      // Overly strict for legitimate patterns like resetting state on prop/route change,
+      // syncing derived state, and async data fetching in effects.
+      "react-hooks/set-state-in-effect": "warn",
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

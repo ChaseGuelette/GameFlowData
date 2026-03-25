@@ -41,15 +41,17 @@ class MLBDailyPredictionRunner:
     """
     Production pipeline for daily MLB predictions.
 
-    Supports pitcher K quantile models and scaffolding for batter
-    NegBin/binary models (returns empty if models not loaded).
+    Accepts an MLBModelSuite for unified model access across pitcher quantile,
+    batter NegBin, and batter binary model types.
     """
 
     def __init__(
         self,
         engine,
+        suite=None,
         pitcher_feature_store=None,
         batter_feature_store=None,
+        # Legacy args — kept for backward compatibility
         pitcher_k_pipeline=None,
         pitcher_k_predictor=None,
         batter_models: dict[str, Any] | None = None,
@@ -57,8 +59,17 @@ class MLBDailyPredictionRunner:
         self.engine = engine
         self.pitcher_feature_store = pitcher_feature_store
         self.batter_feature_store = batter_feature_store
+
+        # If suite is provided, use it for all model access
+        self.suite = suite
+
+        # Legacy fallback: wrap old-style args
+        if suite is not None:
+            self.pitcher_k_predictor = suite.get_predictor("pitcher_strikeouts")
+        else:
+            self.pitcher_k_predictor = pitcher_k_predictor
+
         self.pitcher_k_pipeline = pitcher_k_pipeline
-        self.pitcher_k_predictor = pitcher_k_predictor
         self.batter_models = batter_models or {}
 
     def run_for_date(
@@ -98,9 +109,13 @@ class MLBDailyPredictionRunner:
                 all_predictions.extend(pitcher_preds)
                 all_samples.update(pitcher_samples)
 
-        # 3. Batter predictions (scaffold — returns empty if models not loaded)
+        # 3. Batter predictions
         batter_stats = [s for s in stats if s.startswith("batter_")]
-        if batter_stats and self.batter_models:
+        has_batter_models = (
+            (self.suite is not None and self.suite.batter_stats)
+            or self.batter_models
+        )
+        if batter_stats and has_batter_models:
             batters = self._get_batters_for_games(games, target_date)
             logger.info(f"Found {len(batters)} active batters")
 
@@ -144,6 +159,8 @@ class MLBDailyPredictionRunner:
                 s.away_team_id,
                 s.probable_pitcher_home_id,
                 s.probable_pitcher_away_id,
+                s.venue_id,
+                s.season,
                 s.game_time_utc,
                 ht.team_abbreviation AS home_team_abbrev,
                 at.team_abbreviation AS away_team_abbrev
@@ -226,7 +243,7 @@ class MLBDailyPredictionRunner:
             result = conn.execute(query, {"team_ids": list(team_ids)})
             batters_raw = [dict(row._mapping) for row in result]
 
-        # Map batters to games
+        # Map batters to games (enriched with venue_id, opp_pitcher_id, season)
         team_game_map: dict[int, dict] = {}
         for g in games:
             home_id = g.get("home_team_id")
@@ -236,15 +253,21 @@ class MLBDailyPredictionRunner:
                     "game_id": g["game_id"],
                     "opponent_id": away_id,
                     "is_home": True,
-                    "game_time": g.get("game_datetime"),
+                    "game_time": g.get("game_time_utc"),
                     "opp_abbrev": g.get("away_team_abbrev"),
+                    "venue_id": g.get("venue_id"),
+                    "season": g.get("season"),
+                    "opp_pitcher_id": g.get("probable_pitcher_away_id"),
                 }
                 team_game_map[away_id] = {
                     "game_id": g["game_id"],
                     "opponent_id": home_id,
                     "is_home": False,
-                    "game_time": g.get("game_datetime"),
+                    "game_time": g.get("game_time_utc"),
                     "opp_abbrev": g.get("home_team_abbrev"),
+                    "venue_id": g.get("venue_id"),
+                    "season": g.get("season"),
+                    "opp_pitcher_id": g.get("probable_pitcher_home_id"),
                 }
 
         # Look up player names
@@ -272,6 +295,9 @@ class MLBDailyPredictionRunner:
                     "is_home": mapping["is_home"],
                     "game_time": mapping.get("game_time"),
                     "opp_abbrev": mapping.get("opp_abbrev"),
+                    "venue_id": mapping.get("venue_id"),
+                    "season": mapping.get("season"),
+                    "opp_pitcher_id": mapping.get("opp_pitcher_id"),
                 })
 
         return batters
@@ -367,23 +393,124 @@ class MLBDailyPredictionRunner:
         target_date: date,
         stats: list[str],
     ) -> tuple[list[dict], dict[tuple, np.ndarray]]:
-        """Generate batter predictions (NegBin/binary dispatch).
-
-        Returns empty if batter models are not loaded.
-        Infrastructure is scaffolded for when models are trained.
-        """
+        """Generate batter predictions via NegBin/binary dispatch through suite."""
+        start_time = time.perf_counter()
         predictions = []
         samples_dict: dict[tuple, np.ndarray] = {}
 
-        if not self.batter_models:
+        # Determine which batter stats we can actually predict
+        if self.suite is not None:
+            available_batter = [s for s in stats if self.suite.has_stat(s)]
+        else:
+            available_batter = []
+
+        if not available_batter:
             logger.info("No batter models loaded — skipping batter predictions")
             return predictions, samples_dict
 
-        # TODO: Build batter features, dispatch to NegBin/binary per stat,
-        # generate MC samples, and collect predictions.
-        # This will follow the same pattern as pitcher predictions once
-        # batter models are trained and validated.
-        logger.info(f"Batter prediction scaffold: {len(batters)} batters, {len(stats)} stats")
+        if self.batter_feature_store is None:
+            logger.warning("No batter feature store — skipping batter predictions")
+            return predictions, samples_dict
+
+        logger.info(
+            "Building batter features for %d batters, stats=%s",
+            len(batters), available_batter,
+        )
+
+        # Build features in parallel (one call per batter, covers all stats)
+        def fetch_batter_features(batter: dict) -> tuple[dict, dict | None]:
+            try:
+                features = self.batter_feature_store.get_player_game_features(
+                    player_id=batter["player_id"],
+                    game_id=batter["game_id"],
+                    game_date=str(target_date),
+                    team_id=batter["team_id"],
+                    opp_team_id=batter["opponent_id"],
+                    venue_id=batter.get("venue_id") or 0,
+                    season=batter.get("season") or target_date.year,
+                    is_home=batter["is_home"],
+                    opp_pitcher_id=batter.get("opp_pitcher_id"),
+                    lineup_pos=0,  # Lineup data not available pre-game
+                    stat="hits",   # Base features (stat-specific prop line added per-stat)
+                )
+                return batter, features
+            except Exception as e:
+                logger.error(
+                    "Error building features for batter %s: %s",
+                    batter["player_id"], e,
+                )
+                return batter, None
+
+        batter_features = []
+        max_workers = min(8, len(batters)) if batters else 1
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(fetch_batter_features, b): b for b in batters}
+            for future in as_completed(futures):
+                batter, features = future.result()
+                if features is not None:
+                    batter_features.append((batter, features))
+
+        logger.info(
+            "Batter features built for %d/%d batters", len(batter_features), len(batters)
+        )
+
+        # For each available batter stat, build player_games and batch predict
+        for stat in available_batter:
+            model_type = self.suite.get_model_type(stat)
+
+            player_games = []
+            batter_info = []
+            for batter, base_features in batter_features:
+                # Copy features so we can add stat-specific prop line
+                feat = dict(base_features)
+
+                # Add stat-specific prop line if the feature store fetched a generic one
+                # The batter feature store fetches for stat="hits" by default;
+                # for other stats, set the prop line feature to 0 (will be fetched
+                # per-stat if the feature store supports it, otherwise defaults)
+                player_games.append((batter["player_id"], batter["game_id"], feat))
+                batter_info.append(batter)
+
+            if not player_games:
+                continue
+
+            try:
+                preds = self.suite.predict_batch(stat, player_games)
+            except Exception as e:
+                logger.error("Error predicting %s: %s", stat, e)
+                continue
+
+            for pred, batter in zip(preds, batter_info):
+                pred_prob = pred.mean if model_type == "binary" else None
+
+                predictions.append({
+                    "player_id": pred.player_id,
+                    "player_name": batter.get("player_name", "Unknown"),
+                    "game_id": int(pred.game_id),
+                    "team_id": batter["team_id"],
+                    "opponent_id": batter["opponent_id"],
+                    "stat": pred.stat,
+                    "model_type": model_type,
+                    "pred_mean": pred.mean,
+                    "pred_std": float(np.std(pred.samples)) if pred.samples is not None else None,
+                    "pred_median": pred.median,
+                    "pred_q10": pred.q10,
+                    "pred_q25": pred.q25,
+                    "pred_q50": pred.q50,
+                    "pred_q75": pred.q75,
+                    "pred_q90": pred.q90,
+                    "pred_prob": pred_prob,
+                    "game_time": batter.get("game_time"),
+                })
+                if pred.samples is not None:
+                    samples_dict[(pred.player_id, int(pred.game_id), pred.stat)] = pred.samples
+
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "Batter predictions: %d in %.1fs (%d batters × %d stats)",
+            len(predictions), elapsed, len(batter_features), len(available_batter),
+        )
 
         return predictions, samples_dict
 

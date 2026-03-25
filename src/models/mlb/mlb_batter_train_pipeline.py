@@ -17,6 +17,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.models.binomial_model import BinomialConfig
+    from src.models.negbin_model import NegBinConfig
 import json
 import logging
 import subprocess
@@ -107,6 +112,8 @@ class MLBBatterTrainingOrchestrator:
 
         if self.is_binary:
             self._run_binary_pipeline(train_df, cal_df, train_seasons, cal_season, cal_end_date)
+        elif self.stat == "hits":
+            self._run_binomial_pipeline(train_df, cal_df, train_seasons, cal_season, cal_end_date)
         else:
             self._run_negbin_pipeline(train_df, cal_df, train_seasons, cal_season, cal_end_date)
 
@@ -197,11 +204,278 @@ class MLBBatterTrainingOrchestrator:
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
 
     # ------------------------------------------------------------------
-    # NegBin pipeline (hits, TB, RBI, runs)
+    # Binomial pipeline (hits)
+    # ------------------------------------------------------------------
+
+    def _run_binomial_pipeline(self, train_df, cal_df, train_seasons, cal_season, cal_end_date):
+        """Train Binomial model for hits (successes in at-bats)."""
+        from scipy.stats import binom as _binom
+
+        from src.models.binomial_model import BinomialModel
+        from src.models.mlb.mlb_batter_feature_store import BATTER_STAT_MARKET_KEY
+
+        model_name = f"batter_{self.stat}"
+
+        # Step 3: Feature selection — binomial NLL-based
+        logger.info("Step 3: Running binomial NLL-based feature selection...")
+        excluded = {
+            "game_id", "player_id", "game_date", "season", "team_id",
+            "opp_team_id", "actual", "player_name", "at_bats",
+        }
+        candidates = [
+            c for c in train_df.columns
+            if c not in excluded and train_df[c].dtype in ("float64", "float32", "int64", "int32")
+        ]
+
+        valid_df = train_df[
+            train_df["actual"].notna() & (train_df["actual"] >= 0) & (train_df["at_bats"] > 0)
+        ].fillna(0)
+
+        selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
+        selected_features = selector.select_features_binomial_nll(
+            valid_df, "actual", candidates,
+            at_bats_col="at_bats",
+            model_name=f"Batter {self.stat} (Binomial)",
+        )
+        logger.info("Binomial feature set: %d features", len(selected_features))
+
+        X_train = valid_df[selected_features].fillna(0)
+        y_train = valid_df["actual"]
+        at_bats_train = valid_df["at_bats"].values
+
+        # Step 4: Hyperparameter tuning (optional)
+        binomial_config = self._resolve_binomial_config(X_train, y_train, at_bats_train)
+
+        # Step 5: Train
+        display_name = model_name.upper().replace("_", " ")
+        print("\n" + "=" * 60)
+        print(f"TRAINING MLB {display_name} BINOMIAL MODEL")
+        print("=" * 60)
+
+        model = BinomialModel(config=binomial_config, model_name=model_name)
+        fit_info = model.fit(X_train, y_train, at_bats_train)
+        logger.info("Fit info: %s", fit_info)
+
+        # Step 6-7: Binomial calibration
+        logger.info("Step 6-7: Computing binomial calibration metrics...")
+        cal_valid = cal_df[
+            cal_df["actual"].notna() & (cal_df["actual"] >= 0) & (cal_df["at_bats"] > 0)
+        ].fillna(0)
+        X_cal = cal_valid[selected_features].fillna(0)
+        y_cal = cal_valid["actual"].values
+        at_bats_cal = cal_valid["at_bats"].values
+
+        p_pred, n_pred = model.predict_params(X_cal, at_bats_cal)
+        cal_report = self._compute_binomial_calibration(
+            y_cal, p_pred, n_pred, cal_valid, self.stat
+        )
+
+        # Log key metrics
+        logger.info("  Mean NLL: %.4f", cal_report["mean_nll"])
+        logger.info("  Bias: predicted_mean=%.3f, actual_mean=%.3f, ratio=%.4f",
+                     cal_report["mean_predicted_hits"], cal_report["mean_actual"],
+                     cal_report["mean_ratio"])
+        logger.info("  Zero fraction: predicted=%.3f, actual=%.3f, gap=%+.3f",
+                     cal_report["predicted_zero_frac"], cal_report["actual_zero_frac"],
+                     cal_report["zero_frac_gap"])
+        for entry in cal_report.get("prop_line_calibration", []):
+            logger.info("  Line %.1f: model_over=%.3f, actual_over=%.3f, gap=%+.3f (n=%d)",
+                         entry["line"], entry["model_over_rate"], entry["actual_over_rate"],
+                         entry["gap"], entry["n"])
+        logger.info("  p percentiles: %s", cal_report.get("p_percentiles"))
+
+        # Step 8: Sanity check
+        logger.info("Step 8: Sanity check (binomial parameters)...")
+        market_key = BATTER_STAT_MARKET_KEY.get(self.stat, f"batter_{self.stat}")
+        prop_line_col = f"prop_line_{market_key}"
+
+        sample_size = min(5, len(cal_valid))
+        sample_indices = np.random.RandomState(42).choice(len(cal_valid), sample_size, replace=False)
+        for i in sample_indices:
+            p_i, n_i = p_pred[i], n_pred[i]
+            actual_i = y_cal[i]
+
+            line_val = cal_valid.iloc[i].get(prop_line_col, 0)
+            if line_val and line_val > 0:
+                threshold = int(np.floor(line_val))
+                p_over = 1.0 - _binom.cdf(threshold, int(n_i), p_i)
+            else:
+                p_over = float("nan")
+
+            logger.info(
+                "  Row %d: p=%.3f, n=%d, P(over %.1f)=%.3f, actual=%.0f",
+                i, p_i, int(n_i), line_val if line_val else 0, p_over, actual_i,
+            )
+            if p_i < 0 or p_i > 1:
+                raise ValueError(f"Invalid probability: p={p_i}")
+
+        # Step 9: Save
+        logger.info("Step 9: Saving artifacts...")
+        model.save(self.run_dir)
+        self._save_feature_manifest({"binomial": selected_features})
+        self._save_calibration_report({f"batter_{self.stat}": cal_report})
+        self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
+
+    # ------------------------------------------------------------------
+    # Binomial Hyperparameter Tuning
+    # ------------------------------------------------------------------
+
+    def _resolve_binomial_config(self, X: pd.DataFrame, y: pd.Series, at_bats: np.ndarray) -> BinomialConfig:
+        """Resolve Binomial hyperparameters: tune if enabled, else use defaults."""
+        from src.models.binomial_model import BinomialConfig
+
+        if not self.tune_hyperparams:
+            logger.info("Step 4: Hyperparameter tuning DISABLED, using defaults")
+            return BinomialConfig(
+                n_estimators=1000,
+                max_depth=5,
+                learning_rate=0.03,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                min_child_weight=3,
+                early_stopping_rounds=50,
+            )
+
+        from src.models.binomial_tuner import BinomialHyperparameterTuner
+
+        logger.info("Step 4: Running Optuna hyperparameter tuning (%d trials)...", self.tuning_trials)
+
+        tuner = BinomialHyperparameterTuner(
+            n_trials=self.tuning_trials,
+            val_fraction=0.15,
+            pruning=True,
+            random_state=42,
+        )
+        best_config = tuner.tune(X, y, at_bats)
+
+        tuner.save_best_config(self.run_dir / "best_hyperparams.json")
+        logger.info(
+            "Tuning complete: val NLL=%.4f, depth=%d, lr=%.4f, n_est=%d",
+            tuner.best_nll, best_config.max_depth,
+            best_config.learning_rate, best_config.n_estimators,
+        )
+
+        return best_config
+
+    # ------------------------------------------------------------------
+    # Binomial Calibration
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_binomial_calibration(
+        y_actual: np.ndarray,
+        p_pred: np.ndarray,
+        n_pred: np.ndarray,
+        cal_df: pd.DataFrame,
+        stat: str,
+    ) -> dict:
+        """Compute calibration metrics using the Binomial PMF/CDF.
+
+        Returns a dict with: mean_nll, bias metrics, zero fraction comparison,
+        per-prop-line calibration, binned P(over) calibration, and distribution stats.
+        """
+        from scipy.stats import binom as _binom
+
+        from src.models.mlb.mlb_batter_feature_store import BATTER_STAT_MARKET_KEY
+
+        n_samples = len(y_actual)
+        y_int = y_actual.astype(int)
+        n_int = np.maximum(n_pred.astype(int), 1)
+        p_safe = np.clip(p_pred, 1e-7, 1 - 1e-7)
+
+        # --- Mean NLL ---
+        log_probs = _binom.logpmf(y_int, n_int, p_safe)
+        log_probs = np.where(np.isfinite(log_probs), log_probs, -100)
+        mean_nll = -float(np.mean(log_probs))
+
+        # --- Bias ---
+        predicted_hits = p_safe * n_pred
+        mean_predicted_hits = float(np.mean(predicted_hits))
+        mean_actual = float(np.mean(y_actual))
+        mean_ratio = mean_predicted_hits / max(mean_actual, 1e-6)
+
+        # --- Zero fraction ---
+        predicted_zero_frac = float(np.mean(_binom.pmf(0, n_int, p_safe)))
+        actual_zero_frac = float(np.mean(y_actual == 0))
+        zero_frac_gap = predicted_zero_frac - actual_zero_frac
+
+        # --- Per-prop-line calibration ---
+        market_key = BATTER_STAT_MARKET_KEY.get(stat, f"batter_{stat}")
+        prop_line_col = f"prop_line_{market_key}"
+        prop_line_calibration = []
+
+        if prop_line_col in cal_df.columns:
+            lines = cal_df[prop_line_col].values
+            unique_lines = sorted(set(lines[lines > 0]))
+
+            for line_val in unique_lines:
+                mask = lines == line_val
+                if mask.sum() < 20:
+                    continue
+
+                threshold = int(np.floor(line_val))
+                model_over = 1.0 - _binom.cdf(threshold, n_int[mask], p_safe[mask])
+                model_over_rate = float(np.mean(model_over))
+                actual_over_rate = float(np.mean(y_actual[mask] > line_val))
+
+                prop_line_calibration.append({
+                    "line": float(line_val),
+                    "model_over_rate": round(model_over_rate, 4),
+                    "actual_over_rate": round(actual_over_rate, 4),
+                    "gap": round(model_over_rate - actual_over_rate, 4),
+                    "n": int(mask.sum()),
+                })
+
+        # --- Binned calibration ---
+        binned_calibration = []
+        if prop_line_col in cal_df.columns:
+            lines = cal_df[prop_line_col].values
+            has_line_mask = lines > 0
+            if has_line_mask.sum() > 50:
+                thresholds = np.floor(lines[has_line_mask]).astype(int)
+                p_over = 1.0 - _binom.cdf(thresholds, n_int[has_line_mask], p_safe[has_line_mask])
+                actual_over = (y_actual[has_line_mask] > lines[has_line_mask]).astype(float)
+
+                bin_edges = np.arange(0, 1.1, 0.1)
+                for j in range(len(bin_edges) - 1):
+                    lo, hi = bin_edges[j], bin_edges[j + 1]
+                    in_bin = (p_over >= lo) & (p_over < hi)
+                    if in_bin.sum() < 5:
+                        continue
+                    binned_calibration.append({
+                        "bin_lo": round(float(lo), 2),
+                        "bin_hi": round(float(hi), 2),
+                        "mean_predicted": round(float(np.mean(p_over[in_bin])), 4),
+                        "mean_actual": round(float(np.mean(actual_over[in_bin])), 4),
+                        "n": int(in_bin.sum()),
+                    })
+
+        # --- Distribution stats ---
+        pcts = [10, 25, 50, 75, 90]
+        p_percentiles = {f"P{p}": round(float(np.percentile(p_pred, p)), 4) for p in pcts}
+        n_percentiles = {f"P{p}": round(float(np.percentile(n_pred, p)), 1) for p in pcts}
+
+        return {
+            "mean_nll": round(mean_nll, 4),
+            "mean_predicted_hits": round(mean_predicted_hits, 4),
+            "mean_actual": round(mean_actual, 4),
+            "mean_ratio": round(mean_ratio, 4),
+            "predicted_zero_frac": round(predicted_zero_frac, 4),
+            "actual_zero_frac": round(actual_zero_frac, 4),
+            "zero_frac_gap": round(zero_frac_gap, 4),
+            "prop_line_calibration": prop_line_calibration,
+            "binned_calibration": binned_calibration,
+            "p_percentiles": p_percentiles,
+            "n_percentiles": n_percentiles,
+            "n_calibration_samples": n_samples,
+        }
+
+    # ------------------------------------------------------------------
+    # NegBin pipeline (TB, RBI, runs)
     # ------------------------------------------------------------------
 
     def _run_negbin_pipeline(self, train_df, cal_df, train_seasons, cal_season, cal_end_date):
-        """Train NegBin model for count stats (hits, TB, RBI, runs)."""
+        """Train NegBin model for count stats (TB, RBI, runs). Hits use binomial instead."""
         from scipy.stats import nbinom as _nbinom
 
         from src.models.mlb.mlb_batter_feature_store import BATTER_STAT_MARKET_KEY
@@ -308,7 +582,7 @@ class MLBBatterTrainingOrchestrator:
     # NegBin Hyperparameter Tuning
     # ------------------------------------------------------------------
 
-    def _resolve_negbin_config(self, X: pd.DataFrame, y: pd.Series) -> "NegBinConfig":
+    def _resolve_negbin_config(self, X: pd.DataFrame, y: pd.Series) -> NegBinConfig:
         """Resolve NegBin hyperparameters: tune if enabled, else use defaults."""
         from src.models.negbin_model import NegBinConfig
 
@@ -471,9 +745,15 @@ class MLBBatterTrainingOrchestrator:
     # ------------------------------------------------------------------
 
     def _save_run_config(self, train_seasons, cal_season, cal_end_date):
+        if self.is_binary:
+            model_type = "binary"
+        elif self.stat == "hits":
+            model_type = "binomial"
+        else:
+            model_type = "negbin"
         config = {
             "stat": self.stat,
-            "model_type": "binary" if self.is_binary else "negbin",
+            "model_type": model_type,
             "train_seasons": train_seasons,
             "cal_season": cal_season,
             "cal_end_date": cal_end_date,

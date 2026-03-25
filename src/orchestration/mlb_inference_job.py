@@ -86,22 +86,22 @@ def main():
 
     try:
         from src.db.client import get_engine
+        from src.models.mlb.mlb_batter_feature_store import MLBBatterFeatureStore
         from src.models.mlb.mlb_daily_runner import MLBDailyPredictionRunner
         from src.models.mlb.mlb_feature_store import MLBFeatureStore
-        from src.models.mlb.mlb_monte_carlo import MLBMonteCarloPredictor
+        from src.models.mlb.mlb_model_suite import MLBModelSuite
         from src.models.mlb.mlb_prediction_store import MLBPredictionStore
-        from src.models.mlb.mlb_quantile_trainer import MLBPitcherKPipeline
 
         # Find model artifacts
         artifacts_path = Path(args.model_dir)
         if not artifacts_path.exists():
             raise FileNotFoundError(f"MLB model artifacts directory not found: {artifacts_path}")
 
-        # Check for pitcher K model
-        if (artifacts_path / "pitcher_k_model.joblib").exists():
-            model_path = artifacts_path
-        elif (artifacts_path / "production" / "pitcher_k_model.joblib").exists():
+        # Resolve artifact directory: prefer production/, then direct, then latest run
+        if (artifacts_path / "production").exists():
             model_path = artifacts_path / "production"
+        elif (artifacts_path / "pitcher_k_model.joblib").exists():
+            model_path = artifacts_path
         else:
             runs = sorted([
                 d for d in artifacts_path.iterdir()
@@ -112,25 +112,27 @@ def main():
             if not runs:
                 raise FileNotFoundError(
                     f"No MLB model found. Checked:\n"
-                    f"  - {artifacts_path}/pitcher_k_model.joblib\n"
                     f"  - {artifacts_path}/production/\n"
+                    f"  - {artifacts_path}/pitcher_k_model.joblib\n"
                     f"  - {artifacts_path}/mlb_run_*/\n"
                     "Run MLB training first or promote a model to production."
                 )
             model_path = runs[-1]
 
-        logger.info(f"Using MLB model artifacts: {model_path.name}")
+        logger.info(f"Using MLB model artifacts: {model_path}")
 
         # Initialize components
         logger.info("Initializing database connection...")
         engine = get_engine()
+
+        # Load unified model suite (discovers all available models)
+        logger.info("Loading MLB model suite from %s...", model_path)
+        suite = MLBModelSuite.from_directory(model_path, n_samples=10_000)
+        logger.info(f"Available models: {suite.available_stats}")
+
+        # Feature stores
         pitcher_feature_store = MLBFeatureStore(engine)
-
-        logger.info("Loading MLB pitcher K pipeline...")
-        pipeline = MLBPitcherKPipeline.load(str(model_path))
-
-        logger.info("Initializing MLB MC predictor (10,000 samples)...")
-        predictor = MLBMonteCarloPredictor(pipeline, n_samples=10000)
+        batter_feature_store = MLBBatterFeatureStore(engine)
 
         # Determine stats to predict
         if args.stats:
@@ -141,12 +143,12 @@ def main():
 
         logger.info(f"Stats: {stats}")
 
-        # Create runner
+        # Create runner with unified suite
         runner = MLBDailyPredictionRunner(
             engine=engine,
+            suite=suite,
             pitcher_feature_store=pitcher_feature_store,
-            pitcher_k_pipeline=pipeline,
-            pitcher_k_predictor=predictor,
+            batter_feature_store=batter_feature_store,
         )
 
         logger.info(f"Generating MLB predictions for {target_date}...")

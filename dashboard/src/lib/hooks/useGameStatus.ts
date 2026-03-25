@@ -22,7 +22,7 @@ export function useGameStatus(isToday: boolean): GameStatusMap {
 
     async function fetchScoreboard() {
       try {
-        const resp = await fetch('/api/scoreboard')
+        const resp = await fetch(`/api/scoreboard?sport=${config.sport}`)
         if (!resp.ok) return
         const data: Record<string, GameStatusInfo> = await resp.json()
         const map = new Map<string, GameStatusInfo>()
@@ -44,7 +44,7 @@ export function useGameStatus(isToday: boolean): GameStatusMap {
         intervalRef.current = null
       }
     }
-  }, [isToday, config.features.scoreboard])
+  }, [isToday, config.features.scoreboard, config.sport])
 
   return statusMap
 }
