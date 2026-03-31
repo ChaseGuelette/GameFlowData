@@ -45,7 +45,7 @@ STAT_TO_NEGBIN_MODEL_NAME: dict[str, str] = {
     "batter_hits": "batter_hits",
     "batter_total_bases": "batter_total_bases",
     "batter_rbis": "batter_rbis",
-    "batter_runs_scored": "batter_runs_scored",
+    "batter_runs_scored": "batter_runs",
 }
 
 # Short stat name used by NegBinPredictor (for PropPrediction.stat field)
@@ -53,7 +53,7 @@ STAT_TO_NEGBIN_SHORT: dict[str, str] = {
     "batter_hits": "hits",
     "batter_total_bases": "total_bases",
     "batter_rbis": "rbis",
-    "batter_runs_scored": "runs_scored",
+    "batter_runs_scored": "runs",
 }
 
 

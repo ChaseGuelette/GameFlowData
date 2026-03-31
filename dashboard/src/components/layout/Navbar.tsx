@@ -95,6 +95,11 @@ export function Navbar() {
                   Data Vault
                 </Link>
               )}
+              {config.features.predictionMarkets && (
+                <Link href="/prediction-markets" className={navLinkClasses('/prediction-markets')}>
+                  Markets
+                </Link>
+              )}
             </div>
           </div>
 
@@ -161,6 +166,11 @@ export function Navbar() {
           {config.features.statsVault && (
             <Link href="/stats" className={mobileNavLinkClasses('/stats')}>
               Data Vault
+            </Link>
+          )}
+          {config.features.predictionMarkets && (
+            <Link href="/prediction-markets" className={mobileNavLinkClasses('/prediction-markets')}>
+              Markets
             </Link>
           )}
 

@@ -68,6 +68,7 @@ JOB_NAMES = {
     "test_job.py": "System Test",
     "mlb_daily_stats_job.py": "MLB Daily Stats",
     "mlb_inference_job.py": "MLB Inference",
+    "kalshi_refresh_job.py": "Kalshi Refresh",
 }
 
 # In-memory job status tracking for dependency checks.
@@ -220,6 +221,20 @@ def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> di
         rec_match = re.search(r"Recommended picks: (\d+)", output)
         if rec_match:
             metrics["recommended"] = rec_match.group(1)
+
+    elif script_name == "kalshi_refresh_job.py":
+        # Look for edge computation counts
+        matched_match = re.search(r"(\d+) matched", output)
+        if matched_match:
+            metrics["markets_matched"] = matched_match.group(1)
+
+        updated_match = re.search(r"(\d+) updated", output)
+        if updated_match:
+            metrics["edges_updated"] = updated_match.group(1)
+
+        parsed_match = re.search(r"(\d+) parsed", output)
+        if parsed_match:
+            metrics["markets_parsed"] = parsed_match.group(1)
 
     elif script_name == "test_job.py":
         # Look for checks passed
@@ -378,6 +393,7 @@ def _validate_environment():
         ("DISCORD_CHANNEL_ALERTS", "Job notifications"),
         ("DISCORD_CHANNEL_PREDICTIONS", "Prediction alerts"),
         ("DISCORD_CHANNEL_PERFORMANCE", "P&L summaries"),
+        ("KALSHI_API_KEY", "Kalshi prediction markets"),
     ]
 
     logger.info("Environment check:")
@@ -506,6 +522,13 @@ def run_mlb_inference():
         run_job("mlb_inference_job.py")
     else:
         run_job("mlb_inference_job.py")
+
+
+# ---- Kalshi Jobs ----
+
+def run_kalshi_refresh():
+    """Kalshi market refresh: scrape, compute edges, alert. Skips gracefully if no creds."""
+    run_job("kalshi_refresh_job.py", silent_on_success=True)
 
 
 def main():
@@ -639,6 +662,19 @@ def main():
         CronTrigger(hour=18, minute=30),
         id="mlb_inference_6pm",
         name="MLB Inference (6:30 PM ET)",
+    )
+
+    # ==============================================================
+    # Kalshi Prediction Markets
+    # ==============================================================
+
+    # Every 10 min, 11 AM - 11 PM ET — scrape markets + compute edges
+    # Job exits gracefully if KALSHI_API_KEY is not set
+    scheduler.add_job(
+        run_kalshi_refresh,
+        CronTrigger(hour='11-23', minute='*/10'),
+        id="kalshi_refresh",
+        name="Kalshi Refresh (every 10 min, 11AM-11PM ET)",
     )
 
     # Log scheduled jobs

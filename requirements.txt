@@ -18,3 +18,4 @@ discord.py>=2.3.0
 aiohttp>=3.9.0
 Pillow>=10.0.0
 pybaseball>=2.2.7
+cryptography>=42.0.0

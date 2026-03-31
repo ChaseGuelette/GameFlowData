@@ -807,3 +807,182 @@ def send_calibration_alert_sync(
     except Exception as e:
         logger.exception(f"Failed to send calibration alert synchronously: {e}")
         return False
+
+
+# =============================================================================
+# Kalshi Prediction Market Alerts
+# =============================================================================
+
+
+def _build_kalshi_alert_embed(
+    markets: list[dict],
+    target_date: date,
+    sport: str = "nba",
+) -> dict:
+    """Build Discord embed for Kalshi high-edge market alert.
+
+    Args:
+        markets: List of market dicts with edge data (pre-sorted by edge).
+        target_date: Date of the markets.
+        sport: Sport identifier.
+
+    Returns:
+        Discord embed dict.
+    """
+    sport_upper = sport.upper()
+    embed = {
+        "title": f"Kalshi {sport_upper} — High-Edge Markets",
+        "description": f"Top prediction market edges for {target_date.strftime('%B %d, %Y')}",
+        "color": 0x7C3AED,  # Violet
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [],
+        "footer": {
+            "text": f"Kalshi {sport_upper} | Fee-adjusted maker edges | NO contracts are API-only",
+        },
+    }
+
+    if not markets:
+        embed["fields"].append({
+            "name": "Status",
+            "value": "No high-edge Kalshi markets found.",
+            "inline": False,
+        })
+        return embed
+
+    # Take top 5 by edge
+    top = sorted(markets, key=lambda m: m.get("maker_fee_adjusted_edge", 0) or 0, reverse=True)[:5]
+
+    for i, m in enumerate(top, 1):
+        player = m.get("player_name", "Unknown")
+        stat = str(m.get("stat_type", "")).upper()
+        line = m.get("line", "—")
+        yes_price = m.get("yes_price", 0)
+        spread = m.get("bid_ask_spread", 0)
+        edge = m.get("maker_fee_adjusted_edge", 0) or 0
+        volume = m.get("volume", 0)
+        oi = m.get("open_interest", 0)
+        close_time = m.get("close_time", "")
+
+        # Determine if NO side is better (under)
+        model_prob = m.get("model_prob", 0.5) or 0.5
+        kalshi_implied = m.get("kalshi_implied", 0.5) or 0.5
+        is_under = model_prob < kalshi_implied
+
+        side_label = "UNDER (API only)" if is_under else "OVER"
+        price_label = f"{'NO' if is_under else 'YES'} {100 - yes_price if is_under else yes_price}c"
+
+        # Format close time
+        close_str = ""
+        if close_time:
+            try:
+                ct = datetime.fromisoformat(str(close_time).replace("Z", "+00:00"))
+                close_str = ct.strftime("%I:%M %p ET")
+            except (ValueError, TypeError):
+                close_str = str(close_time)
+
+        embed["fields"].append({
+            "name": f"#{i} {player} — {stat} {side_label}",
+            "value": (
+                f"**{price_label}** | Line: {line} | Spread: {spread}c\n"
+                f"Edge: **{edge:+.1%}** | Vol: {volume:,} | OI: {oi:,}"
+                + (f" | Closes: {close_str}" if close_str else "")
+            ),
+            "inline": False,
+        })
+
+    return embed
+
+
+async def send_kalshi_alert(
+    markets: list[dict],
+    target_date: date | None = None,
+    channel_id: str | None = None,
+    sport: str = "nba",
+) -> bool:
+    """Send Kalshi high-edge alert to Discord.
+
+    Args:
+        markets: List of market dicts with edge data.
+        target_date: Date of the markets (defaults to today).
+        channel_id: Discord channel ID (defaults to DISCORD_CHANNEL_KALSHI or DISCORD_CHANNEL_PREDICTIONS).
+        sport: Sport identifier.
+
+    Returns:
+        True if alert was sent successfully.
+    """
+    load_dotenv()
+
+    if target_date is None:
+        target_date = date.today()
+
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping Kalshi alert")
+        return False
+
+    if not channel_id:
+        channel_id = os.getenv("DISCORD_CHANNEL_KALSHI") or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+    if not channel_id:
+        logger.warning("No Kalshi/predictions channel configured, skipping alert")
+        return False
+
+    embed = _build_kalshi_alert_embed(markets, target_date, sport=sport)
+
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status in (200, 201):
+                    logger.info(f"Sent Kalshi alert with {len(markets)} markets")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi alert: {e}")
+        return False
+
+
+def send_kalshi_alert_sync(
+    markets: list[dict],
+    target_date: date | None = None,
+    channel_id: str | None = None,
+    sport: str = "nba",
+) -> bool:
+    """Synchronous wrapper for send_kalshi_alert.
+
+    Args:
+        markets: List of market dicts with edge data.
+        target_date: Date of the markets.
+        channel_id: Discord channel ID.
+        sport: Sport identifier.
+
+    Returns:
+        True if alert was sent successfully.
+    """
+    import asyncio
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                send_kalshi_alert(markets, target_date, channel_id, sport=sport),
+                loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(
+                send_kalshi_alert(markets, target_date, channel_id, sport=sport)
+            )
+
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi alert synchronously: {e}")
+        return False

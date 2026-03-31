@@ -27,6 +27,7 @@ export interface SportConfig {
     askChat: boolean
     injuries: boolean
     scoreboard: boolean
+    predictionMarkets: boolean
   }
   // Column mappings for predictions table (MLB uses different column names)
   columns: {
@@ -113,6 +114,7 @@ export const NBA_CONFIG: SportConfig = {
     askChat: true,
     injuries: true,
     scoreboard: true,
+    predictionMarkets: true,
   },
   columns: {
     q10: 'q10',
@@ -189,6 +191,7 @@ export const MLB_CONFIG: SportConfig = {
     askChat: false,
     injuries: false,
     scoreboard: true,
+    predictionMarkets: false,
   },
   columns: {
     q10: 'pred_q10',

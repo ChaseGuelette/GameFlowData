@@ -455,20 +455,41 @@ class MLBDailyPredictionRunner:
             "Batter features built for %d/%d batters", len(batter_features), len(batters)
         )
 
+        # Bulk-fetch all batter prop lines so each stat gets its correct line.
+        # The base features were built with stat="hits", so only prop_line_batter_hits
+        # is populated. We need prop lines for every market we'll predict.
+        prop_line_lookup = self._bulk_fetch_batter_prop_lines(batter_features, available_batter)
+
+        # Mapping from suite stat key → prop line market key
+        stat_to_market = {
+            "batter_hits": "batter_hits",
+            "batter_total_bases": "batter_total_bases",
+            "batter_rbis": "batter_rbis",
+            "batter_runs_scored": "batter_runs_scored",
+            "batter_home_runs": "batter_home_runs",
+        }
+
         # For each available batter stat, build player_games and batch predict
         for stat in available_batter:
             model_type = self.suite.get_model_type(stat)
+            market_key = stat_to_market.get(stat, stat)
+            prop_line_col = f"prop_line_{market_key}"
 
             player_games = []
             batter_info = []
             for batter, base_features in batter_features:
-                # Copy features so we can add stat-specific prop line
+                # Copy features so stat-specific overrides don't leak between stats
                 feat = dict(base_features)
 
-                # Add stat-specific prop line if the feature store fetched a generic one
-                # The batter feature store fetches for stat="hits" by default;
-                # for other stats, set the prop line feature to 0 (will be fetched
-                # per-stat if the feature store supports it, otherwise defaults)
+                # Inject the correct prop line for this stat
+                feat[prop_line_col] = prop_line_lookup.get(
+                    (batter["player_id"], batter["game_id"], market_key), 0.0
+                )
+
+                # Map projected_ab → at_bats for models trained with at_bats feature
+                # (e.g. batter_total_bases, batter_runs). projected_ab = max(avg_ab_l5, 1.0)
+                feat["at_bats"] = feat.get("projected_ab", feat.get("batter_avg_ab_l5", 3.5))
+
                 player_games.append((batter["player_id"], batter["game_id"], feat))
                 batter_info.append(batter)
 
@@ -513,6 +534,67 @@ class MLBDailyPredictionRunner:
         )
 
         return predictions, samples_dict
+
+    def _bulk_fetch_batter_prop_lines(
+        self,
+        batter_features: list[tuple[dict, dict]],
+        available_stats: list[str],
+    ) -> dict[tuple[int, int, str], float]:
+        """Fetch all batter prop lines in one query for all (player, game, market_key) combos.
+
+        Returns dict: (player_id, game_id, market_key) → line_value
+        """
+        stat_to_market = {
+            "batter_hits": "batter_hits",
+            "batter_total_bases": "batter_total_bases",
+            "batter_rbis": "batter_rbis",
+            "batter_runs_scored": "batter_runs_scored",
+            "batter_home_runs": "batter_home_runs",
+        }
+        market_keys = [stat_to_market[s] for s in available_stats if s in stat_to_market]
+
+        if not batter_features or not market_keys:
+            return {}
+
+        # Collect unique (player_id, game_id) pairs
+        player_game_pairs = list({
+            (b["player_id"], b["game_id"]) for b, _ in batter_features
+        })
+
+        # Build parameterized query
+        pg_placeholders = ", ".join(
+            f"(:pid_{i}, :gid_{i})" for i in range(len(player_game_pairs))
+        )
+        mk_placeholders = ", ".join(f":mk_{i}" for i in range(len(market_keys)))
+
+        params: dict = {}
+        for i, (pid, gid) in enumerate(player_game_pairs):
+            params[f"pid_{i}"] = pid
+            params[f"gid_{i}"] = gid
+        for i, mk in enumerate(market_keys):
+            params[f"mk_{i}"] = mk
+
+        query = text(f"""
+            SELECT DISTINCT ON (player_id, game_id, market_key)
+                player_id, game_id, market_key, line
+            FROM mlb_raw_player_props
+            WHERE (player_id, game_id) IN ({pg_placeholders})
+              AND market_key IN ({mk_placeholders})
+              AND bookmaker IN ('pinnacle', 'draftkings')
+            ORDER BY player_id, game_id, market_key, snapshot_time DESC NULLS LAST
+        """)
+
+        lookup: dict[tuple[int, int, str], float] = {}
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(query, params)
+                for row in result:
+                    lookup[(int(row.player_id), int(row.game_id), row.market_key)] = float(row.line)
+            logger.info("Bulk-fetched %d batter prop lines", len(lookup))
+        except Exception as e:
+            logger.error("Error bulk-fetching batter prop lines: %s", e)
+
+        return lookup
 
     def _get_current_lines(
         self, games: list[dict], stats: list[str]
