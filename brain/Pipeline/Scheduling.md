@@ -17,6 +17,7 @@ Single always-on worker process. All times ET, DST-aware via `BlockingScheduler(
 | 4:15 PM | `inference_job.py` | `--skip-bets` (refresh only) |
 | */5 min, 11AM-11PM | `lines_job.py` | `--live --props-only` (silent) |
 | */5 min +2, 11AM-11PM | `edge_refresh_job.py` | `--skip-paper` (silent) |
+| */10 min, 11AM-11PM | `kalshi_refresh_job.py` | Scrape + edges + orderbooks (silent) |
 
 ### Job Status Tracking
 - `JOB_STATUS` in-memory dict tracks status, end time, duration

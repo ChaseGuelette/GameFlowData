@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { DfsFilters } from '@/components/dfs/DfsFilters'
 import { DfsTable, type DfsRow, type ModelDfsRow, type MarketDfsRow, type CombinedDfsRow } from '@/components/dfs/DfsTable'
+import { SlipBuilderPanel } from '@/components/dfs/SlipBuilderPanel'
 import { type Prediction, type StatType } from '@/types/predictions'
 import {
   type DfsLine, type DfsComparison, type DfsPlatformLine,
@@ -14,6 +15,8 @@ import { TEAM_ABBREV } from '@/lib/constants'
 import { getToday, formatDate } from '@/lib/utils'
 import { estimateOverProb, estimateUnderProb, calcAllSlipEvs, devig, computeVig } from '@/lib/dfs-utils'
 import { useSport } from '@/contexts/SportContext'
+import { useSlipBuilder } from '@/lib/hooks/useSlipBuilder'
+import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 
 // Normalize game_id to 10-digit zero-padded format to match RPC LPAD output
 const padGameId = (id: string) => id.padStart(10, '0')
@@ -41,10 +44,14 @@ export default function DfsPage() {
   // Filters
   const [edgeMode, setEdgeMode] = useState<EdgeMode>('model')
   const [platformFilter, setPlatformFilter] = useState<string>('all')
-  const [slipType, setSlipType] = useState<string>('pp_6_flex')
+  const [slipType, setSlipType] = useState<string>('pp_2_power')
   const [statFilter, setStatFilter] = useState<'all' | StatType>('all')
   const [evOnly, setEvOnly] = useState(true)
   const [showLive, setShowLive] = useState(false)
+
+  // Slip builder
+  const slip = useSlipBuilder(edgeMode)
+  const { prefs } = useUserPreferences()
 
   // Fetch available dates
   useEffect(() => {
@@ -505,7 +512,7 @@ export default function DfsPage() {
   }
 
   return (
-    <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
+    <main className="flex-1 max-w-[90rem] mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
@@ -577,30 +584,55 @@ export default function DfsPage() {
         </div>
       )}
 
-      {/* Content */}
-      {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="flex flex-col items-center gap-3">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
-            <div className="text-slate-400">Loading DFS lines...</div>
-          </div>
-        </div>
-      ) : allGamesStarted ? (
-        <div className="bg-slate-800/50 rounded-lg border border-slate-700">
-          <div className="flex items-center justify-center py-16">
-            <div className="text-center">
-              <p className="text-slate-400 text-lg">All games have started</p>
-              <p className="text-slate-500 text-sm mt-2">
-                Click <button onClick={() => setShowLive(true)} className="text-orange-400 hover:text-orange-300 font-medium">+ Live</button> to view in-progress and completed game lines
-              </p>
+      {/* Content + Slip Builder */}
+      <div className="flex gap-6">
+        <div className="flex-1 min-w-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="flex flex-col items-center gap-3">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+                <div className="text-slate-400">Loading DFS lines...</div>
+              </div>
             </div>
-          </div>
+          ) : allGamesStarted ? (
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700">
+              <div className="flex items-center justify-center py-16">
+                <div className="text-center">
+                  <p className="text-slate-400 text-lg">All games have started</p>
+                  <p className="text-slate-500 text-sm mt-2">
+                    Click <button onClick={() => setShowLive(true)} className="text-orange-400 hover:text-orange-300 font-medium">+ Live</button> to view in-progress and completed game lines
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700">
+              <DfsTable
+                rows={filteredRows}
+                slipType={slipType}
+                edgeMode={edgeMode}
+                selectedLegKeys={slip.selectedLegKeys}
+                onToggleLeg={slip.toggleLeg}
+              />
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="bg-slate-800/50 rounded-lg border border-slate-700">
-          <DfsTable rows={filteredRows} slipType={slipType} edgeMode={edgeMode} />
-        </div>
-      )}
+
+        <SlipBuilderPanel
+          legs={slip.legs}
+          slipType={slip.slipType}
+          onSlipTypeChange={slip.setSlipType}
+          edgeMode={edgeMode}
+          bankroll={prefs.bankroll}
+          kellyFraction={prefs.kellyFraction}
+          validation={slip.validation}
+          placing={slip.placing}
+          error={slip.error}
+          onRemoveLeg={slip.removeLeg}
+          onClearAll={slip.clearAll}
+          onPlace={() => slip.placeEntry(prefs.bankroll, prefs.kellyFraction, selectedDate)}
+        />
+      </div>
     </main>
   )
 }

@@ -26,6 +26,16 @@
 | `mlb_daily_player_props_scraper.py` | Odds API (live daily) |
 | `mlb_daily_game_lines_scraper.py` | Odds API (live daily) |
 
+## Kalshi Scrapers (`src/scrapers/kalshi/`)
+
+| Module | Source | Schedule |
+|--------|--------|----------|
+| `kalshi_client.py` | Kalshi Trade API v2 (RSA-PSS auth) | Via refresh job |
+| `kalshi_market_scraper.py` | Kalshi API (market discovery, ticker parsing, player linking) | Every 10 min, 11AM-11PM |
+| `kalshi_utils.py` | N/A (fee calc, probability conversion, stat mapping) | Utility module |
+
+**Note**: Kalshi API works from any IP (proper API with key auth). Can run on Railway. Private key base64-encoded as env var for Railway deployment.
+
 ## NCAAB Scrapers (`src/scrapers/ncaab/`)
 
 | Module | Source |

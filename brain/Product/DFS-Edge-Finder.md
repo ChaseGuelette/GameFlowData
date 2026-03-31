@@ -32,4 +32,7 @@ Automated via `dfs_paper_trader.py`:
 - Flex partial payouts (e.g., PP 5-flex: 5/5=10x, 4/5=2x, 3/5=0.4x)
 - $500 starting bankroll, $10/entry
 
+## User Slip Builder
+See [[DFS-Slip-Builder]] for the user-facing slip builder that lets users select legs, compute parlay Kelly sizing, place entries, and track P&L on the history page.
+
 #dfs #product #feature

@@ -21,6 +21,7 @@ interface DfsFiltersProps {
   onEvOnlyChange: (evOnly: boolean) => void
   showLive: boolean
   onShowLiveChange: (showLive: boolean) => void
+  standardOnly?: boolean
 }
 
 const platforms: { value: PlatformFilter; label: string }[] = [
@@ -52,6 +53,7 @@ export function DfsFilters({
   onEvOnlyChange,
   showLive,
   onShowLiveChange,
+  standardOnly,
 }: DfsFiltersProps) {
   const [filtersOpen, setFiltersOpen] = useState(false)
 
@@ -118,11 +120,13 @@ export function DfsFilters({
           onChange={(e) => onSlipTypeChange(e.target.value)}
           className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
         >
-          {Object.entries(DFS_SLIP_TYPES).map(([key, slip]) => (
-            <option key={key} value={key}>
-              {slip.label} ({slip.payout})
-            </option>
-          ))}
+          {Object.entries(DFS_SLIP_TYPES)
+            .filter(([key]) => !standardOnly || ['pp_2_power', 'ud_3_standard', 'ud_5_standard'].includes(key))
+            .map(([key, slip]) => (
+              <option key={key} value={key}>
+                {slip.label} ({slip.payout})
+              </option>
+            ))}
         </select>
 
         {/* Stat filter tabs */}

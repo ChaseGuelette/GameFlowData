@@ -13,4 +13,6 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-005]] - MLB Launch Prep: scheduler ungated, RLS policies, analysis modal, scoreboard API
 - [[handoff-006]] - Code health: ESLint errors fixed, ruff clean, all 721 tests passing
 - [[handoff-007]] - MLB Discord alerts, dashboard sport guards, pipeline audit
+- [[handoff-008]] - Kalshi Prediction Markets full integration (7 phases), merge resolution
+- [[handoff-009]] - DFS Slip Builder & Entry Tracking (parlay Kelly sizing, history tab, backend resolver)
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

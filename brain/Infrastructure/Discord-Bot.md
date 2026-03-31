@@ -11,6 +11,7 @@ REST API alerts are working (no bot process needed). Slash commands require a ru
 | `#predictions` | After inference job | Daily picks with edges |
 | `#alerts` | After any job | Success/failure with duration and metrics |
 | `#performance` | Daily | P&L summary |
+| `#kalshi` (or `#predictions`) | After Kalshi refresh | Top 5 Kalshi edges (violet embed, fee-adjusted >=5%) |
 
 ## Slash Commands (Require Running Bot)
 | Command | Purpose |

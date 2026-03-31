@@ -5,9 +5,12 @@ import { createClient } from '@/lib/supabase/client'
 import { HistoryFilters, type StatusFilter } from '@/components/history/HistoryFilters'
 import { HistorySummary } from '@/components/history/HistorySummary'
 import { BetList } from '@/components/history/BetList'
+import { DfsEntrySummary } from '@/components/history/DfsEntrySummary'
+import { DfsEntryList } from '@/components/history/DfsEntryList'
 import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFilter'
 import { DirectionFilter, type DirectionFilterValue } from '@/components/shared/DirectionFilter'
 import { type PaperBet } from '@/types/predictions'
+import type { UserDfsEntryWithLegs } from '@/types/dfs-entries'
 import { cn } from '@/lib/utils'
 import { useSport } from '@/contexts/SportContext'
 
@@ -17,7 +20,7 @@ interface PaperBetWithRecommended extends PaperBet {
   bookmaker?: string
 }
 
-type HistoryTab = 'my_bets' | 'model_history'
+type HistoryTab = 'my_bets' | 'model_history' | 'dfs_entries'
 type DatePreset = '7d' | '30d' | '90d' | 'all'
 
 function getDefaultStartDate(): string {
@@ -55,6 +58,10 @@ export default function HistoryPage() {
   const [myBetsFilter, setMyBetsFilter] = useState<StatusFilter>('all')
   const [directionFilter, setDirectionFilter] = useState<DirectionFilterValue>('both')
   const [myBetsDirectionFilter, setMyBetsDirectionFilter] = useState<DirectionFilterValue>('both')
+
+  // DFS Entries state
+  const [dfsEntries, setDfsEntries] = useState<UserDfsEntryWithLegs[]>([])
+  const [dfsLoading, setDfsLoading] = useState(false)
 
   const applyPreset = (preset: DatePreset) => {
     const now = new Date()
@@ -173,6 +180,83 @@ export default function HistoryPage() {
     fetchMyBets()
   }, [activeTab, startDate, endDate, sport, config.statTypes])
 
+  // Fetch DFS entries when switching to DFS tab or date range changes
+  useEffect(() => {
+    if (activeTab !== 'dfs_entries') return
+
+    async function fetchDfsEntries() {
+      setDfsLoading(true)
+      const supabase = createClient()
+
+      // Fetch entries
+      const { data: entriesData, error: entriesError } = await supabase
+        .from('user_dfs_entries')
+        .select('*')
+        .gte('entry_date', startDate)
+        .lte('entry_date', endDate)
+        .order('placed_at', { ascending: false })
+
+      if (entriesError || !entriesData) {
+        console.error('Failed to fetch DFS entries:', entriesError)
+        setDfsEntries([])
+        setDfsLoading(false)
+        return
+      }
+
+      if (entriesData.length === 0) {
+        setDfsEntries([])
+        setDfsLoading(false)
+        return
+      }
+
+      // Fetch legs for all entries
+      const entryIds = entriesData.map(e => e.id)
+      const { data: legsData, error: legsError } = await supabase
+        .from('user_dfs_legs')
+        .select('*')
+        .in('entry_id', entryIds)
+
+      if (legsError) {
+        console.error('Failed to fetch DFS legs:', legsError)
+      }
+
+      // Group legs by entry_id
+      const legsByEntry = new Map<number, typeof legsData>()
+      if (legsData) {
+        for (const leg of legsData) {
+          if (!legsByEntry.has(leg.entry_id)) legsByEntry.set(leg.entry_id, [])
+          legsByEntry.get(leg.entry_id)!.push(leg)
+        }
+      }
+
+      const entries: UserDfsEntryWithLegs[] = entriesData.map(entry => ({
+        ...entry,
+        legs: legsByEntry.get(entry.id) ?? [],
+      }))
+
+      setDfsEntries(entries)
+      setDfsLoading(false)
+    }
+
+    fetchDfsEntries()
+  }, [activeTab, startDate, endDate])
+
+  // Remove a pending DFS entry (cascade deletes legs)
+  const handleRemoveDfsEntry = useCallback(async (entryId: number) => {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('user_dfs_entries')
+      .delete()
+      .eq('id', entryId)
+
+    if (error) {
+      console.error('Failed to remove DFS entry:', error)
+      return
+    }
+
+    setDfsEntries(prev => prev.filter(e => e.id !== entryId))
+  }, [])
+
   // Filter bets by source (Model Picks = is_recommended from daily_predictions)
   const sourcedBets = betSource === 'model'
     ? bets.filter(b => b.is_recommended === true)
@@ -247,6 +331,17 @@ export default function HistoryPage() {
                 )}
               >
                 Model History
+              </button>
+              <button
+                onClick={() => setActiveTab('dfs_entries')}
+                className={cn(
+                  'px-3 py-1.5 rounded text-sm font-medium transition-colors',
+                  activeTab === 'dfs_entries'
+                    ? 'bg-purple-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                )}
+              >
+                DFS Entries
               </button>
             </div>
             {activeTab === 'model_history' && (
@@ -335,6 +430,22 @@ export default function HistoryPage() {
             <>
               <HistorySummary bets={directionFilteredBets} />
               <BetList bets={filteredBets} />
+            </>
+          )}
+        </>
+      )}
+
+      {/* DFS Entries Tab */}
+      {activeTab === 'dfs_entries' && (
+        <>
+          {dfsLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="text-slate-400">Loading DFS entries...</div>
+            </div>
+          ) : (
+            <>
+              <DfsEntrySummary entries={dfsEntries} />
+              <DfsEntryList entries={dfsEntries} onRemove={handleRemoveDfsEntry} />
             </>
           )}
         </>

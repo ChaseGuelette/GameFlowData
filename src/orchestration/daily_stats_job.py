@@ -228,6 +228,50 @@ def resolve_pending_user_bets(dry_run: bool = False) -> bool:
         return True  # Non-fatal
 
 
+def resolve_pending_user_dfs_entries(dry_run: bool = False) -> bool:
+    """Resolve all pending user DFS parlay entries.
+
+    Non-fatal: failures are logged but don't affect job status.
+    """
+    logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: Resolving Pending User DFS Entries")
+
+    if dry_run:
+        logger.info("  Would call: UserDfsResolver().resolve_all_pending()")
+        return True
+
+    start_time = time.time()
+    try:
+        from src.paper_trading.user_dfs_resolver import UserDfsResolver
+
+        resolver = UserDfsResolver()
+        result = resolver.resolve_all_pending()
+
+        elapsed = time.time() - start_time
+
+        if result["dates_processed"] == 0 and result["dates_skipped"] == 0:
+            logger.info(f"COMPLETED: No pending DFS entries to resolve ({elapsed:.1f}s)")
+        else:
+            logger.info(
+                f"COMPLETED: DFS entry resolution - {result['total_resolved']} entries across "
+                f"{result['dates_processed']} dates ({result['dates_skipped']} skipped) "
+                f"[{result['total_won']}W {result['total_lost']}L {result['total_push']}P] ({elapsed:.1f}s)"
+            )
+
+        return True
+
+    except ImportError as e:
+        elapsed = time.time() - start_time
+        logger.warning(f"SKIPPED: DFS entry resolution - module not found ({elapsed:.1f}s)")
+        logger.warning(f"  Import error: {e}")
+        return True
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error(f"FAILED: DFS entry resolution ({elapsed:.1f}s)")
+        logger.error(f"  Exception: {e}")
+        return True  # Non-fatal
+
+
 def run_command(
     command: str,
     description: str,
@@ -409,6 +453,10 @@ def main():
     # Resolve pending user bets (from dashboard checkmark feature)
     if not args.skip_resolution:
         resolve_pending_user_bets(args.dry_run)
+
+    # Resolve pending user DFS entries (parlay slips from DFS page)
+    if not args.skip_resolution:
+        resolve_pending_user_dfs_entries(args.dry_run)
 
     # Run calibration drift check (after bet resolution)
     if not args.skip_resolution:

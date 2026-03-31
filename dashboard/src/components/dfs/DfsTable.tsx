@@ -5,7 +5,8 @@ import { PlayerAvatar } from '@/components/shared/PlayerAvatar'
 import { Badge } from '@/components/shared/Badge'
 import { DFS_PLATFORM_NAMES, DFS_SLIP_TYPES } from '@/types/dfs'
 import type { DfsPlatformLine, DfsComparison, EdgeMode, MarketEdgePlatformLine, CombinedEdgePlatformLine } from '@/types/dfs'
-import { formatProb } from '@/lib/utils'
+import type { SlipBuilderLeg } from '@/types/dfs-entries'
+import { cn, formatProb } from '@/lib/utils'
 import { formatBookmaker } from '@/lib/dfs-utils'
 
 // Row shapes per mode
@@ -32,6 +33,8 @@ interface DfsTableProps {
   rows: DfsRow[]
   slipType: string
   edgeMode: EdgeMode
+  selectedLegKeys?: Set<string>
+  onToggleLeg?: (leg: SlipBuilderLeg) => void
 }
 
 function SortHeader({ label, sortKeyValue, className, sortKey, sortAsc, onSort }: {
@@ -53,11 +56,45 @@ function SortHeader({ label, sortKeyValue, className, sortKey, sortAsc, onSort }
   )
 }
 
-export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
+// Build a SlipBuilderLeg from a DfsRow
+function buildSlipBuilderLeg(row: DfsRow, edgeMode: EdgeMode, slipType: string): SlipBuilderLeg {
+  const pl = row.platform
+  const key = `${row.comparison.player_id}-${row.comparison.stat}-${pl.bookmaker}-${pl.line}`
+
+  let modelProb: number | null = null
+  let marketProb: number | null = null
+
+  if (edgeMode === 'model') {
+    modelProb = (pl as DfsPlatformLine).best_prob
+  } else if (edgeMode === 'market') {
+    marketProb = (pl as MarketEdgePlatformLine).market_prob
+  } else {
+    const cp = pl as CombinedEdgePlatformLine
+    modelProb = cp.model_prob
+    marketProb = cp.market_prob
+  }
+
+  return {
+    key,
+    player_id: row.comparison.player_id,
+    player_name: row.comparison.player_name,
+    game_id: row.comparison.game_id,
+    stat_type: row.comparison.stat,
+    line: pl.line,
+    direction: pl.best_direction,
+    dfs_bookmaker: pl.bookmaker,
+    model_prob: modelProb,
+    market_prob: marketProb,
+    edge: pl.ev_by_slip[slipType] ?? 0,
+  }
+}
+
+export function DfsTable({ rows, slipType, edgeMode, selectedLegKeys, onToggleLeg }: DfsTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>('edge')
   const [sortAsc, setSortAsc] = useState(false)
 
   const breakEven = DFS_SLIP_TYPES[slipType]?.breakEven ?? 0.55
+  const selectable = !!onToggleLeg
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -204,10 +241,37 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
     </td>
   )
 
+  // ─── Selection helpers ────────────────────────────────────────────
+  const getLegKey = (row: DfsRow) =>
+    `${row.comparison.player_id}-${row.comparison.stat}-${row.platform.bookmaker}-${row.platform.line}`
+
+  const isSelected = (row: DfsRow) => selectedLegKeys?.has(getLegKey(row)) ?? false
+
+  const handleRowClick = (row: DfsRow) => {
+    if (!onToggleLeg) return
+    onToggleLeg(buildSlipBuilderLeg(row, edgeMode, slipType))
+  }
+
+  const renderSelectIcon = (selected: boolean) => {
+    if (!selectable) return null
+    return (
+      <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full border transition-colors shrink-0 ${
+        selected
+          ? 'bg-green-600 border-green-500 text-white'
+          : 'border-slate-500 text-transparent hover:border-slate-300'
+      }`}>
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+      </span>
+    )
+  }
+
   // ─── Mobile Card Renderer ────────────────────────────────────────
   const renderMobileCard = (row: DfsRow, i: number) => {
     const edge = row.platform.ev_by_slip[slipType] ?? 0
     const pl = row.platform
+    const selected = isSelected(row)
 
     // Get prob based on edge mode
     let probLabel: string
@@ -229,11 +293,19 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
     return (
       <div
         key={`${row.comparison.player_id}-${row.comparison.stat}-${pl.bookmaker}-${i}`}
-        className="bg-slate-800 rounded-lg border border-slate-700 p-3"
+        onClick={() => handleRowClick(row)}
+        className={cn(
+          'bg-slate-800 rounded-lg border p-3 transition-colors',
+          selectable && 'cursor-pointer',
+          selected
+            ? 'border-green-500/50 bg-green-500/5'
+            : 'border-slate-700',
+        )}
       >
         {/* Top row: player + edge */}
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2 min-w-0">
+            {renderSelectIcon(selected)}
             <PlayerAvatar
               playerId={row.comparison.player_id}
               playerName={row.comparison.player_name}
@@ -281,6 +353,7 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
           <table className="w-full text-sm">
             <thead className="border-b border-slate-700">
               <tr>
+                {selectable && <th className="w-8" />}
                 <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Player" sortKeyValue="player" />
                 <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Stat" sortKeyValue="stat" />
                 <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Platform" sortKeyValue="platform" />
@@ -297,8 +370,22 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
               {sortedRows.map((row, i) => {
                 const pl = row.platform as DfsPlatformLine
                 const edge = pl.ev_by_slip[slipType] ?? 0
+                const selected = isSelected(row)
                 return (
-                  <tr key={`${row.comparison.player_id}-${row.comparison.stat}-${pl.bookmaker}-${i}`} className="hover:bg-slate-700/30 transition-colors">
+                  <tr
+                    key={`${row.comparison.player_id}-${row.comparison.stat}-${pl.bookmaker}-${i}`}
+                    onClick={() => handleRowClick(row)}
+                    className={cn(
+                      'transition-colors',
+                      selectable && 'cursor-pointer',
+                      selected
+                        ? 'bg-green-500/10 border-l-2 border-l-green-500'
+                        : 'hover:bg-slate-700/30',
+                    )}
+                  >
+                    {selectable && (
+                      <td className="py-3 px-2 text-center">{renderSelectIcon(selected)}</td>
+                    )}
                     {renderPlayerCell(row)}
                     <td className="py-3 px-3"><Badge stat={row.comparison.stat} /></td>
                     <td className="py-3 px-3 text-slate-300 text-sm">{DFS_PLATFORM_NAMES[pl.bookmaker] ?? pl.bookmaker}</td>
@@ -332,6 +419,7 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
           <table className="w-full text-sm">
             <thead className="border-b border-slate-700">
               <tr>
+                {selectable && <th className="w-8" />}
                 <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Player" sortKeyValue="player" />
                 <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Stat" sortKeyValue="stat" />
                 <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Platform" sortKeyValue="platform" />
@@ -350,8 +438,22 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
                 const pl = row.platform as MarketEdgePlatformLine
                 const edge = pl.ev_by_slip[slipType] ?? 0
                 const hasMarketProb = pl.market_prob !== null
+                const selected = isSelected(row)
                 return (
-                  <tr key={`${row.comparison.player_id}-${row.comparison.stat}-${pl.bookmaker}-${i}`} className="hover:bg-slate-700/30 transition-colors">
+                  <tr
+                    key={`${row.comparison.player_id}-${row.comparison.stat}-${pl.bookmaker}-${i}`}
+                    onClick={() => handleRowClick(row)}
+                    className={cn(
+                      'transition-colors',
+                      selectable && 'cursor-pointer',
+                      selected
+                        ? 'bg-green-500/10 border-l-2 border-l-green-500'
+                        : 'hover:bg-slate-700/30',
+                    )}
+                  >
+                    {selectable && (
+                      <td className="py-3 px-2 text-center">{renderSelectIcon(selected)}</td>
+                    )}
                     {renderPlayerCell(row)}
                     <td className="py-3 px-3"><Badge stat={row.comparison.stat} /></td>
                     <td className="py-3 px-3 text-slate-300 text-sm">{DFS_PLATFORM_NAMES[pl.bookmaker] ?? pl.bookmaker}</td>
@@ -394,6 +496,7 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
         <table className="w-full text-sm">
           <thead className="border-b border-slate-700">
             <tr>
+              {selectable && <th className="w-8" />}
               <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Player" sortKeyValue="player" />
               <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Stat" sortKeyValue="stat" />
               <SortHeader sortKey={sortKey} sortAsc={sortAsc} onSort={handleSort} label="Platform" sortKeyValue="platform" />
@@ -410,8 +513,22 @@ export function DfsTable({ rows, slipType, edgeMode }: DfsTableProps) {
             {sortedRows.map((row, i) => {
               const pl = row.platform as CombinedEdgePlatformLine
               const edge = pl.ev_by_slip[slipType] ?? 0
+              const selected = isSelected(row)
               return (
-                <tr key={`${row.comparison.player_id}-${row.comparison.stat}-${pl.bookmaker}-${i}`} className="hover:bg-slate-700/30 transition-colors">
+                <tr
+                  key={`${row.comparison.player_id}-${row.comparison.stat}-${pl.bookmaker}-${i}`}
+                  onClick={() => handleRowClick(row)}
+                  className={cn(
+                    'transition-colors',
+                    selectable && 'cursor-pointer',
+                    selected
+                      ? 'bg-green-500/10 border-l-2 border-l-green-500'
+                      : 'hover:bg-slate-700/30',
+                  )}
+                >
+                  {selectable && (
+                    <td className="py-3 px-2 text-center">{renderSelectIcon(selected)}</td>
+                  )}
                   {renderPlayerCell(row)}
                   <td className="py-3 px-3"><Badge stat={row.comparison.stat} /></td>
                   <td className="py-3 px-3 text-slate-300 text-sm">{DFS_PLATFORM_NAMES[pl.bookmaker] ?? pl.bookmaker}</td>

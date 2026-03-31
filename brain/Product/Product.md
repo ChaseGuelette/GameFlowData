@@ -10,3 +10,5 @@ Dashboard features, UX decisions, and frontend architecture. The Next.js 16 dash
 - [[AI-QA-Chat]] - Claude Haiku-powered player analysis chat
 - [[DFS-Edge-Finder]] - DFS comparison tool across 6 stats
 - [[Mobile-UX]] - Mobile optimization status and known issues
+- [[Kalshi-Integration-Design]] - Kalshi prediction markets page (implemented Session 8)
+- [[DFS-Slip-Builder]] - User DFS slip builder with parlay Kelly sizing and entry tracking (Session 9)

@@ -58,6 +58,16 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 
 ---
 
+## Phase 2.5: NBA Product Features
+
+**Goal**: Add user-facing features to the NBA dashboard that increase engagement and stickiness.
+
+| Step | Task | Status | Dependencies | Details |
+|------|------|--------|--------------|---------|
+| 2.5.1 | DFS Slip Builder & Tracking | completed | DFS page live | User-facing slip builder with parlay Kelly sizing, entry tracking, history tab, backend resolution. See [[DFS-Slip-Builder]]. DB migration pending (run in Supabase SQL Editor). |
+
+---
+
 ## Phase 4: NBA Model Maintenance
 
 **Goal**: Keep the NBA model profitable and catch degradation early.
@@ -106,16 +116,36 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 
 ---
 
-## Phase 7: Growth & Community
+## Phase 7: Kalshi Prediction Markets
+
+**Goal**: Integrate Kalshi exchange data as a parallel edge source with dedicated scraper, edge calculator, dashboard page, and Discord alerts.
+
+| Step | Task | Status | Dependencies | Details |
+|------|------|--------|--------------|---------|
+| 7.1 | Kalshi API client + utils | completed | None | RSA-PSS SHA256 auth, rate limiting, fee calculators, stat mapping. `src/scrapers/kalshi/` |
+| 7.2 | Market scraper + player linking | completed | 7.1 | Ticker parsing, title fallback regex, SequenceMatcher fuzzy match (0.85), mock/dry-run modes |
+| 7.3 | Database schema | completed | None | `kalshi_markets`, `kalshi_orderbook_snapshots` tables, RLS, `get_kalshi_edges` RPC |
+| 7.4 | Edge calculator | completed | 7.1, 7.3 | Empirical CDF, fee-adjusted edges (maker/taker), sportsbook comparison. `src/models/kalshi_edge.py` |
+| 7.5 | Scheduler integration | completed | 7.2, 7.4 | `kalshi_refresh_job.py`, every 10 min 11AM-11PM ET, silent on success |
+| 7.6 | Dashboard prediction markets page | completed | 7.3, 7.4 | `/prediction-markets` route, sortable/filterable table, detail modal, countdown, fee breakdown |
+| 7.7 | Discord alerts | completed | 7.4 | Violet embed, top 5 edges, `send_kalshi_alert_sync()`, `DISCORD_CHANNEL_KALSHI` fallback |
+| 7.8 | Kalshi paper trading | not_started | 7.4 | `kalshi_paper_bets` table, Kelly sizing, fill simulation. Design in [[Kalshi-Integration-Design]] |
+| 7.9 | Kalshi live trading | not_started | 7.8 proven | Limit orders only, gated by `KALSHI_LIVE_TRADING_ENABLED`. Future phase. |
+
+**Done when**: Kalshi markets scraped, edges computed, displayed on dashboard, paper trading profitable.
+
+---
+
+## Phase 8: Growth & Community
 
 **Goal**: Build the user base and establish GameFlowData as a trusted tool.
 
 | Step | Task | Status | Dependencies | Details |
 |------|------|--------|--------------|---------|
-| 7.1 | Deploy Discord bot as Railway service | not_started | None | Persistent slash commands |
-| 7.2 | Content marketing (methodology posts) | not_started | None | ROI proof is the #1 acquisition tool |
-| 7.3 | Social media pick cards | not_started | None | Pillow image gen in `src/social/` |
-| 7.4 | SEO optimization for landing page | not_started | None | Target "sports betting model" keywords |
-| 7.5 | Referral program | not_started | 3.5 | Requires Stripe integration first |
+| 8.1 | Deploy Discord bot as Railway service | not_started | None | Persistent slash commands |
+| 8.2 | Content marketing (methodology posts) | not_started | None | ROI proof is the #1 acquisition tool |
+| 8.3 | Social media pick cards | not_started | None | Pillow image gen in `src/social/` |
+| 8.4 | SEO optimization for landing page | not_started | None | Target "sports betting model" keywords |
+| 8.5 | Referral program | not_started | 3.5 | Requires Stripe integration first |
 
 **Done when**: Growing Discord community, organic traffic to dashboard, positive user feedback loop.
