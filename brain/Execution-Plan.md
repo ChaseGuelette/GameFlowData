@@ -14,10 +14,10 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 |------|------|--------|--------------|---------|
 | 1.1 | Finish MLB batter pipeline | completed | None | NLL feature selection, PMF calibration, Optuna tuner built. Pipeline ready for training. |
 | 1.2 | Train pitcher K model | completed | Data backfills | Artifact exists (`run_20260313_195757`), backtested with good results. |
-| 1.3 | Train batter hits/total_bases models | in_progress | 1.1 | Pipeline code complete for all 5 stats (hits/TB/RBI/runs/HR). Binomial model built for hits (Session 4). Training commands ready — not yet executed. |
+| 1.3 | Train batter hits/total_bases models | in_progress | 1.1 | All 5 batter models trained & deployed. `batter_total_bases` and `batter_runs_scored` need retraining — `at_bats` feature leakage (trained on actual game ABs, unavailable pre-game). Replace with `batter_avg_ab_l5`. |
 | 1.4 | Build MLB daily runner | completed | 1.2, 1.3 | `src/models/mlb/mlb_daily_runner.py` is production-ready — game discovery, pitcher K predictions, batter predictions scaffolded, prop lines, edge calc, paper bets. Mirrors NBA architecture. |
 | 1.5 | Build MLB paper trading | completed | 1.4 | `src/paper_trading/mlb_paper_trader.py` — full bet selection, placement, and resolution. |
-| 1.6 | Run MLB backtests | completed | 1.2, 1.3 | Backtests completed and validated. |
+| 1.6 | Run MLB backtests | in_progress | 1.2, 1.3 | Pitcher K backtested (best: tau=0.9 z_max=0.75 mw=0.65). Batter sweeps not yet run — commands ready. |
 | 1.7 | Add MLB to Railway scheduler | completed | 1.4, 1.6 | MLB jobs in `scheduler.py`: stats at 10/10:30 AM ET, inference at 1:30/6:30 PM ET. Month gate removed — jobs run year-round (handle off-season gracefully). |
 
 **Done when**: MLB pitcher K and batter models are backtested with >5% ROI and running daily on Railway.
@@ -129,7 +129,7 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 7.5 | Scheduler integration | completed | 7.2, 7.4 | `kalshi_refresh_job.py`, every 10 min 11AM-11PM ET, silent on success |
 | 7.6 | Dashboard prediction markets page | completed | 7.3, 7.4 | `/prediction-markets` route, sortable/filterable table, detail modal, countdown, fee breakdown |
 | 7.7 | Discord alerts | completed | 7.4 | Violet embed, top 5 edges, `send_kalshi_alert_sync()`, `DISCORD_CHANNEL_KALSHI` fallback |
-| 7.8 | Kalshi paper trading | not_started | 7.4 | `kalshi_paper_bets` table, Kelly sizing, fill simulation. Design in [[Kalshi-Integration-Design]] |
+| 7.8 | Kalshi paper trading | completed | 7.4 | `kalshi_paper_bets` + `kalshi_paper_trading_daily_log` tables, `KalshiPaperTrader` class (Kelly sizing, cents-based P&L, liquidity filters), integrated into `kalshi_refresh_job.py` as Step 4, `--skip-paper` CLI flag |
 | 7.9 | Kalshi live trading | not_started | 7.8 proven | Limit orders only, gated by `KALSHI_LIVE_TRADING_ENABLED`. Future phase. |
 
 **Done when**: Kalshi markets scraped, edges computed, displayed on dashboard, paper trading profitable.

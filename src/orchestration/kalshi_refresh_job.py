@@ -5,7 +5,8 @@ Orchestrates the full Kalshi pipeline:
   1. Scrape markets (or skip if no credentials)
   2. Fetch orderbook snapshots
   3. Compute edges against MC samples
-  4. Send Discord alert for high-edge markets
+  4. Paper trading (select/place/resolve bets)
+  5. Send Discord alert for high-edge markets
 
 Follows the edge_refresh_job.py pattern: CLI-driven, subprocess-friendly,
 graceful degradation when credentials are missing.
@@ -15,6 +16,7 @@ Usage:
     python src/orchestration/kalshi_refresh_job.py --mock --dry-run
     python src/orchestration/kalshi_refresh_job.py --sport nba --date 2026-03-31
     python src/orchestration/kalshi_refresh_job.py --skip-discord
+    python src/orchestration/kalshi_refresh_job.py --skip-paper
 """
 
 import argparse
@@ -44,6 +46,7 @@ def run(
     dry_run: bool = False,
     mock: bool = False,
     skip_discord: bool = False,
+    skip_paper: bool = False,
 ) -> dict:
     """Run the full Kalshi refresh pipeline.
 
@@ -57,7 +60,7 @@ def run(
     Returns:
         Summary dict.
     """
-    summary = {"scrape": {}, "edges": {}, "alerts_sent": False}
+    summary: dict = {"scrape": {}, "edges": {}, "paper_trading": {}, "alerts_sent": False}
 
     # Step 1: Scrape markets
     logger.info("Step 1: Scraping Kalshi markets...")
@@ -100,16 +103,39 @@ def run(
     else:
         logger.info("Step 3: Skipping edge computation (dry-run)")
 
-    # Step 4: Discord alerts
+    # Step 4: Paper trading
+    if not skip_paper and not dry_run and not mock:
+        logger.info("Step 4: Paper trading...")
+        try:
+            from src.paper_trading.kalshi_paper_trader import KalshiPaperTrader
+
+            trader = KalshiPaperTrader()
+            # Resolve pending bets from previous days first
+            resolve_result = trader.resolve_all_pending()
+            # Select and place new bets
+            bets = trader.select_bets(target_date, sport=sport)
+            placed = trader.place_bets(bets) if bets else 0
+            summary["paper_trading"] = {
+                "resolved": resolve_result.get("total_resolved", 0),
+                "selected": len(bets),
+                "placed": placed,
+            }
+        except Exception as e:
+            logger.warning(f"Paper trading failed (non-fatal): {e}")
+            summary["paper_trading"] = {"error": str(e)}
+    else:
+        logger.info("Step 4: Skipping paper trading")
+
+    # Step 5: Discord alerts
     if not skip_discord and not dry_run:
-        logger.info("Step 4: Checking for high-edge markets...")
+        logger.info("Step 5: Checking for high-edge markets...")
         try:
             alerts_sent = _send_high_edge_alerts(target_date, sport)
             summary["alerts_sent"] = alerts_sent
         except Exception as e:
             logger.warning(f"Discord alert failed (non-fatal): {e}")
     else:
-        logger.info("Step 4: Skipping Discord alerts")
+        logger.info("Step 5: Skipping Discord alerts")
 
     return summary
 
@@ -262,6 +288,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="No DB writes or API calls")
     parser.add_argument("--mock", action="store_true", help="Use synthetic data")
     parser.add_argument("--skip-discord", action="store_true", help="Skip Discord alerts")
+    parser.add_argument("--skip-paper", action="store_true", help="Skip paper trading")
     return parser.parse_args()
 
 
@@ -276,6 +303,7 @@ def main():
     logger.info(f"  Mock: {args.mock}")
     logger.info(f"  Dry run: {args.dry_run}")
     logger.info(f"  Skip Discord: {args.skip_discord}")
+    logger.info(f"  Skip Paper: {args.skip_paper}")
     logger.info("=" * 60)
 
     # Check credentials early
@@ -290,12 +318,14 @@ def main():
         dry_run=args.dry_run,
         mock=args.mock,
         skip_discord=args.skip_discord,
+        skip_paper=args.skip_paper,
     )
 
     logger.info("=" * 60)
     logger.info("KALSHI REFRESH COMPLETE")
     logger.info(f"  Scrape: {summary.get('scrape', {})}")
     logger.info(f"  Edges: {summary.get('edges', {})}")
+    logger.info(f"  Paper trading: {summary.get('paper_trading', {})}")
     logger.info(f"  Alerts sent: {summary.get('alerts_sent', False)}")
     logger.info("=" * 60)
 

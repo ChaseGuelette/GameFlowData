@@ -42,7 +42,6 @@ nul
 .session/briefings/
 .session/history/
 .session/
-.session\
 # Solokit adoption backups
 .solokit-backup/
 # Coverage
@@ -73,7 +72,6 @@ output/social/
 
 #node modules
 node_modules/
-node_modules\
 
 # Ignore model training runs but keep production models
 src/models/artifacts/run_*/

@@ -2,7 +2,25 @@
 
 > Part of [[Models]]
 
-## Status: All 5 Batter Models Ready for Training
+## Status: 6 Models Trained & Deployed — 2 Need Retraining
+
+All 6 MLB models are trained and deployed to production (`src/models/mlb/artifacts/production/`). Daily inference pipeline fixed and running. Two models have `at_bats` feature leakage requiring retraining.
+
+### Trained Models (Production)
+| Model | Type | Status | Notes |
+|-------|------|--------|-------|
+| `pitcher_strikeouts` | Quantile | OK | Backtested, best config: tau=0.9 z_max=0.75 mw=0.65 |
+| `batter_hits` | Binomial | OK | No leakage, uses `batter_avg_ab_l5` |
+| `batter_total_bases` | NegBin | **NEEDS RETRAIN** | `at_bats` is 1 of 6 features — target leakage. Using proxy for now. |
+| `batter_rbis` | NegBin | OK | No leakage, uses `batter_avg_ab_l5`/`batter_avg_pa_l5` |
+| `batter_runs_scored` | NegBin | **NEEDS RETRAIN** | `at_bats` in features — leakage (less critical, 28 other features) |
+| `batter_home_runs` | Binary | OK | 72 features, no leakage |
+
+### Bugs Fixed (Session 10)
+1. **Model naming mismatch**: `batter_runs_scored` mapped to wrong artifact filenames (was looking for `batter_runs_scored_*`, actual files are `batter_runs_*`)
+2. **Missing prop lines**: Daily runner hardcoded `stat="hits"` so only `prop_line_batter_hits` was populated. Added bulk prop line fetch for all stats.
+3. **`at_bats` defaulting to 0**: Models trained with actual game ABs, but inference had no pre-game value. Added `projected_ab` → `at_bats` proxy mapping.
+4. **RLS blocking dashboard**: MLB table policies required expired subscription. Replaced with open-access `USING (true)`.
 
 ### What's Built
 - Full data pipeline: boxscore scraper, Statcast scraper, FanGraphs scraper, props/lines scrapers, 15 database tables
@@ -40,8 +58,9 @@ Hits data is **underdispersed** (variance < mean, ratio=0.93). NegBin assumes ov
 - **Hyperparameter tuning**: Optuna with binomial NLL objective (`BinomialHyperparameterTuner`)
 
 ### What's NOT Built
-- No trained batter models yet — pipeline ready, training not yet run
-- No batter backtest harness (pitcher-only currently)
+- No batter backtests run yet — sweep commands ready, need to execute
+- MLB inference runs once daily — no periodic line re-scrape + rerun like NBA
+- `batter_total_bases` and `batter_runs_scored` need retrain without `at_bats` feature
 
 ### Key Differences from NBA
 - No minutes decomposition — stats predicted directly

@@ -20,7 +20,7 @@ import logging
 import re
 import sys
 import unicodedata
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -35,7 +35,6 @@ from src.scrapers.kalshi.kalshi_utils import (
     KALSHI_SERIES_MAP,
     KALSHI_STAT_MAP,
     kalshi_mid_to_prob,
-    kalshi_price_to_prob,
 )
 
 logging.basicConfig(
@@ -506,7 +505,6 @@ def scrape_and_store(
     if dry_run:
         logger.info("=== DRY RUN — parsed markets ===")
         for m in parsed_markets:
-            yes_p = kalshi_price_to_prob(m.get("yes_price", 0))
             mid_p = kalshi_mid_to_prob(m.get("yes_bid", 0), m.get("yes_ask", 0))
             logger.info(
                 f"  {m['player_name']:25s} | {m['stat_type']:10s} | "

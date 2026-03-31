@@ -84,7 +84,7 @@ def _sign_request(private_key, timestamp_ms: str, method: str, path: str) -> str
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding
 
-    message = f"{timestamp_ms}{method}{path}".encode("utf-8")
+    message = f"{timestamp_ms}{method}{path}".encode()
     signature = private_key.sign(
         message,
         padding.PSS(
