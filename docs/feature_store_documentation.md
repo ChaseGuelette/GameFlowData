@@ -101,10 +101,17 @@ Injury-driven features from `rapidapi_injuries` table, capturing how teammate an
 - `player_is_questionable` — binary flag if player's own status is "Questionable"
 - `player_is_probable` — binary flag if player's own status is "Probable"
 
+**Position-matched injuries (4 features, added 2026-03-25 Session 89):**
+- `team_out_same_pos_count` — number of OUT teammates in the same G/W/B position group
+- `team_out_same_pos_min_sum` — sum of L5 avg minutes for those position-matched OUT teammates
+- `team_out_same_pos_usg_sum` — sum of L5 usage% for those position-matched OUT teammates
+- `team_out_same_pos_starter_sum` — sum of `games_started_l5 / 5.0` (clamped [0,1]) for those OUT teammates. High value (e.g., 1.0) means a starter at the same position is out — significant opportunity. Low value (e.g., 0.1) means a bench player is out — minimal impact.
+
 **Implementation:**
 - SQL LATERAL JOINs in `feature_store.py` with temporal integrity (`report_date <= game_date`)
 - Injury data linked to NBA player IDs via `link_injury_data.py` (3-tier cascade: manual CSV → exact match → fuzzy SequenceMatcher)
-- Added to all 4 `RATE_FEATURES_*` lists and `MINUTES_FEATURES`
+- Position-matched features join `player_position_history` to get each injured player's G/W/B group, then group by (team, date, position_group) for training and filter by position_group for inference
+- Added to all 5 `RATE_FEATURES_*` lists and `MINUTES_FEATURES`
 - COALESCE to 0 for all injury features (no injury data = no injuries reported)
 
 ---

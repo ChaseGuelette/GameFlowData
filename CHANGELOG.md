@@ -5,6 +5,103 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-03-25 Session 90] — MLB Lines Job + Pitcher K Fix + First MLB Predictions
+
+### Added
+
+- **MLB lines job** (`src/orchestration/mlb_lines_job.py`) — New orchestration script that scrapes MLB game lines and player props from The Odds API, then runs the incremental linker. Supports `--live`, `--props-only`, `--parallel` modes mirroring NBA `lines_job.py`. Without this, MLB inference generated predictions but had no prop lines to calculate edges against.
+- **MLB lines scheduler entries** — 4 new cron jobs: full lines at 12 PM and 5 PM ET, props-only refresh at 1 PM and 6 PM ET. Lines run before inference (1:30 PM, 6:30 PM) to ensure edges are calculated.
+
+### Fixed
+
+- **MLB pitcher K inference failure** — `mlb_daily_runner.py` passed `as_of_date` and `opponent_id` to `MLBFeatureStore.get_player_game_features()` which expects `game_date` and `opp_team_id`. Also missing `venue_id` and `season` params. Fixed arg names and added venue_id/season to pitcher dict construction.
+
+### Deployed
+
+- **First MLB predictions generated** — 481 predictions (120 batters × 4 stats + 1 pitcher K), 974 prop lines matched, 19 BL-recommended picks, 16 paper bets placed for Opening Day 2026-03-25.
+- Pushed to Railway: MLB lines job + pitcher fix + scheduler entries.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/orchestration/mlb_lines_job.py` | Created — MLB props + game lines scraping orchestrator |
+| `src/orchestration/scheduler.py` | Modified — 4 new MLB lines cron entries, `mlb_lines_job.py` in JOB_NAMES |
+| `src/models/mlb/mlb_daily_runner.py` | Modified — pitcher feature store arg fix + venue_id/season in pitcher dicts |
+
+---
+
+## [2026-03-25 Session 89] — Position-Matched Injury Features + Under-Bet Sanity Improvements
+
+### Added
+
+- **4 position-matched injury features** — `team_out_same_pos_count`, `team_out_same_pos_min_sum`, `team_out_same_pos_usg_sum`, `team_out_same_pos_starter_sum`. Aggregates OUT teammates in the same G/W/B position group. `starter_sum` uses `games_started_l5 / 5.0` to distinguish starter-level competition (Ant Edwards = 1.0) from bench depth (= 0.1). Added to all 5 feature lists (MINUTES + 4 rate models). Computed in both bulk training and single-player inference paths.
+- **L5-above-line sanity check** — New check rejects under bets when player's L5 average >= prop line. Catches cases like Sexton (L5 ~18, line 14.5) and Hyland (L5 16.6, line 14.5) where the model recommends unders on players averaging above the line.
+- **`sanity_flag` column on `daily_predictions`** — Persists warning reasons for all under-leaning predictions (e.g., `"l5_above_line:18.0>14.5|q50_divergence:62%"`). Enables dashboard warnings without re-computing at display time.
+- **Dashboard warning on PropCard** — Amber warning banner with caution icon shown on under predictions with `sanity_flag` set. Warning insight added to insights generator with `'warning'` category.
+- **Position injury insights** — New insight in `insights.ts` shows "same-position starter out — major opportunity" when `starter_sum >= 0.8`.
+
+### Fixed
+
+- **Q50 divergence check None-handling** — Changed from `if feat_l5 and pred_q50` (truthiness, silently skips None) to `pd.notna(feat_l5) and pd.notna(pred_q50)` (proper null check). This was the likely reason the sanity check wasn't catching Sexton/Hyland cases.
+
+### Database Migrations
+
+- `021_sanity_flag_and_position_injuries` — 5 new columns: `sanity_flag TEXT`, `feat_team_out_same_pos_count SMALLINT`, `feat_team_out_same_pos_min_sum DOUBLE PRECISION`, `feat_team_out_same_pos_usg_sum DOUBLE PRECISION`, `feat_team_out_same_pos_starter_sum DOUBLE PRECISION`.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `src/models/feature_store.py` | Modified — 4 new features in all 5 lists, bulk training aggregation with position grouping, inference query with position filter, `numpy` import at module level |
+| `src/models/daily_runner.py` | Modified — L5-above-line check in BL recs, sanity_flag computation for all under predictions, 4 new feat_* column mapping |
+| `src/paper_trading/paper_trader.py` | Modified — L5-above-line check in bet selection, `pd.notna()` fix |
+| `src/models/prediction_store.py` | Modified — 5 new columns in PREDICTION_COLS |
+| `database/migrations/021_sanity_flag_and_position_injuries.sql` | Created — 5 ALTER TABLE statements |
+| `dashboard/src/types/predictions.ts` | Modified — 5 new TypeScript fields |
+| `dashboard/src/lib/insights.ts` | Modified — warning category, sanity flag insights, position injury insights |
+| `dashboard/src/components/predictions/PropCard.tsx` | Modified — amber sanity warning banner |
+
+---
+
+## [2026-03-25 Session 88] — AI Q&A Enrichment + MLB Games Fix + Feature Persistence
+
+### Fixed
+
+- **MLB page showing NBA games** — `fetchFallbackGames` was hardcoded to `/api/games` which only fetched NBA CDN schedule. When MLB was selected with no predictions, NBA games appeared. Fixed by passing `sport` param to the API route.
+
+### Added
+
+- **MLB schedule support in `/api/games`** — Route now accepts `sport` query param. MLB uses `statsapi.mlb.com/api/v1/schedule` (filters cancelled/postponed). NBA unchanged.
+- **AI Q&A: Opponent-specific matchup history** — New parallel query fetches up to 5 games the player has played against the current opponent this season. Displayed as "MATCHUP HISTORY vs [OPP]" section.
+- **AI Q&A: Opponent injuries** — Fetches Out/Questionable players from opposing team, enriched with position and L15 averages. Displayed as "OPPONENT INJURIES" section.
+- **AI Q&A: Game context from model features** — New "GAME CONTEXT" section showing home/away, Vegas spread (with favored/underdog label), Vegas total, team+opponent pace with expected pace calculation, and opponent defensive rating with league average context.
+- **AI Q&A: Minutes/usage context** — Enhanced section showing starter probability, usage rate (with league avg context), minutes L3 average, minutes floor, minutes std dev (with stability interpretation), rest days, back-to-back flag.
+- **11 new `feat_*` columns in `daily_predictions`** — `feat_line_spread`, `feat_line_total`, `feat_is_home`, `feat_player_starter_prob`, `feat_player_avg_usg_pct_l5`, `feat_team_avg_pace_l5`, `feat_opp_avg_pace_l5`, `feat_opp_avg_def_rtg_l5`, `feat_player_avg_min_l3`, `feat_player_min_floor_l5`, `feat_player_min_std_l5`. Features were already computed at inference time but never persisted.
+
+### Changed
+
+- **AI Q&A: Expanded opponent defense** — Now shows L5/L15/SZN windows, per-100-possession rates, offensive rating allowed, and context stats (all of pts/reb/ast/threes) even when analyzing a single stat.
+- **AI Q&A: Updated LLM rules** — Added explicit instructions for referencing game context, matchup history, opponent defense/injuries, and minutes/usage data.
+- **`_map_features_to_predictions()`** — Maps 11 additional model features to predictions DataFrame for DB persistence.
+- **`PREDICTION_COLS`** — Extended with 11 new game context columns.
+
+### Database Migrations
+
+- `ALTER TABLE daily_predictions ADD COLUMN IF NOT EXISTS feat_line_spread/feat_line_total/feat_is_home/...` — 11 new DOUBLE PRECISION/BOOLEAN columns.
+
+### Files Changed
+
+| File | Action |
+|------|--------|
+| `dashboard/src/app/api/ask/route.ts` | Modified — 5 new enrichment queries, game context section, minutes/usage section, expanded defense, opponent injuries, matchup history, updated LLM rules |
+| `dashboard/src/app/api/games/route.ts` | Modified — added MLB schedule support via MLB Stats API, sport param |
+| `dashboard/src/app/(protected)/dashboard/page.tsx` | Modified — pass sport to fetchFallbackGames |
+| `src/models/prediction_store.py` | Modified — 11 new columns in PREDICTION_COLS |
+| `src/models/daily_runner.py` | Modified — map 11 game context features in _map_features_to_predictions |
+
+---
+
 ## [2026-03-24 Session 87] — Finish-Feature: PTS Model Fix Verification
 
 ### Verified

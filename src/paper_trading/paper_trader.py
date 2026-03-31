@@ -41,6 +41,9 @@ SUPPORTED_STATS = {"pts", "reb", "ast", "pra", "pr", "pa", "ra"}
 
 # Q50 vs L5 sanity check: reject under bets where Q50 is 30%+ below player L5 avg
 MAX_Q50_DIVERGENCE = 0.30
+# L5 vs line sanity check: reject under bets where L5 average is above the line
+# (player has been AVERAGING above the line — under is suspect)
+L5_ABOVE_LINE_MARGIN = 0.0  # L5 >= line * (1 + margin) triggers rejection
 
 
 def _get_env_float(name: str, default: float) -> float:
@@ -399,17 +402,29 @@ class PaperTrader:
             if direction is None:
                 continue
 
-            # Q50 vs L5 sanity check — reject under bets with absurdly low predictions
+            # Sanity checks for under bets
             if direction == "under":
                 feat_l5 = row.get("feat_player_avg_stat_l5")
                 pred_q50 = row.get("pred_q50")
-                if feat_l5 and pred_q50 and feat_l5 > 0:
+
+                # Check 1: Q50 divergence — reject when Q50 is 30%+ below L5
+                if pd.notna(feat_l5) and pd.notna(pred_q50) and feat_l5 > 0:
                     divergence = (feat_l5 - pred_q50) / feat_l5
                     if divergence > MAX_Q50_DIVERGENCE:
                         player_name = row["player_name"]
                         logger.warning(
-                            f"SANITY CHECK: Skipping {player_name} {stat} under — "
+                            f"SANITY CHECK [Q50]: Skipping {player_name} {stat} under — "
                             f"Q50={pred_q50:.1f} is {divergence:.0%} below L5={feat_l5:.1f}"
+                        )
+                        continue
+
+                # Check 2: L5 above line — reject when player is averaging above the line
+                if pd.notna(feat_l5) and feat_l5 > 0 and line > 0:
+                    if feat_l5 >= line * (1 + L5_ABOVE_LINE_MARGIN):
+                        player_name = row["player_name"]
+                        logger.warning(
+                            f"SANITY CHECK [L5>LINE]: Skipping {player_name} {stat} under — "
+                            f"L5 avg={feat_l5:.1f} >= line={line:.1f}"
                         )
                         continue
 

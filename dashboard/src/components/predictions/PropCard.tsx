@@ -108,6 +108,18 @@ export function PropCard({ prediction, onAnalyze, selectable, selected, onToggle
         </span>
       </div>
 
+      {/* Sanity warning */}
+      {prediction.sanity_flag && !isOverBet && (
+        <div className="flex items-center gap-1.5 mb-2 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20">
+          <span className="text-amber-400 text-xs shrink-0">&#9888;</span>
+          <span className="text-amber-400/90 text-[11px] leading-tight">
+            {prediction.sanity_flag.includes('l5_above_line')
+              ? 'L5 avg is above line — under may be suspect'
+              : 'Model prediction diverges from recent form'}
+          </span>
+        </div>
+      )}
+
       {/* Probability and edge */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-1">

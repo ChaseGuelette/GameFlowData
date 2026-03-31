@@ -73,6 +73,15 @@ export interface Prediction {
   feat_opp_team_abbrev?: string
   feat_prop_line?: number
   feat_player_season_avg_vs_line?: number
+
+  // Position-matched injury features
+  feat_team_out_same_pos_count?: number
+  feat_team_out_same_pos_min_sum?: number
+  feat_team_out_same_pos_usg_sum?: number
+  feat_team_out_same_pos_starter_sum?: number
+
+  // Sanity check flag — warning reason(s) if prediction looks suspect
+  sanity_flag?: string
 }
 
 export interface GameStatusInfo {

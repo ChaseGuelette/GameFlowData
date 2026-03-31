@@ -1,7 +1,7 @@
 import { type Prediction } from '@/types/predictions'
 
 export interface Insight {
-  category: 'rest' | 'injury' | 'trend' | 'consistency' | 'average'
+  category: 'rest' | 'injury' | 'trend' | 'consistency' | 'average' | 'warning'
   text: string
   sentiment: 'positive' | 'negative' | 'neutral'
 }
@@ -135,6 +135,42 @@ export function generateInsights(prediction: Prediction): Insight[] {
         sentiment: favorsOver ? 'negative' : 'positive'
       })
     }
+  }
+
+  // Sanity flag warning — model prediction may be unreliable
+  if (prediction.sanity_flag) {
+    const flags = prediction.sanity_flag.split('|')
+    for (const flag of flags) {
+      if (flag.startsWith('l5_above_line:')) {
+        insights.unshift({
+          category: 'warning',
+          text: 'Caution: L5 average is above the line — under may be suspect',
+          sentiment: 'negative'
+        })
+      } else if (flag.startsWith('q50_divergence:')) {
+        insights.unshift({
+          category: 'warning',
+          text: 'Caution: Model prediction far below recent performance',
+          sentiment: 'negative'
+        })
+      }
+    }
+  }
+
+  // Position-matched injury opportunity
+  if (prediction.feat_team_out_same_pos_count && prediction.feat_team_out_same_pos_count >= 1) {
+    const mins = prediction.feat_team_out_same_pos_min_sum
+      ? prediction.feat_team_out_same_pos_min_sum.toFixed(0)
+      : '?'
+    const starterSum = prediction.feat_team_out_same_pos_starter_sum ?? 0
+    const isStarterOut = starterSum >= 0.8
+    insights.push({
+      category: 'injury',
+      text: isStarterOut
+        ? `${prediction.feat_team_out_same_pos_count} same-position starter${prediction.feat_team_out_same_pos_count > 1 ? 's' : ''} out (${mins} MPG) — major opportunity`
+        : `${prediction.feat_team_out_same_pos_count} same-position teammate${prediction.feat_team_out_same_pos_count > 1 ? 's' : ''} out (${mins} MPG)`,
+      sentiment: 'positive'
+    })
   }
 
   return insights

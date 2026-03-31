@@ -1,31 +1,92 @@
 # GameFlowData — Roadmap
 
-## Session Summary (2026-03-24 — Session 87)
+## Session Summary (2026-03-25 — Session 90)
 
 ### What We Did
 
-**Finish-Feature: Verification & Documentation for PTS Model Fix**
+**MLB Lines Job + Pitcher K Fix + First MLB Predictions Live**
 
-Verified all code changes from Session 86 (Q50 sanity check, MIN_MINUTES 5→8) and confirmed manual steps (rolling average rebuild, retrain, backtest) were completed. Ran full test suite (719 passed), ruff clean. Updated documentation.
+1. **Diagnosed missing MLB predictions** — Inference job was running but producing 0 edges because no MLB prop lines existed. The MLB lines scraper (`mlb_daily_player_props_scraper.py`, `mlb_daily_game_lines_scraper.py`) existed but had no orchestration job or scheduler entry.
+2. **Built `mlb_lines_job.py`** — New orchestration script mirroring NBA `lines_job.py`. Supports `--live`, `--props-only`, `--parallel`. Runs game lines scraper + props scraper + incremental linker.
+3. **Added 4 MLB lines cron entries** — Full scrape at 12 PM/5 PM ET, props-only at 1 PM/6 PM ET. Lines run before inference at 1:30 PM/6:30 PM.
+4. **Fixed pitcher K inference** — `as_of_date` → `game_date`, `opponent_id` → `opp_team_id`, added missing `venue_id` and `season` to pitcher dict construction.
+5. **First MLB predictions generated** — 481 predictions, 974 prop lines, 19 recommended, 16 paper bets placed for Opening Day.
+6. **Committed and pushed** — Railway auto-deploying with all MLB pipeline fixes.
 
 ### Remaining Action Items
 
-1. **Deploy to Vercel** — push all dashboard changes (AI Q&A, combo markets, DFS 6-stat support, mobile optimization, security headers, error boundaries, auth, query narrowing). Set `ANTHROPIC_API_KEY` env var.
+1. **Retrain NBA model with position injury features** — 3-way comparison (force all 4, force best 2, selector-only). Backtest each.
+2. **Deploy to Vercel** — push all dashboard changes (sanity warnings, position injury insights, AI Q&A enrichment, MLB games fix, combo markets, etc). Set `ANTHROPIC_API_KEY` env var.
+3. **Monitor MLB pipeline tomorrow** — Verify full automated cycle: daily stats (10 AM) → lines (12 PM) → inference (1:30 PM) → lines refresh (5 PM) → inference refresh (6:30 PM).
+4. **MLB pitcher K coverage** — Only 1 pitcher predicted today (schedule had 1 probable starter). Check if `mlb_game_schedule` is getting probable pitcher IDs populated correctly.
+5. **Stripe integration** — subscribe page, customer portal, webhook
+6. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+7. **Clean up old model backups** — `production_old_20260210/` and `production_old_20260323/`
+8. **Fix pre-existing test** — `test_finds_latest_run_directory`
+9. **Drop unused index** — `idx_props_dfs_latest`
+
+---
+
+## Session Summary (2026-03-25 — Session 89)
+
+### What We Did
+
+**Position-Matched Injury Features + Improved Under-Bet Sanity Checks + Dashboard Warnings**
+
+1. **Improved under-bet sanity check** — Added L5-above-line check (rejects unders when L5 avg >= line). Fixed None-handling bug in existing Q50 divergence check (`pd.notna()` instead of truthiness). Applied to both `paper_trader.py` and `daily_runner.py` BL recommendations.
+2. **Sanity flag on predictions** — New `sanity_flag TEXT` column on `daily_predictions` stores warning reasons for all under-leaning predictions (e.g., `"l5_above_line:18.0>14.5"`). Persisted to DB via prediction store.
+3. **Dashboard warning** — PropCard shows amber warning banner on flagged under predictions. Insights generator (`insights.ts`) adds warning category insights at top of list. Position-matched injury insights show "major opportunity" when a starter is out.
+4. **4 new position-matched injury features** — `team_out_same_pos_count`, `team_out_same_pos_min_sum`, `team_out_same_pos_usg_sum`, `team_out_same_pos_starter_sum`. Aggregates OUT teammates in the same G/W/B position group. `starter_sum` captures whether a starter at your position is out (Ant Edwards = 1.0) vs a bench player (= 0.1). Added to all 5 feature lists. Computed in both bulk training and single-player inference paths.
+5. Migration 021 applied to Supabase (5 new columns on `daily_predictions`).
+6. Ruff clean. Pre-existing TS errors only (Anthropic SDK types).
+
+### Remaining Action Items
+
+1. **Retrain model with position injury features** — 3-way comparison: force all 4, force best 2 (`team_out_same_pos_starter_sum`, `team_out_same_pos_min_sum`), and selector-only. Backtest each against current production.
+2. **Deploy to Vercel** — push all dashboard changes (sanity warnings, position injury insights, AI Q&A enrichment, MLB games fix, combo markets, DFS 6-stat support, mobile optimization, security headers, error boundaries, auth, query narrowing). Set `ANTHROPIC_API_KEY` env var.
+3. **Deploy to Railway** — push sanity check improvements + position injury features for next inference run.
+4. **Stripe integration** — subscribe page, customer portal, webhook
+5. **MLB pipeline** — train batter hits/total_bases models (in progress), train pitcher K model, build daily runner, backtesting harness. MLB season started 2026-03-25.
+6. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
+7. **Clean up old model backups** — `production_old_20260210/` and `production_old_20260323/` can be removed once new model is validated in live trading
+8. **Future: Pagination** — Add pagination to history/performance pages (see SCALING.md Tier 1)
+9. **Future: Client-side caching** — React Query for cross-page data caching (see SCALING.md Tier 2)
+10. **Future: Database indexes** — Composite indexes on `raw_player_props_combined`, `paper_bets`, `user_bets` (see SCALING.md). CAUTION: `raw_player_props_combined` has 67M+ rows — NEVER use `CREATE INDEX` (non-concurrent) via Supabase migrations on this table.
+11. **Fix pre-existing test** — `test_finds_latest_run_directory` fails because `find_latest_model_dir` now expects `nba_run_*` prefix but test creates `run_*` dirs
+12. **Backtest combo validation** — Run a short backtest with combo stats to validate edges and resolution
+13. **Future: Persist AI chat** — Consider persisting chat history per player/stat to Supabase for returning users
+14. **Drop unused index** — `idx_props_dfs_latest` index still exists in DB from failed optimization attempt — should be dropped
+15. **Tune drift threshold** — Monitor re-inference frequency in production. If triggering too often (>30 players/cycle), increase `DRIFT_THRESHOLD` from 1.0 to 1.5 or 2.0.
+
+---
+
+## Session Summary (2026-03-25 — Session 88)
+
+### What We Did
+
+**AI Q&A Enrichment + MLB Games Fix + Feature Persistence**
+
+1. Fixed MLB dashboard showing NBA games (sport-aware `/api/games` route with MLB Stats API support).
+2. Added 5 new data enrichments to AI Q&A: opponent-specific matchup history, opponent injuries, game context (spread/total/home-away), pace context, and minutes/usage details (starter prob, usage rate, min floor/variance).
+3. Persisted 11 model features to `daily_predictions` that were previously computed at inference but discarded (spread, total, is_home, starter_prob, usage, pace, def_rtg, min_l3, min_floor, min_std).
+4. Expanded opponent defense display with per-100 rates, SZN windows, and cross-stat context.
+5. 721 tests passed, ruff clean.
+
+### Remaining Action Items
+
+1. **Deploy to Vercel** — push all dashboard changes (AI Q&A enrichment, MLB games fix, combo markets, DFS 6-stat support, mobile optimization, security headers, error boundaries, auth, query narrowing). Set `ANTHROPIC_API_KEY` env var.
 2. **Stripe integration** — subscribe page, customer portal, webhook
-3. **MLB pipeline** — train batter hits/total_bases models (in progress), train pitcher K model, build daily runner, backtesting harness.
+3. **MLB pipeline** — train batter hits/total_bases models (in progress), train pitcher K model, build daily runner, backtesting harness. MLB season started 2026-03-25.
 4. **NCAAB migrations** — apply 009-011, backfill, train spread/total models
 5. **Clean up old model backups** — `production_old_20260210/` and `production_old_20260323/` can be removed once new model is validated in live trading
 6. **Future: Pagination** — Add pagination to history/performance pages (see SCALING.md Tier 1)
 7. **Future: Client-side caching** — React Query for cross-page data caching (see SCALING.md Tier 2)
 8. **Future: Database indexes** — Composite indexes on `raw_player_props_combined`, `paper_bets`, `user_bets` (see SCALING.md). CAUTION: `raw_player_props_combined` has 67M+ rows — NEVER use `CREATE INDEX` (non-concurrent) via Supabase migrations on this table.
 9. **Fix pre-existing test** — `test_finds_latest_run_directory` fails because `find_latest_model_dir` now expects `nba_run_*` prefix but test creates `run_*` dirs
-10. **Future: Card-based mobile layouts** — DfsTable/HeatmapTable card-based layouts for small screens (currently using horizontal scroll)
-11. **Backtest combo validation** — Run a short backtest with combo stats to validate edges and resolution
-12. **Future: Persist AI chat** — Consider persisting chat history per player/stat to Supabase for returning users
-13. **Future: Redis rate limiting** — Replace in-memory rate limit map with Redis for multi-instance deployments
-14. **Future: DFS query optimization** — `get_dfs_lines` still takes ~9-14s. Long-term fix: optimize the query itself, or archive old rows from `raw_player_props_combined` (67M+ rows)
-15. **Drop unused index** — `idx_props_dfs_latest` index still exists in DB from failed optimization attempt — should be dropped
-16. **Tune drift threshold** — Monitor re-inference frequency in production. If triggering too often (>30 players/cycle), increase `DRIFT_THRESHOLD` from 1.0 to 1.5 or 2.0.
+10. **Backtest combo validation** — Run a short backtest with combo stats to validate edges and resolution
+11. **Future: Persist AI chat** — Consider persisting chat history per player/stat to Supabase for returning users
+12. **Drop unused index** — `idx_props_dfs_latest` index still exists in DB from failed optimization attempt — should be dropped
+13. **Tune drift threshold** — Monitor re-inference frequency in production. If triggering too often (>30 players/cycle), increase `DRIFT_THRESHOLD` from 1.0 to 1.5 or 2.0.
 
 ---
 

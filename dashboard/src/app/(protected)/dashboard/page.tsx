@@ -140,7 +140,7 @@ export default function DashboardPage() {
   // Fetch fallback games from NBA CDN schedule (when predictions haven't been generated yet)
   const fetchFallbackGames = useCallback(async (date: string) => {
     try {
-      const resp = await fetch(`/api/games?date=${date}`)
+      const resp = await fetch(`/api/games?date=${date}&sport=${sport}`)
       if (resp.ok) {
         const games = await resp.json()
         setFallbackGames(Array.isArray(games) && games.length > 0 ? games : [])
@@ -150,7 +150,7 @@ export default function DashboardPage() {
     } catch {
       setFallbackGames([])
     }
-  }, [])
+  }, [sport])
 
   // Handle "Take Bet" from AnalysisModal
   const handleTakeBet = useCallback(async (prediction: Prediction, data: TakeBetData) => {

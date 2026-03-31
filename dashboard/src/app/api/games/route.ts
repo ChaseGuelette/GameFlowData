@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+// ---------------------------------------------------------------------------
+// NBA Schedule (CDN)
+// ---------------------------------------------------------------------------
+
 const SCHEDULE_URL = 'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json'
 const CDN_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -34,42 +38,85 @@ interface CDNGameDate {
   games: CDNGame[]
 }
 
+async function fetchNbaGames(targetDate: string) {
+  const resp = await fetch(SCHEDULE_URL, { headers: CDN_HEADERS, next: { revalidate: 3600 } })
+  if (!resp.ok) return null
+
+  const data = await resp.json()
+  const gameDates: CDNGameDate[] = data?.leagueSchedule?.gameDates ?? []
+
+  // Parse targetDate (YYYY-MM-DD) to match CDN format (MM/DD/YYYY)
+  const [year, month, day] = targetDate.split('-')
+  const cdnDatePrefix = `${month}/${day}/${year}`
+
+  const matchingDate = gameDates.find(d => d.gameDate.startsWith(cdnDatePrefix))
+  if (!matchingDate) return []
+
+  // Filter to regular season games (game_id starts with "002") that aren't cancelled
+  return matchingDate.games
+    .filter(g => g.gameId.startsWith('002'))
+    .map(g => ({
+      home_team: TRICODE_TO_NAME[g.homeTeam.teamTricode] ?? g.homeTeam.teamTricode,
+      away_team: TRICODE_TO_NAME[g.awayTeam.teamTricode] ?? g.awayTeam.teamTricode,
+      commence_time: g.gameDateTimeUTC || null,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// MLB Schedule (MLB Stats API)
+// ---------------------------------------------------------------------------
+
+interface MLBScheduleGame {
+  gamePk: number
+  gameDate: string // ISO datetime
+  status: { statusCode: string }
+  teams: {
+    home: { team: { id: number; name: string } }
+    away: { team: { id: number; name: string } }
+  }
+}
+
+async function fetchMlbGames(targetDate: string) {
+  const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${targetDate}&gameType=R`
+  const resp = await fetch(url, { next: { revalidate: 3600 } })
+  if (!resp.ok) return null
+
+  const data = await resp.json()
+  const games: MLBScheduleGame[] = data?.dates?.[0]?.games ?? []
+
+  return games
+    .filter(g => !['D', 'DR', 'CR'].includes(g.status.statusCode)) // exclude cancelled/postponed
+    .map(g => ({
+      home_team: g.teams.home.team.name,
+      away_team: g.teams.away.team.name,
+      commence_time: g.gameDate || null,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Route handler
+// ---------------------------------------------------------------------------
+
 export async function GET(req: NextRequest) {
   const targetDate = req.nextUrl.searchParams.get('date')
   if (!targetDate) {
     return NextResponse.json({ error: 'date parameter required' }, { status: 400 })
   }
 
+  const sport = req.nextUrl.searchParams.get('sport') || 'nba'
+
   try {
-    const resp = await fetch(SCHEDULE_URL, { headers: CDN_HEADERS, next: { revalidate: 3600 } })
-    if (!resp.ok) {
-      return NextResponse.json({ error: 'Failed to fetch NBA schedule' }, { status: 502 })
+    const games = sport === 'mlb'
+      ? await fetchMlbGames(targetDate)
+      : await fetchNbaGames(targetDate)
+
+    if (games === null) {
+      return NextResponse.json({ error: `Failed to fetch ${sport.toUpperCase()} schedule` }, { status: 502 })
     }
-
-    const data = await resp.json()
-    const gameDates: CDNGameDate[] = data?.leagueSchedule?.gameDates ?? []
-
-    // Parse targetDate (YYYY-MM-DD) to match CDN format (MM/DD/YYYY)
-    const [year, month, day] = targetDate.split('-')
-    const cdnDatePrefix = `${month}/${day}/${year}`
-
-    const matchingDate = gameDates.find(d => d.gameDate.startsWith(cdnDatePrefix))
-    if (!matchingDate) {
-      return NextResponse.json([])
-    }
-
-    // Filter to regular season games (game_id starts with "002") that aren't cancelled
-    const games = matchingDate.games
-      .filter(g => g.gameId.startsWith('002'))
-      .map(g => ({
-        home_team: TRICODE_TO_NAME[g.homeTeam.teamTricode] ?? g.homeTeam.teamTricode,
-        away_team: TRICODE_TO_NAME[g.awayTeam.teamTricode] ?? g.awayTeam.teamTricode,
-        commence_time: g.gameDateTimeUTC || null,
-      }))
 
     return NextResponse.json(games)
   } catch (err) {
-    console.error('NBA CDN schedule fetch error:', err)
+    console.error(`${sport.toUpperCase()} schedule fetch error:`, err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }
