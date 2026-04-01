@@ -17,4 +17,5 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-009]] - DFS Slip Builder & Entry Tracking (parlay Kelly sizing, history tab, backend resolver)
 - [[handoff-010]] - MLB inference bugfixes: naming, prop lines, at_bats leakage, RLS policies
 - [[handoff-011]] - Kalshi paper trading: DB tables, KalshiPaperTrader, pipeline integration
+- [[handoff-012]] - Kalshi live trading bot: real orders, circuit breakers, Discord alerts, migration applied
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

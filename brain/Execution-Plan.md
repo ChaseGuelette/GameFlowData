@@ -130,7 +130,7 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 7.6 | Dashboard prediction markets page | completed | 7.3, 7.4 | `/prediction-markets` route, sortable/filterable table, detail modal, countdown, fee breakdown |
 | 7.7 | Discord alerts | completed | 7.4 | Violet embed, top 5 edges, `send_kalshi_alert_sync()`, `DISCORD_CHANNEL_KALSHI` fallback |
 | 7.8 | Kalshi paper trading | completed | 7.4 | `kalshi_paper_bets` + `kalshi_paper_trading_daily_log` tables, `KalshiPaperTrader` class (Kelly sizing, cents-based P&L, liquidity filters), integrated into `kalshi_refresh_job.py` as Step 4, `--skip-paper` CLI flag |
-| 7.9 | Kalshi live trading | not_started | 7.8 proven | Limit orders only, gated by `KALSHI_LIVE_TRADING_ENABLED`. Future phase. |
+| 7.9 | Kalshi live trading | completed | 7.8 | Taker market orders, `KalshiLiveTrader` class, 3 circuit breakers (drawdown/daily loss/streak), Kelly sizing with taker fees, 15% edge threshold, position accumulation awareness, Discord alerts per trade, DB tables migrated, integrated into `kalshi_refresh_job.py` Step 4.5 with `--skip-live` flag. Gated by `KALSHI_LIVE_TRADING_ENABLED=true`. |
 
 **Done when**: Kalshi markets scraped, edges computed, displayed on dashboard, paper trading profitable.
 
