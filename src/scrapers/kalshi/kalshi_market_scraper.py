@@ -27,6 +27,7 @@ import argparse
 import logging
 import re
 import sys
+import time
 import unicodedata
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
@@ -436,7 +437,9 @@ def scrape_and_store(
             logger.warning("No Kalshi credentials -- use --mock for testing")
             return stats
 
-        for series_ticker in prop_series:
+        for i, series_ticker in enumerate(prop_series):
+            if i > 0:
+                time.sleep(1.0)  # pause between series to avoid rate limiting
             raw = client.list_all_markets(series_ticker=series_ticker)
             if raw:
                 all_raw_markets[series_ticker] = raw

@@ -99,7 +99,7 @@ def _sign_request(private_key, timestamp_ms: str, method: str, path: str) -> str
 class KalshiClient:
     """HTTP client for the Kalshi prediction markets API."""
 
-    def __init__(self, delay: float = 0.05, max_retries: int = 3):
+    def __init__(self, delay: float = 0.10, max_retries: int = 3):
         self.delay = delay
         self.max_retries = max_retries
         self.session = requests.Session()
@@ -152,11 +152,12 @@ class KalshiClient:
             return None
 
         url = f"{KALSHI_BASE_URL}{path}"
+        sign_path = f"/trade-api/v2{path}"
 
         for attempt in range(self.max_retries):
             self._rate_limit()
             try:
-                headers = self._auth_headers(method.upper(), path)
+                headers = self._auth_headers(method.upper(), sign_path)
                 response = self.session.request(
                     method, url, headers=headers, params=params, timeout=15,
                 )
@@ -215,11 +216,12 @@ class KalshiClient:
             return None
 
         url = f"{KALSHI_BASE_URL}{path}"
+        sign_path = f"/trade-api/v2{path}"
 
         for attempt in range(self.max_retries):
             self._rate_limit()
             try:
-                headers = self._auth_headers(method.upper(), path)
+                headers = self._auth_headers(method.upper(), sign_path)
                 response = self.session.request(
                     method, url, headers=headers, json=body, timeout=15,
                 )

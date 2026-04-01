@@ -993,8 +993,8 @@ def send_kalshi_alert_sync(
 # =============================================================================
 
 
-def _build_kalshi_trade_placed_embed(trade: dict) -> dict:
-    """Build Discord embed for a live Kalshi trade placement."""
+def _build_kalshi_trade_placed_embed(trade: dict, mode: str = "live") -> dict:
+    """Build Discord embed for a Kalshi trade placement."""
     player = trade.get("player_name", "Unknown")
     stat = str(trade.get("stat_type", "")).upper()
     line = trade.get("line", "—")
@@ -1005,10 +1005,11 @@ def _build_kalshi_trade_placed_embed(trade: dict) -> dict:
     total_cost = trade.get("total_cost", 0)
     balance = trade.get("balance_after", 0)
 
+    mode_upper = mode.upper()
     return {
-        "title": "KALSHI TRADE PLACED",
+        "title": f"KALSHI {mode_upper} TRADE PLACED",
         "description": f"**{player}** {stat} {'OVER' if side == 'YES' else 'UNDER'} {line}",
-        "color": 0x2ECC71,  # Green
+        "color": 0x2ECC71 if mode == "live" else 0x3498DB,  # Green / Blue
         "timestamp": datetime.utcnow().isoformat(),
         "fields": [
             {"name": "Side", "value": side, "inline": True},
@@ -1018,12 +1019,12 @@ def _build_kalshi_trade_placed_embed(trade: dict) -> dict:
             {"name": "Edge", "value": f"{edge:.1%}", "inline": True},
             {"name": "Balance", "value": f"${balance:.2f}", "inline": True},
         ],
-        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+        "footer": {"text": f"Kalshi {mode.title()} Trading | GameFlowData"},
     }
 
 
-def _build_kalshi_trade_resolved_embed(trade: dict) -> dict:
-    """Build Discord embed for a resolved Kalshi live trade."""
+def _build_kalshi_trade_resolved_embed(trade: dict, mode: str = "live") -> dict:
+    """Build Discord embed for a resolved Kalshi trade."""
     player = trade.get("player_name", "Unknown")
     stat = str(trade.get("stat_type", "")).upper()
     line = trade.get("line", "—")
@@ -1033,8 +1034,9 @@ def _build_kalshi_trade_resolved_embed(trade: dict) -> dict:
     balance = trade.get("balance_after", 0)
     won = trade.get("status") == "won"
 
+    mode_upper = mode.upper()
     return {
-        "title": f"KALSHI TRADE {'WON' if won else 'LOST'}",
+        "title": f"KALSHI {mode_upper} TRADE {'WON' if won else 'LOST'}",
         "description": (
             f"**{player}** {stat} {'OVER' if side == 'YES' else 'UNDER'} {line}"
             + (f" — Actual: {actual}" if actual is not None else "")
@@ -1045,7 +1047,7 @@ def _build_kalshi_trade_resolved_embed(trade: dict) -> dict:
             {"name": "P&L", "value": f"${pnl:+.2f}", "inline": True},
             {"name": "Balance", "value": f"${balance:.2f}", "inline": True},
         ],
-        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+        "footer": {"text": f"Kalshi {mode.title()} Trading | GameFlowData"},
     }
 
 
@@ -1069,7 +1071,11 @@ async def send_kalshi_trade_alert(
     embed: dict,
     channel_id: str | None = None,
 ) -> bool:
-    """Send a Kalshi live trading alert embed to Discord."""
+    """Send a Kalshi trading alert embed to Discord.
+
+    Routes to DISCORD_CHANNEL_KALSHI (shared for paper + live),
+    falling back to DISCORD_CHANNEL_PREDICTIONS.
+    """
     load_dotenv()
 
     bot_token = os.getenv("DISCORD_BOT_TOKEN")
@@ -1079,12 +1085,11 @@ async def send_kalshi_trade_alert(
 
     if not channel_id:
         channel_id = (
-            os.getenv("DISCORD_CHANNEL_KALSHI_LIVE")
-            or os.getenv("DISCORD_CHANNEL_KALSHI")
+            os.getenv("DISCORD_CHANNEL_KALSHI")
             or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
         )
     if not channel_id:
-        logger.warning("No Kalshi live channel configured, skipping trade alert")
+        logger.warning("No Kalshi channel configured, skipping trade alert")
         return False
 
     url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
@@ -1113,13 +1118,15 @@ def send_kalshi_trade_alert_sync(
     alert_type: str,
     data: dict,
     channel_id: str | None = None,
+    mode: str = "live",
 ) -> bool:
-    """Send a Kalshi live trading alert synchronously.
+    """Send a Kalshi trading alert synchronously.
 
     Args:
         alert_type: "placed", "resolved", or "circuit_breaker".
         data: Dict with trade/breaker details.
         channel_id: Optional Discord channel override.
+        mode: "live" or "paper" — controls embed title and color.
 
     Returns:
         True if alert was sent successfully.
@@ -1127,9 +1134,9 @@ def send_kalshi_trade_alert_sync(
     import asyncio
 
     if alert_type == "placed":
-        embed = _build_kalshi_trade_placed_embed(data)
+        embed = _build_kalshi_trade_placed_embed(data, mode=mode)
     elif alert_type == "resolved":
-        embed = _build_kalshi_trade_resolved_embed(data)
+        embed = _build_kalshi_trade_resolved_embed(data, mode=mode)
     elif alert_type == "circuit_breaker":
         embed = _build_kalshi_circuit_breaker_embed(
             data.get("reason", "Unknown"), data,

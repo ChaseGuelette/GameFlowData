@@ -77,7 +77,7 @@ class KalshiLiveTrader:
         self.kelly_fraction = _env_float("KALSHI_LIVE_KELLY_FRACTION", 0.125)
         self.min_edge = _env_float("KALSHI_LIVE_MIN_EDGE", 0.15)
         self.max_contracts = _env_int("KALSHI_LIVE_MAX_CONTRACTS", 50)
-        self.max_daily_exposure = _env_float("KALSHI_LIVE_MAX_DAILY_EXPOSURE", 30.0)
+        self.max_daily_exposure = _env_float("KALSHI_LIVE_MAX_DAILY_EXPOSURE", 80.0)
         self.drawdown_limit = _env_float("KALSHI_LIVE_DRAWDOWN_LIMIT", 0.30)
         self.daily_loss_limit = _env_float("KALSHI_LIVE_DAILY_LOSS_LIMIT", 15.0)
         self.consec_loss_limit = _env_int("KALSHI_LIVE_CONSEC_LOSS_LIMIT", 5)
@@ -810,7 +810,11 @@ class KalshiLiveTrader:
         self, game_date: date, orders_df: pd.DataFrame, sport: str,
     ) -> dict[tuple[int, str], float | None]:
         """Fetch actual stat values for resolution (same logic as paper trader)."""
-        from src.paper_trading.kalshi_paper_trader import MLB_STAT_RESOLUTION, NBA_STAT_RESOLUTION
+        from src.paper_trading.kalshi_paper_trader import (
+            COMBINED_STAT_RESOLUTION,
+            MLB_STAT_RESOLUTION,
+            NBA_STAT_RESOLUTION,
+        )
 
         actuals: dict[tuple[int, str], float | None] = {}
         stats_needed = orders_df["stat_type"].unique()
@@ -841,6 +845,24 @@ class KalshiLiveTrader:
                     """), {"game_date": game_date}).fetchall()
                 for row in rows:
                     if row[2]:  # DNP
+                        actuals[(int(row[0]), stat_type)] = None
+                    else:
+                        actuals[(int(row[0]), stat_type)] = float(row[1]) if row[1] is not None else None
+                continue
+
+            # Combined stats (e.g., batter_hits_runs_rbis)
+            combined_res = COMBINED_STAT_RESOLUTION.get(stat_type)
+            if combined_res is not None:
+                table, columns = combined_res
+                col_expr = " + ".join(f"s.{c}" for c in columns)
+                with self.engine.connect() as conn:
+                    rows = conn.execute(text(f"""
+                        SELECT s.player_id, ({col_expr}) as actual_value, s.did_not_play
+                        FROM {table} s
+                        WHERE s.game_date = :game_date
+                    """), {"game_date": game_date}).fetchall()
+                for row in rows:
+                    if row[2]:
                         actuals[(int(row[0]), stat_type)] = None
                     else:
                         actuals[(int(row[0]), stat_type)] = float(row[1]) if row[1] is not None else None

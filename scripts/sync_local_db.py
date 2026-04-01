@@ -11,13 +11,13 @@ Usage:
 Prerequisites:
     - Local Postgres running on localhost:5432
     - DATABASE_URL env var pointing to Supabase (from .env)
-    - LOCAL_DATABASE_URL env var (default: postgresql://postgres:postgres@localhost:5432/gameflow_local)
+    - LOCAL_DATABASE_URL env var set in .env
 
 Setup (one-time):
     1. Install Postgres: https://www.postgresql.org/download/windows/
-       Or Docker: docker run -d --name gameflow-pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
-    2. python scripts/sync_local_db.py --full --sport mlb   (~10 GB, ~10-15 min)
-    3. python scripts/sync_local_db.py --full --sport nba   (~30 GB, ~30-40 min)
+    2. Set LOCAL_DATABASE_URL in .env
+    3. python scripts/sync_local_db.py --full --sport mlb   (~10 GB, ~10-15 min)
+    4. python scripts/sync_local_db.py --full --sport nba   (~30 GB, ~30-40 min)
 
 To use local DB for backtesting:
     python src/backtesting/mlb/run_mlb_sweep.py --local ...

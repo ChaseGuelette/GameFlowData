@@ -24,4 +24,5 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-016]] - MLB pipeline debugging: Supavisor timeout, bet resolution, Discord alerts
 - [[handoff-017]] - Local Postgres setup, gameflow_local created, MLB sweep commands for hits/home_runs
 - [[handoff-018]] - AI Chat revamp: persistence, enriched data (depth chart, advanced stats, injury timeline), markdown rendering
+- [[handoff-019]] - Kalshi paper/live trader alignment, overflow bet tracking, Discord alerts with mode distinction
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

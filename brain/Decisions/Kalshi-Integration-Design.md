@@ -3,7 +3,7 @@
 > Part of [[Decisions]]
 
 **Created**: March 24, 2026
-**Status**: Implemented (Session 8, March 31 2026) — Phases 1-3 + 6 complete. Phase 4 (paper trading) and Phase 5 (live trading) deferred.
+**Status**: Fully Implemented — All 6 phases complete. Paper trader aligned with live trader (Session 18, April 1 2026). Overflow bet tracking added for exposure-capped markets.
 
 ## Overview
 
@@ -412,16 +412,23 @@ Wire into `kalshi_refresh_job.py` — after edge calculation, call paper trader'
 
 ---
 
-## Phase 5: Live Trading (Future — Design Only)
+## Phase 5: Live Trading — Implemented (Session 12)
 
-**New file**: `src/trading/kalshi_live_trader.py`
+**File**: `src/paper_trading/kalshi_live_trader.py`
 - Gated behind `KALSHI_LIVE_TRADING_ENABLED=true`
-- Limit orders only (maker fees)
-- Self-imposed limits: $5K/market, $10K/day
-- Auto-cancel 30 min before market close
-- New table: `kalshi_live_orders`
+- Taker market orders (instant fill), 15% min fee-adjusted edge
+- 3 circuit breakers: 30% drawdown, $15 daily loss limit, 5 consecutive losses
+- Kelly sizing with taker fees, position accumulation awareness
+- Tables: `kalshi_live_orders`, `kalshi_live_trading_daily_log`, `kalshi_live_trading_config`
 
-**Not implementing now** — needs Phase 4 paper trading to prove profitability first.
+## Phase 4+5 Alignment (Session 18)
+
+Paper trader and live trader now mirror each other 1:1:
+- Both use **taker fees** (not maker), **15% min edge** (sniper mode), **$80 daily exposure cap**
+- Both use Kelly sizing with taker fee deduction, min volume 20, max spread 15
+- Paper trader sends **Discord alerts** (blue embeds) for every bet placed and resolved
+- **Overflow bet tracking**: When exposure cap is hit, additional qualifying bets are stored with `status='overflow'` and resolved separately (`overflow_won`/`overflow_lost`/`overflow_cancelled`) — hypothetical P&L tracked but excluded from daily log metrics
+- DB CHECK constraint updated: `kalshi_paper_bets` now allows overflow statuses
 
 ---
 
