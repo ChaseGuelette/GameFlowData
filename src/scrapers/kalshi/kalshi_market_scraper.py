@@ -4,6 +4,14 @@ Kalshi Market Scraper
 Discovers player prop markets on Kalshi, parses tickers, links to our
 player database, and stores snapshots in kalshi_markets.
 
+Market structure (discovered Apr 2026):
+  - Player props live in per-stat series: KXNBAPTS, KXNBAREB, KXNBAAST,
+    KXNBA3PT, KXNBABLK, KXNBASTL (NBA) and KXMLBTB, KXMLBHR (MLB).
+  - Ticker format: KX{STAT}-{YYMONDD}{MATCHUP}-{TEAM}{PLAYER}{JERSEY}-{LINE}
+    Example: KXNBAPTS-26APR01BOSMIA-BOSJTATUM0-25
+  - Prices are in dollars (0.00-1.00), not cents.
+  - The old KXNBA/KXMLB series contain only championship futures.
+
 Supports:
   --dry-run   Parse and print markets without DB writes
   --mock      Generate synthetic markets (no API credentials needed)
@@ -32,8 +40,7 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 from src.db.client import get_engine
 from src.scrapers.kalshi.kalshi_client import KalshiClient
 from src.scrapers.kalshi.kalshi_utils import (
-    KALSHI_SERIES_MAP,
-    KALSHI_STAT_MAP,
+    KALSHI_PROP_SERIES,
     kalshi_mid_to_prob,
 )
 
@@ -69,142 +76,89 @@ def normalize_player(name: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Ticker Parsing
+# Ticker Parsing (new format discovered Apr 2026)
 # ---------------------------------------------------------------------------
 
-# Ticker format: KXNBA-26MAR25-LEBRON-PTS-T29.5
-# or: KXNBA-26MAR25-LEBRON-JAMES-PTS-O29.5
-TICKER_PATTERN = re.compile(
-    r"^(?P<series>KX\w+)-"
-    r"(?P<date>\d{1,2}[A-Z]{3}\d{2})-"
-    r"(?P<player>.+?)-"
-    r"(?P<stat>[A-Z0-9]+)-"
-    r"[TO](?P<line>[\d.]+)$"
+# New ticker format: KX{STAT}-{YYMONDD}{MATCHUP}-{TEAM}{PLAYER}{JERSEY}-{LINE}
+# Examples:
+#   KXNBAPTS-26APR01BOSMIA-BOSJTATUM0-25       (Jayson Tatum 25+ points)
+#   KXNBAREB-26APR01SASGSW-SASVWEMBANYAMA1-8    (Victor Wembanyama 8+ rebounds)
+#   KXMLBTB-26APR011610NYYSEA-NYYPGOLDSCHMIDT48-5  (Paul Goldschmidt 5+ total bases)
+#   KXMLBHR-26APR011610NYYSEA-NYYPGOLDSCHMIDT48-2  (Paul Goldschmidt 2+ home runs)
+#
+# The matchup part may include a time prefix for MLB: 1610 = 4:10 PM
+# Player segment: {3-letter team}{FirstInitial/Name}{LastName}{JerseyNumber}
+# Line: integer (the "+" threshold)
+
+# We parse from the market title instead of the ticker for player names,
+# since the title is human-readable: "Jayson Tatum: 25+ points"
+TITLE_PLAYER_LINE_PATTERN = re.compile(
+    r"^(.+?):\s*(\d+)\+",
 )
 
-# Title fallback: "Will LeBron James score 30+ points?"
-TITLE_PATTERN = re.compile(
-    r"Will\s+(.+?)\s+(?:score|record|throw|have|get|hit)\s+(\d+\.?\d*)\+?\s*(?:or more\s+)?(\w+)",
-    re.IGNORECASE,
-)
 
-# Title stat word → Kalshi stat key
-TITLE_STAT_MAP = {
-    "points": "PTS",
-    "rebounds": "REB",
-    "assists": "AST",
-    "steals": "STL",
-    "blocks": "BLK",
-    "threes": "3PM",
-    "three-pointers": "3PM",
-    "strikeouts": "K",
-    "hits": "HITS",
-    "home runs": "HR",
-    "rbis": "RBI",
-    "runs": "RUNS",
-    "total bases": "TB",
-}
-
-
-def parse_ticker(ticker: str) -> dict | None:
-    """Parse a Kalshi market ticker into components.
-
-    Args:
-        ticker: Market ticker string (e.g., "KXNBA-26MAR25-LEBRON-PTS-T29.5").
-
-    Returns:
-        Dict with series, date_str, player_name, stat_key, line, or None if unparseable.
-    """
-    m = TICKER_PATTERN.match(ticker)
-    if not m:
-        return None
-
-    player_raw = m.group("player").replace("-", " ").title()
-    stat_key = m.group("stat")
-    line = float(m.group("line"))
-
-    return {
-        "series": m.group("series"),
-        "date_str": m.group("date"),
-        "player_name": player_raw,
-        "stat_key": stat_key,
-        "line": line,
-    }
-
-
-def parse_market(market: dict) -> dict | None:
+def parse_market(market: dict, series_ticker: str, stat_type: str) -> dict | None:
     """Parse a Kalshi market dict into our standard format.
 
-    Tries ticker parsing first, falls back to title regex.
+    Uses the market title for player name and line extraction, since titles
+    are human-readable (e.g., "Jayson Tatum: 25+ points").
 
     Args:
         market: Raw market dict from Kalshi API.
+        series_ticker: The series this market belongs to (e.g., "KXNBAPTS").
+        stat_type: Our internal stat type (e.g., "pts").
 
     Returns:
-        Parsed market dict with player_name, stat_type, line, etc.
+        Parsed market dict with player_name, stat_type, line, prices, etc.
     """
     ticker = market.get("ticker", "")
-
-    # Try ticker-based parsing first
-    parsed = parse_ticker(ticker)
-    if parsed:
-        stat_type = KALSHI_STAT_MAP.get(parsed["stat_key"])
-        if stat_type:
-            return {
-                "ticker": ticker,
-                "event_ticker": market.get("event_ticker", ""),
-                "series_ticker": parsed["series"],
-                "player_name": parsed["player_name"],
-                "stat_type": stat_type,
-                "line": parsed["line"],
-                "market_title": market.get("title", ""),
-                "yes_price": market.get("yes_price", 0),
-                "no_price": market.get("no_price", 0),
-                "yes_bid": market.get("yes_bid", 0),
-                "yes_ask": market.get("yes_ask", 0),
-                "volume": market.get("volume", 0),
-                "open_interest": market.get("open_interest", 0),
-                "close_time": market.get("close_time"),
-                "market_status": market.get("status", "open"),
-            }
-
-    # Fallback: parse from title
     title = market.get("title", "")
-    m = TITLE_PATTERN.match(title)
-    if m:
-        player_name = m.group(1).strip()
-        line = float(m.group(2))
-        stat_word = m.group(3).lower()
-        stat_key = TITLE_STAT_MAP.get(stat_word)
-        if stat_key:
-            stat_type = KALSHI_STAT_MAP.get(stat_key)
-            if stat_type:
-                # Infer series from sport context
-                series = ""
-                for prefix in KALSHI_SERIES_MAP.values():
-                    if ticker.startswith(prefix):
-                        series = prefix
-                        break
 
-                return {
-                    "ticker": ticker,
-                    "event_ticker": market.get("event_ticker", ""),
-                    "series_ticker": series,
-                    "player_name": player_name,
-                    "stat_type": stat_type,
-                    "line": line,
-                    "market_title": title,
-                    "yes_price": market.get("yes_price", 0),
-                    "no_price": market.get("no_price", 0),
-                    "yes_bid": market.get("yes_bid", 0),
-                    "yes_ask": market.get("yes_ask", 0),
-                    "volume": market.get("volume", 0),
-                    "open_interest": market.get("open_interest", 0),
-                    "close_time": market.get("close_time"),
-                    "market_status": market.get("status", "open"),
-                }
+    # Parse player name and line from title: "Jayson Tatum: 25+ points"
+    m = TITLE_PLAYER_LINE_PATTERN.match(title)
+    if not m:
+        return None
 
-    return None
+    player_name = m.group(1).strip()
+    line = float(m.group(2))
+
+    # Kalshi API returns prices in dollars as strings (e.g., "0.4600")
+    # Convert to cents (0 - 100) for internal consistency with edge calculator
+    yes_bid_dollars = float(market.get("yes_bid_dollars") or 0)
+    yes_ask_dollars = float(market.get("yes_ask_dollars") or 0)
+    last_price_dollars = float(market.get("last_price_dollars") or 0)
+
+    yes_bid_cents = round(yes_bid_dollars * 100)
+    yes_ask_cents = round(yes_ask_dollars * 100)
+    yes_price_cents = round(last_price_dollars * 100) if last_price_dollars else round((yes_bid_dollars + yes_ask_dollars) / 2 * 100)
+
+    try:
+        volume = int(float(market.get("volume_fp") or market.get("volume") or 0))
+    except (ValueError, TypeError):
+        volume = 0
+    try:
+        open_interest = int(float(market.get("open_interest_fp") or market.get("open_interest") or 0))
+    except (ValueError, TypeError):
+        open_interest = 0
+
+    return {
+        "ticker": ticker,
+        "event_ticker": market.get("event_ticker", ""),
+        "series_ticker": series_ticker,
+        "player_name": player_name,
+        "stat_type": stat_type,
+        "line": line,
+        "market_title": title,
+        "yes_price": yes_price_cents,
+        "no_price": 100 - yes_price_cents,
+        "yes_bid": yes_bid_cents,
+        "yes_ask": yes_ask_cents,
+        "volume": volume,
+        "open_interest": open_interest,
+        "close_time": market.get("close_time") or market.get("expected_expiration_time"),
+        # Normalize Kalshi "active" status to "open" for consistency with edge calculator
+        "market_status": "open" if market.get("status") in ("active", "open") else market.get("status", "open"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -213,19 +167,11 @@ def parse_market(market: dict) -> dict | None:
 
 
 def build_player_cache(engine, sport: str) -> dict[str, int]:
-    """Build normalized_name → player_id lookup from database.
-
-    Args:
-        engine: SQLAlchemy engine.
-        sport: "nba" or "mlb".
-
-    Returns:
-        Dict mapping normalized player names to player IDs.
-    """
+    """Build normalized_name -> player_id lookup from database."""
     if sport == "nba":
         query = "SELECT player_id, player_name FROM players WHERE player_name IS NOT NULL"
     else:
-        query = "SELECT player_id, full_name AS player_name FROM mlb_players WHERE full_name IS NOT NULL"
+        query = "SELECT player_id, player_name FROM mlb_players WHERE player_name IS NOT NULL"
 
     with engine.connect() as conn:
         rows = conn.execute(text(query)).fetchall()
@@ -245,16 +191,7 @@ def link_player(
     player_cache: dict[str, int],
     fuzzy_cache: dict[str, int | None] | None = None,
 ) -> int | None:
-    """Link a player name to a player_id using exact + fuzzy matching.
-
-    Args:
-        player_name: Raw player name from Kalshi.
-        player_cache: Normalized name → player_id lookup.
-        fuzzy_cache: Optional cache of previous fuzzy results.
-
-    Returns:
-        player_id or None if no match found.
-    """
+    """Link a player name to a player_id using exact + fuzzy matching."""
     norm = normalize_player(player_name)
     if not norm:
         return None
@@ -292,7 +229,7 @@ def link_player(
         fuzzy_cache[norm] = result
 
     if result:
-        logger.debug(f"Fuzzy matched '{player_name}' → player_id={result} (score={best_score:.2f})")
+        logger.debug(f"Fuzzy matched '{player_name}' -> player_id={result} (score={best_score:.2f})")
     else:
         logger.debug(f"No match for '{player_name}' (best score={best_score:.2f})")
 
@@ -304,47 +241,85 @@ def link_player(
 # ---------------------------------------------------------------------------
 
 MOCK_MARKETS_NBA = [
-    {"ticker": "KXNBA-31MAR26-LEBRON-JAMES-PTS-T29.5", "event_ticker": "KXNBA-31MAR26-LEBRON-JAMES",
-     "title": "Will LeBron James score 30+ points?", "yes_price": 35, "no_price": 65,
-     "yes_bid": 33, "yes_ask": 37, "volume": 1250, "open_interest": 890, "status": "open",
-     "close_time": "2026-03-31T23:30:00Z"},
-    {"ticker": "KXNBA-31MAR26-LUKA-DONCIC-AST-T8.5", "event_ticker": "KXNBA-31MAR26-LUKA-DONCIC",
-     "title": "Will Luka Doncic record 9+ assists?", "yes_price": 42, "no_price": 58,
-     "yes_bid": 40, "yes_ask": 44, "volume": 980, "open_interest": 650, "status": "open",
-     "close_time": "2026-03-31T23:30:00Z"},
-    {"ticker": "KXNBA-31MAR26-JAYSON-TATUM-PTS-T28.5", "event_ticker": "KXNBA-31MAR26-JAYSON-TATUM",
-     "title": "Will Jayson Tatum score 29+ points?", "yes_price": 48, "no_price": 52,
-     "yes_bid": 46, "yes_ask": 50, "volume": 2100, "open_interest": 1400, "status": "open",
-     "close_time": "2026-03-31T23:30:00Z"},
-    {"ticker": "KXNBA-31MAR26-NIKOLA-JOKIC-REB-T12.5", "event_ticker": "KXNBA-31MAR26-NIKOLA-JOKIC",
-     "title": "Will Nikola Jokic record 13+ rebounds?", "yes_price": 55, "no_price": 45,
-     "yes_bid": 53, "yes_ask": 57, "volume": 1800, "open_interest": 1100, "status": "open",
-     "close_time": "2026-03-31T23:30:00Z"},
-    {"ticker": "KXNBA-31MAR26-STEPHEN-CURRY-3PM-T4.5", "event_ticker": "KXNBA-31MAR26-STEPHEN-CURRY",
-     "title": "Will Stephen Curry hit 5+ three-pointers?", "yes_price": 38, "no_price": 62,
-     "yes_bid": 36, "yes_ask": 40, "volume": 3200, "open_interest": 2100, "status": "open",
-     "close_time": "2026-03-31T23:30:00Z"},
+    {
+        "ticker": "KXNBAPTS-26APR01BOSMIA-BOSJTATUM0-25",
+        "event_ticker": "KXNBAPTS-26APR01BOSMIA",
+        "title": "Jayson Tatum: 25+ points",
+        "yes_bid_dollars": 0.46, "yes_ask_dollars": 0.50,
+        "last_price_dollars": 0.48,
+        "volume_fp": 2100, "open_interest_fp": 1400,
+        "status": "active", "close_time": "2026-04-01T23:30:00Z",
+    },
+    {
+        "ticker": "KXNBAREB-26APR01DENUTA-DENNJOKIC15-12",
+        "event_ticker": "KXNBAREB-26APR01DENUTA",
+        "title": "Nikola Jokic: 12+ rebounds",
+        "yes_bid_dollars": 0.53, "yes_ask_dollars": 0.57,
+        "last_price_dollars": 0.55,
+        "volume_fp": 1800, "open_interest_fp": 1100,
+        "status": "active", "close_time": "2026-04-01T23:30:00Z",
+    },
+    {
+        "ticker": "KXNBAAST-26APR01DENUTA-DENNJOKIC15-8",
+        "event_ticker": "KXNBAAST-26APR01DENUTA",
+        "title": "Nikola Jokic: 8+ assists",
+        "yes_bid_dollars": 0.40, "yes_ask_dollars": 0.44,
+        "last_price_dollars": 0.42,
+        "volume_fp": 980, "open_interest_fp": 650,
+        "status": "active", "close_time": "2026-04-01T23:30:00Z",
+    },
+    {
+        "ticker": "KXNBA3PT-26APR01BOSMIA-BOSJTATUM0-3",
+        "event_ticker": "KXNBA3PT-26APR01BOSMIA",
+        "title": "Jayson Tatum: 3+ threes",
+        "yes_bid_dollars": 0.36, "yes_ask_dollars": 0.40,
+        "last_price_dollars": 0.38,
+        "volume_fp": 3200, "open_interest_fp": 2100,
+        "status": "active", "close_time": "2026-04-01T23:30:00Z",
+    },
 ]
 
 MOCK_MARKETS_MLB = [
-    {"ticker": "KXMLB-31MAR26-GERRIT-COLE-K-T7.5", "event_ticker": "KXMLB-31MAR26-GERRIT-COLE",
-     "title": "Will Gerrit Cole throw 8+ strikeouts?", "yes_price": 40, "no_price": 60,
-     "yes_bid": 38, "yes_ask": 42, "volume": 750, "open_interest": 500, "status": "open",
-     "close_time": "2026-03-31T23:30:00Z"},
-    {"ticker": "KXMLB-31MAR26-SHOHEI-OHTANI-HR-T0.5", "event_ticker": "KXMLB-31MAR26-SHOHEI-OHTANI",
-     "title": "Will Shohei Ohtani hit 1+ home runs?", "yes_price": 22, "no_price": 78,
-     "yes_bid": 20, "yes_ask": 24, "volume": 4500, "open_interest": 3000, "status": "open",
-     "close_time": "2026-03-31T23:30:00Z"},
+    {
+        "ticker": "KXMLBTB-26APR011610NYYSEA-NYYAJUDGE99-4",
+        "event_ticker": "KXMLBTB-26APR011610NYYSEA",
+        "title": "Aaron Judge: 4+ total bases?",
+        "yes_bid_dollars": 0.18, "yes_ask_dollars": 0.22,
+        "last_price_dollars": 0.20,
+        "volume_fp": 750, "open_interest_fp": 500,
+        "status": "active", "close_time": "2026-04-01T23:30:00Z",
+    },
+    {
+        "ticker": "KXMLBHR-26APR011610NYYSEA-NYYAJUDGE99-1",
+        "event_ticker": "KXMLBHR-26APR011610NYYSEA",
+        "title": "Aaron Judge: 1+ home runs?",
+        "yes_bid_dollars": 0.20, "yes_ask_dollars": 0.24,
+        "last_price_dollars": 0.22,
+        "volume_fp": 4500, "open_interest_fp": 3000,
+        "status": "active", "close_time": "2026-04-01T23:30:00Z",
+    },
 ]
 
 
-def generate_mock_markets(sport: str) -> list[dict]:
-    """Generate synthetic market data for testing."""
+def generate_mock_markets(sport: str) -> dict[str, list[dict]]:
+    """Generate synthetic market data for testing.
+
+    Returns:
+        Dict mapping series_ticker -> list of market dicts.
+    """
     if sport == "nba":
-        return MOCK_MARKETS_NBA
+        return {
+            "KXNBAPTS": [m for m in MOCK_MARKETS_NBA if "PTS" in m["ticker"]],
+            "KXNBAREB": [m for m in MOCK_MARKETS_NBA if "REB" in m["ticker"]],
+            "KXNBAAST": [m for m in MOCK_MARKETS_NBA if "AST" in m["ticker"]],
+            "KXNBA3PT": [m for m in MOCK_MARKETS_NBA if "3PT" in m["ticker"]],
+        }
     elif sport == "mlb":
-        return MOCK_MARKETS_MLB
-    return []
+        return {
+            "KXMLBTB": [m for m in MOCK_MARKETS_MLB if "TB" in m["ticker"]],
+            "KXMLBHR": [m for m in MOCK_MARKETS_MLB if "HR" in m["ticker"]],
+        }
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +402,10 @@ def scrape_and_store(
     dry_run: bool = False,
     mock: bool = False,
 ) -> dict:
-    """Full scrape cycle: discover → parse → link → store.
+    """Full scrape cycle: discover -> parse -> link -> store.
+
+    Scrapes all per-stat series for the sport (e.g., KXNBAPTS, KXNBAREB, ...),
+    parses player names from titles, links to DB players, and stores.
 
     Args:
         sport: Target sport ("nba" or "mlb").
@@ -440,44 +418,59 @@ def scrape_and_store(
     snapshot_time = datetime.now(UTC)
     stats = {"raw": 0, "parsed": 0, "linked": 0, "stored": 0}
 
-    # Step 1: Discover markets
+    prop_series = KALSHI_PROP_SERIES.get(sport, {})
+    if not prop_series:
+        logger.error(f"No prop series configured for sport: {sport}")
+        return stats
+
+    # Step 1: Discover markets from all stat series
+    all_raw_markets: dict[str, list[dict]] = {}
+
     if mock:
-        raw_markets = generate_mock_markets(sport)
-        logger.info(f"Generated {len(raw_markets)} mock {sport.upper()} markets")
+        all_raw_markets = generate_mock_markets(sport)
+        total_raw = sum(len(ms) for ms in all_raw_markets.values())
+        logger.info(f"Generated {total_raw} mock {sport.upper()} markets")
     else:
         client = KalshiClient()
         if not client.is_authenticated:
-            logger.warning("No Kalshi credentials — use --mock for testing")
+            logger.warning("No Kalshi credentials -- use --mock for testing")
             return stats
 
-        series_ticker = KALSHI_SERIES_MAP.get(sport)
-        if not series_ticker:
-            logger.error(f"Unknown sport: {sport}")
-            return stats
+        for series_ticker in prop_series:
+            raw = client.list_all_markets(series_ticker=series_ticker)
+            if raw:
+                all_raw_markets[series_ticker] = raw
+                logger.info(f"  {series_ticker}: {len(raw)} markets")
 
-        raw_markets = client.list_all_markets(series_ticker=series_ticker)
-
-    stats["raw"] = len(raw_markets)
+    total_raw = sum(len(ms) for ms in all_raw_markets.values())
+    stats["raw"] = total_raw
 
     # Step 2: Parse markets
     parsed_markets = []
-    for market in raw_markets:
-        parsed = parse_market(market)
-        if parsed:
-            parsed["sport"] = sport
-            parsed_markets.append(parsed)
+    for series_ticker, markets in all_raw_markets.items():
+        stat_type = prop_series.get(series_ticker)
+        if not stat_type:
+            continue
+        for market in markets:
+            # Skip non-active markets
+            if market.get("status") not in ("active", "open"):
+                continue
+            parsed = parse_market(market, series_ticker, stat_type)
+            if parsed:
+                parsed["sport"] = sport
+                parsed_markets.append(parsed)
 
     stats["parsed"] = len(parsed_markets)
-    logger.info(f"Parsed {len(parsed_markets)}/{len(raw_markets)} markets")
+    logger.info(f"Parsed {len(parsed_markets)}/{total_raw} markets")
 
     # Step 3: Link players
+    engine = None
     if not dry_run:
         engine = get_engine()
-    else:
-        engine = None
 
-    if engine and not dry_run:
-        player_cache = build_player_cache(engine, sport)
+    try:
+        link_engine = engine or get_engine()
+        player_cache = build_player_cache(link_engine, sport)
         fuzzy_cache: dict[str, int | None] = {}
 
         for m in parsed_markets:
@@ -485,29 +478,18 @@ def scrape_and_store(
             if pid:
                 m["player_id"] = pid
                 stats["linked"] += 1
-    else:
-        # In dry-run, still try to link if DB is available
-        try:
-            engine = get_engine()
-            player_cache = build_player_cache(engine, sport)
-            fuzzy_cache = {}
-            for m in parsed_markets:
-                pid = link_player(m["player_name"], player_cache, fuzzy_cache)
-                if pid:
-                    m["player_id"] = pid
-                    stats["linked"] += 1
-        except Exception:
-            logger.info("DB unavailable for player linking in dry-run mode")
+    except Exception:
+        logger.info("DB unavailable for player linking")
 
     logger.info(f"Linked {stats['linked']}/{len(parsed_markets)} players")
 
     # Step 4: Print or store
     if dry_run:
-        logger.info("=== DRY RUN — parsed markets ===")
+        logger.info("=== DRY RUN -- parsed markets ===")
         for m in parsed_markets:
             mid_p = kalshi_mid_to_prob(m.get("yes_bid", 0), m.get("yes_ask", 0))
             logger.info(
-                f"  {m['player_name']:25s} | {m['stat_type']:10s} | "
+                f"  {m['player_name']:25s} | {m['stat_type']:20s} | "
                 f"line={m['line']:5.1f} | YES={m.get('yes_price', 0):3d}c | "
                 f"mid={mid_p:.1%} | vol={m.get('volume', 0):5d} | "
                 f"pid={'linked' if m.get('player_id') else 'UNLINKED'}"

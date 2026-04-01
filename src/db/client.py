@@ -11,6 +11,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # 2. Create the engine ONCE (deferred to avoid crash during import in CI/test)
 _engine = None
+_local_engine = None
 
 if DATABASE_URL:
     _engine = create_engine(
@@ -28,8 +29,29 @@ if DATABASE_URL:
 engine = _engine
 
 
-def get_engine():
-    """Returns the main database engine."""
+def get_engine(local: bool = False):
+    """Returns a database engine.
+
+    Args:
+        local: If True, return an engine connected to LOCAL_DATABASE_URL
+               (for offline training/backtesting). No statement timeout,
+               no pgBouncer compat needed.
+    """
+    if local:
+        global _local_engine
+        if _local_engine is None:
+            local_url = os.getenv(
+                "LOCAL_DATABASE_URL",
+                "postgresql://postgres:postgres@localhost:5432/gameflow_local",
+            )
+            _local_engine = create_engine(
+                local_url,
+                pool_pre_ping=True,
+                pool_size=5,
+                max_overflow=5,
+            )
+        return _local_engine
+
     if _engine is None:
         raise ValueError(
             "DATABASE_URL not found in environment. "

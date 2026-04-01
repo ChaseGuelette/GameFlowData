@@ -3,28 +3,65 @@
 > Part of [[Product]]
 
 ## Overview
-Multi-turn conversational AI in the AnalysisModal. Users ask natural language questions about any player prop and get LLM-powered answers grounded in actual data.
+Multi-turn conversational AI in the AnalysisModal. Users ask natural language questions about any player prop and get LLM-powered answers grounded in actual data. Conversations persist per player/stat/game_date so users can close and reopen the modal without losing context.
 
 ## Architecture
 - **Model**: Claude Haiku 4.5 (~$0.003/question)
-- **Endpoint**: `/api/ask` (server-side, auth-gated)
+- **Endpoints**: `/api/ask` (POST, server-side, auth-gated), `/api/ask/history` (GET/DELETE)
 - **Rate limit**: 20 questions/24hr per user (in-memory — needs Redis for multi-instance)
-- **Context window**: Max 5 messages in conversation
+- **Context window**: Max 5 messages sent to Claude per turn
+- **max_tokens**: 2048
+- **Persistence**: `chat_conversations` + `chat_messages` tables (Supabase, RLS-protected)
 
 ## Data Enrichment
-Each question triggers 5 parallel data queries:
-1. Extended 10-game log
+Each question triggers parallel data queries organized in batches:
+
+**Batch 1** (5 parallel):
+1. Extended 25-game log (with game_id for advanced stats join)
 2. Rolling averages (L3/L5/L15/SZN)
 3. Player injury status
-4. Teammate injuries
-5. Opponent defense by position
+4. Player position
+5. Matchup history vs opponent
 
-These are injected into a structured system prompt so the AI's answers are grounded in real data, not hallucinated.
+**Batch 2** (parallel with team_id lookup):
+6. Advanced stats per game (USG%, OffRtg, NRtg, Pace from `player_game_advanced_stats`)
+
+**Batch 3** (after team_id resolved):
+7. Teammate injuries (enriched with position + L15 averages)
+8. Positional depth chart (same-position teammates, L5 averages, sorted by minutes)
+9. Injury timeline (45-day teammate status transitions)
+
+**Batch 4** (after opponent team_id resolved):
+10. Opponent defense by position
+11. Opponent injuries (enriched)
+
+### System Prompt Sections
+- Game log (two-tier: detailed #1-10 with USG/OffRtg/NRtg, condensed #11-25)
+- Matchup history vs opponent
+- Rolling averages
+- Game context (home/away, spread, total, pace, def rating)
+- Minutes/usage context
+- Model quantile predictions
+- Injury status + teammate injuries
+- Teammate injury timeline (status changes over 45 days)
+- Positional depth chart (same-position rotation with stats)
+- Opponent defense + opponent injuries
+- Sportsbook lines
+- Model insights
+
+## Chat Persistence
+- **Scoping**: One conversation per `(user_id, player_id, stat, game_date)`
+- **Tables**: `chat_conversations` (unique key lookup), `chat_messages` (cascade delete)
+- **Flow**: POST /api/ask upserts conversation + inserts messages after Claude responds. GET /api/ask/history loads previous messages on component mount. DELETE clears conversation.
+- **RLS**: Users can only access their own conversations and messages.
 
 ## Component: AskChat
 - Collapsible "Ask AI about this pick" section
+- Loads previous conversation on mount (shows message count when collapsed)
 - Suggested question chips for quick start
-- Scrollable message history
+- Scrollable message history (max-h-80)
+- Markdown rendering for assistant messages (react-markdown + prose-invert)
+- "Clear chat" button (deletes conversation server-side)
 - 500-char input limit
 - Remaining questions counter
 - AbortController for cleanup on modal close
@@ -34,7 +71,6 @@ These are injected into a structured system prompt so the AI's answers are groun
 
 ## Known Issues
 - In-memory rate limiting won't work multi-instance (needs Redis)
-- Chat history not persisted across modal close
-- Consider persisting per player/stat to Supabase for returning users
+- `players` table only has ~2K rows — may miss very new/obscure players for depth chart
 
 #ai #product #feature

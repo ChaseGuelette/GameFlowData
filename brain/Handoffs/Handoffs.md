@@ -18,4 +18,10 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-010]] - MLB inference bugfixes: naming, prop lines, at_bats leakage, RLS policies
 - [[handoff-011]] - Kalshi paper trading: DB tables, KalshiPaperTrader, pipeline integration
 - [[handoff-012]] - Kalshi live trading bot: real orders, circuit breakers, Discord alerts, migration applied
+- [[handoff-013]] - MLB backtest timeout fix + at_bats data leakage code fix
+- [[handoff-014]] - Fixed failing Python test: game ID zero-padding assertion
+- [[handoff-015]] - Database optimization (47 GB freed), RLS fixes, local Postgres sync system
+- [[handoff-016]] - MLB pipeline debugging: Supavisor timeout, bet resolution, Discord alerts
+- [[handoff-017]] - Local Postgres setup, gameflow_local created, MLB sweep commands for hits/home_runs
+- [[handoff-018]] - AI Chat revamp: persistence, enriched data (depth chart, advanced stats, injury timeline), markdown rendering
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

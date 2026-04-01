@@ -88,6 +88,10 @@ function buildSystemPrompt(
   edge: number,
   probability: number,
   playerPosition: string | null,
+  advancedStatsMap: Map<string, Record<string, unknown>>,
+  depthChart: Array<Record<string, unknown>>,
+  playerPositionGroup: string | null,
+  injuryTimeline: Array<{ player: string; transitions: string[] }>,
 ): string {
   const stat = prediction.stat
   const statLabel = STAT_LABELS[stat] || stat.toUpperCase()
@@ -95,12 +99,17 @@ function buildSystemPrompt(
   const combo = isComboStat(stat)
   const components = COMBO_COMPONENTS[stat]
 
-  // Game log — numbered rows with compact format
+  // Game log — two-tier format: detailed (1-10), condensed (11-25), with advanced stats
   let gameLogSection = 'No recent game data available.'
   if (gameLog.length > 0) {
     const rows = gameLog.map((g: Record<string, unknown>, i: number) => {
       const num = `#${i + 1}`
       const shortDate = formatShortDate(String(g.game_date || ''))
+      const gameId = String(g.game_id || '')
+      const adv = advancedStatsMap.get(gameId)
+      const usg = adv?.usage_percentage != null ? `USG ${Number(adv.usage_percentage).toFixed(1)}%` : null
+      const offRtg = adv?.offensive_rating != null ? `OffRtg ${Number(adv.offensive_rating).toFixed(0)}` : null
+      const nRtg = adv?.net_rating != null ? `NRtg ${Number(adv.net_rating) >= 0 ? '+' : ''}${Number(adv.net_rating).toFixed(0)}` : null
 
       // Compact matchup: "vs HOU" or "@ BOS" from "MIA vs. HOU"
       const matchup = String(g.matchup || '')
@@ -109,14 +118,24 @@ function buildSystemPrompt(
         ? `${matchParts[1].replace('.', '')} ${matchParts[2]}`
         : matchup
 
+      // Condensed format for games 11-25
+      if (i >= 10) {
+        const comboTotal = combo ? ` | ${statLabel}=${(components || []).reduce((s: number, c: string) => s + (Number(g[c]) || 0), 0)}` : ''
+        const advStr = usg ? ` | ${usg}` : ''
+        return `${num.padEnd(4)}${shortDate.padEnd(6)}${oppStr.padEnd(8)}| ${String(g.min ?? '-').padEnd(3)} MIN | ${g.pts ?? '-'}/${g.reb ?? '-'}/${g.ast ?? '-'} PTS/REB/AST${comboTotal}${advStr} | ${g.wl ?? '-'}`
+      }
+
+      // Detailed format for games 1-10
       const oreb = g.oreb ?? 0
+      const advParts = [usg, offRtg, nRtg].filter(Boolean).join(' | ')
+      const advStr = advParts ? ` | ${advParts}` : ''
       const base = `${num.padEnd(4)}${shortDate.padEnd(6)}${oppStr.padEnd(8)}| ${String(g.min ?? '-').padEnd(3)} MIN | ${String(g.pts ?? '-')} PTS | ${g.reb ?? '-'} REB (${oreb} OREB) | ${g.ast ?? '-'} AST`
 
       if (combo) {
         const total = (components || []).reduce((s: number, c: string) => s + (Number(g[c]) || 0), 0)
-        return `${base} | ${statLabel}=${total} | ${g.wl ?? '-'} | ${g.started ? 'Started' : 'Bench'}`
+        return `${base} | ${statLabel}=${total}${advStr} | ${g.wl ?? '-'} | ${g.started ? 'Started' : 'Bench'}`
       }
-      return `${base} | ${g.stl ?? '-'} STL | ${g.blk ?? '-'} BLK | ${g.fg3m ?? '-'} 3PM | ${g.tov ?? '-'} TOV | ${g.fga ?? '-'} FGA | ${g.fta ?? '-'} FTA | ${g.wl ?? '-'} | ${g.started ? 'Started' : 'Bench'}`
+      return `${base} | ${g.stl ?? '-'} STL | ${g.blk ?? '-'} BLK | ${g.fg3m ?? '-'} 3PM | ${g.tov ?? '-'} TOV | ${g.fga ?? '-'} FGA | ${g.fta ?? '-'} FTA${advStr} | ${g.wl ?? '-'} | ${g.started ? 'Started' : 'Bench'}`
     })
 
     gameLogSection = `LAST ${gameLog.length} GAMES (most recent first):\n${rows.join('\n')}`
@@ -290,6 +309,33 @@ function buildSystemPrompt(
     ? `MINUTES/USAGE CONTEXT:\n  ${minutesContext.join('\n  ')}`
     : ''
 
+  // Positional depth chart
+  let depthChartSection = ''
+  if (depthChart.length > 0) {
+    const posLabel = playerPositionGroup || 'Teammates'
+    const teamAbbrev = prediction.team_abbrev || '???'
+    const lines = depthChart.map((p: Record<string, unknown>) => {
+      const isTarget = p.player_id === prediction.player_id
+      const prefix = isTarget ? '  >>> THIS PLAYER: ' : '  '
+      const pos = p.position ? ` (${p.position})` : ''
+      const min = Number(p.avg_min).toFixed(1)
+      const pts = Number(p.avg_pts).toFixed(1)
+      const reb = Number(p.avg_reb).toFixed(1)
+      const ast = Number(p.avg_ast).toFixed(1)
+      const role = p.is_starter ? 'Starter' : 'Bench'
+      const injNote = p.injury_status ? ` [${p.injury_status}${p.injury_reason ? ` - ${p.injury_reason}` : ''}]` : ''
+      return `${prefix}${p.player_name}${pos} — L5: ${min} min, ${pts} pts, ${reb} reb, ${ast} ast | ${role}${injNote}`
+    })
+    depthChartSection = `POSITIONAL DEPTH CHART (${posLabel} — ${teamAbbrev}):\n${lines.join('\n')}`
+  }
+
+  // Injury timeline
+  let injuryTimelineSection = ''
+  if (injuryTimeline.length > 0) {
+    const lines = injuryTimeline.map(t => `  ${t.player}: ${t.transitions.join(' → ')}`)
+    injuryTimelineSection = `TEAMMATE INJURY TIMELINE (last 45 days — status changes):\n${lines.join('\n')}`
+  }
+
   const quantileSection = `MODEL QUANTILE PREDICTIONS:
   Q10=${prediction.q10} | Q25=${prediction.q25} | Q50=${prediction.q50} | Q75=${prediction.q75} | Q90=${prediction.q90}
   Prop Line: ${prediction.prop_line}
@@ -318,6 +364,10 @@ ${quantileSection}
 
 ${injurySection}
 ${oppInjurySection}
+${injuryTimelineSection}
+
+${depthChartSection}
+
 ${defenseSection}
 
 ${linesSection}
@@ -329,11 +379,15 @@ RULES:
 - Cite specific games, dates, and numbers when relevant.
 - Keep responses to 2-4 short paragraphs.
 - Be direct and analytical. Avoid generic hedging like "it depends on many factors."
+- You have comprehensive data. Before saying "I don't have" information, carefully re-read ALL sections above. Opponent defense IS in OPPONENT DEFENSE. Game history IS in the game log. Injury data IS in TEAMMATE INJURIES and TEAMMATE INJURY TIMELINE.
+- Use markdown: **bold** for emphasis, bullet points for lists. Keep responses analytical and specific.
 - When discussing trends, reference the rolling averages and game log.
 - When asked about minutes or playing time, reference the MINUTES/USAGE CONTEXT section with starter probability, minutes floor, usage rate, and recent averages.
 - When asked about game script, pace, or blowout risk, reference the GAME CONTEXT section. A large negative spread means the team is heavily favored. High pace + high total = more possessions = more stat opportunities.
 - When asked about matchup history vs a specific team, reference the MATCHUP HISTORY section. If no matchup history exists, say so and use the opponent defense stats instead.
 - When asked about opponent defense, reference both OPPONENT DEFENSE and OPPONENT INJURIES sections. Missing key players affects defensive quality.
+- When asked about role, rotation, or playing time, reference the POSITIONAL DEPTH CHART showing all same-position teammates with their recent stats.
+- When asked about production changes or why stats shifted, cross-reference the TEAMMATE INJURY TIMELINE dates with game log entries to identify roster-driven performance shifts.
 - For combo stats (${Object.keys(COMBO_COMPONENTS).join(', ')}), break down which component stat is driving the total.
 - If the user asks about something not covered by the data, say so honestly.`
 }
@@ -374,14 +428,14 @@ export async function POST(request: NextRequest) {
 
   // --- Data enrichment: 5 parallel queries ---
   const [gameLogRes, rollingAvgRes, playerInjuryRes, playerPosRes, vsOpponentRes] = await Promise.all([
-    // 1. Extended game log (last 10) — includes oreb, dreb, tov, fga, fta
+    // 1. Extended game log (last 25) — includes oreb, dreb, tov, fga, fta, game_id
     supabase
       .from('player_game_stats')
-      .select('game_date, pts, reb, ast, fg3m, min, matchup, wl, started, stl, blk, oreb, dreb, tov, fga, fta')
+      .select('game_id, game_date, pts, reb, ast, fg3m, min, matchup, wl, started, stl, blk, oreb, dreb, tov, fga, fta')
       .eq('player_id', prediction.player_id)
       .gt('min', 0)
       .order('game_date', { ascending: false })
-      .limit(10),
+      .limit(25),
 
     // 2. Rolling averages (latest row for this player)
     supabase
@@ -423,15 +477,35 @@ export async function POST(request: NextRequest) {
   const playerPosition = playerPosRes.data?.[0]?.primary_position || null
   const playerPositionGroup = playerPosRes.data?.[0]?.position_group || null
 
+  // Extract game IDs for advanced stats lookup
+  const gameLog = (gameLogRes.data || []) as Array<Record<string, unknown>>
+  const gameIds = gameLog.map(g => String(g.game_id)).filter(Boolean)
+
+  // Advanced stats query — parallel with team lookup
+  const [advancedStatsRes, teamLookup] = await Promise.all([
+    gameIds.length > 0
+      ? supabase
+          .from('player_game_advanced_stats')
+          .select('game_id, usage_percentage, offensive_rating, net_rating, pace')
+          .eq('player_id', prediction.player_id)
+          .in('game_id', gameIds)
+      : Promise.resolve({ data: [], error: null }),
+    supabase
+      .from('player_game_stats')
+      .select('team_id')
+      .eq('player_id', prediction.player_id)
+      .order('game_date', { ascending: false })
+      .limit(1),
+  ])
+
+  // Build advanced stats map
+  const advancedStatsMap = new Map<string, Record<string, unknown>>()
+  for (const row of advancedStatsRes.data || []) {
+    advancedStatsMap.set(row.game_id, row as Record<string, unknown>)
+  }
+
   // Process teammate injuries — look up team_id, then enrich with position + avg stats
   let teammateInjuries: Array<Record<string, unknown>> = []
-  const teamLookup = await supabase
-    .from('player_game_stats')
-    .select('team_id')
-    .eq('player_id', prediction.player_id)
-    .order('game_date', { ascending: false })
-    .limit(1)
-
   const playerTeamId = teamLookup.data?.[0]?.team_id
 
   if (playerTeamId) {
@@ -603,10 +677,161 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const gameLog = (gameLogRes.data || []) as Array<Record<string, unknown>>
   const rollingAvgs = (rollingAvgRes.data?.[0] || null) as Record<string, unknown> | null
   const playerInjury = (playerInjuryRes.data?.[0] || null) as Record<string, unknown> | null
   const vsOpponentLog = (vsOpponentRes.data || []) as Array<Record<string, unknown>>
+
+  // --- Depth chart + injury timeline (parallel, both need playerTeamId) ---
+  let depthChart: Array<Record<string, unknown>> = []
+  let injuryTimeline: Array<{ player: string; transitions: string[] }> = []
+
+  if (playerTeamId) {
+    const fortyFiveDaysAgo = new Date()
+    fortyFiveDaysAgo.setDate(fortyFiveDaysAgo.getDate() - 45)
+    const fortyFiveDaysAgoStr = fortyFiveDaysAgo.toISOString().split('T')[0]
+
+    const [depthChartRes, injTimelineRes] = await Promise.all([
+      // Depth chart: recent teammates on same team (last ~15 games worth)
+      supabase
+        .from('player_game_stats')
+        .select('player_id, min, pts, reb, ast, fg3m, started, game_date')
+        .eq('team_id', playerTeamId)
+        .gt('min', 0)
+        .order('game_date', { ascending: false })
+        .limit(200),
+
+      // Injury timeline: all status reports for teammates over 45 days
+      supabase
+        .from('rapidapi_injuries')
+        .select('player, player_id, status, reason, report_date')
+        .eq('nba_team_id', playerTeamId)
+        .neq('player_id', prediction.player_id)
+        .gte('report_date', fortyFiveDaysAgoStr)
+        .order('report_date', { ascending: true })
+        .order('player', { ascending: true }),
+    ])
+
+    // --- Process depth chart ---
+    if (depthChartRes.data && depthChartRes.data.length > 0) {
+      // Group by player_id, compute L5 averages
+      const playerStats = new Map<number, { games: Array<Record<string, unknown>> }>()
+      for (const row of depthChartRes.data) {
+        const pid = row.player_id as number
+        if (!playerStats.has(pid)) playerStats.set(pid, { games: [] })
+        const entry = playerStats.get(pid)!
+        if (entry.games.length < 5) entry.games.push(row as Record<string, unknown>)
+      }
+
+      // Get positions for all teammates (reuse posMap pattern)
+      const allTeammateIds = Array.from(playerStats.keys())
+      const [teamPosRes, teamInjRes] = await Promise.all([
+        supabase
+          .from('players')
+          .select('player_id, player_name, primary_position, position_group')
+          .in('player_id', allTeammateIds),
+        // Current injury status for depth chart annotations
+        supabase
+          .from('rapidapi_injuries')
+          .select('player_id, status, reason')
+          .eq('nba_team_id', playerTeamId)
+          .in('status', ['Out', 'Questionable', 'Doubtful'])
+          .order('report_date', { ascending: false })
+          .limit(30),
+      ])
+
+      const teamPosMap = new Map<number, { name: string; position: string; group: string }>()
+      for (const p of teamPosRes.data || []) {
+        teamPosMap.set(p.player_id, {
+          name: p.player_name,
+          position: p.primary_position,
+          group: p.position_group,
+        })
+      }
+
+      // Deduplicated injury status map
+      const teamInjMap = new Map<number, { status: string; reason: string }>()
+      for (const inj of teamInjRes.data || []) {
+        if (!teamInjMap.has(inj.player_id)) {
+          teamInjMap.set(inj.player_id, { status: inj.status, reason: inj.reason })
+        }
+      }
+
+      // Filter to same position group as target player, compute averages
+      const targetGroup = playerPositionGroup || 'Guard'
+      const depthEntries: Array<Record<string, unknown>> = []
+
+      for (const [pid, { games }] of playerStats) {
+        const info = teamPosMap.get(pid)
+        if (!info) continue
+        // Include target player + same position group teammates
+        if (info.group !== targetGroup && pid !== prediction.player_id) continue
+        if (games.length < 2) continue // skip players with barely any games
+
+        const avg = (field: string) => games.reduce((s, g) => s + (Number(g[field]) || 0), 0) / games.length
+        const injStatus = teamInjMap.get(pid)
+
+        depthEntries.push({
+          player_id: pid,
+          player_name: info.name,
+          position: info.position,
+          avg_min: avg('min'),
+          avg_pts: avg('pts'),
+          avg_reb: avg('reb'),
+          avg_ast: avg('ast'),
+          is_starter: games[0]?.started === true,
+          injury_status: injStatus?.status || null,
+          injury_reason: injStatus?.reason || null,
+        })
+      }
+
+      // Sort by avg minutes descending (starters first)
+      depthEntries.sort((a, b) => Number(b.avg_min) - Number(a.avg_min))
+      depthChart = depthEntries
+    }
+
+    // --- Process injury timeline ---
+    if (injTimelineRes.data && injTimelineRes.data.length > 0) {
+      // Group by player, detect status transitions
+      const playerReports = new Map<string, Array<{ status: string; reason: string; date: string }>>()
+      for (const row of injTimelineRes.data) {
+        const name = row.player as string
+        if (!playerReports.has(name)) playerReports.set(name, [])
+        playerReports.get(name)!.push({
+          status: row.status as string,
+          reason: (row.reason || '') as string,
+          date: row.report_date as string,
+        })
+      }
+
+      for (const [player, reports] of playerReports) {
+        // Keep only rows where status changed from previous
+        const transitions: string[] = []
+        let lastStatus = 'Available'
+        for (const r of reports) {
+          if (r.status !== lastStatus) {
+            if (r.status === 'Available') {
+              transitions.push(`Available ${formatShortDate(r.date)}`)
+            } else {
+              transitions.push(`${r.status} ${formatShortDate(r.date)}${r.reason ? ` (${r.reason})` : ''}`)
+            }
+            lastStatus = r.status
+          }
+        }
+        // Only include players with meaningful transitions
+        if (transitions.length > 0) {
+          // Prepend "Available" if first transition is going out
+          if (!transitions[0].startsWith('Available')) {
+            transitions.unshift('Available')
+          }
+          // Append current status if still out
+          if (lastStatus !== 'Available') {
+            transitions.push(`still ${lastStatus}`)
+          }
+          injuryTimeline.push({ player, transitions })
+        }
+      }
+    }
+  }
 
   // Build system prompt
   const systemPrompt = buildSystemPrompt(
@@ -624,6 +849,10 @@ export async function POST(request: NextRequest) {
     edge,
     probability,
     playerPosition,
+    advancedStatsMap,
+    depthChart,
+    playerPositionGroup,
+    injuryTimeline,
   )
 
   // Build messages (keep last 5 from conversation history)
@@ -639,7 +868,7 @@ export async function POST(request: NextRequest) {
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: 2048,
       system: systemPrompt,
       messages,
     })
@@ -649,7 +878,46 @@ export async function POST(request: NextRequest) {
       .map(block => block.text)
       .join('')
 
-    return NextResponse.json({ answer, remaining })
+    // Persist conversation (fire-and-forget — don't block the response)
+    const gameDate = prediction.prediction_date || new Date().toISOString().split('T')[0]
+    const persistPromise = (async () => {
+      try {
+        // Upsert conversation
+        const { data: convData } = await supabase
+          .from('chat_conversations')
+          .upsert({
+            user_id: user.id,
+            player_id: prediction.player_id,
+            player_name: prediction.player_name || 'Unknown',
+            stat: prediction.stat,
+            game_date: gameDate,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'user_id,player_id,stat,game_date' })
+          .select('id')
+          .single()
+
+        if (convData?.id) {
+          // Insert both messages
+          await supabase.from('chat_messages').insert([
+            { conversation_id: convData.id, role: 'user', content: question.trim() },
+            { conversation_id: convData.id, role: 'assistant', content: answer },
+          ])
+        }
+
+        return convData?.id ?? null
+      } catch (e) {
+        console.error('Chat persistence error:', e)
+        return null
+      }
+    })()
+
+    // Wait briefly for persistence to complete so we can return conversation_id
+    const conversationId = await Promise.race([
+      persistPromise,
+      new Promise<null>(resolve => setTimeout(() => resolve(null), 2000)),
+    ])
+
+    return NextResponse.json({ answer, remaining, conversation_id: conversationId })
   } catch (err) {
     console.error('Anthropic API error:', err)
     return NextResponse.json(

@@ -6,7 +6,7 @@
 
 Single always-on worker process. All times ET, DST-aware via `BlockingScheduler(timezone="America/New_York")`.
 
-### Job Schedule
+### NBA Job Schedule
 | Time (ET) | Job | Key Flags |
 |-----------|-----|-----------|
 | 11:00 AM | `daily_stats_job.py` | CDN-only scrape |
@@ -17,7 +17,17 @@ Single always-on worker process. All times ET, DST-aware via `BlockingScheduler(
 | 4:15 PM | `inference_job.py` | `--skip-bets` (refresh only) |
 | */5 min, 11AM-11PM | `lines_job.py` | `--live --props-only` (silent) |
 | */5 min +2, 11AM-11PM | `edge_refresh_job.py` | `--skip-paper` (silent) |
-| */10 min, 11AM-11PM | `kalshi_refresh_job.py` | Scrape + edges + orderbooks + paper trading + live trading (silent) |
+| */10 min, 11AM-11PM | `kalshi_refresh_job.py` | `--sport nba` (silent) |
+
+### MLB Job Schedule
+| Time (ET) | Job | Key Flags |
+|-----------|-----|-----------|
+| 10:00 AM | `mlb_daily_stats_job.py` | Scrape boxscores, Statcast, linker, rolling averages, resolve bets, Discord P&L |
+| 10:30 AM | `mlb_daily_stats_job.py` (retry) | Only if 10 AM failed |
+| 1:30 PM | `mlb_inference_job.py` | **`--skip-bets`** (disabled until leaky models retrained) |
+| 6:30 PM | `mlb_inference_job.py` | **`--skip-bets`** (disabled until leaky models retrained) |
+| */5 min, 11AM-11PM | `mlb_lines_job.py` | `--live --props-only` (silent) |
+| */10 min, 11AM-11PM | `kalshi_refresh_job.py` | `--sport mlb` (silent) |
 
 ### Job Status Tracking
 - `JOB_STATUS` in-memory dict tracks status, end time, duration

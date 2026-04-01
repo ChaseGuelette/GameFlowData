@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { type ChatMessage, type AskResponse } from '@/types/chat'
+import ReactMarkdown from 'react-markdown'
+import { type ChatMessage, type AskResponse, type ChatHistoryResponse } from '@/types/chat'
 import { type Prediction, type PlayerGameStats, type BookmakerLine } from '@/types/predictions'
 import { type Insight } from '@/lib/insights'
 
@@ -35,6 +36,8 @@ export function AskChat({
   const [loading, setLoading] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
   const [remaining, setRemaining] = useState<number | null>(null)
+  const [conversationId, setConversationId] = useState<number | null>(null)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -50,6 +53,38 @@ export function AskChat({
       abortRef.current?.abort()
     }
   }, [])
+
+  // Load conversation history on mount
+  useEffect(() => {
+    if (historyLoaded) return
+    const gameDate = prediction.prediction_date || new Date().toISOString().split('T')[0]
+
+    fetch(`/api/ask/history?player_id=${prediction.player_id}&stat=${prediction.stat}&game_date=${gameDate}`)
+      .then(res => res.ok ? res.json() : null)
+      .then((data: ChatHistoryResponse | null) => {
+        if (data && data.messages.length > 0) {
+          setMessages(data.messages)
+          setConversationId(data.conversation_id)
+        }
+        setHistoryLoaded(true)
+      })
+      .catch(() => setHistoryLoaded(true))
+  }, [prediction.player_id, prediction.stat, prediction.prediction_date, historyLoaded])
+
+  const clearConversation = useCallback(async () => {
+    if (!conversationId) {
+      setMessages([])
+      return
+    }
+
+    try {
+      await fetch(`/api/ask/history?conversation_id=${conversationId}`, { method: 'DELETE' })
+    } catch {
+      // Ignore errors — clear locally regardless
+    }
+    setMessages([])
+    setConversationId(null)
+  }, [conversationId])
 
   const sendQuestion = useCallback(async (question: string) => {
     if (!question.trim() || loading) return
@@ -97,6 +132,9 @@ export function AskChat({
           { role: 'assistant', content: data.answer },
         ])
         setRemaining(data.remaining)
+        if (data.conversation_id) {
+          setConversationId(data.conversation_id)
+        }
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
@@ -132,6 +170,11 @@ export function AskChat({
         <h3 className="text-lg font-semibold text-slate-50 flex items-center gap-2">
           <span className="text-base">AI</span>
           Ask AI about this pick
+          {messages.length > 0 && !isOpen && (
+            <span className="text-xs font-normal text-slate-400 ml-1">
+              ({messages.length} messages)
+            </span>
+          )}
         </h3>
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -164,20 +207,26 @@ export function AskChat({
 
           {/* Messages area */}
           {messages.length > 0 && (
-            <div className="max-h-64 overflow-y-auto space-y-3 mb-3 scrollbar-thin">
+            <div className="max-h-80 overflow-y-auto space-y-3 mb-3 scrollbar-thin">
               {messages.map((msg, i) => (
                 <div
                   key={i}
                   className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
                       msg.role === 'user'
-                        ? 'bg-blue-600/30 text-blue-100'
+                        ? 'bg-blue-600/30 text-blue-100 whitespace-pre-wrap'
                         : 'bg-slate-700/60 text-slate-200'
                     }`}
                   >
-                    {msg.content}
+                    {msg.role === 'assistant' ? (
+                      <div className="prose prose-sm prose-invert max-w-none [&>p]:my-1 [&>ul]:my-1 [&>ol]:my-1">
+                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      msg.content
+                    )}
                   </div>
                 </div>
               ))}
@@ -218,12 +267,23 @@ export function AskChat({
             </button>
           </div>
 
-          {/* Footer: char count + remaining */}
+          {/* Footer: char count + remaining + clear */}
           <div className="flex items-center justify-between mt-1.5 text-xs text-slate-500">
             <span>{input.length > 0 ? `${input.length}/500` : ''}</span>
-            {remaining !== null && (
-              <span>{remaining} question{remaining !== 1 ? 's' : ''} left today</span>
-            )}
+            <div className="flex items-center gap-3">
+              {messages.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearConversation}
+                  className="text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  Clear chat
+                </button>
+              )}
+              {remaining !== null && (
+                <span>{remaining} question{remaining !== 1 ? 's' : ''} left today</span>
+              )}
+            </div>
           </div>
         </div>
       )}

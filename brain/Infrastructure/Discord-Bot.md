@@ -8,9 +8,10 @@ REST API alerts are working (no bot process needed). Slash commands require a ru
 ## Automated Alerts (No Bot Process Needed)
 | Channel | Trigger | Content |
 |---------|---------|---------|
-| `#predictions` | After inference job | Daily picks with edges |
+| `#predictions` | After inference job | Daily picks with edges (NBA + MLB) |
 | `#alerts` | After any job | Success/failure with duration and metrics |
-| `#performance` | Daily | P&L summary |
+| `#performance` | After NBA bet resolution | NBA P&L summary (bankroll, daily/cumulative PnL) |
+| `#mlb-performance` (or `#performance`) | After MLB bet resolution | MLB P&L summary (Session 15). Channel: `DISCORD_MLB_CHANNEL_PERFORMANCE` → fallback `DISCORD_CHANNEL_PERFORMANCE` |
 | `#kalshi` (or `#predictions`) | After Kalshi refresh | Top 5 Kalshi edges (violet embed, fee-adjusted >=5%) |
 
 ## Slash Commands (Require Running Bot)

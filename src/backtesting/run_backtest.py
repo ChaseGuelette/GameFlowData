@@ -124,6 +124,9 @@ def main():
         help="Black-Litterman tau for Kelly sizing only (edge detection uses raw model probs). E.g., 0.10",
     )
 
+    parser.add_argument("--local", action="store_true",
+                        help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
+
     args = parser.parse_args()
 
     # Build StatConfigSet from CLI args
@@ -167,7 +170,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize components
-    engine = get_engine()
+    engine = get_engine(local=args.local)
+    if args.local:
+        logger.info("Using LOCAL database")
     feature_store = FeatureStore(engine)
 
     logger.info("Loading model pipeline...")

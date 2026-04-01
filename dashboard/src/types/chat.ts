@@ -6,5 +6,11 @@ export interface ChatMessage {
 export interface AskResponse {
   answer: string
   remaining: number
+  conversation_id?: number
   error?: string
+}
+
+export interface ChatHistoryResponse {
+  conversation_id: number | null
+  messages: ChatMessage[]
 }

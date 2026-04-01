@@ -4,6 +4,13 @@
 
 ## Active Bugs
 - `test_finds_latest_run_directory` failing — expects `run_*` prefix but code now expects `nba_run_*`
+- **MLB paper bets disabled** (`--skip-bets`) — `batter_total_bases` and `batter_runs_scored` trained with at_bats leakage. Re-enable after retraining.
+
+## Recently Fixed (Session 15)
+- **Railway MLB daily stats failing**: Supavisor strips `-c` startup params → role-level 8s timeout killed batting/pitching rolling average queries. Fix: explicit `SET statement_timeout = '120000'` in `fetch_batter_season_games()` and `fetch_pitcher_season_games()`.
+- **MLB bets not resolving**: Zero 2026 game stats in DB — schedule existed but all games stuck at "Scheduled". Backfilled locally, 946 bets resolved.
+- **pitcher_outs column mismatch**: Mapped to `"outs"` but actual column is `"outs_recorded"` in `mlb_paper_trader.py`.
+- **MLB Discord P&L missing**: `mlb_daily_stats_job.py` never sent post-resolution P&L summary. Added `_send_mlb_pnl_summary()`.
 
 ## Technical Debt
 - `raw_player_props_combined` at **67M+ rows** — queries take 9-14s. Needs archiving or partitioning.

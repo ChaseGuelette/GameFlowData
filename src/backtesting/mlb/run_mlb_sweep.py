@@ -930,6 +930,8 @@ def main():
         ],
     )
     parser.add_argument("--output-dir", type=str, default=None)
+    parser.add_argument("--local", action="store_true",
+                        help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
 
     args = parser.parse_args()
 
@@ -954,7 +956,9 @@ def main():
         output_dir = Path("backtest_results") / f"mlb_sweep_{timestamp}"
 
     # Initialize
-    engine = get_engine()
+    engine = get_engine(local=args.local)
+    if args.local:
+        logger.info("Using LOCAL database")
     pitcher_feature_store = MLBFeatureStore(engine)
 
     model_path = find_latest_model_dir(args.model_dir)

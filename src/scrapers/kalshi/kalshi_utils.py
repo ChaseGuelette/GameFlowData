@@ -34,19 +34,50 @@ KALSHI_STAT_MAP: dict[str, str] = {
     "HR": "batter_home_runs",
     "RBI": "batter_rbis",
     "RUNS": "batter_runs_scored",
+    "HRR": "batter_hits_runs_rbis",
+}
+
+# Combined stats that require summing multiple MC sample arrays
+COMBINED_STATS: dict[str, list[str]] = {
+    "batter_hits_runs_rbis": ["batter_hits", "batter_runs_scored", "batter_rbis"],
 }
 
 # Reverse map: our stat keys → Kalshi ticker stat keys
 INTERNAL_TO_KALSHI_STAT: dict[str, str] = {v: k for k, v in KALSHI_STAT_MAP.items()}
 
 # ---------------------------------------------------------------------------
-# Series Mapping: sport → Kalshi series ticker prefix
+# Series Mapping: sport → per-stat series tickers
 # ---------------------------------------------------------------------------
 
+# Old single-series map (championship futures only — NOT player props)
 KALSHI_SERIES_MAP: dict[str, str] = {
     "nba": "KXNBA",
     "mlb": "KXMLB",
 }
+
+# Actual player prop series: each stat has its own series ticker
+KALSHI_PROP_SERIES: dict[str, dict[str, str]] = {
+    "nba": {
+        "KXNBAPTS": "pts",
+        "KXNBAREB": "reb",
+        "KXNBAAST": "ast",
+        "KXNBA3PT": "3pm",
+        "KXNBABLK": "blk",
+        "KXNBASTL": "stl",
+    },
+    "mlb": {
+        "KXMLBTB": "batter_total_bases",
+        "KXMLBHR": "batter_home_runs",
+        "KXMLBHIT": "batter_hits",
+        "KXMLBKS": "pitcher_strikeouts",
+        "KXMLBHRR": "batter_hits_runs_rbis",  # combined: hits + runs + RBIs
+    },
+}
+
+# Reverse: internal stat → series ticker
+INTERNAL_STAT_TO_SERIES: dict[str, dict[str, str]] = {}
+for _sport, _series_map in KALSHI_PROP_SERIES.items():
+    INTERNAL_STAT_TO_SERIES[_sport] = {stat: series for series, stat in _series_map.items()}
 
 # ---------------------------------------------------------------------------
 # Probability Conversion
@@ -68,14 +99,20 @@ def kalshi_price_to_prob(yes_price_cents: int | float) -> float:
 def kalshi_mid_to_prob(yes_bid: int | float, yes_ask: int | float) -> float:
     """Convert bid/ask midpoint to implied probability (removes spread).
 
+    Accepts EITHER cents (0-100 range) or dollars (0-1 range) — auto-detects.
+
     Args:
-        yes_bid: Best YES bid price in cents.
-        yes_ask: Best YES ask price in cents.
+        yes_bid: Best YES bid price.
+        yes_ask: Best YES ask price.
 
     Returns:
-        Midpoint implied probability.
+        Midpoint implied probability (0-1).
     """
-    return (yes_bid + yes_ask) / 200.0
+    mid = (yes_bid + yes_ask) / 2.0
+    # Auto-detect: if values are > 1, they're in cents; divide by 100
+    if mid > 1.0:
+        return mid / 100.0
+    return mid
 
 
 # ---------------------------------------------------------------------------

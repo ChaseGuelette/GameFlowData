@@ -83,3 +83,6 @@ src/models/mlb/artifacts/mlb_run_*/
 #Ignore backtest results
 backtest_results/
 **/bankroll_chart.html
+
+#kalshi generated files
+KalshiBot.txt

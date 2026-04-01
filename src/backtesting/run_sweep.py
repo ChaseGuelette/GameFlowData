@@ -692,6 +692,8 @@ Examples:
         help="Stat:side pairs to allow (e.g., pts:under reb:over)",
     )
     parser.add_argument("--output-dir", type=str, default=None, help="Output directory")
+    parser.add_argument("--local", action="store_true",
+                        help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
 
     args = parser.parse_args()
 
@@ -734,7 +736,9 @@ Examples:
         output_dir = Path("backtest_results") / f"nba_sweep_{timestamp}"
 
     # Initialize shared components
-    engine = get_engine()
+    engine = get_engine(local=args.local)
+    if args.local:
+        logger.info("Using LOCAL database")
     feature_store = FeatureStore(engine)
 
     model_path = find_latest_model_dir(args.model_dir)

@@ -64,12 +64,13 @@ class MLBBatterTrainingOrchestrator:
         tune_hyperparams: bool = False,
         tuning_trials: int = 50,
         feature_tolerance: float = 0.02,
+        local: bool = False,
     ):
         if stat not in BATTER_FEATURE_MAP:
             raise ValueError(f"Unknown stat: {stat}. Valid: {list(BATTER_FEATURE_MAP.keys())}")
 
         self.stat = stat
-        self.engine = get_engine()
+        self.engine = get_engine(local=local)
         self.feature_store = MLBBatterFeatureStore(self.engine)
         self.feature_tolerance = feature_tolerance
         self.tune_hyperparams = tune_hyperparams
@@ -813,6 +814,8 @@ if __name__ == "__main__":
     parser.add_argument("--tuning-trials", type=int, default=50)
     parser.add_argument("--feature-tolerance", type=float, default=0.02)
     parser.add_argument("--output-dir", type=str, default="src/models/mlb/artifacts")
+    parser.add_argument("--local", action="store_true",
+                        help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
 
     args = parser.parse_args()
 
@@ -822,6 +825,7 @@ if __name__ == "__main__":
         tune_hyperparams=args.tune,
         tuning_trials=args.tuning_trials,
         feature_tolerance=args.feature_tolerance,
+        local=args.local,
     )
 
     orchestrator.run(

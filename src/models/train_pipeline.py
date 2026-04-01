@@ -39,8 +39,9 @@ class TrainingOrchestrator:
         tuning_per_quantile: bool = False,
         hyperparams_path: str | None = None,
         feature_tolerance: float = 0.005,
+        local: bool = False,
     ):
-        self.engine = get_engine()
+        self.engine = get_engine(local=local)
         self.feature_store = FeatureStore(self.engine)
         self.feature_tolerance = feature_tolerance
 
@@ -1088,6 +1089,8 @@ if __name__ == "__main__":
         help="Force-include these features in all quantile lists for all models "
              "(e.g. --force-features player_starter_prob). Applied after loading base model features.",
     )
+    parser.add_argument("--local", action="store_true",
+                        help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
 
     args = parser.parse_args()
 
@@ -1117,7 +1120,7 @@ if __name__ == "__main__":
         if cal_end:
             logger.info(f"Calibration End Date: {cal_end} (exclusive)")
 
-        engine = get_engine()
+        engine = get_engine(local=args.local)
         feature_store = FeatureStore(engine)
 
         # Load existing pipeline
@@ -1170,6 +1173,7 @@ if __name__ == "__main__":
             tuning_per_quantile=args.tuning_per_quantile,
             hyperparams_path=args.hyperparams_path,
             feature_tolerance=args.feature_tolerance,
+            local=args.local,
         )
 
         if is_partial:

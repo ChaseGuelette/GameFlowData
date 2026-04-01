@@ -14,11 +14,11 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 |------|------|--------|--------------|---------|
 | 1.1 | Finish MLB batter pipeline | completed | None | NLL feature selection, PMF calibration, Optuna tuner built. Pipeline ready for training. |
 | 1.2 | Train pitcher K model | completed | Data backfills | Artifact exists (`run_20260313_195757`), backtested with good results. |
-| 1.3 | Train batter hits/total_bases models | in_progress | 1.1 | All 5 batter models trained & deployed. `batter_total_bases` and `batter_runs_scored` need retraining — `at_bats` feature leakage (trained on actual game ABs, unavailable pre-game). Replace with `batter_avg_ab_l5`. |
+| 1.3 | Train batter hits/total_bases models | in_progress | 1.1 | All 5 batter models trained & deployed. `batter_total_bases` and `batter_runs_scored` need retraining — `at_bats` leakage code fix applied (Session 13). Paper bet placement disabled (`--skip-bets`) until retrained. Just need to run training commands. |
 | 1.4 | Build MLB daily runner | completed | 1.2, 1.3 | `src/models/mlb/mlb_daily_runner.py` is production-ready — game discovery, pitcher K predictions, batter predictions scaffolded, prop lines, edge calc, paper bets. Mirrors NBA architecture. |
 | 1.5 | Build MLB paper trading | completed | 1.4 | `src/paper_trading/mlb_paper_trader.py` — full bet selection, placement, and resolution. |
-| 1.6 | Run MLB backtests | in_progress | 1.2, 1.3 | Pitcher K backtested (best: tau=0.9 z_max=0.75 mw=0.65). Batter sweeps not yet run — commands ready. |
-| 1.7 | Add MLB to Railway scheduler | completed | 1.4, 1.6 | MLB jobs in `scheduler.py`: stats at 10/10:30 AM ET, inference at 1:30/6:30 PM ET. Month gate removed — jobs run year-round (handle off-season gracefully). |
+| 1.6 | Run MLB backtests | in_progress | 1.2, 1.3 | Pitcher K backtested (best: tau=0.9 z_max=0.75 mw=0.65). `batter_runs_scored` swept (best: +49.5% ROI, but may be inflated by at_bats leakage). Re-run all batter sweeps after retrain. |
+| 1.7 | Add MLB to Railway scheduler | completed | 1.4, 1.6 | MLB jobs in `scheduler.py`: stats at 10/10:30 AM ET, inference at 1:30/6:30 PM ET. Month gate removed. Kalshi split into NBA/MLB separate refresh jobs. Supavisor timeout fix deployed (Session 15). |
 
 **Done when**: MLB pitcher K and batter models are backtested with >5% ROI and running daily on Railway.
 
@@ -91,10 +91,12 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | Step | Task | Status | Dependencies | Details |
 |------|------|--------|--------------|---------|
 | 5.1 | Archive old `raw_player_props_combined` rows | not_started | None | Biggest performance win |
-| 5.2 | Drop unused `idx_props_dfs_latest` index | not_started | None | Quick cleanup |
+| 5.2 | Drop unused indexes on large tables | completed | None | Session 15: Dropped 47 GB of unused indexes (116 GB → 69 GB). 7 indexes on `raw_player_props_combined` (45 GB), 25+ across other tables, duplicates cleaned. |
 | 5.3 | Optimize `get_dfs_lines` query | not_started | 5.1 | Currently 9-14s |
 | 5.4 | Add pagination to history/performance | not_started | None | SCALING.md Tier 1 |
 | 5.5 | Add React Query caching | not_started | None | SCALING.md Tier 2 |
+| 5.6 | Fix RLS `auth.uid()` → `(select auth.uid())` | completed | None | Session 15: Fixed 9 policies on `user_subscriptions`, `user_profiles`, `user_bets` to avoid per-row re-evaluation. |
+| 5.7 | Local Postgres for training/backtesting | completed | None | Session 15: `scripts/sync_local_db.py` + `--local` flag on all training/backtest scripts. No more statement timeouts or resource exhaustion. |
 
 **Done when**: DFS queries < 3s, history/performance pages paginated, prop table under control.
 
