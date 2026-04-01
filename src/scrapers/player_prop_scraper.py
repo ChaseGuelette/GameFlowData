@@ -166,7 +166,8 @@ class ScraperBot:
 
         rows_to_insert = []
 
-        game_id = data.get("id")
+        raw_game_id = data.get("id")
+        game_id = raw_game_id.zfill(10) if raw_game_id else raw_game_id
         commence_time = data.get("commence_time")
         home_team = data.get("home_team")
         away_team = data.get("away_team")

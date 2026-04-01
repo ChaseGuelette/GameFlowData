@@ -164,8 +164,16 @@ class MLBBatterFeatureStore:
         logger.info("Total MLB batter training rows: %d", len(combined))
         return combined
 
-    def enrich_with_matchup_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Merge opposing starter stats and platoon splits into training DataFrame."""
+    def enrich_with_matchup_features(
+        self,
+        df: pd.DataFrame,
+        matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None,
+    ) -> pd.DataFrame:
+        """Merge opposing starter stats and platoon splits into training DataFrame.
+
+        If matchup_cache is provided (dict[season -> (opp_df, plat_df)]),
+        uses pre-computed data instead of re-querying the database.
+        """
         from src.processing.mlb.mlb_batter_matchup_features import (
             compute_opposing_starter_bulk,
             compute_platoon_splits_bulk,
@@ -177,8 +185,13 @@ class MLBBatterFeatureStore:
         opp_frames = []
         platoon_frames = []
         for season in seasons:
-            opp_frames.append(compute_opposing_starter_bulk(self.engine, int(season)))
-            platoon_frames.append(compute_platoon_splits_bulk(self.engine, int(season)))
+            s = int(season)
+            if matchup_cache and s in matchup_cache:
+                opp_frames.append(matchup_cache[s][0])
+                platoon_frames.append(matchup_cache[s][1])
+            else:
+                opp_frames.append(compute_opposing_starter_bulk(self.engine, s))
+                platoon_frames.append(compute_platoon_splits_bulk(self.engine, s))
 
         # Merge opposing starter
         if opp_frames:
@@ -501,10 +514,17 @@ class MLBBatterFeatureStore:
     # Batch inference (backtesting)
     # ------------------------------------------------------------------
 
-    def get_features_for_date(self, game_date: str, stat: str = "hits") -> pd.DataFrame:
+    def get_features_for_date(
+        self,
+        game_date: str,
+        stat: str = "hits",
+        matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None,
+    ) -> pd.DataFrame:
         """Get features for all starting batters on a given date.
 
         Returns DataFrame with batter feature columns.
+        When matchup_cache is provided, skips expensive DB queries for
+        opposing starter stats and platoon splits.
         """
         target_col = BATTER_STAT_TARGET[stat]
         market_key = BATTER_STAT_MARKET_KEY[stat]
@@ -691,7 +711,7 @@ class MLBBatterFeatureStore:
         df = self._add_derived_features(df)
 
         # Add matchup features
-        df = self.enrich_with_matchup_features(df)
+        df = self.enrich_with_matchup_features(df, matchup_cache=matchup_cache)
 
         return df
 

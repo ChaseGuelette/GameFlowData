@@ -215,6 +215,26 @@ def run_shared_phases(
     total_actuals = sum(len(v) for v in date_actuals.values())
     logger.info(f"  Prefetched {total_actuals} actuals across {len(date_actuals)} dates")
 
+    # Phase 0c: Precompute matchup features once per season (avoids re-querying per date)
+    matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None
+    if batter_feature_store is not None:
+        from src.processing.mlb.mlb_batter_matchup_features import (
+            compute_opposing_starter_bulk,
+            compute_platoon_splits_bulk,
+        )
+
+        seasons = {gd.year for gd in game_dates}
+        matchup_cache = {}
+        for season in seasons:
+            logger.info(f"  Precomputing matchup features for season {season}...")
+            t_mc = time.time()
+            opp_df = compute_opposing_starter_bulk(engine, season)
+            logger.info(f"    Opposing starter features: {len(opp_df)} rows ({time.time() - t_mc:.1f}s)")
+            t_mc = time.time()
+            plat_df = compute_platoon_splits_bulk(engine, season)
+            logger.info(f"    Platoon splits: {len(plat_df)} rows ({time.time() - t_mc:.1f}s)")
+            matchup_cache[season] = (opp_df, plat_df)
+
     # Phase 1: Generate predictions date-by-date
     logger.info("Phase 1: Generating predictions...")
     date_predictions: dict[date, list[DatePrediction]] = {}
@@ -225,7 +245,7 @@ def run_shared_phases(
         try:
             preds, lines = _process_date_shared(
                 engine, pitcher_feature_store, batter_feature_store, suite,
-                game_date, stats, bookmakers,
+                game_date, stats, bookmakers, matchup_cache=matchup_cache,
             )
             if preds:
                 date_predictions[game_date] = preds
@@ -251,6 +271,7 @@ def _process_date_shared(
     game_date: date,
     stats: list[str],
     bookmakers: list[str],
+    matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None,
 ) -> tuple[list[DatePrediction], pd.DataFrame | None]:
     """Generate predictions + fetch lines for a single date."""
     # Get games
@@ -347,6 +368,7 @@ def _process_date_shared(
             try:
                 features_df = batter_feature_store.get_features_for_date(
                     str(game_date), stat=short_stat,
+                    matchup_cache=matchup_cache,
                 )
             except Exception as e:
                 logger.warning(f"Error loading batter features for {batter_stat} on {game_date}: {e}")

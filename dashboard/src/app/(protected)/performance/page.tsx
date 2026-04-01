@@ -1,7 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useState, useMemo } from 'react'
 import { KPICard } from '@/components/performance/KPICard'
 import { BankrollChart } from '@/components/performance/BankrollChart'
 import { StatBreakdown } from '@/components/performance/StatBreakdown'
@@ -10,45 +9,17 @@ import { cn } from '@/lib/utils'
 import { type DailyPerformance, type StatPerformance, type PaperBet, type StatType } from '@/types/predictions'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 import { useSport } from '@/contexts/SportContext'
+import {
+  usePropsPerformance,
+  useDfsPerformance,
+  useMyBetsPerformance,
+  type DfsEntry,
+} from '@/lib/hooks/usePerformanceData'
 
 type PerformanceTab = 'props' | 'dfs' | 'my_bets'
 
-// Extended type to include is_recommended from joined daily_predictions
 interface PaperBetWithRecommended extends PaperBet {
   is_recommended?: boolean
-}
-
-// DFS entry from dfs_paper_entries table
-interface DfsEntry {
-  id: number
-  entry_date: string
-  slip_type: string
-  platform: string
-  num_legs: number
-  stake: number
-  status: string
-  legs_won: number
-  legs_lost: number
-  legs_push: number
-  legs_cancelled: number
-  payout_multiplier: number
-  pnl: number
-  avg_edge: number
-  min_edge: number
-}
-
-// DFS daily log from dfs_paper_daily_log table
-interface DfsDailyLog {
-  entry_date: string
-  entries_placed: number
-  entries_won: number
-  entries_lost: number
-  entries_partial: number
-  total_staked: number
-  total_pnl: number
-  roi_pct: number
-  cumulative_pnl: number
-  bankroll_after: number
 }
 
 const SLIP_TYPE_LABELS: Record<string, string> = {
@@ -59,161 +30,24 @@ const SLIP_TYPE_LABELS: Record<string, string> = {
 }
 
 export default function PerformancePage() {
-  const { sport, config } = useSport()
+  const { config } = useSport()
   const { prefs } = useUserPreferences()
-  const [dailyData, setDailyData] = useState<DailyPerformance[]>([])
-  const [allBets, setAllBets] = useState<PaperBetWithRecommended[]>([])
-  const [loading, setLoading] = useState(true)
-  const [currentBankroll, setCurrentBankroll] = useState<number>(0)
-  const [betSource, setBetSource] = useState<BetSource>('model') // Default to Model Picks
+  const [betSource, setBetSource] = useState<BetSource>('model')
   const [activeTab, setActiveTab] = useState<PerformanceTab>('props')
 
-  // DFS state
-  const [dfsEntries, setDfsEntries] = useState<DfsEntry[]>([])
-  const [dfsDailyData, setDfsDailyData] = useState<DfsDailyLog[]>([])
-  const [dfsLoading, setDfsLoading] = useState(false)
+  // React Query hooks
+  const propsQuery = usePropsPerformance()
+  const dfsQuery = useDfsPerformance()
+  const myBetsQuery = useMyBetsPerformance()
 
-  // My Bets state
-  const [myBets, setMyBets] = useState<PaperBet[]>([])
-  const [myBetsLoading, setMyBetsLoading] = useState(false)
+  const dailyData = propsQuery.data?.dailyData ?? []
+  const allBets = (propsQuery.data?.allBets ?? []) as PaperBetWithRecommended[]
+  const currentBankroll = propsQuery.data?.currentBankroll ?? 0
 
-  // Reset my bets cache when sport changes so it re-fetches
-  useEffect(() => {
-    setMyBets([])
-  }, [sport])
+  const dfsEntries = dfsQuery.data?.dfsEntries ?? []
+  const dfsDailyData = dfsQuery.data?.dfsDailyData ?? []
 
-  // Fetch props data
-  useEffect(() => {
-    async function fetchData() {
-      const supabase = createClient()
-
-      // Fetch daily performance log (for bankroll chart)
-      const { data: logData, error: logError } = await supabase
-        .from(config.dailyLogTable)
-        .select('game_date, total_bets, bets_won, bets_lost, bets_push, total_staked, total_pnl, cumulative_pnl, bankroll_after, roi_pct')
-        .order('game_date', { ascending: true })
-
-      if (!logError && logData) {
-        setDailyData(logData as DailyPerformance[])
-        if (logData.length > 0) {
-          setCurrentBankroll(logData[logData.length - 1].bankroll_after)
-        }
-      }
-
-      // Fetch all resolved bets
-      const { data: betsData, error: betsError } = await supabase
-        .from(config.paperBetsTable)
-        .select('id, prediction_id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl')
-        .in('status', ['won', 'lost', 'push'])
-        .order('game_date', { ascending: true })
-
-      if (!betsError && betsData) {
-        // Get unique prediction IDs to fetch is_recommended status
-        const predictionIds = [...new Set(betsData.map(b => b.prediction_id).filter(Boolean))]
-
-        // Fetch is_recommended for these predictions
-        const { data: predictionsData } = await supabase
-          .from(config.predictionsTable)
-          .select('id, is_recommended')
-          .in('id', predictionIds)
-
-        // Create a map for quick lookup
-        const recommendedMap = new Map<number, boolean>()
-        if (predictionsData) {
-          for (const p of predictionsData) {
-            recommendedMap.set(p.id, p.is_recommended ?? false)
-          }
-        }
-
-        // Merge is_recommended into bets
-        const enrichedBets = betsData.map(bet => ({
-          ...bet,
-          is_recommended: recommendedMap.get(bet.prediction_id) ?? false,
-        })) as PaperBetWithRecommended[]
-
-        setAllBets(enrichedBets)
-      }
-
-      setLoading(false)
-    }
-
-    fetchData()
-  }, [sport, config.dailyLogTable, config.paperBetsTable, config.predictionsTable])
-
-  // Fetch DFS data when tab switches to DFS
-  useEffect(() => {
-    if (activeTab !== 'dfs') return
-    if (dfsEntries.length > 0) return // Already loaded
-
-    async function fetchDfsData() {
-      setDfsLoading(true)
-      const supabase = createClient()
-
-      const [entriesRes, dailyRes] = await Promise.all([
-        supabase
-          .from('dfs_paper_entries')
-          .select('id, entry_date, slip_type, platform, num_legs, stake, status, legs_won, legs_lost, legs_push, legs_cancelled, payout_multiplier, pnl, avg_edge, min_edge')
-          .order('entry_date', { ascending: true }),
-        supabase
-          .from('dfs_paper_daily_log')
-          .select('entry_date, entries_placed, entries_won, entries_lost, entries_partial, total_staked, total_pnl, roi_pct, cumulative_pnl, bankroll_after')
-          .order('entry_date', { ascending: true }),
-      ])
-
-      if (!entriesRes.error && entriesRes.data) {
-        setDfsEntries(entriesRes.data as DfsEntry[])
-      }
-      if (!dailyRes.error && dailyRes.data) {
-        setDfsDailyData(dailyRes.data as DfsDailyLog[])
-      }
-
-      setDfsLoading(false)
-    }
-
-    fetchDfsData()
-  }, [activeTab, dfsEntries.length])
-
-  // Fetch My Bets data when tab switches
-  useEffect(() => {
-    if (activeTab !== 'my_bets') return
-    if (myBets.length > 0) return // Already loaded
-
-    async function fetchMyBets() {
-      setMyBetsLoading(true)
-      const supabase = createClient()
-
-      const { data, error } = await supabase
-        .from('user_bets')
-        .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet')
-        .in('stat_type', config.statTypes)
-        .in('status', ['won', 'lost', 'push'])
-        .order('game_date', { ascending: true })
-
-      if (!error && data) {
-        const mapped: PaperBet[] = data.map(row => ({
-          id: row.id,
-          game_date: row.game_date,
-          player_id: row.player_id,
-          player_name: row.player_name,
-          stat_type: row.stat_type,
-          line: Number(row.line),
-          bet_direction: row.bet_direction,
-          odds_at_bet: row.odds_at_bet ? Number(row.odds_at_bet) : -110,
-          stake: row.stake ? Number(row.stake) : 0,
-          edge: row.edge ? Number(row.edge) : 0,
-          status: row.status,
-          actual_value: row.actual_value != null ? Number(row.actual_value) : null,
-          pnl: row.pnl != null ? Number(row.pnl) : null,
-          bookmaker: row.book_at_bet,
-        }))
-        setMyBets(mapped)
-      }
-
-      setMyBetsLoading(false)
-    }
-
-    fetchMyBets()
-  }, [activeTab, myBets.length, sport, config.statTypes])
+  const myBets = myBetsQuery.data ?? []
 
   // Filter bets based on source (Model Picks = is_recommended from daily_predictions)
   const filteredBets = useMemo(() => {
@@ -272,7 +106,6 @@ export default function PerformancePage() {
       })
     }
 
-    // Sort by total bets descending
     statPerformance.sort((a, b) => b.total_bets - a.total_bets)
     return statPerformance
   }, [filteredBets])
@@ -283,7 +116,6 @@ export default function PerformancePage() {
       return dailyData
     }
 
-    // For Model Picks, simulate bankroll progression
     const dailyPnlMap = new Map<string, number>()
 
     for (const bet of filteredBets) {
@@ -291,7 +123,6 @@ export default function PerformancePage() {
       dailyPnlMap.set(date, (dailyPnlMap.get(date) || 0) + (bet.pnl || 0))
     }
 
-    // Get sorted unique dates and compute prefix sums without mutation
     const dates = Array.from(dailyPnlMap.keys()).sort()
     const dailyPnls = dates.map(date => dailyPnlMap.get(date) || 0)
     const cumulativePnls = dailyPnls.reduce<number[]>((acc, pnl) => {
@@ -517,7 +348,7 @@ export default function PerformancePage() {
       {/* Props Tab */}
       {activeTab === 'props' && (
         <>
-          {loading ? (
+          {propsQuery.isLoading ? (
             <div className="flex items-center justify-center py-16">
               <div className="text-slate-400">Loading performance data...</div>
             </div>
@@ -554,7 +385,7 @@ export default function PerformancePage() {
       {/* DFS Tab */}
       {activeTab === 'dfs' && (
         <>
-          {dfsLoading ? (
+          {dfsQuery.isLoading ? (
             <div className="flex items-center justify-center py-16">
               <div className="text-slate-400">Loading DFS performance data...</div>
             </div>
@@ -651,7 +482,7 @@ export default function PerformancePage() {
       {/* My Bets Tab */}
       {activeTab === 'my_bets' && (
         <>
-          {myBetsLoading ? (
+          {myBetsQuery.isLoading ? (
             <div className="flex items-center justify-center py-16">
               <div className="text-slate-400">Loading your bet performance...</div>
             </div>

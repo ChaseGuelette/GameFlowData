@@ -70,6 +70,7 @@ JOB_NAMES = {
     "mlb_lines_job.py": "MLB Lines Scraper",
     "mlb_inference_job.py": "MLB Inference",
     "kalshi_refresh_job.py": "Kalshi Refresh",
+    "archive_old_props_job.py": "Archive Old Props",
 }
 
 # In-memory job status tracking for dependency checks.
@@ -537,6 +538,11 @@ def run_mlb_inference():
 
 # ---- Kalshi Jobs ----
 
+def run_archive_old_props():
+    """Archive rows older than 30 days from raw_player_props_combined."""
+    run_job("archive_old_props_job.py", silent_on_success=True)
+
+
 def run_kalshi_refresh():
     """Kalshi market refresh: scrape, compute edges, alert. Skips gracefully if no creds."""
     run_job("kalshi_refresh_job.py", silent_on_success=True)
@@ -637,6 +643,18 @@ def main():
         CronTrigger(hour=16, minute=15),
         id="inference_4pm",
         name="Inference (4:15 PM ET, skip bets)",
+    )
+
+    # ==============================================================
+    # Maintenance Jobs
+    # ==============================================================
+
+    # 3:00 AM ET - Archive old props (rows > 30 days)
+    scheduler.add_job(
+        run_archive_old_props,
+        CronTrigger(hour=3, minute=0),
+        id="archive_old_props",
+        name="Archive Old Props (3 AM ET)",
     )
 
     # ==============================================================
