@@ -196,7 +196,7 @@ def compute_platoon_splits_bulk(engine: Engine, season: int) -> pd.DataFrame:
     """)
 
     with engine.connect() as conn:
-        conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
+        conn.execute(text("SET statement_timeout = '900000'"))  # 15 min – heavy LATERAL join, runs once per backtest
         df = pd.read_sql(query, conn, params={"season": season})
 
     logger.info("Computed platoon splits for season %d: %d rows", season, len(df))

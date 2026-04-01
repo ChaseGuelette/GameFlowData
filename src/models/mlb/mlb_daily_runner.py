@@ -492,9 +492,9 @@ class MLBDailyPredictionRunner:
                     (batter["player_id"], batter["game_id"], market_key), 0.0
                 )
 
-                # Map projected_ab → at_bats for models trained with at_bats feature
-                # (e.g. batter_total_bases, batter_runs). projected_ab = max(avg_ab_l5, 1.0)
-                feat["at_bats"] = feat.get("projected_ab", feat.get("batter_avg_ab_l5", 3.5))
+                # Ensure projected_ab is available (used by retrained negbin models)
+                if "projected_ab" not in feat:
+                    feat["projected_ab"] = max(feat.get("batter_avg_ab_l5", 3.5), 1.0)
 
                 player_games.append((batter["player_id"], batter["game_id"], feat))
                 batter_info.append(batter)

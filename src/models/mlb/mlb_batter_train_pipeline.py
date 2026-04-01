@@ -220,7 +220,7 @@ class MLBBatterTrainingOrchestrator:
         logger.info("Step 3: Running binomial NLL-based feature selection...")
         excluded = {
             "game_id", "player_id", "game_date", "season", "team_id",
-            "opp_team_id", "actual", "player_name", "at_bats",
+            "opp_team_id", "actual", "player_name", "actual_at_bats",
         }
         candidates = [
             c for c in train_df.columns
@@ -228,20 +228,20 @@ class MLBBatterTrainingOrchestrator:
         ]
 
         valid_df = train_df[
-            train_df["actual"].notna() & (train_df["actual"] >= 0) & (train_df["at_bats"] > 0)
+            train_df["actual"].notna() & (train_df["actual"] >= 0) & (train_df["actual_at_bats"] > 0)
         ].fillna(0)
 
         selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
         selected_features = selector.select_features_binomial_nll(
             valid_df, "actual", candidates,
-            at_bats_col="at_bats",
+            at_bats_col="actual_at_bats",
             model_name=f"Batter {self.stat} (Binomial)",
         )
         logger.info("Binomial feature set: %d features", len(selected_features))
 
         X_train = valid_df[selected_features].fillna(0)
         y_train = valid_df["actual"]
-        at_bats_train = valid_df["at_bats"].values
+        at_bats_train = valid_df["actual_at_bats"].values
 
         # Step 4: Hyperparameter tuning (optional)
         binomial_config = self._resolve_binomial_config(X_train, y_train, at_bats_train)
@@ -259,11 +259,11 @@ class MLBBatterTrainingOrchestrator:
         # Step 6-7: Binomial calibration
         logger.info("Step 6-7: Computing binomial calibration metrics...")
         cal_valid = cal_df[
-            cal_df["actual"].notna() & (cal_df["actual"] >= 0) & (cal_df["at_bats"] > 0)
+            cal_df["actual"].notna() & (cal_df["actual"] >= 0) & (cal_df["actual_at_bats"] > 0)
         ].fillna(0)
         X_cal = cal_valid[selected_features].fillna(0)
         y_cal = cal_valid["actual"].values
-        at_bats_cal = cal_valid["at_bats"].values
+        at_bats_cal = cal_valid["actual_at_bats"].values
 
         p_pred, n_pred = model.predict_params(X_cal, at_bats_cal)
         cal_report = self._compute_binomial_calibration(
@@ -487,7 +487,7 @@ class MLBBatterTrainingOrchestrator:
         logger.info("Step 3: Running NLL-based feature selection for NegBin model...")
         excluded = {
             "game_id", "player_id", "game_date", "season", "team_id",
-            "opp_team_id", "actual", "player_name",
+            "opp_team_id", "actual", "player_name", "actual_at_bats",
         }
         candidates = [
             c for c in train_df.columns

@@ -263,7 +263,7 @@ def test_parse_and_store_inserts_expected_rows(bot, monkeypatch):
     assert len(inserted) == 1
 
     row = inserted[0]
-    assert row[0] == "game1"
+    assert row[0] == "00000game1"
     assert row[1] == "Player A"
     assert row[2] == "book1"
     assert row[3] == "player_points"

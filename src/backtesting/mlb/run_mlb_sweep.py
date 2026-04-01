@@ -253,7 +253,7 @@ def run_shared_phases(
             if lines is not None and not lines.empty:
                 date_lines[game_date] = lines
         except Exception as e:
-            logger.error(f"  Error processing {game_date}: {e}")
+            logger.error(f"  Error processing {game_date}: {type(e).__name__}: {e}")
             continue
 
         if (i + 1) % 10 == 0 or (i + 1) == len(game_dates):
@@ -454,6 +454,7 @@ def _fetch_lines_for_date(
     """)
 
     with engine.connect() as conn:
+        conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
         return pd.read_sql(query, conn, params=params)
 
 

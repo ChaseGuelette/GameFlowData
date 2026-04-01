@@ -238,8 +238,8 @@ class MLBBatterFeatureStore:
                 -- Target
                 bgs.{target_col} AS actual,
 
-                -- At-bats (for binomial model)
-                COALESCE(bgs.ab, 0) AS at_bats,
+                -- Actual at-bats (for binomial model fitting/filtering only, NOT a model feature)
+                COALESCE(bgs.ab, 0) AS actual_at_bats,
 
                 -- Game context
                 CASE WHEN gs.home_team_id = bgs.team_id THEN 1 ELSE 0 END AS is_home,
@@ -403,6 +403,7 @@ class MLBBatterFeatureStore:
         """.replace("{target_col}", target_col))
 
         with self.engine.connect() as conn:
+            conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
             df = pd.read_sql(query, conn, params={"season": season, "market_key": market_key})
 
         # Rename prop_line to stat-specific name
@@ -541,8 +542,8 @@ class MLBBatterFeatureStore:
                 -- Target (for backtesting evaluation)
                 bgs.{target_col} AS actual,
 
-                -- At-bats (for binomial model)
-                COALESCE(bgs.ab, 0) AS at_bats,
+                -- Actual at-bats (for binomial model fitting/filtering only, NOT a model feature)
+                COALESCE(bgs.ab, 0) AS actual_at_bats,
 
                 -- Game context
                 CASE WHEN gs.home_team_id = bgs.team_id THEN 1 ELSE 0 END AS is_home,
@@ -697,6 +698,7 @@ class MLBBatterFeatureStore:
         """.replace("{target_col}", target_col))
 
         with self.engine.connect() as conn:
+            conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
             df = pd.read_sql(query, conn, params={"game_date": game_date, "market_key": market_key})
 
         if df.empty:
