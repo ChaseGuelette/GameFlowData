@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # Stat resolution: stat_type -> (table, column) for resolving actual values
 MLB_STAT_RESOLUTION: dict[str, tuple[str, str]] = {
     "pitcher_strikeouts": ("mlb_player_game_stats_pitching", "so"),
-    "pitcher_outs":       ("mlb_player_game_stats_pitching", "outs"),
+    "pitcher_outs":       ("mlb_player_game_stats_pitching", "outs_recorded"),
     "batter_hits":        ("mlb_player_game_stats_batting",  "h"),
     "batter_total_bases": ("mlb_player_game_stats_batting",  "tb"),
     "batter_rbis":        ("mlb_player_game_stats_batting",  "rbi"),

@@ -525,15 +525,18 @@ def run_mlb_lines_props_only():
 
 
 def run_mlb_inference():
-    """Run MLB inference, checking if MLB daily stats succeeded first."""
+    """Run MLB inference, checking if MLB daily stats succeeded first.
+
+    NOTE: Paper bet placement is disabled (--skip-bets) until batter_total_bases
+    and batter_runs_scored models are retrained without at_bats leakage.
+    Re-enable once models are retrained and backtested with clean data.
+    """
     if not check_dependency("mlb_daily_stats_job.py", max_age_hours=8):
         logger.warning(
             "MLB daily stats job has not succeeded in the last 8 hours — "
             "MLB inference will run with potentially stale data."
         )
-        run_job("mlb_inference_job.py")
-    else:
-        run_job("mlb_inference_job.py")
+    run_job("mlb_inference_job.py", extra_args="--skip-bets")
 
 
 # ---- Kalshi Jobs ----
@@ -544,8 +547,13 @@ def run_archive_old_props():
 
 
 def run_kalshi_refresh():
-    """Kalshi market refresh: scrape, compute edges, alert. Skips gracefully if no creds."""
-    run_job("kalshi_refresh_job.py", silent_on_success=True)
+    """Kalshi NBA market refresh: scrape, compute edges, alert. Skips gracefully if no creds."""
+    run_job("kalshi_refresh_job.py", extra_args="--sport nba", silent_on_success=True)
+
+
+def run_kalshi_refresh_mlb():
+    """Kalshi MLB market refresh: scrape, compute edges, alert. Skips gracefully if no creds."""
+    run_job("kalshi_refresh_job.py", extra_args="--sport mlb", silent_on_success=True)
 
 
 def main():
@@ -734,8 +742,15 @@ def main():
     scheduler.add_job(
         run_kalshi_refresh,
         CronTrigger(hour='11-23', minute='*/10'),
-        id="kalshi_refresh",
-        name="Kalshi Refresh (every 10 min, 11AM-11PM ET)",
+        id="kalshi_refresh_nba",
+        name="Kalshi NBA Refresh (every 10 min, 11AM-11PM ET)",
+    )
+
+    scheduler.add_job(
+        run_kalshi_refresh_mlb,
+        CronTrigger(hour='11-23', minute='*/10'),
+        id="kalshi_refresh_mlb",
+        name="Kalshi MLB Refresh (every 10 min, 11AM-11PM ET)",
     )
 
     # Log scheduled jobs

@@ -103,7 +103,9 @@ def fetch_batter_season_games(
           AND did_not_play = false
         ORDER BY player_id, game_date
     """
-    df = pd.read_sql(text(query), engine, params={"season": season, "td": target_date})
+    with engine.connect() as conn:
+        conn.execute(text("SET statement_timeout = '120000'"))  # 2 min
+        df = pd.read_sql(text(query), conn, params={"season": season, "td": target_date})
     logger.info(f"Fetched {len(df):,} batter season games for {len(player_ids)} players")
     return df
 
@@ -127,7 +129,9 @@ def fetch_pitcher_season_games(
           AND did_not_play = false
         ORDER BY player_id, game_date
     """
-    df = pd.read_sql(text(query), engine, params={"season": season, "td": target_date})
+    with engine.connect() as conn:
+        conn.execute(text("SET statement_timeout = '120000'"))  # 2 min
+        df = pd.read_sql(text(query), conn, params={"season": season, "td": target_date})
     logger.info(f"Fetched {len(df):,} pitcher season games for {len(player_ids)} players")
     return df
 

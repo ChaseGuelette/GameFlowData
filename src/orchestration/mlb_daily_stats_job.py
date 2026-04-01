@@ -46,6 +46,48 @@ logger = logging.getLogger("MLBDailyStatsJob")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _send_mlb_pnl_summary(result: dict) -> None:
+    """Send MLB daily P&L summary to Discord performance channel.
+
+    Non-fatal: failures are logged but don't affect job status.
+    """
+    try:
+        import os
+
+        if not os.getenv("DISCORD_BOT_TOKEN"):
+            return
+
+        from sqlalchemy import text as sa_text
+
+        from src.db.client import get_engine
+        from src.discord_bot.alerts import send_pnl_summary_sync
+
+        engine = get_engine()
+        query = sa_text("""
+            SELECT bankroll_after, total_pnl, cumulative_pnl
+            FROM mlb_paper_trading_daily_log
+            ORDER BY game_date DESC
+            LIMIT 1
+        """)
+        with engine.connect() as conn:
+            row = conn.execute(query).fetchone()
+
+        bankroll = float(row[0]) if row else 5000.0
+        daily_pnl = float(row[1]) if row else 0.0
+        total_pnl = float(row[2]) if row else 0.0
+
+        send_pnl_summary_sync(
+            resolution_result=result,
+            bankroll=bankroll,
+            daily_pnl=daily_pnl,
+            total_pnl=total_pnl,
+            sport="mlb",
+        )
+
+    except Exception as e:
+        logger.warning(f"Failed to send MLB P&L summary to Discord: {e}")
+
+
 def resolve_pending_mlb_bets(dry_run: bool = False) -> bool:
     """Resolve all pending MLB paper bets using newly available game stats."""
     logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: Resolving Pending MLB Paper Bets")
@@ -71,6 +113,7 @@ def resolve_pending_mlb_bets(dry_run: bool = False) -> bool:
                 f"{result['dates_processed']} dates ({result['dates_skipped']} skipped) "
                 f"[{result['total_won']}W {result['total_lost']}L {result['total_push']}P] ({elapsed:.1f}s)"
             )
+            _send_mlb_pnl_summary(result)
 
         return True
 
@@ -137,7 +180,9 @@ def run_command(
             elapsed = time.time() - start_time
             logger.error(f"FAILED (attempt {attempt}/{attempts}): {description} ({elapsed:.1f}s)")
             logger.error(f"  Exit code: {e.returncode}")
-            logger.error(f"  Stderr: {e.stderr[:500] if e.stderr else 'No error output'}")
+            logger.error(f"  Stderr: {e.stderr[-500:] if e.stderr else 'No error output'}")
+            if e.stdout:
+                logger.error(f"  Stdout (tail): {e.stdout[-500:]}")
 
         except Exception as e:
             elapsed = time.time() - start_time
