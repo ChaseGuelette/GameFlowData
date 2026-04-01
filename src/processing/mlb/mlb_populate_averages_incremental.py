@@ -418,6 +418,10 @@ def upsert_pitching_averages(engine, df: pd.DataFrame):
 def main():
     parser = argparse.ArgumentParser(description="MLB Incremental Rolling Average Stats Update")
     parser.add_argument("--date", type=str, help="Target date (YYYY-MM-DD). Defaults to today.")
+    parser.add_argument(
+        "--type", choices=["batting", "pitching"], default=None,
+        help="Only update batting or pitching averages. Defaults to both.",
+    )
     args = parser.parse_args()
 
     if args.date:
@@ -425,10 +429,14 @@ def main():
     else:
         target_date = date.today()
 
+    do_batting = args.type in (None, "batting")
+    do_pitching = args.type in (None, "pitching")
+
     engine = get_engine()
 
+    type_label = args.type or "batting + pitching"
     logger.info("=" * 60)
-    logger.info(f"MLB Incremental average stats update for {target_date}")
+    logger.info(f"MLB Incremental average stats update for {target_date} ({type_label})")
     logger.info("=" * 60)
 
     start_time = datetime.now()
@@ -441,28 +449,30 @@ def main():
         logger.info(f"Season: {season}")
 
         # Batting
-        batter_ids = get_batter_ids_on_date(engine, target_date)
-        if batter_ids:
-            df = fetch_batter_season_games(engine, batter_ids, season, target_date)
-            if not df.empty:
-                result = calculate_incremental(
-                    df, target_date, "player_id", calculate_batting_rolling_for_player
-                )
-                upsert_batting_averages(engine, result)
-        else:
-            logger.info("No batters found for target date.")
+        if do_batting:
+            batter_ids = get_batter_ids_on_date(engine, target_date)
+            if batter_ids:
+                df = fetch_batter_season_games(engine, batter_ids, season, target_date)
+                if not df.empty:
+                    result = calculate_incremental(
+                        df, target_date, "player_id", calculate_batting_rolling_for_player
+                    )
+                    upsert_batting_averages(engine, result)
+            else:
+                logger.info("No batters found for target date.")
 
         # Pitching
-        pitcher_ids = get_pitcher_ids_on_date(engine, target_date)
-        if pitcher_ids:
-            df = fetch_pitcher_season_games(engine, pitcher_ids, season, target_date)
-            if not df.empty:
-                result = calculate_incremental(
-                    df, target_date, "player_id", calculate_pitching_rolling_for_player
-                )
-                upsert_pitching_averages(engine, result)
-        else:
-            logger.info("No pitchers found for target date.")
+        if do_pitching:
+            pitcher_ids = get_pitcher_ids_on_date(engine, target_date)
+            if pitcher_ids:
+                df = fetch_pitcher_season_games(engine, pitcher_ids, season, target_date)
+                if not df.empty:
+                    result = calculate_incremental(
+                        df, target_date, "player_id", calculate_pitching_rolling_for_player
+                    )
+                    upsert_pitching_averages(engine, result)
+            else:
+                logger.info("No pitchers found for target date.")
 
         elapsed = datetime.now() - start_time
         logger.info("=" * 60)

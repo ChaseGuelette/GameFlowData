@@ -197,6 +197,208 @@ class KalshiClient:
         logger.error(f"Failed after {self.max_retries} attempts: {path}")
         return None
 
+    def _request_with_body(
+        self, method: str, path: str, body: dict | None = None
+    ) -> dict | None:
+        """Make an authenticated API request with a JSON body (POST/PUT/DELETE).
+
+        Args:
+            method: HTTP method (POST, PUT, DELETE).
+            path: API path (appended to base URL).
+            body: JSON body dict.
+
+        Returns:
+            JSON response dict, or None on failure.
+        """
+        if not self.is_authenticated:
+            logger.warning("Cannot make API request — no credentials configured")
+            return None
+
+        url = f"{KALSHI_BASE_URL}{path}"
+
+        for attempt in range(self.max_retries):
+            self._rate_limit()
+            try:
+                headers = self._auth_headers(method.upper(), path)
+                response = self.session.request(
+                    method, url, headers=headers, json=body, timeout=15,
+                )
+
+                if response.status_code == 429:
+                    wait = (2 ** attempt) * 5
+                    logger.warning(f"Rate limited (429). Waiting {wait}s before retry.")
+                    time.sleep(wait)
+                    continue
+
+                if response.status_code in (401, 403):
+                    logger.error(
+                        f"Authentication failed ({response.status_code}). "
+                        "Check KALSHI_API_KEY and private key."
+                    )
+                    return None
+
+                response.raise_for_status()
+                # DELETE may return 204 No Content
+                if response.status_code == 204:
+                    return {}
+                return response.json()
+
+            except requests.exceptions.Timeout:
+                logger.warning(f"Timeout on {path} (attempt {attempt + 1}/{self.max_retries})")
+            except requests.exceptions.HTTPError as e:
+                if response.status_code >= 500:
+                    wait = (2 ** attempt) * 2
+                    logger.warning(f"Server error {response.status_code}. Waiting {wait}s.")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"HTTP error on {path}: {e} — {response.text}")
+                return None
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request failed on {path}: {e}")
+
+            if attempt < self.max_retries - 1:
+                wait = (2 ** attempt) * self.delay
+                time.sleep(wait)
+
+        logger.error(f"Failed after {self.max_retries} attempts: {path}")
+        return None
+
+    # ------------------------------------------------------------------
+    # Portfolio / Trading endpoints
+    # ------------------------------------------------------------------
+
+    def get_balance(self) -> dict | None:
+        """Get portfolio balance.
+
+        Returns:
+            Dict with 'balance' and 'portfolio_value' in cents,
+            or None on failure.
+        """
+        return self._request("GET", "/portfolio/balance")
+
+    def get_positions(
+        self,
+        ticker: str | None = None,
+        settlement_status: str | None = None,
+        limit: int = 200,
+        cursor: str | None = None,
+    ) -> list[dict]:
+        """Get portfolio positions.
+
+        Args:
+            ticker: Filter by market ticker.
+            settlement_status: Filter by status ("open" or "settled").
+            limit: Max results per page.
+            cursor: Pagination cursor.
+
+        Returns:
+            List of position dicts.
+        """
+        params: dict = {"limit": limit}
+        if ticker:
+            params["ticker"] = ticker
+        if settlement_status:
+            params["settlement_status"] = settlement_status
+        if cursor:
+            params["cursor"] = cursor
+
+        result = self._request("GET", "/portfolio/positions", params=params)
+        if result is None:
+            return []
+        return result.get("market_positions", [])
+
+    def create_order(
+        self,
+        ticker: str,
+        action: str = "buy",
+        side: str = "yes",
+        order_type: str = "market",
+        count: int = 1,
+        yes_price: int | None = None,
+    ) -> dict | None:
+        """Place an order on a market.
+
+        Args:
+            ticker: Market ticker.
+            action: "buy" or "sell".
+            side: "yes" or "no".
+            order_type: "market" or "limit".
+            count: Number of contracts.
+            yes_price: Limit price in cents (required for limit orders).
+
+        Returns:
+            Order response dict with order_id, status, fill details,
+            or None on failure.
+        """
+        if count <= 0:
+            logger.error(f"Invalid contract count: {count}")
+            return None
+
+        body: dict = {
+            "ticker": ticker,
+            "action": action,
+            "side": side,
+            "type": order_type,
+            "count": count,
+        }
+        if yes_price is not None:
+            body["yes_price"] = yes_price
+
+        result = self._request_with_body("POST", "/portfolio/orders", body=body)
+        if result:
+            order = result.get("order", result)
+            logger.info(
+                f"Order placed: {ticker} {action} {count}x {side} "
+                f"(type={order_type}) → status={order.get('status')}"
+            )
+        return result
+
+    def cancel_order(self, order_id: str) -> dict | None:
+        """Cancel an open order.
+
+        Args:
+            order_id: The order ID to cancel.
+
+        Returns:
+            Response dict or None on failure.
+        """
+        return self._request_with_body("DELETE", f"/portfolio/orders/{order_id}")
+
+    def get_fills(
+        self,
+        ticker: str | None = None,
+        order_id: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> list[dict]:
+        """Get fill history.
+
+        Args:
+            ticker: Filter by market ticker.
+            order_id: Filter by order ID.
+            limit: Max results.
+            cursor: Pagination cursor.
+
+        Returns:
+            List of fill dicts.
+        """
+        params: dict = {"limit": limit}
+        if ticker:
+            params["ticker"] = ticker
+        if order_id:
+            params["order_id"] = order_id
+        if cursor:
+            params["cursor"] = cursor
+
+        result = self._request("GET", "/portfolio/fills", params=params)
+        if result is None:
+            return []
+        return result.get("fills", [])
+
+    # ------------------------------------------------------------------
+    # Market endpoints
+    # ------------------------------------------------------------------
+
     def list_markets(
         self,
         series_ticker: str | None = None,

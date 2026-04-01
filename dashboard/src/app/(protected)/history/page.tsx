@@ -21,7 +21,7 @@ interface PaperBetWithRecommended extends PaperBet {
 }
 
 type HistoryTab = 'my_bets' | 'model_history' | 'dfs_entries'
-type DatePreset = '7d' | '30d' | '90d' | 'all'
+type DatePreset = '7d' | '30d' | '90d' | 'all' | 'lifetime'
 
 function getDefaultStartDate(): string {
   const d = new Date()
@@ -68,10 +68,11 @@ export default function HistoryPage() {
     const end = now.toISOString().split('T')[0]
     setEndDate(end)
     if (preset === 'all') {
-      // Cap "All" to last 6 months instead of all-time
       const d = new Date()
       d.setMonth(d.getMonth() - 6)
       setStartDate(d.toISOString().split('T')[0])
+    } else if (preset === 'lifetime') {
+      setStartDate('2020-01-01')
     } else {
       const days = preset === '7d' ? 7 : preset === '30d' ? 30 : 90
       const d = new Date()
@@ -211,13 +212,13 @@ export default function HistoryPage() {
             />
           </div>
           <div className="flex items-center gap-1">
-            {(['7d', '30d', '90d', 'all'] as DatePreset[]).map(preset => (
+            {(['7d', '30d', '90d', 'all', 'lifetime'] as DatePreset[]).map(preset => (
               <button
                 key={preset}
                 onClick={() => applyPreset(preset)}
                 className="px-2.5 py-1 rounded text-xs font-medium bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500 transition-colors"
               >
-                {preset === 'all' ? '6M' : preset.toUpperCase()}
+                {preset === 'all' ? '6M' : preset === 'lifetime' ? 'ALL' : preset.toUpperCase()}
               </button>
             ))}
           </div>

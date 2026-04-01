@@ -986,3 +986,167 @@ def send_kalshi_alert_sync(
     except Exception as e:
         logger.exception(f"Failed to send Kalshi alert synchronously: {e}")
         return False
+
+
+# =============================================================================
+# Kalshi Live Trading Alerts
+# =============================================================================
+
+
+def _build_kalshi_trade_placed_embed(trade: dict) -> dict:
+    """Build Discord embed for a live Kalshi trade placement."""
+    player = trade.get("player_name", "Unknown")
+    stat = str(trade.get("stat_type", "")).upper()
+    line = trade.get("line", "—")
+    side = trade.get("side", "yes").upper()
+    fill_price = trade.get("fill_price", 0)
+    contracts = trade.get("contracts", 0)
+    edge = trade.get("fee_adjusted_edge", 0)
+    total_cost = trade.get("total_cost", 0)
+    balance = trade.get("balance_after", 0)
+
+    return {
+        "title": "KALSHI TRADE PLACED",
+        "description": f"**{player}** {stat} {'OVER' if side == 'YES' else 'UNDER'} {line}",
+        "color": 0x2ECC71,  # Green
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {"name": "Side", "value": side, "inline": True},
+            {"name": "Price", "value": f"{fill_price}c", "inline": True},
+            {"name": "Contracts", "value": str(contracts), "inline": True},
+            {"name": "Cost", "value": f"${total_cost:.2f}", "inline": True},
+            {"name": "Edge", "value": f"{edge:.1%}", "inline": True},
+            {"name": "Balance", "value": f"${balance:.2f}", "inline": True},
+        ],
+        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+    }
+
+
+def _build_kalshi_trade_resolved_embed(trade: dict) -> dict:
+    """Build Discord embed for a resolved Kalshi live trade."""
+    player = trade.get("player_name", "Unknown")
+    stat = str(trade.get("stat_type", "")).upper()
+    line = trade.get("line", "—")
+    side = trade.get("side", "yes").upper()
+    actual = trade.get("actual_value")
+    pnl = trade.get("pnl", 0)
+    balance = trade.get("balance_after", 0)
+    won = trade.get("status") == "won"
+
+    return {
+        "title": f"KALSHI TRADE {'WON' if won else 'LOST'}",
+        "description": (
+            f"**{player}** {stat} {'OVER' if side == 'YES' else 'UNDER'} {line}"
+            + (f" — Actual: {actual}" if actual is not None else "")
+        ),
+        "color": 0x2ECC71 if won else 0xE74C3C,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {"name": "P&L", "value": f"${pnl:+.2f}", "inline": True},
+            {"name": "Balance", "value": f"${balance:.2f}", "inline": True},
+        ],
+        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+    }
+
+
+def _build_kalshi_circuit_breaker_embed(reason: str, details: dict) -> dict:
+    """Build Discord embed for a circuit breaker trigger."""
+    balance = details.get("balance", 0)
+    return {
+        "title": "CIRCUIT BREAKER TRIGGERED",
+        "description": reason,
+        "color": 0xE74C3C,  # Red
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {"name": "Balance", "value": f"${balance:.2f}", "inline": True},
+            {"name": "Action", "value": details.get("action", "Trading halted"), "inline": True},
+        ],
+        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+    }
+
+
+async def send_kalshi_trade_alert(
+    embed: dict,
+    channel_id: str | None = None,
+) -> bool:
+    """Send a Kalshi live trading alert embed to Discord."""
+    load_dotenv()
+
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping Kalshi trade alert")
+        return False
+
+    if not channel_id:
+        channel_id = (
+            os.getenv("DISCORD_CHANNEL_KALSHI_LIVE")
+            or os.getenv("DISCORD_CHANNEL_KALSHI")
+            or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+        )
+    if not channel_id:
+        logger.warning("No Kalshi live channel configured, skipping trade alert")
+        return False
+
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status in (200, 201):
+                    logger.info("Sent Kalshi live trade alert")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi trade alert: {e}")
+        return False
+
+
+def send_kalshi_trade_alert_sync(
+    alert_type: str,
+    data: dict,
+    channel_id: str | None = None,
+) -> bool:
+    """Send a Kalshi live trading alert synchronously.
+
+    Args:
+        alert_type: "placed", "resolved", or "circuit_breaker".
+        data: Dict with trade/breaker details.
+        channel_id: Optional Discord channel override.
+
+    Returns:
+        True if alert was sent successfully.
+    """
+    import asyncio
+
+    if alert_type == "placed":
+        embed = _build_kalshi_trade_placed_embed(data)
+    elif alert_type == "resolved":
+        embed = _build_kalshi_trade_resolved_embed(data)
+    elif alert_type == "circuit_breaker":
+        embed = _build_kalshi_circuit_breaker_embed(
+            data.get("reason", "Unknown"), data,
+        )
+    else:
+        logger.error(f"Unknown Kalshi alert type: {alert_type}")
+        return False
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                send_kalshi_trade_alert(embed, channel_id), loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(send_kalshi_trade_alert(embed, channel_id))
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi trade alert synchronously: {e}")
+        return False

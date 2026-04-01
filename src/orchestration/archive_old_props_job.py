@@ -2,7 +2,7 @@
 """
 Archive Old Props Job
 =====================
-Moves rows older than 30 days from raw_player_props_combined
+Moves rows older than 7 days from raw_player_props_combined
 to raw_player_props_archive in batches.
 
 Runs daily at 3 AM ET via the scheduler. Each run moves up to
@@ -40,7 +40,7 @@ logger = logging.getLogger("ArchiveOldPropsJob")
 
 BATCH_SIZE = 50_000
 MAX_ROWS_PER_RUN = 500_000
-DEFAULT_RETENTION_DAYS = 30
+DEFAULT_RETENTION_DAYS = 7
 
 
 def archive_batch(engine, retention_days: int, batch_size: int) -> int:

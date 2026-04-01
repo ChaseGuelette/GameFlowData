@@ -76,16 +76,15 @@ class MLBStatsScraper:
         resp.raise_for_status()
         data = resp.json()
 
-        # Get existing game IDs
+        # Get existing game IDs to track inserts vs updates
         existing = self._get_existing_game_ids()
 
         games_inserted = 0
+        games_updated = 0
         with self.engine.begin() as conn:
             for date_entry in data.get("dates", []):
                 for game in date_entry.get("games", []):
                     game_pk = game["gamePk"]
-                    if game_pk in existing:
-                        continue
 
                     status = game.get("status", {}).get("detailedState", "Unknown")
                     home = game.get("teams", {}).get("home", {})
@@ -132,9 +131,12 @@ class MLBStatsScraper:
                             "probable_pitcher_away_id": away_pitcher.get("id"),
                         },
                     )
-                    games_inserted += 1
+                    if game_pk in existing:
+                        games_updated += 1
+                    else:
+                        games_inserted += 1
 
-        logger.info(f"Inserted {games_inserted} new games for {season} season.")
+        logger.info(f"Schedule: {games_inserted} inserted, {games_updated} updated for {season} season.")
         return games_inserted
 
     # ------------------------------------------------------------------

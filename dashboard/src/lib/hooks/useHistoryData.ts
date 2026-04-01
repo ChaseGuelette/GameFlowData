@@ -11,7 +11,7 @@ interface PaperBetWithRecommended extends PaperBet {
   bookmaker?: string
 }
 
-const PAGE_SIZE = 100
+const PAGE_SIZE = 1000
 
 async function fetchModelHistory(
   config: { paperBetsTable: string; predictionsTable: string },
@@ -26,7 +26,6 @@ async function fetchModelHistory(
     .gte('game_date', startDate)
     .lte('game_date', endDate)
     .order('game_date', { ascending: false })
-    .limit(PAGE_SIZE)
 
   if (betsError) throw betsError
   const bets = betsData ?? []
@@ -84,7 +83,6 @@ async function fetchMyBets(
     .gte('game_date', startDate)
     .lte('game_date', endDate)
     .order('game_date', { ascending: false })
-    .limit(PAGE_SIZE)
 
   if (error) throw error
 
@@ -130,7 +128,6 @@ async function fetchDfsEntries(startDate: string, endDate: string) {
     .gte('entry_date', startDate)
     .lte('entry_date', endDate)
     .order('placed_at', { ascending: false })
-    .limit(PAGE_SIZE)
 
   if (entriesError) throw entriesError
   if (!entriesData?.length) return [] as UserDfsEntryWithLegs[]

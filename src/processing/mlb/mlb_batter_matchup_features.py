@@ -124,6 +124,7 @@ def compute_opposing_starter_bulk(engine: Engine, season: int) -> pd.DataFrame:
     """)
 
     with engine.connect() as conn:
+        conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
         df = pd.read_sql(query, conn, params={"season": season})
 
     logger.info("Computed opposing starter features for season %d: %d rows", season, len(df))
@@ -195,6 +196,7 @@ def compute_platoon_splits_bulk(engine: Engine, season: int) -> pd.DataFrame:
     """)
 
     with engine.connect() as conn:
+        conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
         df = pd.read_sql(query, conn, params={"season": season})
 
     logger.info("Computed platoon splits for season %d: %d rows", season, len(df))
