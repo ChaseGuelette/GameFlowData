@@ -26,15 +26,10 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
 
-from src.models.black_litterman import BlackLittermanBlender, BLConfig
-from src.models.mlb.mlb_stat_config import MLB_STATS
+from src.models.black_litterman import BlackLittermanBlender
+from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL_CONFIGS
 
 logger = logging.getLogger(__name__)
-
-# Optimal BL config (same approach as NBA)
-DEFAULT_BL_TAU = 0.5
-DEFAULT_BL_Z_MAX = 1.0
-DEFAULT_BL_EDGE_THRESHOLD = 0.08
 
 
 class MLBDailyPredictionRunner:
@@ -469,9 +464,7 @@ class MLBDailyPredictionRunner:
         # Mapping from suite stat key → prop line market key
         stat_to_market = {
             "batter_hits": "batter_hits",
-            "batter_total_bases": "batter_total_bases",
             "batter_rbis": "batter_rbis",
-            "batter_runs_scored": "batter_runs_scored",
         }
 
         # For each available batter stat, build player_games and batch predict
@@ -551,9 +544,7 @@ class MLBDailyPredictionRunner:
         """
         stat_to_market = {
             "batter_hits": "batter_hits",
-            "batter_total_bases": "batter_total_bases",
             "batter_rbis": "batter_rbis",
-            "batter_runs_scored": "batter_runs_scored",
         }
         market_keys = [stat_to_market[s] for s in available_stats if s in stat_to_market]
 
@@ -613,9 +604,7 @@ class MLBDailyPredictionRunner:
             "pitcher_strikeouts": "pitcher_strikeouts",
             "pitcher_outs": "pitcher_outs",
             "batter_hits": "batter_hits",
-            "batter_total_bases": "batter_total_bases",
             "batter_rbis": "batter_rbis",
-            "batter_runs_scored": "batter_runs_scored",
         }
 
         markets = [stat_to_market[s] for s in stats if s in stat_to_market]
@@ -783,8 +772,11 @@ class MLBDailyPredictionRunner:
             logger.warning("No MC samples for BL blending. Skipping.")
             return predictions_df
 
-        bl_config = BLConfig(tau=DEFAULT_BL_TAU, z_max=DEFAULT_BL_Z_MAX)
-        blender = BlackLittermanBlender(config=bl_config)
+        # Build per-stat blenders from optimized configs
+        stat_blenders: dict[str, BlackLittermanBlender] = {}
+        for stat_key, bl_cfg in STAT_BL_CONFIGS.items():
+            stat_blenders[stat_key] = BlackLittermanBlender(config=bl_cfg)
+        default_blender = BlackLittermanBlender(config=DEFAULT_BL_CONFIG)
 
         bl_computed = 0
         recommended_count = 0
@@ -798,6 +790,9 @@ class MLBDailyPredictionRunner:
 
             if samples is None or len(samples) == 0:
                 continue
+
+            stat = row["stat"]
+            blender = stat_blenders.get(stat, default_blender)
 
             bl_result = blender.blend_prediction(
                 samples=samples,
@@ -820,8 +815,11 @@ class MLBDailyPredictionRunner:
                 predictions_df.at[idx, "bl_over_edge"] = bl_over_edge
                 predictions_df.at[idx, "bl_under_edge"] = bl_under_edge
 
+                # Use per-stat edge threshold
+                stat_config = MLB_STATS.get(stat, {})
+                edge_threshold = stat_config.get("edge_threshold", 0.08)
                 max_bl_edge = max(bl_over_edge, bl_under_edge)
-                if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
+                if max_bl_edge >= edge_threshold:
                     predictions_df.at[idx, "is_recommended"] = True
                     recommended_count += 1
 
@@ -829,7 +827,7 @@ class MLBDailyPredictionRunner:
 
         logger.info(
             f"MLB BL blending: {bl_computed} computed, "
-            f"{recommended_count} recommended (edge >= {DEFAULT_BL_EDGE_THRESHOLD*100:.0f}%)"
+            f"{recommended_count} recommended (per-stat edge thresholds)"
         )
 
         return predictions_df

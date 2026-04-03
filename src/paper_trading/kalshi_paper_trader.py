@@ -22,7 +22,7 @@ import logging
 import math
 import os
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
@@ -440,9 +440,12 @@ class KalshiPaperTrader:
         # Build actuals lookup
         actuals = self._fetch_actuals(target_date, bets_df, sport)
 
-        results = {"won": 0, "lost": 0, "cancelled": 0,
+        results = {"won": 0, "lost": 0, "cancelled": 0, "skipped": 0,
                    "overflow_won": 0, "overflow_lost": 0, "overflow_cancelled": 0}
         updates = []
+
+        # Staleness threshold: cancel bets only if >48h old with no stats (DNP/postponed)
+        staleness_cutoff = date.today() - timedelta(days=2)
 
         for _, bet in bets_df.iterrows():
             player_id = int(bet["player_id"]) if pd.notna(bet["player_id"]) else None
@@ -458,9 +461,15 @@ class KalshiPaperTrader:
             actual = actuals.get((player_id, stat_type)) if player_id else None
 
             if actual is None:
-                status = f"{prefix}cancelled"
-                pnl = 0.0
-                results[f"{prefix}cancelled"] += 1
+                if target_date <= staleness_cutoff:
+                    # Stale bet (>48h) — likely DNP or postponed, cancel it
+                    status = f"{prefix}cancelled"
+                    pnl = 0.0
+                    results[f"{prefix}cancelled"] += 1
+                else:
+                    # No stats yet — leave as pending for next resolution attempt
+                    results["skipped"] += 1
+                    continue
             else:
                 yes_wins = actual >= line
 
@@ -538,7 +547,8 @@ class KalshiPaperTrader:
 
         msg = (
             f"Resolved {real_resolved} Kalshi bets for {target_date}: "
-            f"{results['won']}W {results['lost']}L {results['cancelled']}C"
+            f"{results['won']}W {results['lost']}L {results['cancelled']}C "
+            f"{results['skipped']}S(pending)"
         )
         if overflow_resolved > 0:
             overflow_pnl = sum(u["pnl"] for u in updates if u["is_overflow"])
@@ -682,13 +692,6 @@ class KalshiPaperTrader:
         by_date: dict[str, dict[str, Any]] = {}
 
         for game_date in pending_dates:
-            # Check if stats exist for this date
-            if not self._has_stats_for_date(game_date):
-                logger.info(f"Skipping {game_date}: no game stats available yet")
-                totals["dates_skipped"] += 1
-                by_date[str(game_date)] = {"skipped": True, "reason": "no_stats"}
-                continue
-
             # Determine sport from the bets
             sport_query = text("""
                 SELECT DISTINCT sport FROM kalshi_paper_bets
@@ -697,14 +700,25 @@ class KalshiPaperTrader:
             with self.engine.connect() as conn:
                 sports = [r[0] for r in conn.execute(sport_query, {"game_date": game_date}).fetchall()]
 
+            any_resolved = False
             for sport in sports:
+                # Check if sufficient stats exist per-sport
+                if not self._has_stats_for_date(game_date, sport=sport):
+                    logger.info(f"Skipping {game_date}/{sport}: insufficient stats (< threshold)")
+                    continue
+
                 result = self.resolve_bets(game_date, sport=sport)
+                any_resolved = True
                 totals["dates_processed"] += 1
                 totals["total_resolved"] += result["resolved"]
                 totals["total_won"] += result["won"]
                 totals["total_lost"] += result["lost"]
                 totals["total_cancelled"] += result["cancelled"]
                 by_date[str(game_date)] = result
+
+            if not any_resolved:
+                totals["dates_skipped"] += 1
+                by_date[str(game_date)] = {"skipped": True, "reason": "no_stats"}
 
         totals["by_date"] = by_date
         logger.info(
@@ -714,18 +728,39 @@ class KalshiPaperTrader:
         )
         return totals
 
-    def _has_stats_for_date(self, game_date: date) -> bool:
-        """Check if any game stats exist for the given date (NBA or MLB)."""
-        query = text("""
-            SELECT
-                (SELECT COUNT(*) FROM player_game_stats WHERE game_date = :game_date) +
-                (SELECT COUNT(*) FROM mlb_player_game_stats_pitching WHERE game_date = :game_date) +
-                (SELECT COUNT(*) FROM mlb_player_game_stats_batting WHERE game_date = :game_date)
-                as total_stats
-        """)
+    def _has_stats_for_date(self, game_date: date, sport: str | None = None) -> bool:
+        """Check if sufficient game stats exist for the given date.
+
+        Requires a minimum number of stat rows to prevent partial early-game
+        stats from triggering premature resolution of ALL bets.
+        """
+        MIN_STATS_THRESHOLD = 50  # At least 50 player stat rows
+
+        if sport == "mlb":
+            query = text("""
+                SELECT
+                    (SELECT COUNT(*) FROM mlb_player_game_stats_pitching WHERE game_date = :game_date) +
+                    (SELECT COUNT(*) FROM mlb_player_game_stats_batting WHERE game_date = :game_date)
+                    as total_stats
+            """)
+        elif sport == "nba":
+            query = text("""
+                SELECT COUNT(*) as total_stats
+                FROM player_game_stats WHERE game_date = :game_date
+            """)
+        else:
+            # No sport specified — check both
+            query = text("""
+                SELECT
+                    (SELECT COUNT(*) FROM player_game_stats WHERE game_date = :game_date) +
+                    (SELECT COUNT(*) FROM mlb_player_game_stats_pitching WHERE game_date = :game_date) +
+                    (SELECT COUNT(*) FROM mlb_player_game_stats_batting WHERE game_date = :game_date)
+                    as total_stats
+            """)
+
         with self.engine.connect() as conn:
             count = conn.execute(query, {"game_date": game_date}).scalar()
-        return (count or 0) > 0
+        return (count or 0) >= MIN_STATS_THRESHOLD
 
     # ------------------------------------------------------------------
     # Daily log

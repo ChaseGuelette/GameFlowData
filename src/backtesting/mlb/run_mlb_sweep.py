@@ -501,10 +501,16 @@ def _select_sharpest_line(lines: pd.DataFrame, player_id: int, market_key: str) 
 def compute_edges_for_config(
     predictions: list[DatePrediction],
     lines_df: pd.DataFrame | None,
-    bl_blender: BlackLittermanBlender | None,
+    bl_blender: BlackLittermanBlender | dict[str, BlackLittermanBlender] | None,
     actuals: dict[tuple[int, str], float] | None,
 ) -> list[dict]:
-    """Calculate edges for predictions using a specific BL config."""
+    """Calculate edges for predictions using a specific BL config.
+
+    bl_blender can be:
+    - None: no BL blending (baseline)
+    - BlackLittermanBlender: single blender for all stats
+    - dict[str, BlackLittermanBlender]: per-stat blenders
+    """
     results = []
 
     for pred in predictions:
@@ -551,9 +557,16 @@ def compute_edges_for_config(
         implied_over = raw_over / booksum
         implied_under = raw_under / booksum
 
+        # Resolve blender for this stat
+        stat_blender = None
+        if isinstance(bl_blender, dict):
+            stat_blender = bl_blender.get(pred.stat)
+        elif bl_blender is not None:
+            stat_blender = bl_blender
+
         # BL blending — overwrite probs so edges and bet decisions use posteriors
-        if bl_blender is not None:
-            bl_result = bl_blender.blend_prediction(
+        if stat_blender is not None:
+            bl_result = stat_blender.blend_prediction(
                 samples=samples,
                 line=line_val,
                 over_odds=over_odds,
@@ -573,7 +586,7 @@ def compute_edges_for_config(
         row["over_edge"] = over_prob - implied_over
         row["under_edge"] = under_prob - implied_under
 
-        if bl_blender is not None:
+        if stat_blender is not None:
             row["bl_over_prob"] = bl_result["posterior_over"]
             row["bl_under_prob"] = bl_result["posterior_under"]
             row["bl_over_edge"] = bl_result["posterior_over"] - implied_over
@@ -669,10 +682,111 @@ def run_single_config(
     bets_df = simulator.to_dataframe()
     metrics = MetricsCalculator().calculate(predictions_df, bets_df, starting_bankroll=starting_bankroll)
 
+
     elapsed = time.time() - t0
 
     return SweepResult(
         config=config,
+        metrics=metrics,
+        bets_df=bets_df,
+        predictions_df=predictions_df,
+        elapsed_seconds=elapsed,
+    )
+
+
+def run_combined_config(
+    stat_bl_configs: dict[str, BLConfig],
+    stat_edge_thresholds: dict[str, float],
+    game_dates: list[date],
+    date_predictions: dict[date, list[DatePrediction]],
+    date_lines: dict[date, pd.DataFrame],
+    date_actuals: dict[date, dict[tuple[int, str], float]],
+    starting_bankroll: float,
+    kelly_fraction: float = 0.125,
+    max_bet_pct: float | None = None,
+    flat_bet_size: float | None = None,
+) -> SweepResult:
+    """Run a combined backtest using per-stat BL configs and edge thresholds.
+
+    This is the 'promotion validation' mode — each stat uses its own optimal
+    BL and edge config from individual sweeps.
+    """
+    from src.config.stat_config import StatConfig, StatConfigSet
+
+    t0 = time.time()
+
+    # Build per-stat blenders
+    stat_blenders: dict[str, BlackLittermanBlender] = {}
+    for stat_key, bl_cfg in stat_bl_configs.items():
+        stat_blenders[stat_key] = BlackLittermanBlender(config=bl_cfg)
+
+    # Build StatConfigSet for per-stat edge thresholds
+    min_edge = min(stat_edge_thresholds.values()) if stat_edge_thresholds else 0.05
+    stat_config_set = StatConfigSet(global_edge_threshold=min_edge)
+    for stat_key, threshold in stat_edge_thresholds.items():
+        stat_config_set.configs[stat_key] = StatConfig(stat=stat_key, edge_threshold=threshold)
+
+    # Create simulator with per-stat edge thresholds
+    simulator = BetSimulator(
+        edge_threshold=min_edge,  # fallback
+        starting_bankroll=starting_bankroll,
+        kelly_fraction=kelly_fraction,
+        max_bet_pct=max_bet_pct,
+        flat_bet_size=flat_bet_size,
+        stat_config=stat_config_set,
+    )
+
+    all_prediction_rows = []
+    all_actuals_rows: list[dict] = []
+
+    for game_date in game_dates:
+        preds = date_predictions.get(game_date)
+        if not preds:
+            continue
+
+        lines = date_lines.get(game_date)
+        actuals = date_actuals.get(game_date, {})
+
+        day_rows = compute_edges_for_config(preds, lines, stat_blenders, actuals)
+        if not day_rows:
+            continue
+
+        day_df = pd.DataFrame(day_rows)
+        all_prediction_rows.append(day_df)
+
+        for row in day_rows:
+            if row.get("actual") is not None:
+                all_actuals_rows.append({
+                    "player_id": row["player_id"],
+                    "game_id": row["game_id"],
+                    "stat": row["stat"],
+                    "actual_value": row["actual"],
+                })
+
+        if all_actuals_rows:
+            simulator.resolve_bets(pd.DataFrame(all_actuals_rows))
+        simulator.evaluate_predictions(day_df, game_date)
+
+    if all_actuals_rows:
+        simulator.resolve_bets(pd.DataFrame(all_actuals_rows))
+
+    if all_prediction_rows:
+        predictions_df = pd.concat(all_prediction_rows, ignore_index=True)
+    else:
+        predictions_df = pd.DataFrame()
+
+    bets_df = simulator.to_dataframe()
+    metrics = MetricsCalculator().calculate(predictions_df, bets_df, starting_bankroll=starting_bankroll)
+
+    # Build a representative SweepConfig for labeling
+    label_config = SweepConfig(
+        tau=None, edge_threshold=min_edge, kelly_fraction=kelly_fraction,
+    )
+
+    elapsed = time.time() - t0
+
+    return SweepResult(
+        config=label_config,
         metrics=metrics,
         bets_df=bets_df,
         predictions_df=predictions_df,
@@ -917,7 +1031,8 @@ def main():
     # Model / data
     parser.add_argument("--model-dir", type=str, default="src/models/mlb/artifacts")
     parser.add_argument("--n-samples", type=int, default=5000, help="Monte Carlo samples")
-    parser.add_argument("--stats", nargs="+", default=["pitcher_strikeouts"])
+    parser.add_argument("--stats", nargs="+",
+                        default=["pitcher_strikeouts", "batter_hits", "batter_rbis"])
     parser.add_argument("--starting-bankroll", type=float, default=10000.0)
     parser.add_argument("--max-bet-pct", type=float, default=None)
     parser.add_argument("--flat-bet", type=float, default=None)
@@ -931,6 +1046,9 @@ def main():
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
+    parser.add_argument("--combined", action="store_true",
+                        help="Run combined backtest using per-stat optimal BL configs from mlb_stat_config.py. "
+                             "Ignores --tau, --edge, --z-max, --max-weight when set.")
 
     args = parser.parse_args()
 
@@ -990,22 +1108,33 @@ def main():
     phase01_time = time.time() - t_shared
     total_predictions = sum(len(preds) for preds in date_predictions.values())
 
-    # Sweep
-    logger.info("=" * 60)
-    logger.info(f"SWEEP: Running {len(configs)} configurations...")
-    logger.info("=" * 60)
-
     results: list[SweepResult] = []
-    for i, config in enumerate(configs, 1):
-        logger.info(f"Config {i}/{len(configs)}: {config.label}")
 
-        result = run_single_config(
-            config=config,
+    if args.combined:
+        # Combined mode: use per-stat optimal configs from mlb_stat_config.py
+        from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL_CONFIGS
+
+        logger.info("=" * 60)
+        logger.info("COMBINED MODE: Using per-stat optimal BL configs")
+        for stat_key, bl_cfg in STAT_BL_CONFIGS.items():
+            if stat_key in args.stats:
+                edge = MLB_STATS.get(stat_key, {}).get("edge_threshold", 0.08)
+                logger.info(f"  {stat_key}: tau={bl_cfg.tau}, z_max={bl_cfg.z_max}, mw={bl_cfg.max_weight}, edge={edge}")
+        logger.info("=" * 60)
+
+        # Build per-stat BL configs and edge thresholds for requested stats
+        stat_bl = {s: STAT_BL_CONFIGS.get(s, DEFAULT_BL_CONFIG) for s in args.stats}
+        stat_edges = {s: MLB_STATS.get(s, {}).get("edge_threshold", 0.08) for s in args.stats}
+
+        result = run_combined_config(
+            stat_bl_configs=stat_bl,
+            stat_edge_thresholds=stat_edges,
             game_dates=game_dates,
             date_predictions=date_predictions,
             date_lines=date_lines,
             date_actuals=date_actuals,
             starting_bankroll=args.starting_bankroll,
+            kelly_fraction=args.kelly[0],
             max_bet_pct=args.max_bet_pct,
             flat_bet_size=args.flat_bet,
         )
@@ -1017,6 +1146,33 @@ def main():
             f"ROI={m.roi:+.2%}, Profit=${m.total_profit:+,.0f}, "
             f"Sharpe={m.sharpe_ratio:.2f}, MaxDD={m.max_drawdown:.1%} ({result.elapsed_seconds:.1f}s)"
         )
+    else:
+        # Standard sweep mode
+        logger.info("=" * 60)
+        logger.info(f"SWEEP: Running {len(configs)} configurations...")
+        logger.info("=" * 60)
+
+        for i, config in enumerate(configs, 1):
+            logger.info(f"Config {i}/{len(configs)}: {config.label}")
+
+            result = run_single_config(
+                config=config,
+                game_dates=game_dates,
+                date_predictions=date_predictions,
+                date_lines=date_lines,
+                date_actuals=date_actuals,
+                starting_bankroll=args.starting_bankroll,
+                max_bet_pct=args.max_bet_pct,
+                flat_bet_size=args.flat_bet,
+            )
+
+            results.append(result)
+            m = result.metrics
+            logger.info(
+                f"  -> {m.total_bets} bets, HitRate={m.hit_rate:.1%}, "
+                f"ROI={m.roi:+.2%}, Profit=${m.total_profit:+,.0f}, "
+                f"Sharpe={m.sharpe_ratio:.2f}, MaxDD={m.max_drawdown:.1%} ({result.elapsed_seconds:.1f}s)"
+            )
 
     # Output
     print_comparison_table(

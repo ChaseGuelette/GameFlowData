@@ -221,9 +221,15 @@ class KalshiEdgeCalculator:
 
             stats["matched"] += 1
 
-            # Empirical CDF — ALWAYS use (samples > line).mean()
+            # Empirical CDF
+            # Kalshi uses integer lines with "N+" semantics (YES wins if actual >= N)
+            # Sportsbooks use half-integer lines (YES wins if actual > N)
+            # For integer lines: use >= ; for half-integer lines: use >
             line = market["line"]
-            model_prob_over = float((matched_samples > line).mean())
+            if line == int(line):
+                model_prob_over = float((matched_samples >= line).mean())
+            else:
+                model_prob_over = float((matched_samples > line).mean())
 
             # Kalshi implied from midpoint (removes spread)
             yes_bid = market.get("yes_bid", 0) or 0
