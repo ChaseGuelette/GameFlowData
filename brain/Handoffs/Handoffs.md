@@ -27,4 +27,7 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-019]] - Kalshi paper/live trader alignment, overflow bet tracking, Discord alerts with mode distinction
 - [[handoff-020]] - MLB model evaluation: HR dropped, hits backtested (+36.3% ROI), TB/runs retrained
 - [[handoff-021]] - Bot Tracker page + admin access control (admin_users, is_admin, RLS, middleware, /bot-tracker)
+- [[handoff-022]] - NBA calibration health check (HOLD, +9.8% ROI) + DFS bookmaker dashboard bug fix
+- [[handoff-023]] - Black-Litterman Kalshi blending + Railway pipeline debugging (env var fix, 607 markets matched)
+- [[handoff-024]] - MLB model promotion: 3 stats live (pitcher K, hits, RBIs), 3 dropped (TB, runs, HR), per-stat BL configs, dashboard updated
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

@@ -35,7 +35,7 @@
 ## Protected Routes (`(protected)/`)
 | Route | Purpose |
 |-------|---------|
-| `/dashboard` | Main predictions — PropCards, FilterTabs, date selector, edge/BL/sportsbook/direction filters, live scoreboard |
+| `/dashboard` | Main predictions — PropCards, FilterTabs, date selector, edge/BL/sportsbook/direction filters, live scoreboard. DFS-only predictions (PrizePicks, Fliff, etc.) filtered out at query level (Session 21). |
 | `/dfs` | DFS Edge Finder — 3 modes, 6 stats, platform filters, slip type selector |
 | `/history` | My Bets + Model History — status/direction filters, date range, per-stat win rates |
 | `/performance` | My Bets + Props + DFS tabs — bankroll chart, stat breakdown, KPI cards |

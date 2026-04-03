@@ -168,15 +168,13 @@ export const MLB_CONFIG: SportConfig = {
   dailyLogTable: 'mlb_paper_trading_daily_log',
   predictionSamplesTable: 'mlb_daily_prediction_samples',
   statTypes: [
-    'pitcher_strikeouts', 'batter_hits', 'batter_total_bases',
-    'batter_home_runs', 'batter_rbis', 'batter_runs_scored',
+    'pitcher_strikeouts', 'batter_hits', 'batter_rbis',
   ],
   filterTabs: [
     { value: 'all', label: 'All Props' },
     { value: 'pitcher_strikeouts', label: 'Strikeouts' },
     { value: 'batter_hits', label: 'Hits' },
-    { value: 'batter_total_bases', label: 'Total Bases' },
-    { value: 'batter_home_runs', label: 'Home Runs' },
+    { value: 'batter_rbis', label: 'RBIs' },
   ],
   comboStats: new Set<StatType>(),
   teams: MLB_TEAMS,

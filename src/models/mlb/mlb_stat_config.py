@@ -11,19 +11,19 @@ from src.models.black_litterman import BLConfig
 
 MLB_STATS: dict[str, dict] = {
     # Quantile regression stats (semi-continuous)
-    "pitcher_strikeouts": {"model_type": "quantile", "edge_threshold": 0.02},
+    "pitcher_strikeouts": {"model_type": "quantile", "edge_threshold": 0.05},
     "pitcher_outs": {"model_type": "quantile", "edge_threshold": 0.08},
     # Binomial stats (hits in at-bats — underdispersed)
     "batter_hits": {"model_type": "binomial", "edge_threshold": 0.08},
     # NegBin stats (discrete counts — overdispersed)
-    "batter_rbis": {"model_type": "negbin", "edge_threshold": 0.08},
+    "batter_rbis": {"model_type": "negbin", "edge_threshold": 0.12},
 }
 
 # Per-stat optimal BL configs from backtest sweeps.
 # Used by daily runner and backtest sweep for per-stat blending.
 STAT_BL_CONFIGS: dict[str, BLConfig] = {
-    "pitcher_strikeouts": BLConfig(tau=0.9, z_max=0.75, max_weight=0.65),
-    "batter_hits": BLConfig(tau=0.75, z_max=1.0, max_weight=0.65),
+    "pitcher_strikeouts": BLConfig(tau=0.9, z_max=0.25, max_weight=0.80),
+    "batter_hits": BLConfig(tau=0.75, z_max=1.0, max_weight=0.80),
     "batter_rbis": BLConfig(tau=0.9, z_max=0.25, max_weight=0.80),
 }
 

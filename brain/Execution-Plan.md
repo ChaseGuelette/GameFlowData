@@ -14,13 +14,13 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 |------|------|--------|--------------|---------|
 | 1.1 | Finish MLB batter pipeline | completed | None | NLL feature selection, PMF calibration, Optuna tuner built. Pipeline ready for training. |
 | 1.2 | Train pitcher K model | completed | Data backfills | Artifact exists (`run_20260313_195757`), backtested with good results. |
-| 1.3 | Train batter hits/total_bases models | in_progress | 1.1 | `batter_runs_scored` and `batter_total_bases` retrained clean (Session 19). `batter_hits` backtested (+36.3% ROI). `batter_home_runs` DROPPED (no edge). Remaining: promote hits config, run TB/runs backtest sweeps. |
+| 1.3 | Train batter hits/total_bases models | completed | 1.1 | `batter_hits` promoted (tau=0.75, z_max=1.0, mw=0.8, edge=8%, +33.2% ROI). `batter_rbis` promoted (tau=0.9, z_max=0.25, mw=0.8, edge=12%, +44.2% ROI). DROPPED: `batter_total_bases` (0/540 profitable), `batter_runs_scored` (trivial edge), `batter_home_runs` (no edge). |
 | 1.4 | Build MLB daily runner | completed | 1.2, 1.3 | `src/models/mlb/mlb_daily_runner.py` is production-ready — game discovery, pitcher K predictions, batter predictions scaffolded, prop lines, edge calc, paper bets. Mirrors NBA architecture. |
 | 1.5 | Build MLB paper trading | completed | 1.4 | `src/paper_trading/mlb_paper_trader.py` — full bet selection, placement, and resolution. |
-| 1.6 | Run MLB backtests | in_progress | 1.2, 1.3 | Pitcher K backtested (tau=0.9 z_max=0.75 mw=0.65). Batter hits backtested (tau=0.75 z_max=1.0 mw=0.65 edge=0.08, +36.3% ROI). HR dropped (no edge). Remaining: total_bases + runs_scored sweeps with clean retrained models. |
+| 1.6 | Run MLB backtests | completed | 1.2, 1.3 | All 3 stats backtested individually + combined (Jul 1-Sep 28, 1,064 bets, +21.25% ROI, 1.19 Sharpe). Per-stat optimal BL configs promoted. TB/runs/HR confirmed non-viable and dropped. |
 | 1.7 | Add MLB to Railway scheduler | completed | 1.4, 1.6 | MLB jobs in `scheduler.py`: stats at 10/10:30 AM ET, inference at 1:30/6:30 PM ET. Month gate removed. Kalshi split into NBA/MLB separate refresh jobs. Supavisor timeout fix deployed (Session 15). |
 
-**Done when**: MLB pitcher K and batter models are backtested with >5% ROI and running daily on Railway.
+**Done when**: MLB pitcher K and batter models are backtested with >5% ROI and running daily on Railway. ✅ **COMPLETE** — 3 models promoted, combined +21.25% ROI, dashboard updated, frontend deployed.
 
 ---
 
@@ -74,8 +74,8 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 
 | Step | Task | Status | Dependencies | Details |
 |------|------|--------|--------------|---------|
-| 4.1 | Monitor ROI weekly | in_progress | None | 14-day rolling ROI > 8% threshold |
-| 4.2 | Run calibration checks | in_progress | None | ECE < 0.06, quantile gaps < 3% |
+| 4.1 | Monitor ROI weekly | in_progress | None | 14-day rolling ROI > 8% threshold. Apr 3 check: +9.8% ROI (65 bets), HOLD. Next check Apr 13. |
+| 4.2 | Run calibration checks | in_progress | None | ECE < 0.06, quantile gaps < 3%. Apr 3: bias improved all stats, PTS UNDER flagged (36.4% win), 15%+ edge bucket underperforming. |
 | 4.3 | Clean old model backups | not_started | Model validated in live trading | Remove `production_old_20260210/`, `production_old_20260323/` |
 | 4.4 | Backtest combo validation | not_started | None | Short backtest with PRA/PR/PA/RA |
 | 4.5 | Tune drift threshold | not_started | Production monitoring | Increase from 1.0 if >30 players/cycle |
@@ -127,7 +127,7 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 7.1 | Kalshi API client + utils | completed | None | RSA-PSS SHA256 auth, rate limiting, fee calculators, stat mapping. `src/scrapers/kalshi/` |
 | 7.2 | Market scraper + player linking | completed | 7.1 | Ticker parsing, title fallback regex, SequenceMatcher fuzzy match (0.85), mock/dry-run modes |
 | 7.3 | Database schema | completed | None | `kalshi_markets`, `kalshi_orderbook_snapshots` tables, RLS, `get_kalshi_edges` RPC |
-| 7.4 | Edge calculator | completed | 7.1, 7.3 | Empirical CDF, fee-adjusted edges (maker/taker), sportsbook comparison. `src/models/kalshi_edge.py` |
+| 7.4 | Edge calculator | completed | 7.1, 7.3 | Empirical CDF, fee-adjusted edges (maker/taker), sportsbook comparison, **Black-Litterman blending** (tau=0.5, z_max=1.0, sportsbook devigged prior). `src/models/kalshi_edge.py` |
 | 7.5 | Scheduler integration | completed | 7.2, 7.4 | `kalshi_refresh_job.py`, every 10 min 11AM-11PM ET, silent on success |
 | 7.6 | Dashboard prediction markets page | completed | 7.3, 7.4 | `/prediction-markets` route, sortable/filterable table, detail modal, countdown, fee breakdown |
 | 7.7 | Discord alerts | completed | 7.4 | Violet embed, top 5 edges, `send_kalshi_alert_sync()`, `DISCORD_CHANNEL_KALSHI` fallback |

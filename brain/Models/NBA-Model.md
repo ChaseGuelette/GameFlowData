@@ -8,10 +8,21 @@
 - **Architecture**: XGBoost quantile regression (Q10/Q25/Q50/Q75/Q90) with per-quantile feature selection and isotonic calibration
 - **Stats**: PTS, REB, AST + combo markets (PRA, PR, PA, RA)
 - **Simulation**: 10,000 Gaussian copula Monte Carlo samples per player (PTS rho=0.314, AST rho=0.176)
-- **Blending**: Black-Litterman log-odds with tau=0.09, linear ramp confidence via z-score
+- **Blending**: Black-Litterman log-odds with tau=0.09, linear ramp confidence via z-score (sportsbook). Kalshi uses tau=0.5, z_max=1.0 (same as Model Picks)
 - **Calibration offsets**: NONE deployed (4x confirmed to hurt ROI)
 
-## Latest Backtest (Mar 18-23, 2026)
+## Latest Calibration Check (Apr 3, 2026 — 11 days old, HOLD)
+| Metric | Value |
+|--------|-------|
+| 14-day ROI | +9.8% (65 bets, $23K PnL) |
+| Win rate | 64.6% |
+| AST UNDER ROI | +31.9% (21 bets, 81% win) |
+| PTS UNDER ROI | -47.9% (11 bets, 36.4% win — flagged) |
+| 15%+ edge bucket | 55.6% actual vs ~70% expected — flagged |
+| Bias PTS/REB/AST | +0.5% / +1.4% / -6.7% (all improved vs Mar 31) |
+| Next check | ~Apr 13 (model will be 21 days / 3-week limit) |
+
+## Previous Backtest (Mar 18-23, 2026)
 | Metric | Value |
 |--------|-------|
 | Overall hit rate | 63% |

@@ -61,8 +61,9 @@ export default function DashboardPage() {
   const MAX_SLATE_PICKS = 5
 
   // Optimal model config (from backtest sweep)
-  const MODEL_PICKS_EDGE = 0.09
-  const MODEL_PICKS_TAU = 0.50
+  // NBA: single global config. MLB: per-stat configs handled server-side via is_recommended.
+  const MODEL_PICKS_EDGE = sport === 'mlb' ? 0.05 : 0.09
+  const MODEL_PICKS_TAU = sport === 'mlb' ? null : 0.50
 
   // Handle Model Picks toggle - auto-set optimal config
   const handleModelPicksToggle = (enabled: boolean) => {
@@ -199,6 +200,7 @@ export default function DashboardPage() {
       .from(config.predictionsTable)
       .select('*')
       .eq('prediction_date', date)
+      .in('stat', config.statTypes)
       .not('line', 'is', null)
       .not('bookmaker', 'in', `(${DFS_BOOKMAKERS.join(',')})`)
       .order('is_recommended', { ascending: false, nullsFirst: false })
@@ -492,7 +494,7 @@ export default function DashboardPage() {
       if (directionFilter === 'over' && !isOver) return false
       if (directionFilter === 'under' && isOver) return false
     }
-    // Skip edge threshold for Model Picks (is_recommended already guarantees BL edge >= 9%)
+    // Skip edge threshold for Model Picks (is_recommended already guarantees BL edge >= per-stat threshold)
     if (showModelPicks) return true
     return Math.max(p.over_edge, p.under_edge) >= edgeThreshold
   })
@@ -519,13 +521,16 @@ export default function DashboardPage() {
             {formatDate(selectedDate)} • {sortedPredictions.length} {showModelPicks ? 'recommended' : 'picks'}
             {showModelPicks && (
               <span className="text-green-400 ml-2 inline-flex items-center gap-1">
-                BL Edge ≥9%
+                {sport === 'mlb' ? 'Per-Stat BL Edge' : 'BL Edge ≥9%'}
                 <span className="relative group cursor-help">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 hover:text-slate-200 transition-colors">
                     <path fillRule="evenodd" d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM8.94 6.94a.75.75 0 1 1-1.061-1.061 3 3 0 1 1 2.871 5.026v.345a.75.75 0 0 1-1.5 0v-.5c0-.72.57-1.172 1.081-1.287A1.5 1.5 0 1 0 8.94 6.94ZM10 15a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
                   </svg>
                   <span className="invisible group-hover:visible absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 rounded-lg bg-slate-800 border border-slate-600 text-xs text-slate-300 leading-relaxed shadow-xl z-50">
-                    Edges shown here are market-anchored (Black-Litterman blended). The model&apos;s raw probability is blended with the sportsbook&apos;s implied probability, producing more conservative but higher-conviction picks. Raw edges are higher — switch to All Bets to see them.
+                    {sport === 'mlb'
+                      ? 'Each stat uses its own optimal edge threshold (K: 5%, Hits: 8%, RBIs: 12%). Edges are market-anchored via Black-Litterman blending with per-stat configurations.'
+                      : 'Edges shown here are market-anchored (Black-Litterman blended). The model\u0027s raw probability is blended with the sportsbook\u0027s implied probability, producing more conservative but higher-conviction picks. Raw edges are higher — switch to All Bets to see them.'
+                    }
                   </span>
                 </span>
               </span>
