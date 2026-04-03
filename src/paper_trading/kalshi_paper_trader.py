@@ -178,7 +178,8 @@ class KalshiPaperTrader:
                 ticker, sport, player_id, player_name, stat_type, line,
                 yes_price, model_prob, kalshi_implied,
                 raw_edge, taker_fee_adjusted_edge,
-                volume, bid_ask_spread, market_status
+                volume, bid_ask_spread, market_status,
+                bl_model_prob, bl_edge
             FROM kalshi_markets
             WHERE sport = :sport
               AND snapshot_time::date = :target_date
@@ -243,9 +244,14 @@ class KalshiPaperTrader:
                 continue
 
             yes_price = int(row["yes_price"])
-            model_prob = float(row["model_prob"])
 
-            # Calculate taker fee-adjusted edges for both sides
+            # Use BL-blended probability if available, else fall back to raw
+            if pd.notna(row.get("bl_model_prob")):
+                model_prob = float(row["bl_model_prob"])
+            else:
+                model_prob = float(row["model_prob"])
+
+            # Calculate taker fee-adjusted edges from (BL-blended) prob
             yes_edge = fee_adjusted_edge(model_prob, yes_price, is_yes=True, is_maker=False)
             no_edge = fee_adjusted_edge(model_prob, yes_price, is_yes=False, is_maker=False)
 

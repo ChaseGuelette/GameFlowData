@@ -26,6 +26,7 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.db.client import get_engine
+from src.models.black_litterman import BLConfig, BlackLittermanBlender
 from src.scrapers.kalshi.kalshi_utils import (
     COMBINED_STATS,
     fee_adjusted_edge,
@@ -150,6 +151,47 @@ class KalshiEdgeCalculator:
         except Exception:
             return None
 
+    def _find_sportsbook_odds(
+        self, player_id: int, stat_type: str, target_date: date, sport: str
+    ) -> tuple[float, float, float] | None:
+        """Find sportsbook over/under odds for BL market prior.
+
+        Returns (over_odds, under_odds, sportsbook_line) or None.
+        """
+        if sport == "nba":
+            query = text("""
+                SELECT over_odds, under_odds, prop_line
+                FROM daily_predictions
+                WHERE player_id = :pid
+                  AND stat = :stat
+                  AND prediction_date = :target_date
+                  AND over_odds IS NOT NULL
+                  AND under_odds IS NOT NULL
+                LIMIT 1
+            """)
+        else:
+            query = text("""
+                SELECT over_odds, under_odds, line
+                FROM mlb_daily_predictions
+                WHERE player_id = :pid
+                  AND stat = :stat
+                  AND prediction_date = :target_date
+                  AND over_odds IS NOT NULL
+                  AND under_odds IS NOT NULL
+                LIMIT 1
+            """)
+
+        try:
+            with self.engine.connect() as conn:
+                row = conn.execute(query, {
+                    "pid": player_id, "stat": stat_type, "target_date": target_date,
+                }).fetchone()
+            if row:
+                return (float(row[0]), float(row[1]), float(row[2]))
+            return None
+        except Exception:
+            return None
+
     def compute_edges(self, target_date: date, sport: str = "nba") -> dict:
         """Compute edges for all Kalshi markets on a date.
 
@@ -182,6 +224,10 @@ class KalshiEdgeCalculator:
         player_samples: dict[int, list[tuple]] = {}
         for (pid, gid, stat), samples in samples_dict.items():
             player_samples.setdefault(pid, []).append((gid, stat, samples))
+
+        # BL blender — same config as proven NBA Model Picks (tau=0.5, z_max=1.0)
+        bl_config = BLConfig(tau=0.5, z_max=1.0)
+        blender = BlackLittermanBlender(config=bl_config)
 
         updates = []
 
@@ -264,6 +310,28 @@ class KalshiEdgeCalculator:
             sb_line = self._find_sportsbook_consensus(pid, market["stat_type"], target_date, sport)
             line_diff = (line - sb_line) if sb_line is not None else None
 
+            # --- Black-Litterman blending ---
+            # 1. Get market prior (sportsbook devigged, or Kalshi fallback)
+            sb_odds = self._find_sportsbook_odds(pid, market_stat, target_date, sport)
+            if sb_odds:
+                over_odds, under_odds, _sb_line = sb_odds
+                market_over, _market_under = blender.devig(over_odds, under_odds)
+            else:
+                market_over = kalshi_implied
+
+            # 2. model_prob_over already computed with correct >= logic above
+
+            # 3. Confidence from MC samples
+            bl_confidence = blender.compute_confidence(matched_samples, line)
+
+            # 4. Blend in log-odds space
+            bl_prob_over = blender.blend(model_prob_over, market_over, bl_confidence)
+
+            # 5. BL fee-adjusted edge (best side, taker)
+            bl_taker_edge_yes = fee_adjusted_edge(bl_prob_over, yes_price, is_yes=True, is_maker=False)
+            bl_taker_edge_no = fee_adjusted_edge(bl_prob_over, yes_price, is_yes=False, is_maker=False)
+            bl_best_edge = max(bl_taker_edge_yes, bl_taker_edge_no)
+
             updates.append({
                 "id": market["id"],
                 "model_prob": model_prob_over,
@@ -273,6 +341,9 @@ class KalshiEdgeCalculator:
                 "taker_fee_adjusted_edge": best_taker_edge,
                 "sportsbook_consensus_line": sb_line,
                 "line_vs_sportsbook": line_diff,
+                "bl_model_prob": round(bl_prob_over, 6),
+                "bl_edge": round(bl_best_edge, 6),
+                "bl_confidence": round(bl_confidence, 6),
             })
 
         # Batch update
@@ -285,7 +356,10 @@ class KalshiEdgeCalculator:
                     maker_fee_adjusted_edge = :maker_fee_adjusted_edge,
                     taker_fee_adjusted_edge = :taker_fee_adjusted_edge,
                     sportsbook_consensus_line = :sportsbook_consensus_line,
-                    line_vs_sportsbook = :line_vs_sportsbook
+                    line_vs_sportsbook = :line_vs_sportsbook,
+                    bl_model_prob = :bl_model_prob,
+                    bl_edge = :bl_edge,
+                    bl_confidence = :bl_confidence
                 WHERE id = :id
             """)
 
