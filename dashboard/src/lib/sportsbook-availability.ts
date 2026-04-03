@@ -2,6 +2,10 @@
 // Offshore books (pinnacle, novig, prophetx, bovada) excluded from all states
 // fliff excluded (sweepstakes platform, not a regulated sportsbook)
 
+// DFS platforms are not traditional sportsbooks — predictions sourced only from these
+// should not appear on the dashboard since users can't place real bets there
+export const DFS_BOOKMAKERS = ['prizepicks', 'underdog', 'pick6', 'betr_us_dfs', 'fliff'] as const
+
 export const US_STATES: { value: string; label: string }[] = [
   { value: '', label: 'All States' },
   { value: 'AZ', label: 'Arizona' },

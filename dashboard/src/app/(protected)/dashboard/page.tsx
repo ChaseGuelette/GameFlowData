@@ -11,7 +11,7 @@ import { TonightsGames, type GameInfo } from '@/components/predictions/TonightsG
 import { type Prediction } from '@/types/predictions'
 import { getToday, formatDate, calculateBLConfidence, blendProbability, getGameStatus } from '@/lib/utils'
 import { useGameStatus } from '@/lib/hooks/useGameStatus'
-import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS } from '@/lib/sportsbook-availability'
+import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS, DFS_BOOKMAKERS } from '@/lib/sportsbook-availability'
 import { BookFilterDropdown } from '@/components/predictions/BookFilterDropdown'
 import { STAT_TO_MARKET } from '@/types/dfs'
 import { useUserBets, placeBetCustom } from '@/lib/hooks/useUserBets'
@@ -200,6 +200,7 @@ export default function DashboardPage() {
       .select('*')
       .eq('prediction_date', date)
       .not('line', 'is', null)
+      .not('bookmaker', 'in', `(${DFS_BOOKMAKERS.join(',')})`)
       .order('is_recommended', { ascending: false, nullsFirst: false })
       .order('over_edge', { ascending: false })
       .limit(3000)

@@ -9,7 +9,7 @@ import { QuantileSummary } from './QuantileSummary'
 import { type Prediction, type PlayerGameStats, type BookmakerLine, type BetContext, STAT_LABELS } from '@/types/predictions'
 import { formatProb } from '@/lib/utils'
 import { generateInsights } from '@/lib/insights'
-import { getAllowedBookmakers } from '@/lib/sportsbook-availability'
+import { getAllowedBookmakers, DFS_BOOKMAKERS } from '@/lib/sportsbook-availability'
 import { estimateUnderProb, americanToImpliedProb, formatBookmaker } from '@/lib/dfs-utils'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
 import { buildBetContext } from '@/lib/buildBetContext'
@@ -83,9 +83,6 @@ const MLB_STAT_HISTORY: Record<string, { table: string; column: string }> = {
   batter_rbis: { table: 'mlb_player_game_stats_batting', column: 'rbi' },
   batter_runs_scored: { table: 'mlb_player_game_stats_batting', column: 'r' },
 }
-
-// DFS platforms to exclude from main dashboard sportsbook lines
-const DFS_BOOKMAKERS = ['prizepicks', 'underdog', 'pick6', 'betr_us_dfs']
 
 // Format odds for display
 const formatOdds = (odds: number): string => {

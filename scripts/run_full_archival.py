@@ -20,10 +20,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
+
 load_dotenv(PROJECT_ROOT / ".env")
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text  # noqa: E402
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 BATCH_SIZE = 50_000
@@ -98,7 +99,7 @@ while True:
     rate = total_moved / elapsed if elapsed > 0 else 0
 
     if moved == 0:
-        print(f"\nDone! No more rows to archive.")
+        print("\nDone! No more rows to archive.")
         break
 
     print(f"Batch {batch_num}: {moved:,} rows in {batch_dur:.1f}s | Total: {total_moved:,} | Rate: {rate:,.0f} rows/s | Elapsed: {elapsed:.0f}s")

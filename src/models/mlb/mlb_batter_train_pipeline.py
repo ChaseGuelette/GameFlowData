@@ -483,7 +483,7 @@ class MLBBatterTrainingOrchestrator:
         from scipy.stats import nbinom as _nbinom
 
         from src.models.mlb.mlb_batter_feature_store import BATTER_STAT_MARKET_KEY
-        from src.models.negbin_model import NegBinConfig, NegBinModel
+        from src.models.negbin_model import NegBinModel
 
         model_name = f"batter_{self.stat}"
         use_exposure = self.stat in self.EXPOSURE_STATS
