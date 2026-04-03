@@ -472,7 +472,6 @@ class MLBDailyPredictionRunner:
             "batter_total_bases": "batter_total_bases",
             "batter_rbis": "batter_rbis",
             "batter_runs_scored": "batter_runs_scored",
-            "batter_home_runs": "batter_home_runs",
         }
 
         # For each available batter stat, build player_games and batch predict
@@ -555,7 +554,6 @@ class MLBDailyPredictionRunner:
             "batter_total_bases": "batter_total_bases",
             "batter_rbis": "batter_rbis",
             "batter_runs_scored": "batter_runs_scored",
-            "batter_home_runs": "batter_home_runs",
         }
         market_keys = [stat_to_market[s] for s in available_stats if s in stat_to_market]
 
@@ -618,7 +616,6 @@ class MLBDailyPredictionRunner:
             "batter_total_bases": "batter_total_bases",
             "batter_rbis": "batter_rbis",
             "batter_runs_scored": "batter_runs_scored",
-            "batter_home_runs": "batter_home_runs",
         }
 
         markets = [stat_to_market[s] for s in stats if s in stat_to_market]

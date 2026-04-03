@@ -135,6 +135,7 @@ class NegBinHyperparameterTuner:
         X: pd.DataFrame,
         y: pd.Series,
         feature_names: list[str] | None = None,
+        exposure: np.ndarray | None = None,
     ) -> NegBinConfig:
         """Run hyperparameter tuning study.
 
@@ -142,6 +143,9 @@ class NegBinHyperparameterTuner:
             X: Feature DataFrame (training + val combined).
             y: Integer counts >= 0.
             feature_names: Subset of columns to use (default: all).
+            exposure: Optional per-sample exposure (e.g. projected at-bats).
+                When provided, ``log(exposure)`` is added to the r-component
+                base_margin for all trials.
 
         Returns:
             NegBinConfig with best hyperparameters.
@@ -152,11 +156,24 @@ class NegBinHyperparameterTuner:
         logger.info("Starting NegBin hyperparameter tuning: %d trials", self.n_trials)
         logger.info("Features: %d, Samples: %s", len(feature_names), f"{len(X):,}")
 
+        if exposure is not None:
+            exposure = np.asarray(exposure, dtype=float)
+            exposure = np.clip(exposure, 1.0, None)
+            logger.info("Using exposure offset for tuning: mean=%.2f", exposure.mean())
+
         # Temporal train/val split
-        X_train, X_val, y_train, y_val = train_test_split(
-            X[feature_names].fillna(0), y_np,
-            test_size=self.val_fraction, shuffle=False,
-        )
+        if exposure is not None:
+            X_train, X_val, y_train, y_val, exp_train, exp_val = train_test_split(
+                X[feature_names].fillna(0), y_np, exposure,
+                test_size=self.val_fraction, shuffle=False,
+            )
+        else:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X[feature_names].fillna(0), y_np,
+                test_size=self.val_fraction, shuffle=False,
+            )
+            exp_train = exp_val = None
+
         logger.info("Train: %s, Val: %s", f"{len(X_train):,}", f"{len(X_val):,}")
 
         # Fit global MLE once (shared across all trials for base_margin)
@@ -172,10 +189,15 @@ class NegBinHyperparameterTuner:
         dtrain = xgb.DMatrix(X_train, label=y_train.astype(float))
         dval = xgb.DMatrix(X_val, label=y_val.astype(float))
 
-        base_margin_train = np.tile([raw_r_init, raw_p_init], (len(X_train), 1)).reshape(-1)
-        base_margin_val = np.tile([raw_r_init, raw_p_init], (len(X_val), 1)).reshape(-1)
-        dtrain.set_base_margin(base_margin_train)
-        dval.set_base_margin(base_margin_val)
+        # Per-sample base_margin with optional exposure offset
+        def _build_base_margin(n: int, exp_arr: np.ndarray | None) -> np.ndarray:
+            bm = np.tile([raw_r_init, raw_p_init], (n, 1))
+            if exp_arr is not None:
+                bm[:, 0] += np.log(exp_arr)
+            return bm.reshape(-1)
+
+        dtrain.set_base_margin(_build_base_margin(len(X_train), exp_train))
+        dval.set_base_margin(_build_base_margin(len(X_val), exp_val))
 
         # Create objective
         def objective(trial: optuna.Trial) -> float:

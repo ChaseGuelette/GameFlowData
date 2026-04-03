@@ -12,3 +12,4 @@ Dashboard features, UX decisions, and frontend architecture. The Next.js 16 dash
 - [[Mobile-UX]] - Mobile optimization status and known issues
 - [[Kalshi-Integration-Design]] - Kalshi prediction markets page (implemented Session 8)
 - [[DFS-Slip-Builder]] - User DFS slip builder with parlay Kelly sizing and entry tracking (Session 9)
+- [[Bot-Tracker]] - Admin-only Kalshi bot dashboard with live/paper trades, P&L, circuit breaker status (Session 20)

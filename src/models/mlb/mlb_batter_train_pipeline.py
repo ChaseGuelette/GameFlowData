@@ -475,14 +475,18 @@ class MLBBatterTrainingOrchestrator:
     # NegBin pipeline (TB, RBI, runs)
     # ------------------------------------------------------------------
 
+    # Stats that use projected_ab as a structural exposure/offset term
+    EXPOSURE_STATS = {"total_bases", "runs_scored"}
+
     def _run_negbin_pipeline(self, train_df, cal_df, train_seasons, cal_season, cal_end_date):
         """Train NegBin model for count stats (TB, RBI, runs). Hits use binomial instead."""
         from scipy.stats import nbinom as _nbinom
 
         from src.models.mlb.mlb_batter_feature_store import BATTER_STAT_MARKET_KEY
-        from src.models.negbin_model import NegBinModel
+        from src.models.negbin_model import NegBinConfig, NegBinModel
 
         model_name = f"batter_{self.stat}"
+        use_exposure = self.stat in self.EXPOSURE_STATS
 
         # Step 3: Feature selection — NLL-based (single feature set for NegBin)
         logger.info("Step 3: Running NLL-based feature selection for NegBin model...")
@@ -490,6 +494,11 @@ class MLBBatterTrainingOrchestrator:
             "game_id", "player_id", "game_date", "season", "team_id",
             "opp_team_id", "actual", "player_name", "actual_at_bats",
         }
+        # If using exposure, exclude projected_ab from features (it's structural, not learned)
+        if use_exposure:
+            excluded.add("projected_ab")
+            logger.info("Using projected_ab as exposure/offset (excluded from features)")
+
         candidates = [
             c for c in train_df.columns
             if c not in excluded and train_df[c].dtype in ("float64", "float32", "int64", "int32")
@@ -501,13 +510,28 @@ class MLBBatterTrainingOrchestrator:
         selected_features = selector.select_features_nll(
             valid_df, "actual", candidates, model_name=f"Batter {self.stat}"
         )
+        # Double-check projected_ab is not in the selected features
+        if use_exposure:
+            selected_features = [f for f in selected_features if f != "projected_ab"]
         logger.info("NegBin feature set: %d features (NLL-based)", len(selected_features))
 
         X_train = valid_df[selected_features].fillna(0)
         y_train = valid_df["actual"]
 
+        # Extract exposure array if applicable
+        exposure_train = None
+        if use_exposure:
+            exposure_train = valid_df["projected_ab"].values.copy()
+            exposure_train = np.clip(exposure_train, 1.0, None)
+            logger.info("Exposure (train): mean=%.2f, min=%.2f, max=%.2f",
+                        exposure_train.mean(), exposure_train.min(), exposure_train.max())
+
         # Step 4: Hyperparameter tuning (optional)
-        negbin_config = self._resolve_negbin_config(X_train, y_train)
+        negbin_config = self._resolve_negbin_config(X_train, y_train, exposure=exposure_train)
+
+        # Set exposure_col in config so it's persisted
+        if use_exposure:
+            negbin_config.exposure_col = "projected_ab"
 
         # Step 5: Train
         display_name = model_name.upper().replace("_", " ")
@@ -516,7 +540,7 @@ class MLBBatterTrainingOrchestrator:
         print("=" * 60)
 
         model = NegBinModel(config=negbin_config, model_name=model_name)
-        fit_info = model.fit(X_train, y_train)
+        fit_info = model.fit(X_train, y_train, exposure=exposure_train)
         logger.info("Fit info: %s", fit_info)
 
         # Step 6-7: PMF-based calibration (vectorized, ~5 sec)
@@ -525,7 +549,12 @@ class MLBBatterTrainingOrchestrator:
         X_cal = cal_valid[selected_features].fillna(0)
         y_cal = cal_valid["actual"].values
 
-        mu, alpha = model.predict_params(X_cal)
+        exposure_cal = None
+        if use_exposure:
+            exposure_cal = cal_valid["projected_ab"].values.copy()
+            exposure_cal = np.clip(exposure_cal, 1.0, None)
+
+        mu, alpha = model.predict_params(X_cal, exposure=exposure_cal)
         cal_report = self._compute_negbin_calibration(
             y_cal, mu, alpha, cal_valid, self.stat
         )
@@ -583,7 +612,12 @@ class MLBBatterTrainingOrchestrator:
     # NegBin Hyperparameter Tuning
     # ------------------------------------------------------------------
 
-    def _resolve_negbin_config(self, X: pd.DataFrame, y: pd.Series) -> NegBinConfig:
+    def _resolve_negbin_config(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        exposure: np.ndarray | None = None,
+    ) -> NegBinConfig:
         """Resolve NegBin hyperparameters: tune if enabled, else use defaults."""
         from src.models.negbin_model import NegBinConfig
 
@@ -609,7 +643,7 @@ class MLBBatterTrainingOrchestrator:
             pruning=True,
             random_state=42,
         )
-        best_config = tuner.tune(X, y)
+        best_config = tuner.tune(X, y, exposure=exposure)
 
         # Save tuning results to run directory
         tuner.save_best_config(self.run_dir / "best_hyperparams.json")

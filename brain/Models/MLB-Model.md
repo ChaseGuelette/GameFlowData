@@ -2,19 +2,19 @@
 
 > Part of [[Models]]
 
-## Status: 6 Models Trained & Deployed — 2 Need Retraining
+## Status: 5 Active Models — HR Dropped, 2 Need Retraining
 
-All 6 MLB models are trained and deployed to production (`src/models/mlb/artifacts/production/`). Daily inference pipeline fixed and running. Two models have `at_bats` feature leakage requiring retraining.
+5 MLB models active in production (`src/models/mlb/artifacts/production/`). `batter_home_runs` dropped entirely (no edge, too rare). Two models have `at_bats` feature leakage requiring retraining. Batter hits backtested with strong results.
 
 ### Trained Models (Production)
 | Model | Type | Status | Notes |
 |-------|------|--------|-------|
 | `pitcher_strikeouts` | Quantile | OK | Backtested, best config: tau=0.9 z_max=0.75 mw=0.65 |
-| `batter_hits` | Binomial | OK | No leakage, uses `batter_avg_ab_l5` |
-| `batter_total_bases` | NegBin | **NEEDS RETRAIN** | `at_bats` is 1 of 6 features — target leakage. Using proxy for now. |
+| `batter_hits` | Binomial | **BACKTESTED** | Best config: tau=0.75 z_max=1.0 mw=0.65 edge=0.08 (+36.3% ROI, 3.52 Sharpe, 314 bets) |
+| `batter_total_bases` | NegBin | **RETRAINED** | Retrained clean. Alpha varies 0.87-1.30 (learns player-specific variance). Needs backtest sweep. |
 | `batter_rbis` | NegBin | OK | No leakage, uses `batter_avg_ab_l5`/`batter_avg_pa_l5` |
-| `batter_runs_scored` | NegBin | **NEEDS RETRAIN** | `at_bats` in features — leakage (less critical, 28 other features) |
-| `batter_home_runs` | Binary | OK | 72 features, no leakage |
+| `batter_runs_scored` | NegBin | **RETRAINED** | Retrained clean. Minimal bias, excellent zero calibration, constant alpha=0.135. Needs backtest sweep. |
+| `batter_home_runs` | Binary | **DROPPED** | No edge — backtest showed max 8 bets/month, -12.3% ROI. Too rare/binary for model to beat market. Remove from pipeline + dashboard. |
 
 ### Bugs Fixed (Session 10)
 1. **Model naming mismatch**: `batter_runs_scored` mapped to wrong artifact filenames (was looking for `batter_runs_scored_*`, actual files are `batter_runs_*`)
@@ -73,6 +73,20 @@ Hits data is **underdispersed** (variance < mean, ratio=0.93). NegBin assumes ov
 
 Note: These results may be inflated by `at_bats` leakage — the backtest also had access to actual ABs. Re-run after retraining.
 
+**`batter_hits`** — Sep 2025, backtest sweep (Session 19):
+| Config | ROI | Bets | Hit Rate | Sharpe | MaxDD |
+|--------|-----|------|----------|--------|-------|
+| **Best pick**: tau=0.75 z_max=1.0 mw=0.65 edge=0.08 | **+36.3%** | 314 | 63% | 3.52 | 22.3% |
+| Best Sharpe: tau=0.5 z_max=1.0 mw=0.65 edge=0.08 | +32.3% | 303 | 63% | 3.66 | 21.0% |
+| Highest ROI: tau=0.75 z_max=0.75 mw=0.65 edge=0.08 | +39.3% | 284 | 63% | 3.34 | — |
+| Most volume: tau=0.9 z_max=1.0 mw=0.65 edge=0.04 | +25.5% | 715 | 59% | — | — |
+
+**`batter_home_runs`** — Sep 2025, backtest sweep (Session 19): **DROPPED**
+- Max 8 bets across entire month in any config
+- Best ROI: -12.3% (with raw model, no BL)
+- Event too rare (~7% HR rate) for model to find exploitable edge against market pricing
+- Decision: remove from pipeline AND dashboard predictions entirely
+
 ### Bugs Fixed (Session 15)
 1. **pitcher_outs resolution mapping**: `MLB_STAT_RESOLUTION` in `mlb_paper_trader.py` mapped `"pitcher_outs"` to column `"outs"` — actual DB column is `"outs_recorded"`. Silent failures on pitcher_outs bet resolution.
 2. **2026 game stats missing**: MLB schedule existed (2430 games) but all stuck at "Scheduled" — boxscores never scraped. Railway stats job was failing before it could update statuses. Backfilled locally: 77 games finalized, 946 bets resolved (467W/404L/75C).
@@ -81,10 +95,10 @@ Note: These results may be inflated by `at_bats` leakage — the backtest also h
 5. **Paper bet placement disabled**: `--skip-bets` flag added to MLB inference in scheduler until leaky models retrained.
 
 ### What's NOT Built
-- Batter backtests need re-running after model retrain (current results may be inflated by at_bats leakage)
+- `batter_total_bases` and `batter_runs_scored` retrained — need backtest sweeps to find best BL configs
 - MLB inference runs once daily — no periodic line re-scrape + rerun like NBA
-- `batter_total_bases` and `batter_runs_scored` need retrain — code fix applied (Session 13), just need to execute training commands
-- **287 pending bets from April 1** — will auto-resolve tomorrow at 10 AM ET (exclude_today=True filtered them)
+- `batter_home_runs` needs removal from pipeline code (daily runner, paper trader, dashboard predictions)
+- Batter hits config (tau=0.75 z_max=1.0 mw=0.65 edge=0.08) needs promotion to production config
 
 ### Key Differences from NBA
 - No minutes decomposition — stats predicted directly

@@ -53,7 +53,6 @@ BATTER_STAT_FS_MAP: dict[str, str] = {
     "batter_total_bases": "total_bases",
     "batter_rbis": "rbis",
     "batter_runs_scored": "runs",
-    "batter_home_runs": "home_runs",
 }
 
 

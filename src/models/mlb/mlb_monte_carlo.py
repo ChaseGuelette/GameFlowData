@@ -250,6 +250,10 @@ class MLBNegBinPredictor:
 
     For each player-game, draws ``n_samples`` from the fitted NegBin
     distribution and derives quantiles / point estimates from the samples.
+
+    If the model was trained with an exposure/offset (e.g. ``projected_ab``),
+    the predictor automatically extracts it from the features dict and passes
+    it to the sampling routine.
     """
 
     def __init__(
@@ -285,6 +289,16 @@ class MLBNegBinPredictor:
     # Prediction
     # ------------------------------------------------------------------
 
+    def _extract_exposure(self, features: dict) -> float | None:
+        """Extract exposure value from features if model uses exposure."""
+        if not self.model._uses_exposure:
+            return None
+        col = self.model._exposure_col or "projected_ab"
+        val = features.get(col)
+        if val is None or val <= 0:
+            return max(features.get("batter_avg_ab_l5", 3.5), 1.0)
+        return max(float(val), 1.0)
+
     def predict(
         self,
         player_id: int,
@@ -292,8 +306,12 @@ class MLBNegBinPredictor:
         features: dict,
     ) -> PropPrediction:
         """Generate MC prediction for a single batter."""
+        exposure_val = self._extract_exposure(features)
         X = self._prepare_features(features)
-        samples = self.model.sample(X, n_samples=self.n_samples, rng=self.rng).flatten()
+        exp_arr = np.array([exposure_val]) if exposure_val is not None else None
+        samples = self.model.sample(
+            X, n_samples=self.n_samples, rng=self.rng, exposure=exp_arr,
+        ).flatten()
 
         return PropPrediction(
             player_id=player_id,

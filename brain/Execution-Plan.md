@@ -14,10 +14,10 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 |------|------|--------|--------------|---------|
 | 1.1 | Finish MLB batter pipeline | completed | None | NLL feature selection, PMF calibration, Optuna tuner built. Pipeline ready for training. |
 | 1.2 | Train pitcher K model | completed | Data backfills | Artifact exists (`run_20260313_195757`), backtested with good results. |
-| 1.3 | Train batter hits/total_bases models | in_progress | 1.1 | All 5 batter models trained & deployed. `batter_total_bases` and `batter_runs_scored` need retraining — `at_bats` leakage code fix applied (Session 13). Paper bet placement disabled (`--skip-bets`) until retrained. Just need to run training commands. |
+| 1.3 | Train batter hits/total_bases models | in_progress | 1.1 | `batter_runs_scored` and `batter_total_bases` retrained clean (Session 19). `batter_hits` backtested (+36.3% ROI). `batter_home_runs` DROPPED (no edge). Remaining: promote hits config, run TB/runs backtest sweeps. |
 | 1.4 | Build MLB daily runner | completed | 1.2, 1.3 | `src/models/mlb/mlb_daily_runner.py` is production-ready — game discovery, pitcher K predictions, batter predictions scaffolded, prop lines, edge calc, paper bets. Mirrors NBA architecture. |
 | 1.5 | Build MLB paper trading | completed | 1.4 | `src/paper_trading/mlb_paper_trader.py` — full bet selection, placement, and resolution. |
-| 1.6 | Run MLB backtests | in_progress | 1.2, 1.3 | Pitcher K backtested (best: tau=0.9 z_max=0.75 mw=0.65). `batter_runs_scored` swept (best: +49.5% ROI, but may be inflated by at_bats leakage). Re-run all batter sweeps after retrain. |
+| 1.6 | Run MLB backtests | in_progress | 1.2, 1.3 | Pitcher K backtested (tau=0.9 z_max=0.75 mw=0.65). Batter hits backtested (tau=0.75 z_max=1.0 mw=0.65 edge=0.08, +36.3% ROI). HR dropped (no edge). Remaining: total_bases + runs_scored sweeps with clean retrained models. |
 | 1.7 | Add MLB to Railway scheduler | completed | 1.4, 1.6 | MLB jobs in `scheduler.py`: stats at 10/10:30 AM ET, inference at 1:30/6:30 PM ET. Month gate removed. Kalshi split into NBA/MLB separate refresh jobs. Supavisor timeout fix deployed (Session 15). |
 
 **Done when**: MLB pitcher K and batter models are backtested with >5% ROI and running daily on Railway.
@@ -134,6 +134,7 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 7.8 | Kalshi paper trading | completed | 7.4 | `kalshi_paper_bets` + `kalshi_paper_trading_daily_log` tables, `KalshiPaperTrader` class (Kelly sizing, cents-based P&L, liquidity filters), integrated into `kalshi_refresh_job.py` as Step 4, `--skip-paper` CLI flag |
 | 7.9 | Kalshi live trading | completed | 7.8 | Taker market orders, `KalshiLiveTrader` class, 3 circuit breakers (drawdown/daily loss/streak), Kelly sizing with taker fees, 15% edge threshold, position accumulation awareness, Discord alerts per trade, DB tables migrated, integrated into `kalshi_refresh_job.py` Step 4.5 with `--skip-live` flag. Gated by `KALSHI_LIVE_TRADING_ENABLED=true`. |
 | 7.10 | Paper/live trader alignment | completed | 7.8, 7.9 | Paper trader mirrors live 1:1: taker fees, 15% edge, $80 daily cap, Kelly sizing, Discord alerts (blue=paper, green=live), position accumulation dedup, overflow bet tracking (overflow_won/lost/cancelled statuses, excluded from daily log). DB CHECK constraint updated. |
+| 7.11 | Bot Tracker dashboard page | completed | 7.9, 7.10 | Admin-only `/bot-tracker` page: circuit breaker card, summary KPIs, live/paper tab toggle, date range filter, sortable orders table, daily P&L log. `admin_users` table + `is_admin()` function + RLS on all 5 Kalshi trading tables. Middleware admin gating + navbar conditional link. |
 
 **Done when**: Kalshi markets scraped, edges computed, displayed on dashboard, paper trading profitable.
 

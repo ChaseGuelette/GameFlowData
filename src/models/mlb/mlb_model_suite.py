@@ -226,21 +226,7 @@ class MLBModelSuite:
                 except Exception as e:
                     logger.error("Failed to load %s negbin model: %s", stat_key, e)
 
-        # 3. Binary HR model
-        hr_meta_path = directory / "hr_binary_meta.json"
-        if hr_meta_path.exists():
-            try:
-                binary_model = MLBBinaryModel.load(directory)
-                predictor = MLBBinaryPredictor(
-                    binary_model,
-                    stat="batter_home_runs",
-                    n_samples=n_samples,
-                    random_state=random_state,
-                )
-                suite.predictors["batter_home_runs"] = predictor
-                logger.info("Loaded batter_home_runs (binary) model")
-            except Exception as e:
-                logger.error("Failed to load HR binary model: %s", e)
+        # 3. Binary HR model — removed (Session 19/20: HR model non-viable)
 
         logger.info(
             "MLBModelSuite loaded %d models: %s",

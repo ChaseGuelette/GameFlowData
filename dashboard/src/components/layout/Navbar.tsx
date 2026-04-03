@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter, usePathname } from 'next/navigation'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
+import { useAdmin } from '@/lib/hooks/useAdmin'
 import { useSport } from '@/contexts/SportContext'
 import type { Sport } from '@/lib/sport-config'
 
@@ -13,6 +14,7 @@ export function Navbar() {
   const pathname = usePathname()
   const supabase = createClient()
   const { prefs, loading: prefsLoading } = useUserPreferences()
+  const { isAdmin } = useAdmin()
   const { sport, setSport, config } = useSport()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
@@ -100,6 +102,11 @@ export function Navbar() {
                   Markets
                 </Link>
               )}
+              {isAdmin && (
+                <Link href="/bot-tracker" className={navLinkClasses('/bot-tracker')}>
+                  Bot
+                </Link>
+              )}
             </div>
           </div>
 
@@ -171,6 +178,11 @@ export function Navbar() {
           {config.features.predictionMarkets && (
             <Link href="/prediction-markets" className={mobileNavLinkClasses('/prediction-markets')}>
               Markets
+            </Link>
+          )}
+          {isAdmin && (
+            <Link href="/bot-tracker" className={mobileNavLinkClasses('/bot-tracker')}>
+              Bot
             </Link>
           )}
 

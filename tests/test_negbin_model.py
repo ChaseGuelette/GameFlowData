@@ -325,3 +325,133 @@ class TestNegBinEdgeCases:
 
         samples = model.sample(X.iloc[[0]], n_samples=100)
         assert (samples >= 0).all()
+
+
+# ---------------------------------------------------------------------------
+# Exposure / offset tests
+# ---------------------------------------------------------------------------
+
+class TestNegBinExposure:
+    """Tests for the exposure/offset feature (log(AB) in base_margin)."""
+
+    @staticmethod
+    def _make_exposure_data(n_samples: int = 1500, seed: int = 42):
+        """Generate data where counts scale linearly with exposure (AB)."""
+        rng = np.random.RandomState(seed)
+
+        X = pd.DataFrame({
+            "batting_avg": rng.uniform(0.200, 0.320, n_samples),
+            "opp_era": rng.uniform(3.0, 5.0, n_samples),
+        })
+
+        # Exposure = at-bats (varies 2-6)
+        exposure = rng.uniform(2.0, 6.0, n_samples)
+
+        # True rate per AB, mu = rate * AB
+        rate = 0.3 * X["batting_avg"] + 0.05
+        mu_true = rate * exposure
+        alpha_true = 0.5
+
+        n = 1.0 / alpha_true
+        p = n / (n + mu_true)
+        y = pd.Series([int(nbinom.rvs(n, pp, random_state=rng)) for pp in p])
+
+        return X, y, exposure
+
+    def test_fit_with_exposure(self):
+        """Model with exposure should fit successfully."""
+        X, y, exposure = self._make_exposure_data()
+        config = NegBinConfig(exposure_col="projected_ab")
+        model = NegBinModel(config=config, model_name="test_exposure")
+        result = model.fit(X, y, exposure=exposure)
+
+        assert result["uses_exposure"] is True
+        assert model._uses_exposure is True
+        assert model._native_booster is not None
+
+    def test_exposure_scales_predictions(self):
+        """Higher exposure should produce higher predicted mu."""
+        X, y, exposure = self._make_exposure_data()
+        config = NegBinConfig(exposure_col="projected_ab")
+        model = NegBinModel(config=config, model_name="test_exposure")
+        model.fit(X, y, exposure=exposure)
+
+        # Same features, different exposure
+        X_test = X.iloc[[0]]
+        mu_low, _ = model.predict_params(X_test, exposure=np.array([2.0]))
+        mu_high, _ = model.predict_params(X_test, exposure=np.array([5.0]))
+
+        assert mu_high[0] > mu_low[0], (
+            f"Higher exposure should produce higher mu: "
+            f"mu(AB=5)={mu_high[0]:.3f} vs mu(AB=2)={mu_low[0]:.3f}"
+        )
+
+    def test_exposure_affects_samples(self):
+        """Samples should be higher with higher exposure."""
+        X, y, exposure = self._make_exposure_data()
+        config = NegBinConfig(exposure_col="projected_ab")
+        model = NegBinModel(config=config, model_name="test_exposure")
+        model.fit(X, y, exposure=exposure)
+
+        X_test = X.iloc[[0]]
+        rng1 = np.random.RandomState(99)
+        samples_low = model.sample(
+            X_test, n_samples=5000, rng=rng1, exposure=np.array([2.0])
+        )
+        rng2 = np.random.RandomState(99)
+        samples_high = model.sample(
+            X_test, n_samples=5000, rng=rng2, exposure=np.array([5.0])
+        )
+
+        assert samples_high.mean() > samples_low.mean(), (
+            f"More ABs should produce more counts: "
+            f"mean(AB=5)={samples_high.mean():.2f} vs mean(AB=2)={samples_low.mean():.2f}"
+        )
+
+    def test_no_exposure_unchanged(self):
+        """Model without exposure should work as before."""
+        X, y, _ = self._make_exposure_data()
+        model = NegBinModel(model_name="test_no_exposure")
+        result = model.fit(X, y)
+
+        assert result["uses_exposure"] is False
+        assert model._uses_exposure is False
+
+        mu, alpha = model.predict_params(X.iloc[:5])
+        assert (mu > 0).all()
+        assert (alpha > 0).all()
+
+    def test_save_load_exposure_roundtrip(self):
+        """Exposure metadata should survive save/load."""
+        X, y, exposure = self._make_exposure_data()
+        config = NegBinConfig(exposure_col="projected_ab")
+        model = NegBinModel(config=config, model_name="test_exposure")
+        model.fit(X, y, exposure=exposure)
+
+        X_test = X.iloc[:3]
+        exp_test = np.array([3.0, 4.0, 5.0])
+        mu_before, alpha_before = model.predict_params(X_test, exposure=exp_test)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model.save(Path(tmpdir))
+
+            loaded = NegBinModel.load(Path(tmpdir), model_name="test_exposure")
+            assert loaded._uses_exposure is True
+            assert loaded._exposure_col == "projected_ab"
+
+            mu_after, alpha_after = loaded.predict_params(X_test, exposure=exp_test)
+
+            np.testing.assert_array_almost_equal(mu_before, mu_after, decimal=4)
+            np.testing.assert_array_almost_equal(alpha_before, alpha_after, decimal=4)
+
+    def test_sample_single_with_exposure(self):
+        """sample_single should accept exposure parameter."""
+        X, y, exposure = self._make_exposure_data()
+        config = NegBinConfig(exposure_col="projected_ab")
+        model = NegBinModel(config=config, model_name="test_exposure")
+        model.fit(X, y, exposure=exposure)
+
+        features = X.iloc[0].to_dict()
+        samples = model.sample_single(features, n_samples=200, exposure=4.0)
+        assert samples.shape == (200,)
+        assert (samples >= 0).all()

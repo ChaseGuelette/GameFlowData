@@ -172,6 +172,9 @@ class NegBinConfig:
     min_child_weight: int = 3
     early_stopping_rounds: int = 50
 
+    # Exposure/offset column (e.g. "projected_ab" for count stats that scale with ABs)
+    exposure_col: str | None = None
+
     # Legacy fields — kept for backward-compat with old configs/metadata
     mu_n_estimators: int = 1000
     mu_max_depth: int = 5
@@ -233,6 +236,10 @@ class NegBinModel:
         self._global_alpha: float = 1.0
         self._global_mu: float = 1.0
 
+        # Exposure/offset support
+        self._uses_exposure: bool = False
+        self._exposure_col: str | None = config.exposure_col if config else None
+
         # v2: native XGBoost booster (distributional regression)
         self._native_booster: xgb.Booster | None = None
 
@@ -291,6 +298,7 @@ class NegBinModel:
         X: pd.DataFrame,
         y: pd.Series,
         sample_weight: np.ndarray | None = None,
+        exposure: np.ndarray | None = None,
     ) -> dict:
         """Fit the NegBin model via distributional regression.
 
@@ -301,6 +309,9 @@ class NegBinModel:
             X: Feature DataFrame.
             y: Integer counts >= 0.
             sample_weight: Optional sample weights.
+            exposure: Optional per-sample exposure (e.g. projected at-bats).
+                When provided, ``log(exposure)`` is added to the r-component
+                base_margin so the model learns a *rate* per exposure unit.
 
         Returns:
             Dict with training metadata.
@@ -314,6 +325,14 @@ class NegBinModel:
 
         self.feature_names = list(X.columns)
         n_samples = len(X)
+
+        # Track exposure usage
+        self._uses_exposure = exposure is not None
+        if exposure is not None:
+            exposure = np.asarray(exposure, dtype=float)
+            exposure = np.clip(exposure, 1.0, None)  # floor at 1
+            logger.info("Using exposure offset: mean=%.2f, min=%.2f, max=%.2f",
+                        exposure.mean(), exposure.min(), exposure.max())
 
         logger.info("Fitting NegBinModel (%s) on %s samples", self.model_name, f"{n_samples:,}")
         logger.info("Target stats: mean=%.3f, var=%.3f, zero_frac=%.3f",
@@ -336,29 +355,47 @@ class NegBinModel:
         )
 
         # Train/val split (preserve temporal order)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y_np,
+        split_arrays = [X, y_np]
+        if sample_weight is not None:
+            split_arrays.append(sample_weight)
+        if exposure is not None:
+            split_arrays.append(exposure)
+
+        splits = train_test_split(
+            *split_arrays,
             test_size=self.config.val_size,
             shuffle=False,
         )
 
+        # Unpack splits: each input produces (train, val) pair
+        X_train, X_val = splits[0], splits[1]
+        y_train, y_val = splits[2], splits[3]
+        idx = 4
+
         if sample_weight is not None:
-            sw_train, _ = train_test_split(
-                sample_weight,
-                test_size=self.config.val_size,
-                shuffle=False,
-            )
+            sw_train = splits[idx]
+            idx += 2
         else:
             sw_train = None
+
+        if exposure is not None:
+            exp_train, exp_val = splits[idx], splits[idx + 1]
+        else:
+            exp_train = exp_val = None
 
         # Build DMatrices with base_margin
         dtrain = xgb.DMatrix(X_train, label=y_train)
         dval = xgb.DMatrix(X_val, label=y_val)
 
-        base_margin_train = np.tile([raw_r_init, raw_p_init], (len(X_train), 1)).reshape(-1)
-        base_margin_val = np.tile([raw_r_init, raw_p_init], (len(X_val), 1)).reshape(-1)
-        dtrain.set_base_margin(base_margin_train)
-        dval.set_base_margin(base_margin_val)
+        # Per-sample base_margin: [raw_r_init + log(exposure), raw_p_init] per row
+        def _build_base_margin(n: int, exp_arr: np.ndarray | None) -> np.ndarray:
+            bm = np.tile([raw_r_init, raw_p_init], (n, 1))
+            if exp_arr is not None:
+                bm[:, 0] += np.log(exp_arr)
+            return bm.reshape(-1)
+
+        dtrain.set_base_margin(_build_base_margin(len(X_train), exp_train))
+        dval.set_base_margin(_build_base_margin(len(X_val), exp_val))
 
         if sw_train is not None:
             dtrain.set_weight(sw_train)
@@ -417,14 +454,24 @@ class NegBinModel:
             "n_samples": n_samples,
             "n_features": len(self.feature_names),
             "zero_fraction": float((y_np == 0).mean()),
+            "uses_exposure": self._uses_exposure,
         }
 
     # ------------------------------------------------------------------
     # Prediction
     # ------------------------------------------------------------------
 
-    def predict_params(self, X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    def predict_params(
+        self,
+        X: pd.DataFrame,
+        exposure: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Predict (mu, alpha) for each row.
+
+        Args:
+            X: Feature DataFrame.
+            exposure: Optional per-sample exposure. Required if model was
+                trained with exposure; uses ``exposure=1.0`` (no-op) if omitted.
 
         Returns:
             mu  — shape (n,), mean of NegBin
@@ -437,15 +484,25 @@ class NegBinModel:
 
         X_aligned = X.reindex(columns=self.feature_names, fill_value=0)
 
+        # Resolve exposure
+        if self._uses_exposure and exposure is None:
+            logger.warning("Model expects exposure but none provided; using 1.0")
+            exposure = np.ones(len(X_aligned))
+        if exposure is not None:
+            exposure = np.asarray(exposure, dtype=float)
+            exposure = np.clip(exposure, 1.0, None)
+
         if self._native_booster is not None:
             # v2 path: native booster with (r, p) output
             dmat = xgb.DMatrix(X_aligned)
 
-            # Set base margin for prediction
+            # Set base margin for prediction (with optional exposure offset)
             raw_r_init = getattr(self, "_raw_r_init", 0.0)
             raw_p_init = getattr(self, "_raw_p_init", 0.0)
-            base_margin = np.tile([raw_r_init, raw_p_init], (len(X_aligned), 1)).reshape(-1)
-            dmat.set_base_margin(base_margin)
+            bm = np.tile([raw_r_init, raw_p_init], (len(X_aligned), 1))
+            if exposure is not None:
+                bm[:, 0] += np.log(exposure)
+            dmat.set_base_margin(bm.reshape(-1))
 
             raw_preds = self._native_booster.predict(dmat)
             if raw_preds.ndim == 1:
@@ -514,6 +571,7 @@ class NegBinModel:
         X: pd.DataFrame,
         n_samples: int = 10_000,
         rng: np.random.RandomState | None = None,
+        exposure: np.ndarray | None = None,
     ) -> np.ndarray:
         """Draw MC samples from the NegBin for each row.
 
@@ -521,6 +579,7 @@ class NegBinModel:
             X: Features (single row or batch).
             n_samples: Samples per row.
             rng: Random state for reproducibility.
+            exposure: Optional per-sample exposure (passed to predict_params).
 
         Returns:
             Integer samples, shape ``(n_rows, n_samples)``
@@ -528,7 +587,7 @@ class NegBinModel:
         """
         rng = rng or np.random.RandomState(self.config.random_state)
 
-        mu, alpha = self.predict_params(X)
+        mu, alpha = self.predict_params(X, exposure=exposure)
         n_rows = len(X)
 
         if n_rows == 1:
@@ -555,10 +614,12 @@ class NegBinModel:
         features: dict,
         n_samples: int = 10_000,
         rng: np.random.RandomState | None = None,
+        exposure: float | None = None,
     ) -> np.ndarray:
         """Sample for a single observation given a feature dict."""
         X = pd.DataFrame([features]).reindex(columns=self.feature_names, fill_value=0)
-        return self.sample(X, n_samples=n_samples, rng=rng).flatten()
+        exp_arr = np.array([exposure]) if exposure is not None else None
+        return self.sample(X, n_samples=n_samples, rng=rng, exposure=exp_arr).flatten()
 
     # ------------------------------------------------------------------
     # Persistence
@@ -595,6 +656,8 @@ class NegBinModel:
             "response_fns": ["exp", "sigmoid"],
             "raw_r_init": getattr(self, "_raw_r_init", 0.0),
             "raw_p_init": getattr(self, "_raw_p_init", 0.0),
+            "uses_exposure": self._uses_exposure,
+            "exposure_col": self._exposure_col,
             "config": {
                 "n_estimators": self.config.n_estimators,
                 "max_depth": self.config.max_depth,
@@ -656,6 +719,8 @@ class NegBinModel:
         model.feature_names = metadata["feature_names"]
         model._global_mu = metadata["global_mu"]
         model._global_alpha = metadata["global_alpha"]
+        model._uses_exposure = metadata.get("uses_exposure", False)
+        model._exposure_col = metadata.get("exposure_col", None)
 
         # Try v2 format first (native booster)
         booster_path = directory / f"{model_name}_xgblss_booster.json"

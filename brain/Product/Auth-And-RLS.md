@@ -20,12 +20,23 @@ These tables require active subscription via `is_subscribed()` SECURITY DEFINER 
 - `player_game_stats`
 - `raw_player_props_combined`
 
+### Admin-Gated Tables (Session 20)
+These tables require admin role via `is_admin()` SECURITY DEFINER function:
+- `kalshi_live_orders`
+- `kalshi_live_trading_daily_log`
+- `kalshi_live_trading_config`
+- `kalshi_paper_bets`
+- `kalshi_paper_trading_daily_log`
+
 ### User-Scoped Tables
 - `user_subscriptions` — users can view own subscription only
 - `user_bets` — users can CRUD own bets only
 
 ### `is_subscribed(uuid)` Function
 Checks `status IN ('active', 'trialing')` AND `current_period_end > now()`. Returns boolean.
+
+### `is_admin()` Function (Session 20)
+Checks `admin_users` table for `auth.uid()`. SECURITY DEFINER. Used by middleware route gating + RLS policies on Kalshi trading tables. `admin_users` table has RLS with no authenticated SELECT policy (only accessible via the function).
 
 ### Role Architecture
 - **`postgres` role**: Python backend — bypasses ALL RLS
