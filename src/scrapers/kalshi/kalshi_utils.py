@@ -30,16 +30,7 @@ KALSHI_STAT_MAP: dict[str, str] = {
     # MLB
     "K": "pitcher_strikeouts",
     "HITS": "batter_hits",
-    "TB": "batter_total_bases",
-    "HR": "batter_home_runs",
     "RBI": "batter_rbis",
-    "RUNS": "batter_runs_scored",
-    "HRR": "batter_hits_runs_rbis",
-}
-
-# Combined stats that require summing multiple MC sample arrays
-COMBINED_STATS: dict[str, list[str]] = {
-    "batter_hits_runs_rbis": ["batter_hits", "batter_runs_scored", "batter_rbis"],
 }
 
 # Reverse map: our stat keys → Kalshi ticker stat keys
@@ -66,11 +57,8 @@ KALSHI_PROP_SERIES: dict[str, dict[str, str]] = {
         "KXNBASTL": "stl",
     },
     "mlb": {
-        "KXMLBTB": "batter_total_bases",
-        "KXMLBHR": "batter_home_runs",
         "KXMLBHIT": "batter_hits",
         "KXMLBKS": "pitcher_strikeouts",
-        "KXMLBHRR": "batter_hits_runs_rbis",  # combined: hits + runs + RBIs
     },
 }
 

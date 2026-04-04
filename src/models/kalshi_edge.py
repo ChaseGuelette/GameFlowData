@@ -28,7 +28,6 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.db.client import get_engine
 from src.models.black_litterman import BLConfig, BlackLittermanBlender
 from src.scrapers.kalshi.kalshi_utils import (
-    COMBINED_STATS,
     fee_adjusted_edge,
     kalshi_mid_to_prob,
 )
@@ -241,25 +240,10 @@ class KalshiEdgeCalculator:
             market_stat = market["stat_type"]
             matched_samples = None
 
-            if market_stat in COMBINED_STATS:
-                # Combined stat (e.g., hits+runs+RBIs): sum component samples
-                component_stats = COMBINED_STATS[market_stat]
-                component_arrays = []
-                for component in component_stats:
-                    for gid, stat, samples in player_samples[pid]:
-                        if stat == component:
-                            component_arrays.append(samples)
-                            break
-                if len(component_arrays) == len(component_stats):
-                    # All components found — sum element-wise
-                    # Truncate to shortest array length if they differ
-                    min_len = min(len(a) for a in component_arrays)
-                    matched_samples = sum(a[:min_len] for a in component_arrays)
-            else:
-                for gid, stat, samples in player_samples[pid]:
-                    if stat == market_stat:
-                        matched_samples = samples
-                        break
+            for gid, stat, samples in player_samples[pid]:
+                if stat == market_stat:
+                    matched_samples = samples
+                    break
 
             if matched_samples is None:
                 stats["no_samples"] += 1

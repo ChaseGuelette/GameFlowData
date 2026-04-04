@@ -48,11 +48,6 @@ NBA_STAT_RESOLUTION: dict[str, tuple[str, list[str]]] = {
     "ra":  ("player_game_stats", ["reb", "ast"]),
 }
 
-# Combined MLB stats: stat_type -> (table, [columns to sum])
-COMBINED_STAT_RESOLUTION: dict[str, tuple[str, list[str]]] = {
-    "batter_hits_runs_rbis": ("mlb_player_game_stats_batting", ["h", "r", "rbi"]),
-}
-
 
 def _get_env_float(name: str, default: float) -> float:
     val = os.environ.get(name)
@@ -83,6 +78,7 @@ class KalshiPaperTrader:
     max_daily_exposure: float = 80.0
     min_volume: int = 20  # Matches live trader (taker fills anyway)
     max_spread: int = 15  # Matches live trader
+    min_price: int = 5  # Skip extreme prices (below 5c or above 95c)
     starting_bankroll: float = field(default_factory=lambda: DEFAULT_BANKROLL)
     kelly_fraction: float = field(default_factory=lambda: DEFAULT_KELLY_FRACTION)
 
@@ -197,16 +193,17 @@ class KalshiPaperTrader:
             logger.info(f"No Kalshi markets with edges for {target_date}")
             return []
 
-        # Position accumulation: check what we already bet on today (exclude overflow)
-        today_tickers: set[str] = set()
+        # Position accumulation: check what we already bet on today (by player+stat)
+        today_positions: set[tuple[int, str]] = set()
         with self.engine.connect() as conn:
             rows = conn.execute(text("""
-                SELECT DISTINCT ticker
+                SELECT DISTINCT player_id, stat_type
                 FROM kalshi_paper_bets
                 WHERE game_date = :d
                   AND status NOT IN ('cancelled', 'overflow', 'overflow_won', 'overflow_lost', 'overflow_cancelled')
+                  AND player_id IS NOT NULL
             """), {"d": target_date}).fetchall()
-            today_tickers = {row[0] for row in rows}
+            today_positions = {(int(row[0]), row[1]) for row in rows}
 
         # Check today's existing exposure (real bets only, not overflow)
         existing_exposure = 0.0
@@ -223,15 +220,20 @@ class KalshiPaperTrader:
             """), {"d": target_date}).scalar()
             existing_exposure = float(result or 0)
 
-        bets: list[dict[str, Any]] = []
-        overflow_bets: list[dict[str, Any]] = []
-        total_exposure = existing_exposure
+        # First pass: find best-edge candidate per (player_id, stat_type)
+        run_candidates: dict[tuple[int, str], dict] = {}
 
         for _, row in df.iterrows():
-            ticker = row["ticker"]
+            player_id = int(row["player_id"]) if pd.notna(row["player_id"]) else None
+            stat_type = row["stat_type"]
+
+            if player_id is None:
+                continue
+
+            pos_key = (player_id, stat_type)
 
             # Skip if already bet on today (position accumulation awareness)
-            if ticker in today_tickers:
+            if pos_key in today_positions:
                 continue
 
             volume = int(row["volume"] or 0)
@@ -244,6 +246,10 @@ class KalshiPaperTrader:
                 continue
 
             yes_price = int(row["yes_price"])
+
+            # Price floor: skip extreme prices
+            if yes_price < self.min_price or yes_price > (100 - self.min_price):
+                continue
 
             # Use BL-blended probability if available, else fall back to raw
             if pd.notna(row.get("bl_model_prob")):
@@ -264,6 +270,34 @@ class KalshiPaperTrader:
             else:
                 continue
 
+            # Same-run dedup: keep best edge per (player_id, stat_type)
+            if pos_key in run_candidates and edge <= run_candidates[pos_key]["fee_adjusted_edge"]:
+                continue
+
+            kalshi_implied = float(row["kalshi_implied"]) if pd.notna(row["kalshi_implied"]) else yes_price / 100.0
+
+            run_candidates[pos_key] = {
+                "ticker": row["ticker"],
+                "player_name": row["player_name"],
+                "line": float(row["line"]),
+                "side": side,
+                "yes_price": yes_price,
+                "model_prob": model_prob,
+                "kalshi_implied": kalshi_implied,
+                "raw_edge": float(row["raw_edge"]) if pd.notna(row["raw_edge"]) else 0,
+                "fee_adjusted_edge": edge,
+            }
+
+        # Second pass: Kelly size and apply exposure cap
+        bets: list[dict[str, Any]] = []
+        overflow_bets: list[dict[str, Any]] = []
+        total_exposure = existing_exposure
+
+        for pos_key, cand in run_candidates.items():
+            yes_price = cand["yes_price"]
+            side = cand["side"]
+            model_prob = cand["model_prob"]
+
             contracts = self._kelly_contracts(model_prob, yes_price, side, bankroll)
             if contracts <= 0:
                 continue
@@ -274,25 +308,24 @@ class KalshiPaperTrader:
 
             fee_per = kalshi_taker_fee(yes_price if side == "yes" else 100 - yes_price)
             expected_fee = fee_per * contracts
-            kalshi_implied = float(row["kalshi_implied"]) if pd.notna(row["kalshi_implied"]) else yes_price / 100.0
 
             bet_dict = {
                 "game_date": target_date,
-                "ticker": ticker,
+                "ticker": cand["ticker"],
                 "sport": sport,
-                "player_id": int(row["player_id"]) if pd.notna(row["player_id"]) else None,
-                "player_name": row["player_name"],
-                "stat_type": row["stat_type"],
-                "line": float(row["line"]),
+                "player_id": pos_key[0],
+                "player_name": cand["player_name"],
+                "stat_type": pos_key[1],
+                "line": cand["line"],
                 "side": side,
                 "price": yes_price,
                 "contracts": contracts,
                 "is_maker": False,
                 "expected_fee": round(expected_fee, 4),
                 "model_prob": round(model_prob, 4),
-                "kalshi_implied": round(kalshi_implied, 4),
-                "edge": round(float(row["raw_edge"]) if pd.notna(row["raw_edge"]) else 0, 4),
-                "fee_adjusted_edge": round(edge, 4),
+                "kalshi_implied": round(cand["kalshi_implied"], 4),
+                "edge": round(cand["raw_edge"], 4),
+                "fee_adjusted_edge": round(cand["fee_adjusted_edge"], 4),
             }
 
             # Enforce daily exposure cap
@@ -606,32 +639,6 @@ class KalshiPaperTrader:
 
                 actuals_query = text(f"""
                     SELECT s.player_id, s.{column} as actual_value,
-                           s.did_not_play
-                    FROM {table} s
-                    WHERE s.game_date = :game_date
-                """)
-
-                with self.engine.connect() as conn:
-                    rows = conn.execute(actuals_query, {"game_date": game_date}).fetchall()
-
-                for row in rows:
-                    pid = int(row[0])
-                    val = row[1]
-                    dnp = row[2] if len(row) > 2 else False
-                    if dnp:
-                        actuals[(pid, stat_type)] = None
-                    else:
-                        actuals[(pid, stat_type)] = float(val) if val is not None else None
-                continue
-
-            # Try combined stat resolution (e.g., batter_hits_runs_rbis)
-            combined_res = COMBINED_STAT_RESOLUTION.get(stat_type)
-            if combined_res is not None:
-                table, columns = combined_res
-                col_expr = " + ".join(f"s.{c}" for c in columns)
-
-                actuals_query = text(f"""
-                    SELECT s.player_id, ({col_expr}) as actual_value,
                            s.did_not_play
                     FROM {table} s
                     WHERE s.game_date = :game_date

@@ -78,6 +78,7 @@ class KalshiLiveTrader:
         self.min_edge = _env_float("KALSHI_LIVE_MIN_EDGE", 0.15)
         self.max_contracts = _env_int("KALSHI_LIVE_MAX_CONTRACTS", 50)
         self.max_daily_exposure = _env_float("KALSHI_LIVE_MAX_DAILY_EXPOSURE", 80.0)
+        self.min_price = _env_int("KALSHI_LIVE_MIN_PRICE", 5)
         self.drawdown_limit = _env_float("KALSHI_LIVE_DRAWDOWN_LIMIT", 0.30)
         self.daily_loss_limit = _env_float("KALSHI_LIVE_DAILY_LOSS_LIMIT", 15.0)
         self.consec_loss_limit = _env_int("KALSHI_LIVE_CONSEC_LOSS_LIMIT", 5)
@@ -333,20 +334,19 @@ class KalshiLiveTrader:
             logger.info(f"No Kalshi markets with model probs for {target_date}")
             return []
 
-        # Check what we already traded today to avoid duplicates
-        today_tickers = set()
+        # Check what we already traded today (by player+stat)
+        today_positions: set[tuple[int, str]] = set()
         with self.engine.connect() as conn:
             rows = conn.execute(text("""
-                SELECT DISTINCT ticker
+                SELECT DISTINCT player_id, stat_type
                 FROM kalshi_live_orders
                 WHERE game_date = :d AND status != 'cancelled'
+                  AND player_id IS NOT NULL
             """), {"d": target_date}).fetchall()
-            today_tickers = {row[0] for row in rows}
-
-        trades: list[dict[str, Any]] = []
-        total_exposure = 0.0
+            today_positions = {(int(row[0]), row[1]) for row in rows}
 
         # Check today's existing exposure
+        total_exposure = 0.0
         with self.engine.connect() as conn:
             existing_exposure = conn.execute(text("""
                 SELECT COALESCE(SUM(total_cost), 0)
@@ -355,11 +355,20 @@ class KalshiLiveTrader:
             """), {"d": target_date}).scalar()
         total_exposure = float(existing_exposure or 0)
 
+        # First pass: find best-edge candidate per (player_id, stat_type)
+        run_candidates: dict[tuple[int, str], dict] = {}
+
         for _, row in df.iterrows():
-            ticker = row["ticker"]
+            player_id = int(row["player_id"]) if pd.notna(row["player_id"]) else None
+            stat_type = row["stat_type"]
+
+            if player_id is None:
+                continue
+
+            pos_key = (player_id, stat_type)
 
             # Skip if already traded today
-            if ticker in today_tickers:
+            if pos_key in today_positions:
                 continue
 
             volume = int(row["volume"] or 0)
@@ -372,6 +381,11 @@ class KalshiLiveTrader:
                 continue
 
             yes_price = int(row["yes_price"])
+
+            # Price floor: skip extreme prices
+            if yes_price < self.min_price or yes_price > (100 - self.min_price):
+                continue
+
             model_prob = float(row["model_prob"])
 
             # Calculate taker fee-adjusted edges for both sides
@@ -387,7 +401,32 @@ class KalshiLiveTrader:
             else:
                 continue
 
-            # Check position accumulation
+            # Same-run dedup: keep best edge per (player_id, stat_type)
+            if pos_key in run_candidates and edge <= run_candidates[pos_key]["fee_adjusted_edge"]:
+                continue
+
+            run_candidates[pos_key] = {
+                "ticker": row["ticker"],
+                "player_name": row["player_name"],
+                "line": float(row["line"]),
+                "side": side,
+                "yes_price": yes_price,
+                "model_prob": model_prob,
+                "kalshi_implied": float(row["kalshi_implied"]) if pd.notna(row["kalshi_implied"]) else yes_price / 100.0,
+                "raw_edge": float(row["raw_edge"]) if pd.notna(row["raw_edge"]) else 0,
+                "fee_adjusted_edge": edge,
+            }
+
+        # Second pass: Kelly size and apply exposure/balance caps
+        trades: list[dict[str, Any]] = []
+
+        for pos_key, cand in run_candidates.items():
+            ticker = cand["ticker"]
+            side = cand["side"]
+            yes_price = cand["yes_price"]
+            model_prob = cand["model_prob"]
+
+            # Check position accumulation via API
             if ticker in held_tickers:
                 existing = held_tickers[ticker]
                 existing_contracts = existing.get("total_traded", 0)
@@ -430,10 +469,10 @@ class KalshiLiveTrader:
                 "game_date": target_date,
                 "ticker": ticker,
                 "sport": sport,
-                "player_id": int(row["player_id"]) if pd.notna(row["player_id"]) else None,
-                "player_name": row["player_name"],
-                "stat_type": row["stat_type"],
-                "line": float(row["line"]),
+                "player_id": pos_key[0],
+                "player_name": cand["player_name"],
+                "stat_type": pos_key[1],
+                "line": cand["line"],
                 "side": side,
                 "yes_price": yes_price,
                 "contracts": contracts,
@@ -441,9 +480,9 @@ class KalshiLiveTrader:
                 "expected_cost": round(trade_cost, 2),
                 "expected_fee": round(fee_per * contracts, 4),
                 "model_prob": round(model_prob, 4),
-                "kalshi_implied": round(float(row["kalshi_implied"]) if pd.notna(row["kalshi_implied"]) else yes_price / 100.0, 4),
-                "edge": round(float(row["raw_edge"]) if pd.notna(row["raw_edge"]) else 0, 4),
-                "fee_adjusted_edge": round(edge, 4),
+                "kalshi_implied": round(cand["kalshi_implied"], 4),
+                "edge": round(cand["raw_edge"], 4),
+                "fee_adjusted_edge": round(cand["fee_adjusted_edge"], 4),
             })
 
         logger.info(
@@ -811,7 +850,6 @@ class KalshiLiveTrader:
     ) -> dict[tuple[int, str], float | None]:
         """Fetch actual stat values for resolution (same logic as paper trader)."""
         from src.paper_trading.kalshi_paper_trader import (
-            COMBINED_STAT_RESOLUTION,
             MLB_STAT_RESOLUTION,
             NBA_STAT_RESOLUTION,
         )
@@ -845,24 +883,6 @@ class KalshiLiveTrader:
                     """), {"game_date": game_date}).fetchall()
                 for row in rows:
                     if row[2]:  # DNP
-                        actuals[(int(row[0]), stat_type)] = None
-                    else:
-                        actuals[(int(row[0]), stat_type)] = float(row[1]) if row[1] is not None else None
-                continue
-
-            # Combined stats (e.g., batter_hits_runs_rbis)
-            combined_res = COMBINED_STAT_RESOLUTION.get(stat_type)
-            if combined_res is not None:
-                table, columns = combined_res
-                col_expr = " + ".join(f"s.{c}" for c in columns)
-                with self.engine.connect() as conn:
-                    rows = conn.execute(text(f"""
-                        SELECT s.player_id, ({col_expr}) as actual_value, s.did_not_play
-                        FROM {table} s
-                        WHERE s.game_date = :game_date
-                    """), {"game_date": game_date}).fetchall()
-                for row in rows:
-                    if row[2]:
                         actuals[(int(row[0]), stat_type)] = None
                     else:
                         actuals[(int(row[0]), stat_type)] = float(row[1]) if row[1] is not None else None
