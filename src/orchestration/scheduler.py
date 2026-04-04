@@ -525,18 +525,17 @@ def run_mlb_lines_props_only():
 
 
 def run_mlb_inference():
-    """Run MLB inference, checking if MLB daily stats succeeded first.
+    """Run MLB inference with paper betting, checking if MLB daily stats succeeded first.
 
-    NOTE: Paper bet placement is disabled (--skip-bets) until batter_total_bases
-    and batter_runs_scored models are retrained without at_bats leakage.
-    Re-enable once models are retrained and backtested with clean data.
+    Active models: pitcher_strikeouts, batter_hits, batter_rbis.
+    Each stat has per-stat Black-Litterman config in bl_config.yaml.
     """
     if not check_dependency("mlb_daily_stats_job.py", max_age_hours=8):
         logger.warning(
             "MLB daily stats job has not succeeded in the last 8 hours — "
             "MLB inference will run with potentially stale data."
         )
-    run_job("mlb_inference_job.py", extra_args="--skip-bets")
+    run_job("mlb_inference_job.py")
 
 
 # ---- Kalshi Jobs ----
