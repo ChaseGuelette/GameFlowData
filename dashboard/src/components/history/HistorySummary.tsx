@@ -5,9 +5,10 @@ import { cn } from '@/lib/utils'
 
 interface HistorySummaryProps {
   bets: PaperBet[]
+  statTypes?: StatType[]
 }
 
-export function HistorySummary({ bets }: HistorySummaryProps) {
+export function HistorySummary({ bets, statTypes = ['pts', 'reb', 'ast'] }: HistorySummaryProps) {
   const pendingBets = bets.filter(b => b.status === 'pending')
   const resolvedBets = bets.filter(b => b.status !== 'pending' && b.status !== 'cancelled')
   const wins = resolvedBets.filter(b => b.status === 'won').length
@@ -31,7 +32,6 @@ export function HistorySummary({ bets }: HistorySummaryProps) {
   ]
 
   // Per-stat win rates
-  const statTypes: StatType[] = ['pts', 'reb', 'ast']
   const perStatData = statTypes
     .map(stat => {
       const statBets = resolvedBets.filter(b => b.stat_type === stat)

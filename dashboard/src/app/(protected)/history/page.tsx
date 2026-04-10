@@ -12,7 +12,7 @@ import { DirectionFilter, type DirectionFilterValue } from '@/components/shared/
 import { type PaperBet } from '@/types/predictions'
 import type { UserDfsEntryWithLegs } from '@/types/dfs-entries'
 import { cn } from '@/lib/utils'
-import { useModelHistory, useMyBets, useDfsEntries, PAGE_SIZE } from '@/lib/hooks/useHistoryData'
+import { useModelHistory, useMyBets, useDfsEntries, useMLBModelHistory, PAGE_SIZE } from '@/lib/hooks/useHistoryData'
 
 // Extended type to include is_recommended and bookmaker from joined daily_predictions
 interface PaperBetWithRecommended extends PaperBet {
@@ -20,7 +20,7 @@ interface PaperBetWithRecommended extends PaperBet {
   bookmaker?: string
 }
 
-type HistoryTab = 'my_bets' | 'model_history' | 'dfs_entries'
+type HistoryTab = 'my_bets' | 'model_history' | 'dfs_entries' | 'mlb_model'
 type DatePreset = '7d' | '30d' | '90d' | 'all' | 'lifetime'
 
 function getDefaultStartDate(): string {
@@ -58,10 +58,12 @@ export default function HistoryPage() {
   const modelHistory = useModelHistory(startDate, endDate)
   const myBetsQuery = useMyBets(startDate, endDate)
   const dfsEntriesQuery = useDfsEntries(startDate, endDate)
+  const mlbModelQuery = useMLBModelHistory(startDate, endDate)
 
   const bets = (modelHistory.data ?? []) as PaperBetWithRecommended[]
   const myBets = myBetsQuery.data ?? []
   const dfsEntries = dfsEntriesQuery.data ?? []
+  const mlbBets = (mlbModelQuery.data ?? []) as PaperBetWithRecommended[]
 
   const applyPreset = (preset: DatePreset) => {
     const now = new Date()
@@ -140,7 +142,16 @@ export default function HistoryPage() {
 
   const loading = activeTab === 'model_history' ? modelHistory.isLoading
     : activeTab === 'my_bets' ? myBetsQuery.isLoading
+    : activeTab === 'mlb_model' ? mlbModelQuery.isLoading
     : dfsEntriesQuery.isLoading
+
+  // MLB model — apply direction + status filters
+  const mlbDirectionFiltered = directionFilter === 'both'
+    ? mlbBets
+    : mlbBets.filter(b => b.bet_direction === directionFilter)
+  const mlbFiltered = filter === 'all'
+    ? mlbDirectionFiltered.filter(b => b.status !== 'pending' && b.status !== 'cancelled')
+    : mlbDirectionFiltered.filter(b => b.status === filter)
 
   return (
     <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
@@ -186,6 +197,17 @@ export default function HistoryPage() {
                 )}
               >
                 DFS Entries
+              </button>
+              <button
+                onClick={() => setActiveTab('mlb_model')}
+                className={cn(
+                  'px-3 py-1.5 rounded text-sm font-medium transition-colors',
+                  activeTab === 'mlb_model'
+                    ? 'bg-blue-700 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                )}
+              >
+                MLB Model
               </button>
             </div>
             {activeTab === 'model_history' && (
@@ -280,6 +302,27 @@ export default function HistoryPage() {
               <HistorySummary bets={directionFilteredBets} />
               <BetList bets={filteredBets} />
               {bets.length >= PAGE_SIZE && (
+                <div className="text-center py-4 text-sm text-slate-500">
+                  Showing first {PAGE_SIZE} results. Narrow date range for more.
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {/* MLB Model Tab */}
+      {activeTab === 'mlb_model' && (
+        <>
+          {mlbModelQuery.isLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="text-slate-400">Loading MLB bets...</div>
+            </div>
+          ) : (
+            <>
+              <HistorySummary bets={mlbDirectionFiltered} statTypes={['pitcher_strikeouts', 'batter_rbis', 'batter_hits']} />
+              <BetList bets={mlbFiltered} />
+              {mlbBets.length >= PAGE_SIZE && (
                 <div className="text-center py-4 text-sm text-slate-500">
                   Showing first {PAGE_SIZE} results. Narrow date range for more.
                 </div>

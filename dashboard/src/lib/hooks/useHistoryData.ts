@@ -160,5 +160,28 @@ export function useDfsEntries(startDate: string, endDate: string) {
   })
 }
 
+async function fetchMLBModelHistory(startDate: string, endDate: string) {
+  const supabase = createClient()
+
+  const { data, error } = await supabase
+    .from('mlb_paper_bets')
+    .select('id, prediction_id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl')
+    .gte('game_date', startDate)
+    .lte('game_date', endDate)
+    .order('game_date', { ascending: false })
+    .limit(PAGE_SIZE)
+
+  if (error) throw error
+  return (data ?? []) as PaperBetWithRecommended[]
+}
+
+export function useMLBModelHistory(startDate: string, endDate: string) {
+  return useQuery({
+    queryKey: ['history', 'mlb_model', startDate, endDate],
+    queryFn: () => fetchMLBModelHistory(startDate, endDate),
+    staleTime: 10 * 60 * 1000,
+  })
+}
+
 export { PAGE_SIZE }
 export type { PaperBetWithRecommended }
