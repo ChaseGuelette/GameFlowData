@@ -28,4 +28,10 @@ These rules must NEVER be violated regardless of what domain you're working in:
 
 12. **Full retrains are risky** — Always validate with backtests. Lock hyperparams from production.
 
+13. **Kalshi: NEVER bet YES side** — 872 YES bets confirmed structurally negative (-$499 combined). `KALSHI_ALLOW_YES_BETS` defaults to `false`. Only change for controlled experiments.
+
+14. **Kalshi: NEVER correct Q10 "miscalibration"** — This IS the edge. Correcting it removes profitability (confirmed 4×). The model under-shoots Q10 → UNDER wins more than the market implies → NO edge is structural, not a bug.
+
+15. **Kalshi: NEVER trade unsupported stat types** — `batter_hits_runs_rbis`, `batter_total_bases`, `batter_home_runs` have no trained models. Results are structurally noisy (wrong MC inputs). `SUPPORTED_STATS` whitelist in both traders enforces this.
+
 #invariants #operations #critical

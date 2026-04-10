@@ -3,7 +3,7 @@
 > Part of [[Decisions]]
 
 **Created**: March 24, 2026
-**Status**: Fully Implemented — All 6 phases complete. Paper trader aligned with live trader (Session 18, April 1 2026). Overflow bet tracking added for exposure-capped markets.
+**Status**: Fully Implemented + NO-Only Overhaul Complete (Session 26, April 10 2026). Paper and live traders now NO-only by default, bankroll-proportional exposure, stat whitelist. READY TO LAUNCH live trading pending 2-3 day validation. See [[Kalshi-Live-Trading-Startup]].
 
 ## Overview
 
@@ -429,6 +429,25 @@ Paper trader and live trader now mirror each other 1:1:
 - Paper trader sends **Discord alerts** (blue embeds) for every bet placed and resolved
 - **Overflow bet tracking**: When exposure cap is hit, additional qualifying bets are stored with `status='overflow'` and resolved separately (`overflow_won`/`overflow_lost`/`overflow_cancelled`) — hypothetical P&L tracked but excluded from daily log metrics
 - DB CHECK constraint updated: `kalshi_paper_bets` now allows overflow statuses
+
+## NO-Only Overhaul (Session 26, April 10 2026)
+
+Analysis of 1,871 resolved paper bets (999 NO, 872 YES) confirmed the edge is structural on the NO side:
+- **YES combined**: 872 bets, -$499, -8.7% ROI, -1.2σ (no edge)
+- **NO combined**: 999 bets, +$3,101, +38.8% ROI, **+5.8σ** (STRONG EDGE)
+
+Changes deployed in commit `4bc5459`:
+- **NO-only by default**: Both `kalshi_paper_trader.py` and `kalshi_live_trader.py` skip YES bets. Toggle via `KALSHI_ALLOW_YES_BETS=true`
+- **SUPPORTED_STATS whitelist**: Only bet markets with trained models. Filters out `batter_hits_runs_rbis` (no model — structurally noisy), `batter_total_bases`, `batter_home_runs`
+- **Bankroll-proportional exposure**: `effective_cap = clamp(bankroll × 60%, $80 floor, $500 ceiling)`. Env vars: `KALSHI_DAILY_EXPOSURE_PCT`, `KALSHI_MIN_DAILY_EXPOSURE`, `KALSHI_MAX_DAILY_EXPOSURE`
+- **Bet pool logging**: After edge computation, logs NO-edge counts at >0%, >3%, >5%, >10%, >15% thresholds every run
+- **BL probability fix (live trader)**: Was using raw `model_prob`; now fetches `bl_model_prob, bl_edge` from DB and uses BL-blended value when available (matches paper trader behavior)
+- **Discord `[NO-ONLY]` badge**: Trade placed/resolved embeds now show mode
+- **`--yes-bets` CLI flag**: `kalshi_refresh_job.py` allows testing YES+NO without Railway env change
+
+New assets from this session:
+- `brain/Operations/Kalshi-Live-Trading-Startup.md` — full live trading launch playbook
+- `scripts/analyze_kalshi_paper_bets.py` — analysis script (side, stat, cost bucket, edge bucket, Z-scores, overflow impact, daily trend)
 
 ---
 

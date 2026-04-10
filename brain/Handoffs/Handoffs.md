@@ -31,4 +31,5 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-023]] - Black-Litterman Kalshi blending + Railway pipeline debugging (env var fix, 607 markets matched)
 - [[handoff-024]] - MLB model promotion: 3 stats live (pitcher K, hits, RBIs), 3 dropped (TB, runs, HR), per-stat BL configs, dashboard updated
 - [[handoff-025]] - MLB + NBA paper trader fixes: per-stat BL configs (MLB), stored BL values + removed sanity checks (NBA)
+- [[handoff-026]] - Kalshi NO-only overhaul: cut YES bets, stat whitelist, bankroll-proportional exposure, BL fix in live trader, analysis script, live trading startup playbook
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

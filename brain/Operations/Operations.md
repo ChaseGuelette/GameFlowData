@@ -12,3 +12,4 @@ Daily runbooks, critical invariants, incident response procedures, and maintenan
 - [[Known-Issues]] - Active bugs and technical debt
 - [[Claude-Commands]] - Slash commands registered for Claude Code sessions
 - [[Project-Root-Files]] - Root-level project documents (HANDOFF, ARCHITECTURE, etc.)
+- [[Kalshi-Live-Trading-Startup]] - Live trading launch playbook: pre-flight checklist, $300 bankroll config, circuit breakers, scaling plan

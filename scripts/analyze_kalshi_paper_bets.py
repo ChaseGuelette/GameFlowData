@@ -206,14 +206,19 @@ def load_bets(engine, sport=None, date_start=None, date_end=None) -> pd.DataFram
     with engine.connect() as conn:
         df = pd.read_sql(query, conn, params=params)
 
-    # Derived columns
-    df["cost_per"] = df["price"] / 100.0
-    df["fee_per"] = df["price"].apply(taker_fee_per_contract)
-    df["break_even"] = df["price"].apply(break_even_win_rate)
+    # `price` column = YES market price (e.g., 65 = 65¢ for YES / 35¢ for NO).
+    # For YES bets: you pay `price` cents. For NO bets: you pay `100 - price` cents.
+    df["actual_price"] = df.apply(
+        lambda r: int(r["price"]) if r["side"] == "yes" else 100 - int(r["price"]), axis=1
+    )
+    df["cost_per"] = df["actual_price"] / 100.0
+    # Fee formula is symmetric: ceil(0.07 × p × (1-p) × 100) / 100 — same for YES and NO.
+    df["fee_per"] = df["actual_price"].apply(taker_fee_per_contract)
+    df["break_even"] = df["actual_price"].apply(break_even_win_rate)
     df["is_overflow"] = df["status"].str.startswith("overflow")
     df["is_won"] = df["status"].isin(["won", "overflow_won"])
     df["total_cost"] = df["cost_per"] * df["contracts"]
-    df["price_bucket"] = df["price"].apply(price_bucket)
+    df["price_bucket"] = df["actual_price"].apply(price_bucket)
     df["edge_bucket"] = df["fee_adjusted_edge"].apply(edge_bucket)
 
     return df
