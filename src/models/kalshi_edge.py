@@ -26,7 +26,7 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.db.client import get_engine
-from src.models.black_litterman import BLConfig, BlackLittermanBlender
+from src.models.black_litterman import BlackLittermanBlender, BLConfig
 from src.scrapers.kalshi.kalshi_utils import (
     fee_adjusted_edge,
     kalshi_mid_to_prob,
