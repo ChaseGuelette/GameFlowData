@@ -332,6 +332,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-discord", action="store_true", help="Skip Discord alerts")
     parser.add_argument("--skip-paper", action="store_true", help="Skip paper trading")
     parser.add_argument("--skip-live", action="store_true", help="Skip live trading")
+    parser.add_argument("--yes-bets", action="store_true", help="Allow YES bets (sets KALSHI_ALLOW_YES_BETS=true)")
     return parser.parse_args()
 
 
@@ -339,10 +340,15 @@ def main():
     args = parse_args()
     target_date = date.fromisoformat(args.date)
 
+    if args.yes_bets:
+        os.environ["KALSHI_ALLOW_YES_BETS"] = "true"
+    allow_yes = os.environ.get("KALSHI_ALLOW_YES_BETS", "false").lower() == "true"
+
     logger.info("=" * 60)
     logger.info("Kalshi Refresh Job")
     logger.info(f"  Date: {target_date}")
     logger.info(f"  Sport: {args.sport.upper()}")
+    logger.info(f"  Mode: {'YES+NO' if allow_yes else 'NO-only (default)'}")
     logger.info(f"  Mock: {args.mock}")
     logger.info(f"  Dry run: {args.dry_run}")
     logger.info(f"  Skip Discord: {args.skip_discord}")

@@ -37,6 +37,12 @@ from src.scrapers.kalshi.kalshi_utils import fee_adjusted_edge, kalshi_taker_fee
 
 logger = logging.getLogger(__name__)
 
+# Supported stat types per sport (skip markets without trained models)
+SUPPORTED_STATS: dict[str, set[str]] = {
+    "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
+    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_rbis"},
+}
+
 
 def _env_float(name: str, default: float) -> float:
     val = os.environ.get(name)
@@ -308,6 +314,21 @@ class KalshiLiveTrader:
             return []
         bankroll = balance_data.get("balance", 0) / 100.0
 
+        # Bankroll-proportional exposure cap
+        daily_exposure_pct = _env_float("KALSHI_DAILY_EXPOSURE_PCT", 0.60)
+        min_exposure = _env_float("KALSHI_MIN_DAILY_EXPOSURE", 80.0)
+        max_exposure = _env_float("KALSHI_MAX_DAILY_EXPOSURE", 500.0)
+        dynamic_cap = bankroll * daily_exposure_pct
+        effective_cap = max(min_exposure, min(dynamic_cap, max_exposure))
+        # NO-only mode control
+        _allow_yes = os.environ.get("KALSHI_ALLOW_YES_BETS", "false").lower() == "true"
+        _mode_str = "YES+NO" if _allow_yes else "NO-only"
+        logger.info(
+            f"Mode: {_mode_str} | Exposure cap: ${bankroll:.2f} × {daily_exposure_pct:.0%} "
+            f"= ${dynamic_cap:.2f} → effective ${effective_cap:.2f} "
+            f"(floor ${min_exposure:.0f}, ceiling ${max_exposure:.0f})"
+        )
+
         # Get current open positions to avoid over-accumulation
         positions = self.client.get_positions(settlement_status="open")
         held_tickers = {p.get("ticker"): p for p in positions}
@@ -318,7 +339,8 @@ class KalshiLiveTrader:
                 ticker, sport, player_id, player_name, stat_type, line,
                 yes_price, model_prob, kalshi_implied,
                 raw_edge, maker_fee_adjusted_edge,
-                volume, bid_ask_spread, market_status
+                volume, bid_ask_spread, market_status,
+                bl_model_prob, bl_edge
             FROM kalshi_markets
             WHERE sport = :sport
               AND snapshot_time::date = :target_date
@@ -357,6 +379,7 @@ class KalshiLiveTrader:
 
         # First pass: find best-edge candidate per (player_id, stat_type)
         run_candidates: dict[tuple[int, str], dict] = {}
+        _pool_no_edges: list[float] = []  # All NO edges (for pool logging)
 
         for _, row in df.iterrows():
             player_id = int(row["player_id"]) if pd.notna(row["player_id"]) else None
@@ -366,6 +389,11 @@ class KalshiLiveTrader:
                 continue
 
             pos_key = (player_id, stat_type)
+
+            # Stat whitelist: skip unsupported stat types
+            supported = SUPPORTED_STATS.get(sport, set())
+            if supported and stat_type not in supported:
+                continue
 
             # Skip if already traded today
             if pos_key in today_positions:
@@ -386,13 +414,22 @@ class KalshiLiveTrader:
             if yes_price < self.min_price or yes_price > (100 - self.min_price):
                 continue
 
-            model_prob = float(row["model_prob"])
+            # Use BL-blended probability if available, else fall back to raw
+            if pd.notna(row.get("bl_model_prob")):
+                model_prob = float(row["bl_model_prob"])
+            else:
+                model_prob = float(row["model_prob"])
 
             # Calculate taker fee-adjusted edges for both sides
             yes_edge = fee_adjusted_edge(model_prob, yes_price, is_yes=True, is_maker=False)
             no_edge = fee_adjusted_edge(model_prob, yes_price, is_yes=False, is_maker=False)
 
-            if yes_edge >= no_edge and yes_edge >= self.min_edge:
+            # Track all NO edges for bet pool logging (before threshold filter)
+            if no_edge > 0:
+                _pool_no_edges.append(no_edge)
+
+            # NO-only by default; re-enable YES via KALSHI_ALLOW_YES_BETS=true
+            if _allow_yes and yes_edge >= no_edge and yes_edge >= self.min_edge:
                 side = "yes"
                 edge = yes_edge
             elif no_edge >= self.min_edge:
@@ -416,6 +453,14 @@ class KalshiLiveTrader:
                 "raw_edge": float(row["raw_edge"]) if pd.notna(row["raw_edge"]) else 0,
                 "fee_adjusted_edge": edge,
             }
+
+        # Log bet pool statistics (all NO edges, before threshold filter)
+        _tiers = [0, 3, 5, 10, 15]
+        _tier_str = ", ".join(
+            f">{t}%: {sum(1 for e in _pool_no_edges if e >= t / 100.0)}"
+            for t in _tiers
+        )
+        logger.info(f"BET POOL ({target_date} {_mode_str}): {_tier_str}")
 
         # Second pass: Kelly size and apply exposure/balance caps
         trades: list[dict[str, Any]] = []
@@ -446,8 +491,8 @@ class KalshiLiveTrader:
             trade_cost = contracts * cost_per
 
             # Enforce daily exposure cap
-            if total_exposure + trade_cost > self.max_daily_exposure:
-                remaining = self.max_daily_exposure - total_exposure
+            if total_exposure + trade_cost > effective_cap:
+                remaining = effective_cap - total_exposure
                 if remaining <= cost_per:
                     continue
                 contracts = int(math.floor(remaining / cost_per))
@@ -486,8 +531,8 @@ class KalshiLiveTrader:
             })
 
         logger.info(
-            f"Selected {len(trades)} Kalshi live trades for {target_date} "
-            f"(total exposure: ${total_exposure:.2f}, bankroll: ${bankroll:.2f})"
+            f"Selected {len(trades)} Kalshi live trades [{_mode_str}] for {target_date} "
+            f"(exposure: ${total_exposure:.2f}/${effective_cap:.2f} cap)"
         )
         return trades
 

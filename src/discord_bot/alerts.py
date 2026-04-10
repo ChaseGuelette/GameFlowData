@@ -1006,8 +1006,10 @@ def _build_kalshi_trade_placed_embed(trade: dict, mode: str = "live") -> dict:
     balance = trade.get("balance_after", 0)
 
     mode_upper = mode.upper()
+    allow_yes = os.environ.get("KALSHI_ALLOW_YES_BETS", "false").lower() == "true"
+    no_only_badge = "" if allow_yes else " [NO-ONLY]"
     return {
-        "title": f"KALSHI {mode_upper} TRADE PLACED",
+        "title": f"KALSHI {mode_upper} TRADE PLACED{no_only_badge}",
         "description": f"**{player}** {stat} {'OVER' if side == 'YES' else 'UNDER'} {line}",
         "color": 0x2ECC71 if mode == "live" else 0x3498DB,  # Green / Blue
         "timestamp": datetime.utcnow().isoformat(),
@@ -1035,8 +1037,10 @@ def _build_kalshi_trade_resolved_embed(trade: dict, mode: str = "live") -> dict:
     won = trade.get("status") == "won"
 
     mode_upper = mode.upper()
+    allow_yes = os.environ.get("KALSHI_ALLOW_YES_BETS", "false").lower() == "true"
+    no_only_badge = "" if allow_yes else " [NO-ONLY]"
     return {
-        "title": f"KALSHI {mode_upper} TRADE {'WON' if won else 'LOST'}",
+        "title": f"KALSHI {mode_upper} TRADE {'WON' if won else 'LOST'}{no_only_badge}",
         "description": (
             f"**{player}** {stat} {'OVER' if side == 'YES' else 'UNDER'} {line}"
             + (f" — Actual: {actual}" if actual is not None else "")

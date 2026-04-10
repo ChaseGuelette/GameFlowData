@@ -179,6 +179,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
           <thead className="text-xs text-slate-400 bg-slate-900/50">
             <tr>
               <th className="px-3 py-2">Date</th>
+              <th className="px-3 py-2">Sport</th>
               <th
                 className="px-3 py-2 cursor-pointer hover:text-slate-200"
                 onClick={() => toggleSort('player_name')}
@@ -218,20 +219,37 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
           <tbody className="divide-y divide-slate-700/50">
             {sortedOrders.length === 0 ? (
               <tr>
-                <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={11} className="px-3 py-8 text-center text-slate-500">
                   No orders found
                 </td>
               </tr>
             ) : (
               sortedOrders.map((order) => {
-                const price = isLive
+                // For live orders fill_price is already the side-adjusted fill.
+                // For paper bets, `price` stores the YES/market price; the actual
+                // cost per contract depends on side: YES pays price¢, NO pays (100-price)¢.
+                const rawPrice = isLive
                   ? (order as KalshiLiveOrder).fill_price
                   : (order as KalshiPaperBet).price
+                const entryPrice = isLive
+                  ? rawPrice
+                  : rawPrice != null
+                    ? order.side === 'yes' ? rawPrice : 100 - rawPrice
+                    : null
                 const isOverflow = (order.status ?? '').startsWith('overflow')
                 return (
                   <tr key={order.id} className={`hover:bg-slate-700/30 ${isOverflow ? 'opacity-40' : ''}`}>
                     <td className="px-3 py-2 text-slate-300 whitespace-nowrap">
                       {order.game_date}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                        order.sport === 'nba'
+                          ? 'bg-orange-500/20 text-orange-400'
+                          : 'bg-blue-500/20 text-blue-400'
+                      }`}>
+                        {order.sport.toUpperCase()}
+                      </span>
                     </td>
                     <td className="px-3 py-2 text-slate-200 font-medium">
                       {order.player_name ?? '—'}
@@ -251,7 +269,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                     </td>
                     <td className="px-3 py-2 text-slate-300">{order.contracts}</td>
                     <td className="px-3 py-2 text-slate-300">
-                      {price != null ? `${price}¢` : '—'}
+                      {entryPrice != null ? `${entryPrice}¢` : '—'}
                     </td>
                     <td className="px-3 py-2 text-slate-300">
                       {order.fee_adjusted_edge != null

@@ -6,6 +6,7 @@ import { CircuitBreakerCard } from '@/components/bot-tracker/CircuitBreakerCard'
 import { BotSummaryCards } from '@/components/bot-tracker/BotSummaryCards'
 import { BotOrdersTable } from '@/components/bot-tracker/BotOrdersTable'
 import { DailyPnlTable } from '@/components/bot-tracker/DailyPnlTable'
+import { PriceBucketTable } from '@/components/bot-tracker/PriceBucketTable'
 import type { DateRange, BotTab } from '@/types/bot-tracker'
 
 const DATE_RANGES: { label: string; value: DateRange }[] = [
@@ -79,6 +80,9 @@ export default function BotTrackerPage() {
 
       {/* Orders Table */}
       <BotOrdersTable orders={orders} tab={tab} loading={ordersLoading} />
+
+      {/* Price Bucket Win Rate */}
+      {!ordersLoading && <PriceBucketTable orders={orders} tab={tab} />}
 
       {/* Daily P&L Table */}
       <DailyPnlTable logs={dailyLogs} loading={logsLoading} />
