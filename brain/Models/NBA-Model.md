@@ -51,6 +51,15 @@ PTS model had degraded to 44.8% win rate (30% last 7d), -$15K PnL over 14 days. 
 
 Full catalog: `docs/nba_feature_catalog.md`
 
+## Paper Trader Fix (Session 25)
+
+**Root cause**: `paper_trader.py` was re-blending raw MC samples with a conservative tau=0.5 blender AND applying independent sanity checks (L5_ABOVE_LINE_MARGIN=0.0, MAX_Q50_DIVERGENCE=0.30). Meanwhile `edge_refresh_job.py` at 4:15 PM overwrites `is_recommended` in DB *without* those sanity checks. This caused dashboard to show ~15 picks while paper trader bet on far fewer.
+
+**Fix**: Paper trader now reads stored BL values (`bl_over_edge`, `bl_under_edge`, `bl_over_prob`, `bl_under_prob`) directly from `daily_predictions` table. Falls back to raw edges when BL columns are NULL.
+- Removed: `_bl_blender`, `_load_samples_for_date()`, `MAX_Q50_DIVERGENCE`, `L5_ABOVE_LINE_MARGIN`, gzip/numpy imports
+- Kept: `bl_tau`/`bl_z_max` dataclass fields for backward compat with `place_bets.py`
+- Paper trader now uses same `is_recommended`-aligned logic as the dashboard
+
 ## Key Files
 | File | Purpose |
 |------|---------|

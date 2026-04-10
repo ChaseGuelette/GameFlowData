@@ -56,11 +56,11 @@ export interface KalshiPaperBet {
 
 export interface KalshiDailyLog {
   game_date: string
-  total_trades: number
-  trades_won: number
-  trades_lost: number
-  trades_cancelled: number
-  trades_pending: number
+  total_bets: number
+  bets_won: number
+  bets_lost: number
+  bets_cancelled: number
+  bets_pending: number
   total_cost: number
   total_pnl: number
   roi_pct: number
@@ -91,10 +91,10 @@ export interface KalshiConfig {
 }
 
 export interface KalshiTradingStats {
-  total_trades: number
-  trades_won: number
-  trades_lost: number
-  trades_pending: number
+  total_bets: number
+  bets_won: number
+  bets_lost: number
+  bets_pending: number
   total_pnl: number
   total_cost: number
   total_fees?: number

@@ -7,8 +7,7 @@ interface DailyPnlTableProps {
   loading: boolean
 }
 
-function formatDollars(cents: number): string {
-  const dollars = cents / 100
+function formatDollars(dollars: number): string {
   const sign = dollars >= 0 ? '+' : ''
   return `${sign}$${Math.abs(dollars).toFixed(2)}`
 }
@@ -54,13 +53,13 @@ export function DailyPnlTable({ logs, loading }: DailyPnlTableProps) {
                     {log.game_date}
                   </td>
                   <td className="px-3 py-2 text-right text-slate-300">
-                    {log.total_trades}
+                    {log.total_bets}
                   </td>
                   <td className="px-3 py-2 text-right text-green-400">
-                    {log.trades_won}
+                    {log.bets_won}
                   </td>
                   <td className="px-3 py-2 text-right text-red-400">
-                    {log.trades_lost}
+                    {log.bets_lost}
                   </td>
                   <td
                     className={`px-3 py-2 text-right font-medium ${

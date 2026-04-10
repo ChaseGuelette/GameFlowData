@@ -26,8 +26,8 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
-from src.models.black_litterman import BlackLittermanBlender, BLConfig
-from src.models.mlb.mlb_stat_config import MLB_STATS
+from src.models.black_litterman import BlackLittermanBlender
+from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL_CONFIGS
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +77,8 @@ class MLBPaperTrader:
     starting_bankroll: float = field(default_factory=lambda: DEFAULT_BANKROLL)
     min_odds: int = -200
     max_odds: int = 200
-    bl_tau: float | None = 0.5
-    bl_z_max: float = 1.0
-    _bl_blender: BlackLittermanBlender | None = field(init=False, default=None)
+    _bl_blenders: dict = field(init=False, default_factory=dict)
+    _default_bl_blender: BlackLittermanBlender = field(init=False)
 
     def __post_init__(self):
         self.engine = get_engine()
@@ -87,11 +86,12 @@ class MLBPaperTrader:
             f"MLBPaperTrader initialized: bankroll=${self.starting_bankroll:,.0f}, "
             f"kelly={self.kelly_fraction}"
         )
-        if self.bl_tau is not None:
-            self._bl_blender = BlackLittermanBlender(
-                BLConfig(tau=self.bl_tau, z_max=self.bl_z_max)
-            )
-            logger.info(f"BL blending enabled: tau={self.bl_tau}, z_max={self.bl_z_max}")
+        self._bl_blenders = {
+            stat_name: BlackLittermanBlender(bl_cfg)
+            for stat_name, bl_cfg in STAT_BL_CONFIGS.items()
+        }
+        self._default_bl_blender = BlackLittermanBlender(DEFAULT_BL_CONFIG)
+        logger.info(f"BL blending enabled for stats: {list(self._bl_blenders.keys())}")
 
     def _load_samples_for_date(self, game_date: date) -> dict[tuple, np.ndarray]:
         """Load all MC samples for a date from mlb_daily_prediction_samples."""
@@ -186,12 +186,10 @@ class MLBPaperTrader:
         """
         bankroll = self._get_current_bankroll()
 
-        # Load MC samples if BL blending is enabled
-        samples_dict: dict[tuple, np.ndarray] = {}
-        if self._bl_blender is not None:
-            samples_dict = self._load_samples_for_date(game_date)
-            if not samples_dict:
-                logger.warning(f"BL enabled but no samples found for {game_date}")
+        # Load MC samples for BL blending
+        samples_dict: dict[tuple, np.ndarray] = self._load_samples_for_date(game_date)
+        if not samples_dict:
+            logger.warning(f"BL enabled but no samples found for {game_date}")
 
         # Query predictions with edge
         query = text("""
@@ -248,31 +246,24 @@ class MLBPaperTrader:
             over_odds = int(over_odds)
             under_odds = int(under_odds)
 
-            # Apply BL blending if enabled and samples available
-            if self._bl_blender is not None:
-                samples = samples_dict.get((player_id, game_id, stat))
-                if samples is not None and len(samples) > 0:
-                    bl_result = self._bl_blender.blend_prediction(
-                        samples=samples,
-                        line=line,
-                        over_odds=over_odds,
-                        under_odds=under_odds,
-                    )
-                    over_prob = bl_result["posterior_over"]
-                    under_prob = bl_result["posterior_under"]
-                    implied_over = bl_result["market_over"]
-                    implied_under = bl_result["market_under"]
-                    over_edge = over_prob - implied_over
-                    under_edge = under_prob - implied_under
-                else:
-                    continue
+            # Apply per-stat BL blending
+            blender = self._bl_blenders.get(stat, self._default_bl_blender)
+            samples = samples_dict.get((player_id, game_id, stat))
+            if samples is not None and len(samples) > 0:
+                bl_result = blender.blend_prediction(
+                    samples=samples,
+                    line=line,
+                    over_odds=over_odds,
+                    under_odds=under_odds,
+                )
+                over_prob = bl_result["posterior_over"]
+                under_prob = bl_result["posterior_under"]
+                implied_over = bl_result["market_over"]
+                implied_under = bl_result["market_under"]
+                over_edge = over_prob - implied_over
+                under_edge = under_prob - implied_under
             else:
-                over_edge = float(row["over_edge"]) if pd.notna(row["over_edge"]) else 0
-                under_edge = float(row["under_edge"]) if pd.notna(row["under_edge"]) else 0
-                over_prob = float(row["over_prob"]) if pd.notna(row["over_prob"]) else 0.5
-                under_prob = float(row["under_prob"]) if pd.notna(row["under_prob"]) else 0.5
-                implied_over = float(row["implied_over"]) if pd.notna(row["implied_over"]) else 0.5
-                implied_under = float(row["implied_under"]) if pd.notna(row["implied_under"]) else 0.5
+                continue
 
             # Select the direction with higher edge that meets threshold
             direction = None

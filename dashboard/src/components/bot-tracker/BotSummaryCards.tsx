@@ -7,17 +7,15 @@ interface BotSummaryCardsProps {
   config: KalshiConfig
 }
 
-function formatDollars(cents: number): string {
-  const dollars = cents / 100
+function formatDollars(dollars: number): string {
   const sign = dollars >= 0 ? '+' : ''
   return `${sign}$${Math.abs(dollars).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 export function BotSummaryCards({ stats, config }: BotSummaryCardsProps) {
-  const resolved = stats.trades_won + stats.trades_lost
-  const winRate = resolved > 0 ? (stats.trades_won / resolved) * 100 : 0
-  const pnlDollars = stats.total_pnl / 100
-  const balance = config.starting_bankroll + pnlDollars
+  const resolved = stats.bets_won + stats.bets_lost
+  const winRate = resolved > 0 ? (stats.bets_won / resolved) * 100 : 0
+  const balance = config.starting_bankroll + stats.total_pnl
 
   const cards = [
     {
@@ -32,8 +30,8 @@ export function BotSummaryCards({ stats, config }: BotSummaryCardsProps) {
     },
     {
       label: 'Trades',
-      value: `${stats.total_trades}`,
-      sub: `${stats.trades_pending} pending`,
+      value: `${stats.total_bets}`,
+      sub: `${stats.bets_pending} pending`,
       color: 'text-slate-200',
     },
     {

@@ -98,6 +98,15 @@ Hits data is **underdispersed** (variance < mean, ratio=0.93). NegBin assumes ov
 | batter_hits | tau=0.75 z_max=1.0 mw=0.8 edge=0.08 | +36.63% | 78 | 60.3% |
 | batter_rbis | tau=0.9 z_max=0.25 mw=0.8 edge=0.12 | +112.54% | 16 | 81.2% |
 
+### Paper Trader BL Config Fix (Session 25)
+
+**Root cause**: `mlb_paper_trader.py` was creating a single conservative BL blender (tau=0.5, z_max=1.0, max_weight=0.50) and re-blending all predictions from scratch. Meanwhile `mlb_daily_runner.py` used per-stat optimized configs (tau up to 0.9, max_weight=0.80). The conservative blending shrank nearly all edges below the per-stat thresholds → ~1 bet/day instead of ~20-50.
+
+**Fix**: Paper trader now builds per-stat blenders from `STAT_BL_CONFIGS` (same source of truth as daily runner). Falls back to `DEFAULT_BL_CONFIG` for unknown stats.
+- Import: removed `BLConfig`, added `DEFAULT_BL_CONFIG, STAT_BL_CONFIGS` from `mlb_stat_config`
+- `__post_init__`: dict comprehension over `STAT_BL_CONFIGS` → `_bl_blenders`, plus `_default_bl_blender`
+- `select_bets()`: uses `blender = self._bl_blenders.get(stat, self._default_bl_blender)`
+
 ### Bugs Fixed (Session 15)
 1. **pitcher_outs resolution mapping**: `MLB_STAT_RESOLUTION` in `mlb_paper_trader.py` mapped `"pitcher_outs"` to column `"outs"` — actual DB column is `"outs_recorded"`. Silent failures on pitcher_outs bet resolution.
 2. **2026 game stats missing**: MLB schedule existed (2430 games) but all stuck at "Scheduled" — boxscores never scraped. Railway stats job was failing before it could update statuses. Backfilled locally: 77 games finalized, 946 bets resolved (467W/404L/75C).

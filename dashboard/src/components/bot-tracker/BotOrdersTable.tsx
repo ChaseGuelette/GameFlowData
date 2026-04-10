@@ -29,9 +29,8 @@ function statusBadge(status: string | null) {
   )
 }
 
-function formatCents(cents: number | null): string {
-  if (cents == null) return '—'
-  const dollars = cents / 100
+function formatPnl(dollars: number | null): string {
+  if (dollars == null) return '—'
   const sign = dollars >= 0 ? '+' : ''
   return `${sign}$${Math.abs(dollars).toFixed(2)}`
 }
@@ -41,6 +40,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [statFilter, setStatFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [showOverflow, setShowOverflow] = useState<boolean>(false)
 
   const statTypes = useMemo(() => {
     const types = new Set(orders.map((o) => o.stat_type))
@@ -49,6 +49,9 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
 
   const sortedOrders = useMemo(() => {
     let filtered = orders
+    if (!showOverflow) {
+      filtered = filtered.filter((o) => !(o.status ?? '').startsWith('overflow'))
+    }
     if (statFilter !== 'all') {
       filtered = filtered.filter((o) => o.stat_type === statFilter)
     }
@@ -72,8 +75,8 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
           bVal = b.stat_type
           break
         case 'edge':
-          aVal = a.edge ?? 0
-          bVal = b.edge ?? 0
+          aVal = a.fee_adjusted_edge ?? 0
+          bVal = b.fee_adjusted_edge ?? 0
           break
         case 'pnl':
           aVal = a.pnl ?? 0
@@ -91,7 +94,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
       if (aVal > bVal) return sortDir === 'asc' ? 1 : -1
       return 0
     })
-  }, [orders, sortField, sortDir, statFilter, statusFilter])
+  }, [orders, sortField, sortDir, statFilter, statusFilter, showOverflow])
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -143,7 +146,28 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
           <option value="lost">Lost</option>
           <option value="pending">Pending</option>
           <option value="cancelled">Cancelled</option>
+          {showOverflow && (
+            <>
+              <option value="overflow_won">Overflow Won</option>
+              <option value="overflow_lost">Overflow Lost</option>
+              <option value="overflow_cancelled">Overflow Cancelled</option>
+            </>
+          )}
         </select>
+        <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showOverflow}
+            onChange={(e) => {
+              setShowOverflow(e.target.checked)
+              if (!e.target.checked && statusFilter.startsWith('overflow')) {
+                setStatusFilter('all')
+              }
+            }}
+            className="accent-blue-500"
+          />
+          Show overflow
+        </label>
         <span className="text-xs text-slate-500 self-center ml-auto">
           {sortedOrders.length} order{sortedOrders.length !== 1 ? 's' : ''}
         </span>
@@ -203,8 +227,9 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                 const price = isLive
                   ? (order as KalshiLiveOrder).fill_price
                   : (order as KalshiPaperBet).price
+                const isOverflow = (order.status ?? '').startsWith('overflow')
                 return (
-                  <tr key={order.id} className="hover:bg-slate-700/30">
+                  <tr key={order.id} className={`hover:bg-slate-700/30 ${isOverflow ? 'opacity-40' : ''}`}>
                     <td className="px-3 py-2 text-slate-300 whitespace-nowrap">
                       {order.game_date}
                     </td>
@@ -229,8 +254,8 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                       {price != null ? `${price}¢` : '—'}
                     </td>
                     <td className="px-3 py-2 text-slate-300">
-                      {order.edge != null
-                        ? `${(Number(order.edge) * 100).toFixed(1)}%`
+                      {order.fee_adjusted_edge != null
+                        ? `${(Number(order.fee_adjusted_edge) * 100).toFixed(1)}%`
                         : '—'}
                     </td>
                     <td className="px-3 py-2">{statusBadge(order.status)}</td>
@@ -243,7 +268,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                             : 'text-slate-400'
                       }`}
                     >
-                      {formatCents(order.pnl != null ? Number(order.pnl) : null)}
+                      {formatPnl(order.pnl != null ? Number(order.pnl) : null)}
                     </td>
                   </tr>
                 )

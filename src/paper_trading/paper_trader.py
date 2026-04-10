@@ -17,19 +17,16 @@ Configuration via environment variables:
 
 from __future__ import annotations
 
-import gzip
 import logging
 import os
 from dataclasses import dataclass, field
 from datetime import UTC, date
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
-from src.models.black_litterman import BlackLittermanBlender, BLConfig
 
 if TYPE_CHECKING:
     from src.config.stat_config import StatConfigSet
@@ -38,12 +35,6 @@ logger = logging.getLogger(__name__)
 
 # Supported stat types (base + combo)
 SUPPORTED_STATS = {"pts", "reb", "ast", "pra", "pr", "pa", "ra"}
-
-# Q50 vs L5 sanity check: reject under bets where Q50 is 30%+ below player L5 avg
-MAX_Q50_DIVERGENCE = 0.30
-# L5 vs line sanity check: reject under bets where L5 average is above the line
-# (player has been AVERAGING above the line — under is suspect)
-L5_ABOVE_LINE_MARGIN = 0.0  # L5 >= line * (1 + margin) triggers rejection
 
 
 def _get_env_float(name: str, default: float) -> float:
@@ -87,18 +78,17 @@ class PaperTrader:
 
     Supports standalone operation for dashboard integration.
     Supports per-stat edge thresholds via stat_config.
-    Supports Black-Litterman blending via bl_tau and bl_z_max parameters.
 
-    Default configuration matches optimal backtest sweep results:
-    - BL tau=0.5, z_max=1.0, edge_threshold=0.09 (9% BL edge)
-    - Kelly fraction=0.125, no bet size cap (true Kelly sizing)
+    Uses stored BL-blended edges (bl_over_edge/bl_under_edge) from daily_predictions,
+    which are computed by the inference_job and edge_refresh_job. Falls back to raw
+    Monte Carlo edges when BL values are not available.
 
     Configuration can be overridden via environment variables:
     - PAPER_TRADING_BANKROLL: Starting bankroll
     - PAPER_TRADING_KELLY_FRACTION: Kelly fraction
     - PAPER_TRADING_EDGE_THRESHOLD: Edge threshold
     - PAPER_TRADING_MAX_BET_PCT: Max bet % (set to "none" for no cap)
-    - PAPER_TRADING_BL_TAU: Black-Litterman tau
+    - PAPER_TRADING_BL_TAU: Accepted but unused (BL already applied by inference job)
     """
 
     edge_threshold: float = field(default_factory=lambda: DEFAULT_EDGE_THRESHOLD)
@@ -108,9 +98,8 @@ class PaperTrader:
     min_odds: int = -200  # Don't bet heavy favorites
     max_odds: int = 200  # Don't bet long shots
     stat_config: StatConfigSet | None = None  # Per-stat edge thresholds
-    bl_tau: float | None = field(default_factory=lambda: DEFAULT_BL_TAU)
-    bl_z_max: float = 1.0  # BL z-score saturation threshold
-    _bl_blender: BlackLittermanBlender | None = field(init=False, default=None)
+    bl_tau: float | None = field(default_factory=lambda: DEFAULT_BL_TAU)  # Kept for compat
+    bl_z_max: float = 1.0  # Kept for compat
 
     def __post_init__(self):
         self.engine = get_engine()
@@ -121,51 +110,6 @@ class PaperTrader:
             f"kelly={self.kelly_fraction}, edge_threshold={self.edge_threshold}, "
             f"max_bet_pct={self.max_bet_pct or 'None (no cap)'}"
         )
-
-        # Initialize BL blender if tau is set
-        if self.bl_tau is not None:
-            self._bl_blender = BlackLittermanBlender(
-                BLConfig(tau=self.bl_tau, z_max=self.bl_z_max)
-            )
-            logger.info(f"BL blending enabled: tau={self.bl_tau}, z_max={self.bl_z_max}")
-
-    def _load_samples_for_date(self, game_date: date) -> dict[tuple, np.ndarray]:
-        """Load all MC samples for a date from daily_prediction_samples.
-
-        Returns:
-            Dict mapping (player_id, game_id, stat) -> np.ndarray of samples
-        """
-        query = text("""
-            SELECT player_id, game_id, stat, n_samples, samples_gz
-            FROM daily_prediction_samples
-            WHERE prediction_date = :game_date
-        """)
-
-        samples_dict: dict[tuple, np.ndarray] = {}
-        with self.engine.connect() as conn:
-            results = conn.execute(query, {"game_date": game_date}).fetchall()
-
-        for row in results:
-            player_id = int(row[0])
-            game_id = str(row[1])
-            stat = str(row[2])
-            n_samples = int(row[3])
-            blob = row[4]
-
-            # Handle memoryview (psycopg2 returns bytea as memoryview)
-            if isinstance(blob, memoryview):
-                blob = bytes(blob)
-
-            try:
-                samples = np.frombuffer(
-                    gzip.decompress(blob), dtype=np.float64, count=n_samples
-                )
-                samples_dict[(player_id, game_id, stat)] = samples
-            except Exception as e:
-                logger.warning(f"Failed to decompress samples for {player_id}/{stat}: {e}")
-
-        logger.info(f"Loaded {len(samples_dict)} sample arrays for {game_date}")
-        return samples_dict
 
     def _get_edge_threshold(self, stat: str) -> float:
         """Get edge threshold for a stat, using per-stat config if available."""
@@ -268,8 +212,9 @@ class PaperTrader:
         Query daily_predictions for game_date, filter by edge threshold,
         and calculate Kelly stakes.
 
-        When BL blending is enabled (bl_tau is set), loads MC samples and
-        recalculates probabilities/edges using Black-Litterman blending.
+        Uses stored BL-blended edges (bl_over_edge/bl_under_edge) computed by
+        the inference_job and edge_refresh_job. Falls back to raw Monte Carlo
+        edges when BL values are not in the DB.
 
         Skips games that have already started (no live betting).
 
@@ -282,14 +227,7 @@ class PaperTrader:
         if started_game_ids:
             logger.info(f"Excluding {len(started_game_ids) // 2} started games from bet selection")
 
-        # Load MC samples if BL blending is enabled
-        samples_dict: dict[tuple, np.ndarray] = {}
-        if self._bl_blender is not None:
-            samples_dict = self._load_samples_for_date(game_date)
-            if not samples_dict:
-                logger.warning(f"BL enabled but no samples found for {game_date}")
-
-        # Query predictions with edge
+        # Query predictions including stored BL values
         query = text("""
             SELECT
                 id as prediction_id,
@@ -307,8 +245,10 @@ class PaperTrader:
                 implied_under,
                 over_edge,
                 under_edge,
-                pred_q50,
-                feat_player_avg_stat_l5
+                bl_over_prob,
+                bl_under_prob,
+                bl_over_edge,
+                bl_under_edge
             FROM daily_predictions
             WHERE prediction_date = :game_date
               AND stat IN ('pts', 'reb', 'ast', 'pra', 'pr', 'pa', 'ra')
@@ -328,7 +268,6 @@ class PaperTrader:
         for _, row in df.iterrows():
             stat = str(row["stat"])
             threshold = self._get_edge_threshold(stat)
-            player_id = int(row["player_id"])
             game_id = str(row["game_id"])
             line = float(row["line"]) if pd.notna(row["line"]) else None
 
@@ -350,34 +289,31 @@ class PaperTrader:
             over_odds = int(over_odds)
             under_odds = int(under_odds)
 
-            # Apply BL blending if enabled and samples available
-            if self._bl_blender is not None:
-                samples = samples_dict.get((player_id, game_id, stat))
-                if samples is not None and len(samples) > 0:
-                    # Use BL blending
-                    bl_result = self._bl_blender.blend_prediction(
-                        samples=samples,
-                        line=line,
-                        over_odds=over_odds,
-                        under_odds=under_odds,
-                    )
-                    over_prob = bl_result["posterior_over"]
-                    under_prob = bl_result["posterior_under"]
-                    implied_over = bl_result["market_over"]
-                    implied_under = bl_result["market_under"]
-                    over_edge = over_prob - implied_over
-                    under_edge = under_prob - implied_under
-                else:
-                    # No samples - skip this prediction
-                    continue
+            # Use stored BL edges when available (computed by inference/edge_refresh job),
+            # fall back to raw Monte Carlo edges otherwise
+            bl_over = row.get("bl_over_edge")
+            bl_under = row.get("bl_under_edge")
+            if pd.notna(bl_over) and pd.notna(bl_under):
+                over_edge = float(bl_over)
+                under_edge = float(bl_under)
+                bl_over_prob = row.get("bl_over_prob")
+                bl_under_prob = row.get("bl_under_prob")
+                over_prob = float(bl_over_prob) if pd.notna(bl_over_prob) else (
+                    float(row["implied_over"]) + over_edge if pd.notna(row.get("implied_over")) else 0.5
+                )
+                under_prob = float(bl_under_prob) if pd.notna(bl_under_prob) else (
+                    float(row["implied_under"]) + under_edge if pd.notna(row.get("implied_under")) else 0.5
+                )
+                implied_over = float(row["implied_over"]) if pd.notna(row.get("implied_over")) else 0.5
+                implied_under = float(row["implied_under"]) if pd.notna(row.get("implied_under")) else 0.5
             else:
-                # No BL - use stored values
-                over_edge = float(row["over_edge"]) if pd.notna(row["over_edge"]) else 0
-                under_edge = float(row["under_edge"]) if pd.notna(row["under_edge"]) else 0
-                over_prob = float(row["over_prob"]) if pd.notna(row["over_prob"]) else 0.5
-                under_prob = float(row["under_prob"]) if pd.notna(row["under_prob"]) else 0.5
-                implied_over = float(row["implied_over"]) if pd.notna(row["implied_over"]) else 0.5
-                implied_under = float(row["implied_under"]) if pd.notna(row["implied_under"]) else 0.5
+                # No BL computed — use raw stored values
+                over_edge = float(row["over_edge"]) if pd.notna(row.get("over_edge")) else 0
+                under_edge = float(row["under_edge"]) if pd.notna(row.get("under_edge")) else 0
+                over_prob = float(row["over_prob"]) if pd.notna(row.get("over_prob")) else 0.5
+                under_prob = float(row["under_prob"]) if pd.notna(row.get("under_prob")) else 0.5
+                implied_over = float(row["implied_over"]) if pd.notna(row.get("implied_over")) else 0.5
+                implied_under = float(row["implied_under"]) if pd.notna(row.get("implied_under")) else 0.5
 
             # Select the direction with higher edge that meets threshold
             direction = None
@@ -401,32 +337,6 @@ class PaperTrader:
 
             if direction is None:
                 continue
-
-            # Sanity checks for under bets
-            if direction == "under":
-                feat_l5 = row.get("feat_player_avg_stat_l5")
-                pred_q50 = row.get("pred_q50")
-
-                # Check 1: Q50 divergence — reject when Q50 is 30%+ below L5
-                if pd.notna(feat_l5) and pd.notna(pred_q50) and feat_l5 > 0:
-                    divergence = (feat_l5 - pred_q50) / feat_l5
-                    if divergence > MAX_Q50_DIVERGENCE:
-                        player_name = row["player_name"]
-                        logger.warning(
-                            f"SANITY CHECK [Q50]: Skipping {player_name} {stat} under — "
-                            f"Q50={pred_q50:.1f} is {divergence:.0%} below L5={feat_l5:.1f}"
-                        )
-                        continue
-
-                # Check 2: L5 above line — reject when player is averaging above the line
-                if pd.notna(feat_l5) and feat_l5 > 0 and line > 0:
-                    if feat_l5 >= line * (1 + L5_ABOVE_LINE_MARGIN):
-                        player_name = row["player_name"]
-                        logger.warning(
-                            f"SANITY CHECK [L5>LINE]: Skipping {player_name} {stat} under — "
-                            f"L5 avg={feat_l5:.1f} >= line={line:.1f}"
-                        )
-                        continue
 
             # Filter extreme odds
             if pd.isna(odds) or odds < self.min_odds or odds > self.max_odds:
