@@ -12,7 +12,6 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Optional
 
 import pandas as pd
 from sqlalchemy import text
@@ -41,12 +40,17 @@ def _break_even_win_rate(price_cents: float) -> float:
 
 def _edge_bucket(edge: float) -> str:
     e = edge * 100
-    if e < 3:   return "<3%"
-    if e < 5:   return "3-5%"
-    if e < 10:  return "5-10%"
-    if e < 15:  return "10-15%"
-    if e < 20:  return "15-20%"
-    return              "20%+"
+    if e < 3:
+        return "<3%"
+    if e < 5:
+        return "3-5%"
+    if e < 10:
+        return "5-10%"
+    if e < 15:
+        return "10-15%"
+    if e < 20:
+        return "15-20%"
+    return "20%+"
 
 
 def _z_score(wins: int, total: int, be_rate: float) -> float:
@@ -71,7 +75,7 @@ class KalshiAnalysisMetrics:
     z_score: float                 # Z-score for the lookback window (14d default)
     total_pnl: float
     roi: float                     # ROI on stake: pnl / total contract cost
-    bankroll_roi: Optional[float]  # ROI on bankroll: pnl / starting bankroll for window
+    bankroll_roi: float | None  # ROI on bankroll: pnl / starting bankroll for window
     z_score_alltime: float = float("nan")  # Z-score across ALL resolved NO bets ever
     n_bets_alltime: int = 0                # Sample size for all-time Z-score
     by_stat: list[dict] = field(default_factory=list)        # [{stat, wins, total, win_rate, pnl, roi}]
@@ -110,7 +114,7 @@ class KalshiAnalysisMetrics:
 # Core computation
 # ---------------------------------------------------------------------------
 
-def compute_kalshi_analysis(lookback_days: int = 14) -> Optional[KalshiAnalysisMetrics]:
+def compute_kalshi_analysis(lookback_days: int = 14) -> KalshiAnalysisMetrics | None:
     """Compute Kalshi paper trading analysis over the last N days.
 
     Queries resolved real NO bets from kalshi_paper_bets and computes:
@@ -172,7 +176,7 @@ def compute_kalshi_analysis(lookback_days: int = 14) -> Optional[KalshiAnalysisM
     date_max = str(df["game_date"].max())[:10]
 
     # Bankroll ROI: pnl / bankroll at the start of the window
-    bankroll_roi: Optional[float] = None
+    bankroll_roi: float | None = None
     try:
         with engine.connect() as conn:
             row = conn.execute(

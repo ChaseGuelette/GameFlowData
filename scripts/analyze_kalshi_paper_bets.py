@@ -24,16 +24,15 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-import pandas as pd
-from sqlalchemy import text
-
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from dotenv import load_dotenv
 
-load_dotenv()
+import pandas as pd
+from dotenv import load_dotenv
+from sqlalchemy import text
 
 from src.db.client import get_engine
 
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,22 +53,32 @@ def break_even_win_rate(price_cents: float) -> float:
 
 def price_bucket(price_cents: float) -> str:
     p = int(price_cents)
-    if p <= 14:   return "05-14c"
-    if p <= 24:   return "15-24c"
-    if p <= 34:   return "25-34c"
-    if p <= 44:   return "35-44c"
-    if p <= 55:   return "45-55c"
-    return       "56c+"
+    if p <= 14:
+        return "05-14c"
+    if p <= 24:
+        return "15-24c"
+    if p <= 34:
+        return "25-34c"
+    if p <= 44:
+        return "35-44c"
+    if p <= 55:
+        return "45-55c"
+    return "56c+"
 
 
 def edge_bucket(edge: float) -> str:
     e = edge * 100
-    if e < 3:     return "<3%"
-    if e < 5:     return "3-5%"
-    if e < 10:    return "5-10%"
-    if e < 15:    return "10-15%"
-    if e < 20:    return "15-20%"
-    return               "20%+"
+    if e < 3:
+        return "<3%"
+    if e < 5:
+        return "3-5%"
+    if e < 10:
+        return "5-10%"
+    if e < 15:
+        return "10-15%"
+    if e < 20:
+        return "15-20%"
+    return "20%+"
 
 
 def z_score(wins: int, total: int, be_rate: float) -> float:
@@ -274,7 +283,6 @@ def run_analysis(df: pd.DataFrame, no_only: bool = False):
     # For remaining tables, filter to NO bets only (or all per flag)
     analysis_df = df[df["side"] == "no"] if not no_only else df[df["side"] == "no"]
     real_analysis = analysis_df[~analysis_df["is_overflow"]]
-    overflow_analysis = analysis_df[analysis_df["is_overflow"]]
     combined_analysis = analysis_df
 
     # ── By stat type (NO, combined) ─────────────────────────────────────────

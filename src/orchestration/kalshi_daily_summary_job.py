@@ -84,8 +84,9 @@ def _get_yesterday_daily_log() -> dict:
     yesterday = date.today() - timedelta(days=1)
 
     try:
-        from src.db.client import get_engine
         from sqlalchemy import text
+
+        from src.db.client import get_engine
 
         engine = get_engine()
 
