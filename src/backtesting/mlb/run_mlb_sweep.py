@@ -616,6 +616,7 @@ def run_single_config(
     starting_bankroll: float,
     max_bet_pct: float | None = None,
     flat_bet_size: float | None = None,
+    allowed_bets: set[tuple[str, str]] | None = None,
 ) -> SweepResult:
     """Run edge calculation + bet simulation + metrics for one config."""
     t0 = time.time()
@@ -632,6 +633,7 @@ def run_single_config(
         kelly_fraction=config.kelly_fraction,
         max_bet_pct=max_bet_pct,
         flat_bet_size=flat_bet_size,
+        allowed_bets=allowed_bets,
     )
 
     all_prediction_rows = []
@@ -705,6 +707,7 @@ def run_combined_config(
     kelly_fraction: float = 0.125,
     max_bet_pct: float | None = None,
     flat_bet_size: float | None = None,
+    allowed_bets: set[tuple[str, str]] | None = None,
 ) -> SweepResult:
     """Run a combined backtest using per-stat BL configs and edge thresholds.
 
@@ -734,6 +737,7 @@ def run_combined_config(
         max_bet_pct=max_bet_pct,
         flat_bet_size=flat_bet_size,
         stat_config=stat_config_set,
+        allowed_bets=allowed_bets,
     )
 
     all_prediction_rows = []
@@ -1049,6 +1053,10 @@ def main():
     parser.add_argument("--combined", action="store_true",
                         help="Run combined backtest using per-stat optimal BL configs from mlb_stat_config.py. "
                              "Ignores --tau, --edge, --z-max, --max-weight when set.")
+    parser.add_argument("--direction", choices=["over", "under", "both"], default="both",
+                        help="Restrict bet direction for all stats (default: both). "
+                             "In --combined mode, per-stat allowed_directions from mlb_stat_config.py "
+                             "are also applied on top of this filter.")
 
     args = parser.parse_args()
 
@@ -1062,6 +1070,12 @@ def main():
 
     start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
     end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
+
+    # Build allowed_bets set from --direction + --stats flags
+    if args.direction == "both":
+        cli_allowed_bets: set[tuple[str, str]] | None = None
+    else:
+        cli_allowed_bets = {(stat, args.direction) for stat in args.stats}
 
     configs = build_sweep_grid(tau_values, args.edge, args.kelly, args.z_max, args.max_weight)
     logger.info(f"Sweep grid: {len(configs)} configurations")
@@ -1119,12 +1133,26 @@ def main():
         for stat_key, bl_cfg in STAT_BL_CONFIGS.items():
             if stat_key in args.stats:
                 edge = MLB_STATS.get(stat_key, {}).get("edge_threshold", 0.08)
-                logger.info(f"  {stat_key}: tau={bl_cfg.tau}, z_max={bl_cfg.z_max}, mw={bl_cfg.max_weight}, edge={edge}")
+                dirs = MLB_STATS.get(stat_key, {}).get("allowed_directions", ["over", "under"])
+                logger.info(f"  {stat_key}: tau={bl_cfg.tau}, z_max={bl_cfg.z_max}, mw={bl_cfg.max_weight}, edge={edge}, dirs={dirs}")
         logger.info("=" * 60)
 
         # Build per-stat BL configs and edge thresholds for requested stats
         stat_bl = {s: STAT_BL_CONFIGS.get(s, DEFAULT_BL_CONFIG) for s in args.stats}
         stat_edges = {s: MLB_STATS.get(s, {}).get("edge_threshold", 0.08) for s in args.stats}
+
+        # Build allowed_bets: intersect CLI direction filter with per-stat allowed_directions from config
+        config_pairs: set[tuple[str, str]] = set()
+        for stat in args.stats:
+            per_stat_dirs = MLB_STATS.get(stat, {}).get("allowed_directions")
+            dirs = per_stat_dirs if per_stat_dirs else ["over", "under"]
+            for d in dirs:
+                config_pairs.add((stat, d))
+        if cli_allowed_bets is not None:
+            combined_allowed_bets: set[tuple[str, str]] | None = config_pairs & cli_allowed_bets
+        else:
+            all_pairs = {(s, d) for s in args.stats for d in ("over", "under")}
+            combined_allowed_bets = config_pairs if config_pairs != all_pairs else None
 
         result = run_combined_config(
             stat_bl_configs=stat_bl,
@@ -1137,6 +1165,7 @@ def main():
             kelly_fraction=args.kelly[0],
             max_bet_pct=args.max_bet_pct,
             flat_bet_size=args.flat_bet,
+            allowed_bets=combined_allowed_bets,
         )
 
         results.append(result)
@@ -1164,6 +1193,7 @@ def main():
                 starting_bankroll=args.starting_bankroll,
                 max_bet_pct=args.max_bet_pct,
                 flat_bet_size=args.flat_bet,
+                allowed_bets=cli_allowed_bets,
             )
 
             results.append(result)

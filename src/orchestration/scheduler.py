@@ -71,6 +71,7 @@ JOB_NAMES = {
     "mlb_inference_job.py": "MLB Inference",
     "kalshi_refresh_job.py": "Kalshi Refresh",
     "archive_old_props_job.py": "Archive Old Props",
+    "kalshi_daily_summary_job.py": "Kalshi Daily Summary",
 }
 
 # In-memory job status tracking for dependency checks.
@@ -555,6 +556,11 @@ def run_kalshi_refresh_mlb():
     run_job("kalshi_refresh_job.py", extra_args="--sport mlb", silent_on_success=True)
 
 
+def run_kalshi_daily_summary():
+    """Daily Kalshi paper trading summary: resolve bets, P&L + analysis to Discord."""
+    run_job("kalshi_daily_summary_job.py")
+
+
 def main():
     import argparse
 
@@ -735,6 +741,14 @@ def main():
     # ==============================================================
     # Kalshi Prediction Markets
     # ==============================================================
+
+    # 8:00 AM ET - Kalshi daily summary: resolve pending bets + P&L/analysis to Discord
+    scheduler.add_job(
+        run_kalshi_daily_summary,
+        CronTrigger(hour=8, minute=0),
+        id="kalshi_daily_summary",
+        name="Kalshi Daily Summary (8 AM ET)",
+    )
 
     # Every 10 min, 11 AM - 11 PM ET — scrape markets + compute edges
     # Job exits gracefully if KALSHI_API_KEY is not set

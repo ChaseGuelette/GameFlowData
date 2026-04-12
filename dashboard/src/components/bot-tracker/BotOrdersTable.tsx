@@ -35,6 +35,20 @@ function formatPnl(dollars: number | null): string {
   return `${sign}$${Math.abs(dollars).toFixed(2)}`
 }
 
+function getKalshiUrl(ticker: string | null | undefined, sport: string): string | null {
+  if (!ticker) return null
+  const parts = ticker.split('-')
+  if (parts.length < 2) return null
+  const matchup = parts[1].toLowerCase()
+  if (sport === 'nba') {
+    return `https://kalshi.com/markets/kxnbagame/professional-basketball-game/kxnbagame-${matchup}`
+  }
+  if (sport === 'mlb') {
+    return `https://kalshi.com/markets/kxmlbgame/professional-baseball-game/kxmlbgame-${matchup}`
+  }
+  return null
+}
+
 export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
   const [sortField, setSortField] = useState<SortField>('placed_at')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -195,6 +209,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
               <th className="px-3 py-2">Line</th>
               <th className="px-3 py-2">Side</th>
               <th className="px-3 py-2">Contracts</th>
+              <th className="px-3 py-2">Value</th>
               <th className="px-3 py-2">{isLive ? 'Fill' : 'Price'}</th>
               <th
                 className="px-3 py-2 cursor-pointer hover:text-slate-200"
@@ -214,12 +229,13 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
               >
                 P&L{sortIcon('pnl')}
               </th>
+              <th className="px-3 py-2 w-8"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50">
             {sortedOrders.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={13} className="px-3 py-8 text-center text-slate-500">
                   No orders found
                 </td>
               </tr>
@@ -236,6 +252,12 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                   : rawPrice != null
                     ? order.side === 'yes' ? rawPrice : 100 - rawPrice
                     : null
+                const value = isLive
+                  ? (order as KalshiLiveOrder).total_cost
+                  : entryPrice != null
+                    ? (order.contracts * entryPrice) / 100
+                    : null
+                const kalshiUrl = getKalshiUrl(order.ticker, order.sport)
                 const isOverflow = (order.status ?? '').startsWith('overflow')
                 return (
                   <tr key={order.id} className={`hover:bg-slate-700/30 ${isOverflow ? 'opacity-40' : ''}`}>
@@ -269,6 +291,9 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                     </td>
                     <td className="px-3 py-2 text-slate-300">{order.contracts}</td>
                     <td className="px-3 py-2 text-slate-300">
+                      {value != null ? `$${value.toFixed(2)}` : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-slate-300">
                       {entryPrice != null ? `${entryPrice}¢` : '—'}
                     </td>
                     <td className="px-3 py-2 text-slate-300">
@@ -287,6 +312,21 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                       }`}
                     >
                       {formatPnl(order.pnl != null ? Number(order.pnl) : null)}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {kalshiUrl ? (
+                        <a
+                          href={kalshiUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-slate-500 hover:text-slate-300 transition-colors"
+                          title="View on Kalshi"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="inline w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      ) : null}
                     </td>
                   </tr>
                 )

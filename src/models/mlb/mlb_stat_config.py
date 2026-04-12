@@ -11,7 +11,7 @@ from src.models.black_litterman import BLConfig
 
 MLB_STATS: dict[str, dict] = {
     # Quantile regression stats (semi-continuous)
-    "pitcher_strikeouts": {"model_type": "quantile", "edge_threshold": 0.05},
+    "pitcher_strikeouts": {"model_type": "quantile", "edge_threshold": 0.05, "allowed_directions": ["under"]},
     "pitcher_outs": {"model_type": "quantile", "edge_threshold": 0.08},
     # Binomial stats (hits in at-bats — underdispersed)
     "batter_hits": {"model_type": "binomial", "edge_threshold": 0.08},

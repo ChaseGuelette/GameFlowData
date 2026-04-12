@@ -1161,3 +1161,341 @@ def send_kalshi_trade_alert_sync(
     except Exception as e:
         logger.exception(f"Failed to send Kalshi trade alert synchronously: {e}")
         return False
+
+
+# =============================================================================
+# Kalshi Paper Trading Daily Summary (Performance Channel)
+# =============================================================================
+
+
+def _build_kalshi_pnl_summary_embed(
+    resolution_result: dict,
+    bankroll: float,
+    daily_pnl: float,
+    total_pnl: float,
+) -> dict:
+    """Build Discord embed for Kalshi daily P&L summary.
+
+    Args:
+        resolution_result: Dict from KalshiPaperTrader.resolve_all_pending()
+        bankroll: Current Kalshi paper bankroll
+        daily_pnl: Yesterday's P&L (from daily log)
+        total_pnl: Cumulative P&L (from daily log)
+
+    Returns:
+        Discord embed dict
+    """
+    wins = resolution_result.get("total_won", 0)
+    losses = resolution_result.get("total_lost", 0)
+    total_resolved = resolution_result.get("total_resolved", 0)
+
+    if daily_pnl > 0:
+        color = 0x2ECC71  # Green
+        pnl_emoji = "📈"
+    elif daily_pnl < 0:
+        color = 0xE74C3C  # Red
+        pnl_emoji = "📉"
+    else:
+        color = 0x95A5A6  # Gray
+        pnl_emoji = "➖"
+
+    record = f"{wins}W-{losses}L"
+
+    allow_yes = os.environ.get("KALSHI_ALLOW_YES_BETS", "false").lower() == "true"
+    mode_badge = "YES+NO" if allow_yes else "NO-ONLY"
+
+    embed = {
+        "title": f"{pnl_emoji} Kalshi Daily Performance Summary",
+        "color": color,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {
+                "name": "Today's Record",
+                "value": record if total_resolved > 0 else "No bets resolved",
+                "inline": True,
+            },
+            {
+                "name": "Daily P&L",
+                "value": f"${daily_pnl:+,.2f}",
+                "inline": True,
+            },
+            {
+                "name": "Bankroll",
+                "value": f"${bankroll:,.2f}",
+                "inline": True,
+            },
+            {
+                "name": "Total P&L",
+                "value": f"${total_pnl:+,.2f}",
+                "inline": True,
+            },
+            {
+                "name": "Mode",
+                "value": mode_badge,
+                "inline": True,
+            },
+        ],
+        "footer": {
+            "text": "Kalshi Paper Trading | GameFlowData",
+        },
+    }
+
+    if wins + losses > 0:
+        win_rate = wins / (wins + losses)
+        embed["fields"].append({
+            "name": "Win Rate (Today)",
+            "value": f"{win_rate:.1%}",
+            "inline": True,
+        })
+
+    return embed
+
+
+async def send_kalshi_pnl_summary(
+    resolution_result: dict,
+    bankroll: float,
+    daily_pnl: float,
+    total_pnl: float,
+    channel_id: str | None = None,
+) -> bool:
+    """Send Kalshi daily P&L summary to Discord performance channel."""
+    load_dotenv()
+
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping Kalshi P&L summary")
+        return False
+
+    channel_id = channel_id or os.getenv("DISCORD_CHANNEL_PERFORMANCE")
+    if not channel_id:
+        logger.warning("DISCORD_CHANNEL_PERFORMANCE not configured, skipping Kalshi P&L summary")
+        return False
+
+    embed = _build_kalshi_pnl_summary_embed(resolution_result, bankroll, daily_pnl, total_pnl)
+
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status in (200, 201):
+                    logger.info("Sent Kalshi daily P&L summary to performance channel")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi P&L summary: {e}")
+        return False
+
+
+def send_kalshi_pnl_summary_sync(
+    resolution_result: dict,
+    bankroll: float,
+    daily_pnl: float,
+    total_pnl: float,
+    channel_id: str | None = None,
+) -> bool:
+    """Synchronous wrapper for send_kalshi_pnl_summary."""
+    import asyncio
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                send_kalshi_pnl_summary(resolution_result, bankroll, daily_pnl, total_pnl, channel_id),
+                loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(
+                send_kalshi_pnl_summary(resolution_result, bankroll, daily_pnl, total_pnl, channel_id)
+            )
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi P&L summary synchronously: {e}")
+        return False
+
+
+def _build_kalshi_analysis_embed(metrics) -> dict:
+    """Build Discord embed for Kalshi paper trading analysis report.
+
+    Args:
+        metrics: KalshiAnalysisMetrics instance from kalshi_analysis module.
+
+    Returns:
+        Discord embed dict
+    """
+    import math
+
+    severity = metrics.severity
+    verdict = metrics.verdict
+
+    if severity == "healthy":
+        color = 0x2ECC71   # Green
+    elif severity == "warning":
+        color = 0xF39C12   # Amber
+    else:
+        color = 0xE74C3C   # Red
+
+    z_str = f"{metrics.z_score:.1f}σ" if not math.isnan(metrics.z_score) else "—"
+
+    embed = {
+        "title": f"📊 Kalshi Analysis — {verdict}",
+        "color": color,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [],
+        "footer": {
+            "text": (
+                f"Kalshi Paper Trading | {metrics.n_bets} NO bets "
+                f"({metrics.date_range[0]} to {metrics.date_range[1]})"
+            ),
+        },
+    }
+
+    # Overall
+    embed["fields"].append({
+        "name": "Overall (14d)",
+        "value": (
+            f"{metrics.n_bets} bets | "
+            f"{metrics.win_rate:.1%} win | "
+            f"{metrics.break_even:.1%} BE | "
+            f"{metrics.alpha:+.1%} alpha"
+        ),
+        "inline": False,
+    })
+
+    # Z-score (14d window + all-time)
+    z_alltime_str = (
+        f"{metrics.z_score_alltime:.1f}σ"
+        if not math.isnan(metrics.z_score_alltime)
+        else "—"
+    )
+    alltime_label = (
+        f" (n={metrics.n_bets_alltime})" if metrics.n_bets_alltime > 0 else ""
+    )
+    embed["fields"].append({
+        "name": "Z-Score",
+        "value": (
+            f"14d: **{z_str}** ({verdict})\n"
+            f"All-time: **{z_alltime_str}**{alltime_label}"
+        ),
+        "inline": True,
+    })
+
+    # P&L & ROI
+    roi_parts = [f"${metrics.total_pnl:+,.0f}", f"ROI (stake): {metrics.roi:+.1%}"]
+    if metrics.bankroll_roi is not None:
+        roi_parts.append(f"ROI (bankroll): {metrics.bankroll_roi:+.1%}")
+    embed["fields"].append({
+        "name": "P&L & ROI",
+        "value": " | ".join(roi_parts),
+        "inline": False,
+    })
+
+    # 95% CI
+    ci_lo, ci_hi = metrics.ci_95
+    embed["fields"].append({
+        "name": "95% CI",
+        "value": f"[{ci_lo:.1%}, {ci_hi:.1%}]",
+        "inline": True,
+    })
+
+    # By stat
+    if metrics.by_stat:
+        stat_parts = []
+        for s in metrics.by_stat[:6]:
+            stat_parts.append(
+                f"{s['stat'].upper()}: {s['win_rate']:.0%} win (n={s['total']})"
+            )
+        embed["fields"].append({
+            "name": "By Stat",
+            "value": " | ".join(stat_parts),
+            "inline": False,
+        })
+
+    # By edge bucket
+    if metrics.by_edge_bucket:
+        bucket_lines = []
+        for b in metrics.by_edge_bucket:
+            bucket_lines.append(
+                f"{b['bucket']}: {b['win_rate']:.0%} (n={b['total']})"
+            )
+        embed["fields"].append({
+            "name": "By Edge Bucket",
+            "value": "\n".join(bucket_lines),
+            "inline": False,
+        })
+
+    return embed
+
+
+async def send_kalshi_analysis_alert(
+    metrics,
+    channel_id: str | None = None,
+) -> bool:
+    """Send Kalshi analysis embed to Discord performance channel."""
+    load_dotenv()
+
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping Kalshi analysis alert")
+        return False
+
+    channel_id = channel_id or os.getenv("DISCORD_CHANNEL_PERFORMANCE")
+    if not channel_id:
+        logger.warning("DISCORD_CHANNEL_PERFORMANCE not configured, skipping Kalshi analysis alert")
+        return False
+
+    embed = _build_kalshi_analysis_embed(metrics)
+
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status in (200, 201):
+                    logger.info(
+                        f"Sent Kalshi analysis alert (verdict={metrics.verdict}, "
+                        f"n={metrics.n_bets} bets)"
+                    )
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi analysis alert: {e}")
+        return False
+
+
+def send_kalshi_analysis_alert_sync(
+    metrics,
+    channel_id: str | None = None,
+) -> bool:
+    """Synchronous wrapper for send_kalshi_analysis_alert."""
+    import asyncio
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                send_kalshi_analysis_alert(metrics, channel_id),
+                loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(send_kalshi_analysis_alert(metrics, channel_id))
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi analysis alert synchronously: {e}")
+        return False

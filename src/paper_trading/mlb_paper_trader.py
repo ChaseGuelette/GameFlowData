@@ -266,19 +266,23 @@ class MLBPaperTrader:
                 continue
 
             # Select the direction with higher edge that meets threshold
+            allowed_dirs = MLB_STATS.get(stat, {}).get("allowed_directions")
             direction = None
             edge = 0.0
             odds = 0
             model_prob = 0.0
             implied_prob = 0.0
 
-            if over_edge > under_edge and over_edge >= threshold:
+            over_allowed = allowed_dirs is None or "over" in allowed_dirs
+            under_allowed = allowed_dirs is None or "under" in allowed_dirs
+
+            if over_allowed and over_edge > under_edge and over_edge >= threshold:
                 direction = "over"
                 edge = over_edge
                 odds = over_odds
                 model_prob = over_prob
                 implied_prob = implied_over
-            elif under_edge >= threshold:
+            elif under_allowed and under_edge >= threshold:
                 direction = "under"
                 edge = under_edge
                 odds = under_odds
