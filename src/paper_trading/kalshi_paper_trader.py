@@ -63,7 +63,7 @@ def _get_env_float(name: str, default: float) -> float:
 # Supported stat types per sport (skip markets without trained models)
 SUPPORTED_STATS: dict[str, set[str]] = {
     "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
-    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_rbis"},
+    "mlb": {"pitcher_strikeouts", "pitcher_outs", "batter_hits", "batter_rbis", "batter_hrr"},
 }
 
 DEFAULT_BANKROLL = _get_env_float("KALSHI_PAPER_TRADING_BANKROLL", 100.0)
@@ -328,28 +328,65 @@ class KalshiPaperTrader:
         )
         logger.info(f"BET POOL ({target_date} {_mode_str}): {_tier_str}")
 
-        # Second pass: Kelly size and apply exposure cap
-        bets: list[dict[str, Any]] = []
-        overflow_bets: list[dict[str, Any]] = []
-        total_exposure = existing_exposure
-
-        for pos_key, cand in run_candidates.items():
+        # Second pass: Kelly-size ALL candidates (sorted by edge, best first)
+        # Then scale proportionally if total Kelly cost exceeds the remaining cap.
+        # This ensures every qualifying bet gets placed at a fair fraction of its
+        # Kelly-optimal size, rather than the top few getting full Kelly and the
+        # rest getting nothing.
+        kelly_info: list[dict[str, Any]] = []
+        for pos_key, cand in sorted(
+            run_candidates.items(),
+            key=lambda kv: kv[1]["fee_adjusted_edge"],
+            reverse=True,
+        ):
             yes_price = cand["yes_price"]
             side = cand["side"]
             model_prob = cand["model_prob"]
 
-            contracts = self._kelly_contracts(model_prob, yes_price, side, bankroll)
-            if contracts <= 0:
+            kelly_contracts = self._kelly_contracts(model_prob, yes_price, side, bankroll)
+            if kelly_contracts <= 0:
                 continue
 
-            # Cost for this bet
             cost_per = (yes_price / 100.0) if side == "yes" else ((100 - yes_price) / 100.0)
-            bet_cost = contracts * cost_per
-
             fee_per = kalshi_taker_fee(yes_price if side == "yes" else 100 - yes_price)
-            expected_fee = fee_per * contracts
 
-            bet_dict = {
+            kelly_info.append({
+                "pos_key": pos_key,
+                "cand": cand,
+                "kelly_contracts": kelly_contracts,
+                "kelly_cost": kelly_contracts * cost_per,
+                "cost_per": cost_per,
+                "fee_per": fee_per,
+            })
+
+        # Proportional scale factor: shrink all bets equally if Kelly total > cap
+        remaining_cap = max(0.0, effective_cap - existing_exposure)
+        total_kelly_cost = sum(k["kelly_cost"] for k in kelly_info)
+        scale = min(1.0, remaining_cap / total_kelly_cost) if total_kelly_cost > 0 else 0.0
+
+        logger.info(
+            f"Proportional sizing: {len(kelly_info)} candidates, "
+            f"Kelly total=${total_kelly_cost:.2f}, remaining cap=${remaining_cap:.2f}, "
+            f"scale={scale:.3f}"
+        )
+
+        # Third pass: apply scale, build final bet dicts
+        bets: list[dict[str, Any]] = []
+        overflow_bets: list[dict[str, Any]] = []
+        total_exposure = existing_exposure
+
+        for k in kelly_info:
+            pos_key = k["pos_key"]
+            cand = k["cand"]
+            yes_price = cand["yes_price"]
+            side = cand["side"]
+            cost_per = k["cost_per"]
+            fee_per = k["fee_per"]
+
+            scaled_contracts = int(math.floor(k["kelly_contracts"] * scale))
+            actual_contracts = min(scaled_contracts, self.max_contracts_per_market)
+
+            bet_dict: dict[str, Any] = {
                 "game_date": target_date,
                 "ticker": cand["ticker"],
                 "sport": sport,
@@ -359,40 +396,30 @@ class KalshiPaperTrader:
                 "line": cand["line"],
                 "side": side,
                 "price": yes_price,
-                "contracts": contracts,
+                "contracts": actual_contracts,
                 "is_maker": False,
-                "expected_fee": round(expected_fee, 4),
-                "model_prob": round(model_prob, 4),
+                "expected_fee": round(fee_per * actual_contracts, 4),
+                "model_prob": round(cand["model_prob"], 4),
                 "kalshi_implied": round(cand["kalshi_implied"], 4),
                 "edge": round(cand["raw_edge"], 4),
                 "fee_adjusted_edge": round(cand["fee_adjusted_edge"], 4),
             }
 
-            # Enforce daily exposure cap
-            if total_exposure + bet_cost > effective_cap:
-                remaining = effective_cap - total_exposure
-                partial_filled = False
-                if remaining > cost_per:
-                    partial_contracts = int(math.floor(remaining / cost_per))
-                    if partial_contracts > 0:
-                        partial_dict = dict(bet_dict)  # Copy — don't mutate original
-                        partial_dict["contracts"] = partial_contracts
-                        partial_dict["expected_fee"] = round(fee_per * partial_contracts, 4)
-                        total_exposure += partial_contracts * cost_per
-                        bets.append(partial_dict)
-                        partial_filled = True
-
-                # If no partial fill, this bet was entirely skipped — track as overflow
-                if not partial_filled:
-                    overflow_bets.append(bet_dict)
+            if actual_contracts <= 0:
+                # Scaled to zero — record as overflow so we can track these bets
+                # Store Kelly-sized contracts in overflow for honest P&L tracking
+                bet_dict["contracts"] = k["kelly_contracts"]
+                bet_dict["expected_fee"] = round(fee_per * k["kelly_contracts"], 4)
+                overflow_bets.append(bet_dict)
                 continue
 
-            total_exposure += bet_cost
+            total_exposure += actual_contracts * cost_per
             bets.append(bet_dict)
 
         logger.info(
             f"Selected {len(bets)} Kalshi bets [{_mode_str}] for {target_date} "
-            f"(exposure: ${total_exposure:.2f}/${effective_cap:.2f} cap)"
+            f"(exposure: ${total_exposure:.2f}/${effective_cap:.2f} cap, "
+            f"{len(overflow_bets)} scaled to zero)"
         )
 
         # Log overflow bets that would have been taken without the exposure cap

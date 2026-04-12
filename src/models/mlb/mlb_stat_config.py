@@ -11,12 +11,15 @@ from src.models.black_litterman import BLConfig
 
 MLB_STATS: dict[str, dict] = {
     # Quantile regression stats (semi-continuous)
-    "pitcher_strikeouts": {"model_type": "quantile", "edge_threshold": 0.05, "allowed_directions": ["under"]},
+    "pitcher_strikeouts": {"model_type": "quantile", "edge_threshold": 0.08, "allowed_directions": ["under"]},
     "pitcher_outs": {"model_type": "quantile", "edge_threshold": 0.08},
     # Binomial stats (hits in at-bats — underdispersed)
     "batter_hits": {"model_type": "binomial", "edge_threshold": 0.08},
     # NegBin stats (discrete counts — overdispersed)
     "batter_rbis": {"model_type": "negbin", "edge_threshold": 0.12},
+    # Combined batter offensive contribution: hits + runs scored + RBIs
+    # Targets Kalshi's H+R+RBI prop markets (Kalshi-only, no sportsbook equivalent)
+    "batter_hrr": {"model_type": "negbin", "edge_threshold": 0.10},
 }
 
 # Per-stat optimal BL configs from backtest sweeps.

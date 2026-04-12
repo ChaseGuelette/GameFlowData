@@ -21,6 +21,16 @@ export interface SportConfig {
   teamNameToAbbrev: Record<string, string>
   getHeadshotUrl: (playerId: number) => string
   getTeamLogoUrl: (teamAbbrev: string) => string
+  // Model Picks optimal params (from backtest sweep)
+  modelPicksEdge: number        // Global edge threshold when Model Picks is toggled on (NBA) or minimum (MLB)
+  modelPicksTau: number | null  // BL tau for Model Picks (NBA global); null = per-stat server-side for MLB
+  // Per-stat BL configs from mlb_stat_config.py (empty for NBA)
+  perStatConfig: Record<string, {
+    edge: number        // Min edge % required to recommend
+    tau: number         // BL tau — how aggressively to lean on the model vs market
+    z_max: number       // Z-score at which model confidence saturates to 1.0
+    max_weight: number  // Hard cap on blending weight (model can't dominate more than this)
+  }>
   features: {
     dfs: boolean
     statsVault: boolean
@@ -96,6 +106,9 @@ export const NBA_CONFIG: SportConfig = {
   comboStats: new Set<StatType>(['pra', 'pr', 'pa', 'ra']),
   teams: NBA_TEAMS,
   teamNameToAbbrev: NBA_TEAM_NAME_TO_ABBREV,
+  modelPicksEdge: 0.09,
+  modelPicksTau: 0.50,
+  perStatConfig: {},
   getHeadshotUrl: (playerId: number) =>
     `https://cdn.nba.com/headshots/nba/latest/1040x760/${playerId}.png`,
   getTeamLogoUrl: (teamAbbrev: string) => {
@@ -179,13 +192,21 @@ export const MLB_CONFIG: SportConfig = {
   comboStats: new Set<StatType>(),
   teams: MLB_TEAMS,
   teamNameToAbbrev: MLB_TEAM_NAME_TO_ABBREV,
+  modelPicksEdge: 0.05,   // Min edge across all MLB stats (strikeouts threshold)
+  modelPicksTau: null,    // BL applied server-side per stat; null disables global client-side blending
+  // From src/models/mlb/mlb_stat_config.py — STAT_BL_CONFIGS + MLB_STATS
+  perStatConfig: {
+    pitcher_strikeouts: { edge: 0.05, tau: 0.90, z_max: 0.25, max_weight: 0.80 },
+    batter_hits:        { edge: 0.08, tau: 0.75, z_max: 1.00, max_weight: 0.80 },
+    batter_rbis:        { edge: 0.12, tau: 0.90, z_max: 0.25, max_weight: 0.80 },
+  },
   getHeadshotUrl: (playerId: number) =>
     `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${playerId}/headshot/67/current`,
   getTeamLogoUrl: (teamAbbrev: string) =>
     `https://a.espncdn.com/combiner/i?img=/i/teamlogos/mlb/500/${teamAbbrev.toLowerCase()}.png&h=40&w=40`,
   features: {
     dfs: false,
-    statsVault: false,
+    statsVault: true,
     askChat: false,
     injuries: false,
     scoreboard: true,

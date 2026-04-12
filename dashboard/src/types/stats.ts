@@ -1,4 +1,4 @@
-export type WindowSuffix = 'l5' | 'l15' | 'szn'
+export type WindowSuffix = 'l3' | 'l5' | 'l10' | 'l15' | 'l20' | 'szn'
 export type StatsMainTab = 'players' | 'teams' | 'defense' | 'playTypes'
 export type PlayerCategory = 'box' | 'shooting' | 'advanced' | 'consistency'
 export type TeamCategory = 'offense' | 'defense' | 'overall'
@@ -13,7 +13,7 @@ export interface ColumnDef {
   tooltip?: string
   /** Template: "avg_pts_{window}" — {window} replaced at render */
   dbColumn: string
-  format: 'int' | 'dec1' | 'dec2' | 'pct1' | 'rawPct1' | 'plusMinus1'
+  format: 'int' | 'dec1' | 'dec2' | 'dec3' | 'pct1' | 'rawPct1' | 'plusMinus1'
   /** true for TOV, DRtg, PF (higher = worse) */
   invertHeatmap?: boolean
   /** true for columns that don't vary by window */

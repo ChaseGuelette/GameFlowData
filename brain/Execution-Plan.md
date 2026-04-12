@@ -35,7 +35,7 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 2.3 | MLB live scoreboards | completed | MLB scoreboard API endpoint | `/api/scoreboard?sport=mlb` via MLB Stats API, `scoreboard: true` in MLB config. |
 | 2.4 | MLB injury reports | not_started | MLB injury data source + scraper | Injury badges on prop cards, flip `injuries: true` |
 | 2.5 | MLB DFS | not_started | MLB DFS salary data source | Salary scraper + DFS optimizer page for MLB |
-| 2.6 | MLB Stats Vault | not_started | MLB historical stats tables | Player lookup with historical stats for MLB |
+| 2.6 | MLB Stats Vault | completed | MLB historical stats tables | Batters + Pitchers tabs with Box/Rates/Consistency categories. DB views `mlb_batters_latest` + `mlb_pitchers_latest` (migration 023). WindowToggle supports L3/L5/L10/L20/SZN. `dec3` format for AVG/OBP/SLG/OPS. `statsVault: true` in MLB config. Pending: apply migration 023 in Supabase. |
 
 **Done when**: All feature flags in MLB config are `true` and backed by real data.
 
@@ -153,3 +153,18 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 8.5 | Referral program | not_started | 3.5 | Requires Stripe integration first |
 
 **Done when**: Growing Discord community, organic traffic to dashboard, positive user feedback loop.
+
+---
+
+## Phase 9: Polymarket-Kalshi Arbitrage Scanner
+
+**Goal**: Monitor Polymarket prediction markets for cross-platform arbs against Kalshi and mispricings vs. sportsbook consensus.
+
+| Step | Task | Status | Dependencies | Details |
+|------|------|--------|--------------|---------|
+| 9.1 | Core arb scanner pipeline | completed | Kalshi integration | `polymarket_utils`, `polymarket_client`, `polymarket_market_scraper`, `market_matcher`, `arb_scanner`, `arb_scan_job`. 2 DB tables (`polymarket_markets`, `arb_opportunities`). Runs every 10 min on Railway. DISCORD_CHANNEL_ARB=1492934576467611700. |
+| 9.2 | Dry-run validation | not_started | 9.1 deployed | Run `--dry-run` on Railway, verify Polymarket API connectivity, check 20-30 matched markets for false positives, confirm Discord alerts fire |
+| 9.3 | Arb paper trader | not_started | 9.2 | `arb_paper_bets` table (2-leg structure), `ArbPaperTrader` class (P&L for pure/soft arbs, sportsbook directional), resolution via existing stat results |
+| 9.4 | Arb dashboard page | not_started | 9.1, 9.2 | `/arbitrage` page showing live opportunities from `arb_opportunities` table, sortable by margin/discrepancy |
+
+**Done when**: Arb scanner running stably with accurate matches, paper trader tracking simulated P&L, results visible on dashboard.

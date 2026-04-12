@@ -16,6 +16,7 @@ import {
   defenseColumnMap,
   playTypeColumnMap,
 } from '@/lib/stats/columns'
+import { MLBStatsPage } from '@/components/stats/MLBStatsPage'
 import { pivotPlayTypes } from '@/lib/stats/pivotPlayTypes'
 import type {
   StatsMainTab,
@@ -62,12 +63,16 @@ export default function StatsPage() {
   const { config } = useSport()
   const supabase = createClient()
 
+  if (config.sport === 'mlb') {
+    return <MLBStatsPage />
+  }
+
   if (config.sport !== 'nba') {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center">
           <h2 className="text-xl font-semibold text-slate-200 mb-2">Data Vault</h2>
-          <p className="text-slate-400">The Data Vault is currently available for NBA only.</p>
+          <p className="text-slate-400">The Data Vault is not yet available for this sport.</p>
         </div>
       </div>
     )

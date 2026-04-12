@@ -3,7 +3,7 @@
 import { cn } from '@/lib/utils'
 import type { WindowSuffix } from '@/types/stats'
 
-const windows: { value: WindowSuffix; label: string }[] = [
+const NBA_WINDOWS: { value: WindowSuffix; label: string }[] = [
   { value: 'l5', label: 'L5' },
   { value: 'l15', label: 'L15' },
   { value: 'szn', label: 'SZN' },
@@ -12,12 +12,13 @@ const windows: { value: WindowSuffix; label: string }[] = [
 interface WindowToggleProps {
   active: WindowSuffix
   onChange: (w: WindowSuffix) => void
+  options?: { value: WindowSuffix; label: string }[]
 }
 
-export function WindowToggle({ active, onChange }: WindowToggleProps) {
+export function WindowToggle({ active, onChange, options = NBA_WINDOWS }: WindowToggleProps) {
   return (
     <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg">
-      {windows.map((w) => (
+      {options.map((w) => (
         <button
           key={w.value}
           onClick={() => onChange(w.value)}

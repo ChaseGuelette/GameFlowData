@@ -32,15 +32,19 @@ BATTER_STAT_MARKET_KEY: dict[str, str] = {
     "total_bases": "batter_total_bases",
     "rbis": "batter_rbis",
     "runs": "batter_runs_scored",
+    "hrr": "batter_hrr",
 }
 
 # Stat key -> target column in mlb_player_game_stats_batting
+# For compound stats, the value is a SQL expression fragment: used as
+# `bgs.{target_col}` in the training query, so bgs.h + bgs.r + bgs.rbi is correct.
 BATTER_STAT_TARGET: dict[str, str] = {
     "hits": "h",
     "home_runs": "hr",
     "total_bases": "tb",
     "rbis": "rbi",
     "runs": "r",
+    "hrr": "h + bgs.r + bgs.rbi",  # compound: bgs.h + bgs.r + bgs.rbi in SQL
 }
 
 BATTER_BASE_FEATURES: list[str] = [
@@ -103,6 +107,12 @@ BATTER_RBIS_FEATURES: list[str] = BATTER_BASE_FEATURES + [
 BATTER_RUNS_FEATURES: list[str] = BATTER_BASE_FEATURES + [
     "park_runs_factor", "prop_line_batter_runs_scored",
 ]
+# H+R+RBI: hits carry the bulk of the signal; park factors for both hits and runs;
+# no sportsbook prop line exists (Kalshi-only), so prop_line_batter_hrr will be 0
+# during training — the model learns to ignore it and uses rolling avg features instead.
+BATTER_HRR_FEATURES: list[str] = BATTER_BASE_FEATURES + [
+    "park_hits_factor", "park_runs_factor", "prop_line_batter_hrr",
+]
 
 BATTER_FEATURE_MAP: dict[str, list[str]] = {
     "hits": BATTER_HITS_FEATURES,
@@ -110,6 +120,7 @@ BATTER_FEATURE_MAP: dict[str, list[str]] = {
     "total_bases": BATTER_TOTAL_BASES_FEATURES,
     "rbis": BATTER_RBIS_FEATURES,
     "runs": BATTER_RUNS_FEATURES,
+    "hrr": BATTER_HRR_FEATURES,
 }
 
 

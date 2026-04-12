@@ -31,7 +31,8 @@ from src.models.black_litterman import BlackLittermanBlender
 
 logger = logging.getLogger(__name__)
 
-# Stat -> (table, column) for fetching actuals
+# Stat -> (table, column) for fetching actuals.
+# For compound stats, column is a SQL expression used as `{column} as actual_value`.
 STAT_ACTUALS: dict[str, tuple[str, str]] = {
     "pitcher_strikeouts": ("mlb_player_game_stats_pitching", "so"),
     "pitcher_outs":       ("mlb_player_game_stats_pitching", "outs"),
@@ -39,6 +40,7 @@ STAT_ACTUALS: dict[str, tuple[str, str]] = {
     "batter_total_bases": ("mlb_player_game_stats_batting",  "tb"),
     "batter_rbis":        ("mlb_player_game_stats_batting",  "rbi"),
     "batter_runs_scored": ("mlb_player_game_stats_batting",  "r"),
+    "batter_hrr":         ("mlb_player_game_stats_batting",  "h + r + rbi"),
 }
 
 

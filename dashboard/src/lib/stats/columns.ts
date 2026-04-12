@@ -162,6 +162,75 @@ export const playTypeEfficiencyColumns: ColumnDef[] = [
   { key: 'misc_ppp', label: 'MISC', tooltip: 'Miscellaneous — Points Per Possession', dbColumn: 'misc_ppp', format: 'dec2', windowless: true },
 ]
 
+// ─── MLB Batter — Box Score ──────────────────────────────────────────
+// Windows: l5, l10, l20, szn
+export const mlbBatterBoxColumns: ColumnDef[] = [
+  { key: 'gp', label: 'GP', tooltip: 'Games Played', dbColumn: 'games_{window}', format: 'int' },
+  { key: 'h', label: 'H', tooltip: 'Hits Per Game', dbColumn: 'avg_h_{window}', format: 'dec1' },
+  { key: 'rbi', label: 'RBI', tooltip: 'RBI Per Game', dbColumn: 'avg_rbi_{window}', format: 'dec1' },
+  { key: 'r', label: 'R', tooltip: 'Runs Per Game', dbColumn: 'avg_r_{window}', format: 'dec1' },
+  { key: 'hr', label: 'HR', tooltip: 'Home Runs Per Game', dbColumn: 'avg_hr_{window}', format: 'dec1' },
+  { key: 'sb', label: 'SB', tooltip: 'Stolen Bases Per Game', dbColumn: 'avg_sb_{window}', format: 'dec1' },
+  { key: 'bb', label: 'BB', tooltip: 'Walks Per Game', dbColumn: 'avg_bb_{window}', format: 'dec1' },
+  { key: 'so', label: 'SO', tooltip: 'Strikeouts Per Game', dbColumn: 'avg_so_{window}', format: 'dec1', invertHeatmap: true },
+  { key: 'ab', label: 'AB', tooltip: 'At Bats Per Game', dbColumn: 'avg_ab_{window}', format: 'dec1' },
+  { key: 'tb', label: 'TB', tooltip: 'Total Bases Per Game', dbColumn: 'avg_tb_{window}', format: 'dec1' },
+  { key: 'doubles', label: '2B', tooltip: 'Doubles Per Game', dbColumn: 'avg_doubles_{window}', format: 'dec1' },
+  { key: 'pa', label: 'PA', tooltip: 'Plate Appearances Per Game', dbColumn: 'avg_pa_{window}', format: 'dec1' },
+]
+
+// ─── MLB Batter — Rates ──────────────────────────────────────────────
+// Windowless — computed from L10 rolling sums
+export const mlbBatterRatesColumns: ColumnDef[] = [
+  { key: 'avg', label: 'AVG', tooltip: 'Batting Average (L10)', dbColumn: 'avg_batting_avg_l10', format: 'dec3', windowless: true },
+  { key: 'obp', label: 'OBP', tooltip: 'On-Base Percentage (L10)', dbColumn: 'avg_obp_l10', format: 'dec3', windowless: true },
+  { key: 'slg', label: 'SLG', tooltip: 'Slugging Percentage (L10)', dbColumn: 'avg_slg_l10', format: 'dec3', windowless: true },
+  { key: 'ops', label: 'OPS', tooltip: 'On-base Plus Slugging (L10)', dbColumn: 'avg_ops_l10', format: 'dec3', windowless: true },
+]
+
+// ─── MLB Batter — Consistency ────────────────────────────────────────
+// Windowless — std devs from L5
+export const mlbBatterConsistencyColumns: ColumnDef[] = [
+  { key: 'std_h', label: 'std H', tooltip: 'Std dev of Hits (L5) — lower is more consistent', dbColumn: 'std_h_l5', format: 'dec1', invertHeatmap: true, windowless: true },
+  { key: 'std_rbi', label: 'std RBI', tooltip: 'Std dev of RBI (L5)', dbColumn: 'std_rbi_l5', format: 'dec1', invertHeatmap: true, windowless: true },
+  { key: 'std_r', label: 'std R', tooltip: 'Std dev of Runs (L5)', dbColumn: 'std_r_l5', format: 'dec1', invertHeatmap: true, windowless: true },
+  { key: 'std_hr', label: 'std HR', tooltip: 'Std dev of Home Runs (L5)', dbColumn: 'std_hr_l5', format: 'dec1', invertHeatmap: true, windowless: true },
+  { key: 'std_so', label: 'std SO', tooltip: 'Std dev of Strikeouts (L5)', dbColumn: 'std_so_l5', format: 'dec1', invertHeatmap: true, windowless: true },
+  { key: 'rest', label: 'Rest', tooltip: 'Days since last game', dbColumn: 'rest_days', format: 'int', windowless: true },
+  { key: 'g7d', label: 'G/7d', tooltip: 'Games played in last 7 days', dbColumn: 'games_last_7d', format: 'int', windowless: true },
+]
+
+// ─── MLB Pitcher — Box Score ─────────────────────────────────────────
+// Windows: l3, l5, szn
+export const mlbPitcherBoxColumns: ColumnDef[] = [
+  { key: 'starts', label: 'GS', tooltip: 'Starts', dbColumn: 'starts_{window}', format: 'int' },
+  { key: 'ip', label: 'IP', tooltip: 'Innings Pitched Per Start', dbColumn: 'avg_ip_{window}', format: 'dec1' },
+  { key: 'so', label: 'SO', tooltip: 'Strikeouts Per Start', dbColumn: 'avg_so_{window}', format: 'dec1' },
+  { key: 'h_allowed', label: 'H', tooltip: 'Hits Allowed Per Start', dbColumn: 'avg_h_allowed_{window}', format: 'dec1', invertHeatmap: true },
+  { key: 'bb', label: 'BB', tooltip: 'Walks Per Start', dbColumn: 'avg_bb_{window}', format: 'dec1', invertHeatmap: true },
+  { key: 'er', label: 'ER', tooltip: 'Earned Runs Per Start', dbColumn: 'avg_er_{window}', format: 'dec1', invertHeatmap: true },
+  { key: 'hr_allowed', label: 'HR', tooltip: 'Home Runs Allowed Per Start', dbColumn: 'avg_hr_allowed_{window}', format: 'dec1', invertHeatmap: true },
+  { key: 'pitches', label: 'Pitches', tooltip: 'Pitches Thrown Per Start', dbColumn: 'avg_pitches_thrown_{window}', format: 'dec1' },
+]
+
+// ─── MLB Pitcher — Rates ─────────────────────────────────────────────
+// Windowless — computed from L5 rolling sums
+export const mlbPitcherRatesColumns: ColumnDef[] = [
+  { key: 'era', label: 'ERA', tooltip: 'Earned Run Average (L5)', dbColumn: 'avg_era_l5', format: 'dec2', invertHeatmap: true, windowless: true },
+  { key: 'whip', label: 'WHIP', tooltip: 'Walks + Hits per Inning Pitched (L5)', dbColumn: 'avg_whip_l5', format: 'dec2', invertHeatmap: true, windowless: true },
+  { key: 'k9', label: 'K/9', tooltip: 'Strikeouts per 9 Innings (L5)', dbColumn: 'avg_k_per_9_l5', format: 'dec1', windowless: true },
+  { key: 'bb9', label: 'BB/9', tooltip: 'Walks per 9 Innings (L5)', dbColumn: 'avg_bb_per_9_l5', format: 'dec1', invertHeatmap: true, windowless: true },
+]
+
+// ─── MLB Pitcher — Consistency ───────────────────────────────────────
+// Windowless — std devs from L3
+export const mlbPitcherConsistencyColumns: ColumnDef[] = [
+  { key: 'std_so', label: 'std SO', tooltip: 'Std dev of Strikeouts (L3) — lower is more consistent', dbColumn: 'std_so_l3', format: 'dec1', invertHeatmap: true, windowless: true },
+  { key: 'std_er', label: 'std ER', tooltip: 'Std dev of Earned Runs (L3)', dbColumn: 'std_er_l3', format: 'dec1', invertHeatmap: true, windowless: true },
+  { key: 'days_rest', label: 'Rest', tooltip: 'Days since last start', dbColumn: 'days_rest', format: 'int', windowless: true },
+  { key: 'last_pitches', label: 'Last PC', tooltip: 'Pitch count in last start', dbColumn: 'pitch_count_last_start', format: 'int', windowless: true },
+]
+
 // ─── Lookup helpers ─────────────────────────────────────────────────
 export const playTypeColumnMap = {
   frequency: playTypeFrequencyColumns,

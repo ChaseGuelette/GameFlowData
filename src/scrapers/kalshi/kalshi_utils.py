@@ -31,6 +31,10 @@ KALSHI_STAT_MAP: dict[str, str] = {
     "K": "pitcher_strikeouts",
     "HITS": "batter_hits",
     "RBI": "batter_rbis",
+    # TODO: confirm Kalshi's exact ticker key for H+R+RBI markets
+    # Find it by looking at a live HRR market ticker on Kalshi (e.g., KXMLBHRR-26APR12...)
+    # and reading the middle segment after "KXMLB" — that key goes here.
+    "HRR": "batter_hrr",
 }
 
 # Reverse map: our stat keys → Kalshi ticker stat keys
@@ -59,6 +63,10 @@ KALSHI_PROP_SERIES: dict[str, dict[str, str]] = {
     "mlb": {
         "KXMLBHIT": "batter_hits",
         "KXMLBKS": "pitcher_strikeouts",
+        # TODO: verify the real Kalshi series ticker for H+R+RBI markets.
+        # Find a live HRR market on Kalshi, check the ticker prefix (e.g., KXMLBHRR-26APR12...).
+        # Update "KXMLBHRR" below with the confirmed prefix before deploying.
+        "KXMLBHRR": "batter_hrr",
     },
 }
 

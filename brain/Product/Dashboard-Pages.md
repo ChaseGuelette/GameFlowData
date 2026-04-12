@@ -12,7 +12,7 @@
 - Config file: `dashboard/src/lib/sport-config.ts` — table names, stat types, team data, CDN URLs, feature flags, column mappings
 - Context: `dashboard/src/contexts/SportContext.tsx` — `useSport()` hook, localStorage persistence
 - Sport toggle pill in Navbar (NBA/MLB), nav links conditionally shown per feature flags
-- MLB feature flags (all `false` at launch): DFS, Stats Vault, AskChat, Injuries, Prediction Markets
+- MLB feature flags: DFS=false, **Stats Vault=true (Session 27)**, AskChat=false, Injuries=false, Prediction Markets=false
 - NBA: Prediction Markets enabled (`predictionMarkets: true`), MLB: disabled until Kalshi MLB data available
 - MLB stat types: pitcher_strikeouts, batter_hits, batter_total_bases, batter_home_runs, batter_rbis, batter_runs_scored
 - MLB tables: `mlb_daily_predictions`, `mlb_paper_bets`, `mlb_paper_trading_daily_log`
@@ -39,7 +39,7 @@
 | `/dfs` | DFS Edge Finder — 3 modes, 6 stats, platform filters, slip type selector |
 | `/history` | My Bets + Model History — status/direction filters, date range, per-stat win rates |
 | `/performance` | My Bets + Props + DFS tabs — bankroll chart, stat breakdown, KPI cards |
-| `/stats` | Data Vault — player/team/defense/play-type heatmap tables, percentile coloring |
+| `/stats` | Data Vault — NBA: player/team/defense/play-type heatmap tables, percentile coloring. MLB (Session 27): `MLBStatsPage` component with Batters/Pitchers tabs, Box/Rates/Consistency categories, L3/L5/L10/L20/SZN window support. Requires migration 023 in Supabase. |
 | `/account` | Profile + bankroll settings + community card |
 | `/subscribe` | Subscription page (currently redirects to /dashboard) |
 | `/prediction-markets` | Kalshi prediction markets — edge overlay, sortable/filterable table, detail modal with fee breakdown, orderbook, countdown |

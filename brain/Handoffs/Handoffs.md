@@ -32,4 +32,6 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-024]] - MLB model promotion: 3 stats live (pitcher K, hits, RBIs), 3 dropped (TB, runs, HR), per-stat BL configs, dashboard updated
 - [[handoff-025]] - MLB + NBA paper trader fixes: per-stat BL configs (MLB), stored BL values + removed sanity checks (NBA)
 - [[handoff-026]] - Kalshi NO-only overhaul: cut YES bets, stat whitelist, bankroll-proportional exposure, BL fix in live trader, analysis script, live trading startup playbook
+- [[handoff-027]] - Bot Tracker enhancements (Value column + Kalshi link), ruff fixes, MLB Model Picks per-stat params, BL tau restored for MLB, MLB Stats Vault (migration 023 pending apply)
+- [[handoff-028]] - Polymarket-Kalshi Arbitrage Scanner: full pipeline (scraper, matcher, scanner, job), 2 DB tables, Discord alerts, Railway env var
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

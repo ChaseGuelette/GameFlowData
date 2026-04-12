@@ -60,10 +60,9 @@ export default function DashboardPage() {
 
   const MAX_SLATE_PICKS = 5
 
-  // Optimal model config (from backtest sweep)
-  // NBA: single global config. MLB: per-stat configs handled server-side via is_recommended.
-  const MODEL_PICKS_EDGE = sport === 'mlb' ? 0.05 : 0.09
-  const MODEL_PICKS_TAU = sport === 'mlb' ? null : 0.50
+  // Optimal model config (from backtest sweep) — sourced from sport-config.ts
+  const MODEL_PICKS_EDGE = config.modelPicksEdge
+  const MODEL_PICKS_TAU = config.modelPicksTau
 
   // Handle Model Picks toggle - auto-set optimal config
   const handleModelPicksToggle = (enabled: boolean) => {
@@ -520,18 +519,47 @@ export default function DashboardPage() {
           <p className="text-slate-400">
             {formatDate(selectedDate)} • {sortedPredictions.length} {showModelPicks ? 'recommended' : 'picks'}
             {showModelPicks && (
-              <span className="text-green-400 ml-2 inline-flex items-center gap-1">
-                {sport === 'mlb' ? 'Per-Stat BL Edge' : 'BL Edge ≥9%'}
+              <span className="ml-2 inline-flex items-center gap-1.5 flex-wrap">
+                {sport === 'mlb' ? (
+                  <>
+                    <span className="text-slate-500 text-xs">per-stat BL:</span>
+                    <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-red-500/15 text-red-400">K ≥5%</span>
+                    <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-green-500/15 text-green-400">Hits ≥8%</span>
+                    <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-400">RBIs ≥12%</span>
+                  </>
+                ) : (
+                  <span className="text-green-400 text-sm">BL Edge ≥9%</span>
+                )}
                 <span className="relative group cursor-help">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 hover:text-slate-200 transition-colors">
                     <path fillRule="evenodd" d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM8.94 6.94a.75.75 0 1 1-1.061-1.061 3 3 0 1 1 2.871 5.026v.345a.75.75 0 0 1-1.5 0v-.5c0-.72.57-1.172 1.081-1.287A1.5 1.5 0 1 0 8.94 6.94ZM10 15a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
                   </svg>
-                  <span className="invisible group-hover:visible absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 rounded-lg bg-slate-800 border border-slate-600 text-xs text-slate-300 leading-relaxed shadow-xl z-50">
-                    {sport === 'mlb'
-                      ? 'Each stat uses its own optimal edge threshold (K: 5%, Hits: 8%, RBIs: 12%). Edges are market-anchored via Black-Litterman blending with per-stat configurations.'
-                      : 'Edges shown here are market-anchored (Black-Litterman blended). The model\u0027s raw probability is blended with the sportsbook\u0027s implied probability, producing more conservative but higher-conviction picks. Raw edges are higher — switch to All Bets to see them.'
-                    }
-                  </span>
+                  {sport === 'mlb' ? (
+                    <span className="invisible group-hover:visible absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-80 p-3 rounded-lg bg-slate-800 border border-slate-600 text-xs text-slate-300 leading-relaxed shadow-xl z-50">
+                      <span className="block font-semibold text-slate-200 mb-2">Per-Stat BL Configs (from backtest sweep)</span>
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="text-slate-500 border-b border-slate-700">
+                            <th className="pb-1 font-normal">Stat</th>
+                            <th className="pb-1 font-normal">Edge</th>
+                            <th className="pb-1 font-normal">τ</th>
+                            <th className="pb-1 font-normal">z_max</th>
+                            <th className="pb-1 font-normal">max_w</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-slate-300">
+                          <tr><td className="py-0.5 text-red-400">K</td><td>≥5%</td><td>0.90</td><td>0.25</td><td>80%</td></tr>
+                          <tr><td className="py-0.5 text-green-400">Hits</td><td>≥8%</td><td>0.75</td><td>1.0</td><td>80%</td></tr>
+                          <tr><td className="py-0.5 text-orange-400">RBIs</td><td>≥12%</td><td>0.90</td><td>0.25</td><td>80%</td></tr>
+                        </tbody>
+                      </table>
+                      <span className="block mt-2 text-slate-500">τ controls model vs market weight. z_max sets confidence saturation. max_w caps model influence.</span>
+                    </span>
+                  ) : (
+                    <span className="invisible group-hover:visible absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 rounded-lg bg-slate-800 border border-slate-600 text-xs text-slate-300 leading-relaxed shadow-xl z-50">
+                      Edges shown here are market-anchored (Black-Litterman blended, τ=0.50). The model&apos;s raw probability is blended with the sportsbook&apos;s implied probability, producing more conservative but higher-conviction picks. Raw edges are higher — switch to All Bets to see them.
+                    </span>
+                  )}
                 </span>
               </span>
             )}
@@ -571,17 +599,24 @@ export default function DashboardPage() {
           {/* Filter controls - hidden on mobile unless toggled, always visible on sm+ */}
           <div className={`${filtersOpen ? 'flex' : 'hidden'} sm:flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 w-full sm:w-auto ${filtersOpen ? 'mt-2 pt-3 border-t border-slate-700 sm:mt-0 sm:pt-0 sm:border-0' : ''}`}>
             {/* State Selector */}
-            <select
-              value={userState}
-              onChange={(e) => updatePref('userState', e.target.value)}
-              className="w-full sm:w-auto bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-            >
-              {US_STATES.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.value ? s.value : 'All States'}
-                </option>
-              ))}
-            </select>
+            <div className="relative w-full sm:w-auto">
+              <select
+                value={userState}
+                onChange={(e) => updatePref('userState', e.target.value)}
+                className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
+              >
+                {US_STATES.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.value ? s.value : 'All States'}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
+                  <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                </svg>
+              </div>
+            </div>
             {/* Sportsbook Filter */}
             <BookFilterDropdown
               excludedBooks={excludedBooks}
@@ -651,46 +686,84 @@ export default function DashboardPage() {
               {slateMode ? 'Exit Slate' : 'Build Slate'}
             </button>
             {/* Date Selector */}
-            <select
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="w-full sm:w-auto bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-            >
-              {availableDates.map((date) => (
-                <option key={date} value={date}>
-                  {date === getToday() ? `${formatDate(date)} (Today)` : formatDate(date)}
-                </option>
-              ))}
-            </select>
+            <div className="relative w-full sm:w-auto">
+              <select
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
+              >
+                {availableDates.map((date) => (
+                  <option key={date} value={date}>
+                    {date === getToday() ? `${formatDate(date)} (Today)` : formatDate(date)}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
+                  <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                </svg>
+              </div>
+            </div>
             {/* Edge Threshold Filter */}
-            <select
-              value={edgeThreshold}
-              onChange={(e) => setEdgeThreshold(Number(e.target.value))}
-              className="w-full sm:w-auto bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-            >
-              <option value={0}>Edge: All</option>
-              <option value={0.03}>Edge: ≥3%</option>
-              <option value={0.05}>Edge: ≥5%</option>
-              <option value={0.07}>Edge: ≥7%</option>
-              <option value={0.09}>Edge: ≥9% (Model)</option>
-              <option value={0.10}>Edge: ≥10%</option>
-              <option value={0.15}>Edge: ≥15%</option>
-              <option value={0.20}>Edge: ≥20%</option>
-            </select>
+            <div className="relative w-full sm:w-auto">
+              <select
+                value={edgeThreshold}
+                onChange={(e) => setEdgeThreshold(Number(e.target.value))}
+                className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
+              >
+                <option value={0}>Edge: All</option>
+                <option value={0.03}>Edge: ≥3%</option>
+                {sport === 'mlb' ? (
+                  <>
+                    <option value={0.05}>Edge: ≥5% (K model)</option>
+                    <option value={0.08}>Edge: ≥8% (Hits model)</option>
+                    <option value={0.12}>Edge: ≥12% (RBIs model)</option>
+                    <option value={0.15}>Edge: ≥15%</option>
+                  </>
+                ) : (
+                  <>
+                    <option value={0.05}>Edge: ≥5%</option>
+                    <option value={0.07}>Edge: ≥7%</option>
+                    <option value={0.09}>Edge: ≥9% (Model)</option>
+                    <option value={0.10}>Edge: ≥10%</option>
+                    <option value={0.15}>Edge: ≥15%</option>
+                    <option value={0.20}>Edge: ≥20%</option>
+                  </>
+                )}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
+                  <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                </svg>
+              </div>
+            </div>
             {/* BL Tau Filter */}
-            <select
-              value={blTau === null ? 'none' : blTau}
-              onChange={(e) => setBlTau(e.target.value === 'none' ? null : Number(e.target.value))}
-              className="w-full sm:w-auto bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-            >
-              <option value="none">BL: Off</option>
-              <option value={0.03}>BL: τ=0.03</option>
-              <option value={0.05}>BL: τ=0.05</option>
-              <option value={0.10}>BL: τ=0.10</option>
-              <option value={0.15}>BL: τ=0.15</option>
-              <option value={0.25}>BL: τ=0.25</option>
-              <option value={0.50}>BL: τ=0.50 (Model)</option>
-            </select>
+            <div className="relative w-full sm:w-auto">
+              <select
+                value={blTau === null ? 'none' : blTau}
+                onChange={(e) => setBlTau(e.target.value === 'none' ? null : Number(e.target.value))}
+                className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
+              >
+                <option value="none">BL: Off</option>
+                <option value={0.03}>BL: τ=0.03</option>
+                <option value={0.05}>BL: τ=0.05</option>
+                <option value={0.10}>BL: τ=0.10</option>
+                <option value={0.15}>BL: τ=0.15</option>
+                <option value={0.25}>BL: τ=0.25</option>
+                <option value={0.50}>BL: τ=0.50 (Model)</option>
+                {sport === 'mlb' && (
+                  <>
+                    <option value={0.75}>BL: τ=0.75 (Hits model)</option>
+                    <option value={0.90}>BL: τ=0.90 (K/RBI model)</option>
+                  </>
+                )}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
+                  <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                </svg>
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -31,12 +31,15 @@ from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL
 
 logger = logging.getLogger(__name__)
 
-# Stat resolution: stat_type -> (table, column) for resolving actual values
+# Stat resolution: stat_type -> (table, column) for resolving actual values.
+# For compound stats, column is a SQL expression: used as `s.{column}` in queries,
+# so "h + r + rbi" produces `s.h + r + rbi` (unambiguous with one table alias).
 MLB_STAT_RESOLUTION: dict[str, tuple[str, str]] = {
     "pitcher_strikeouts": ("mlb_player_game_stats_pitching", "so"),
     "pitcher_outs":       ("mlb_player_game_stats_pitching", "outs_recorded"),
     "batter_hits":        ("mlb_player_game_stats_batting",  "h"),
     "batter_rbis":        ("mlb_player_game_stats_batting",  "rbi"),
+    "batter_hrr":         ("mlb_player_game_stats_batting",  "h + r + rbi"),
 }
 
 # DNP detection columns per table

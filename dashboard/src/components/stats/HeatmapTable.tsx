@@ -16,6 +16,8 @@ function formatValue(v: number | string | null | undefined, format: ColumnDef['f
       return n.toFixed(1)
     case 'dec2':
       return n.toFixed(2)
+    case 'dec3':
+      return n.toFixed(3)
     case 'pct1':
       return (n * 100).toFixed(1) + '%'
     case 'rawPct1':

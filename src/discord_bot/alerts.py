@@ -1499,3 +1499,200 @@ def send_kalshi_analysis_alert_sync(
     except Exception as e:
         logger.exception(f"Failed to send Kalshi analysis alert synchronously: {e}")
         return False
+
+
+# =============================================================================
+# Arbitrage Scanner Alerts
+# =============================================================================
+
+
+def _build_arb_alert_embed(opportunities: list, sport: str = "nba") -> dict:
+    """Build Discord embed for arbitrage/mispricing opportunities.
+
+    Color coding:
+      Pure arb → orange (0xFF8C00)
+      Soft arb → yellow (0xFFD700)
+      Sportsbook mispricing → blue (0x3498DB)
+
+    Args:
+        opportunities: List of ArbOpportunity instances.
+        sport: Sport identifier.
+
+    Returns:
+        Discord embed dict.
+    """
+    sport_upper = sport.upper()
+
+    # Determine dominant type for embed color
+    arb_types = [getattr(o, "arb_type", "") for o in opportunities]
+    if "pure" in arb_types:
+        color = 0xFF8C00  # Orange — guaranteed profit
+        title_prefix = "PURE ARB DETECTED"
+    elif "soft" in arb_types:
+        color = 0xFFD700  # Yellow — soft arb
+        title_prefix = "Soft Arb Opportunity"
+    else:
+        color = 0x3498DB  # Blue — market intel
+        title_prefix = "Market Mispricing"
+
+    embed = {
+        "title": f"{title_prefix} — {sport_upper}",
+        "description": "Cross-platform price discrepancies detected",
+        "color": color,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [],
+        "footer": {
+            "text": f"Polymarket-Kalshi Arb Scanner | {sport_upper} | Phase 1 (paper only)",
+        },
+    }
+
+    if not opportunities:
+        embed["fields"].append({
+            "name": "Status",
+            "value": "No significant opportunities found.",
+            "inline": False,
+        })
+        return embed
+
+    # Show top 5 opportunities
+    shown = opportunities[:5]
+    for i, opp in enumerate(shown, 1):
+        arb_type = getattr(opp, "arb_type", "unknown")
+        player = getattr(opp, "player_name", None) or "Unknown"
+        stat = str(getattr(opp, "stat_type", "") or "").upper()
+        line = getattr(opp, "line", None)
+        poly_price = getattr(opp, "poly_price", 0) or 0
+        poly_side = getattr(opp, "poly_side", "yes") or "yes"
+        poly_liq = getattr(opp, "poly_liquidity", 0) or 0
+        disc = getattr(opp, "price_discrepancy", None)
+
+        if arb_type in ("pure", "soft"):
+            k_side = getattr(opp, "kalshi_side", "?") or "?"
+            k_price = getattr(opp, "kalshi_price", 0) or 0
+            k_vol = getattr(opp, "kalshi_volume", 0) or 0
+            net_margin = getattr(opp, "net_margin", None)
+            est_profit = getattr(opp, "estimated_profit", None)
+
+            type_badge = "PURE ARB" if arb_type == "pure" else "Soft Arb"
+            value_parts = [
+                f"Kalshi {k_side.upper()} {k_price}c | Poly {poly_side.upper()} {poly_price:.0f}c",
+                f"Discrepancy: **{disc:.1%}**" if disc else "",
+            ]
+            if net_margin is not None:
+                value_parts.append(f"Net margin: **{net_margin:.1f}c**")
+            if est_profit is not None:
+                value_parts.append(f"Est. profit: ${est_profit:.2f}")
+            value_parts.append(f"Kalshi vol: {k_vol:,} | Poly liq: ${poly_liq:,.0f}")
+
+            embed["fields"].append({
+                "name": f"#{i} [{type_badge}] {player} — {stat} {line or ''}",
+                "value": "\n".join(p for p in value_parts if p),
+                "inline": False,
+            })
+
+        else:
+            # Sportsbook mispricing
+            sb_implied = getattr(opp, "sportsbook_implied", None)
+            sb_str = f"{sb_implied:.1%}" if sb_implied is not None else "?"
+            embed["fields"].append({
+                "name": f"#{i} [SB Mispricing] {player} — {stat} {line or ''}",
+                "value": (
+                    f"Poly {poly_side.upper()} {poly_price:.0f}c vs SB {sb_str}\n"
+                    f"Discrepancy: **{disc:.1%}**" if disc else
+                    f"Poly {poly_side.upper()} {poly_price:.0f}c vs SB {sb_str}"
+                ),
+                "inline": False,
+            })
+
+    return embed
+
+
+async def send_arb_alert(
+    opportunities: list,
+    sport: str = "nba",
+    channel_id: str | None = None,
+) -> bool:
+    """Send arbitrage opportunity alert to Discord.
+
+    Routes to DISCORD_CHANNEL_ARB, falling back to DISCORD_CHANNEL_KALSHI
+    then DISCORD_CHANNEL_PREDICTIONS.
+
+    Args:
+        opportunities: List of ArbOpportunity instances.
+        sport: Sport identifier.
+        channel_id: Optional channel override.
+
+    Returns:
+        True if alert was sent successfully.
+    """
+    load_dotenv()
+
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping arb alert")
+        return False
+
+    if not channel_id:
+        channel_id = (
+            os.getenv("DISCORD_CHANNEL_ARB")
+            or os.getenv("DISCORD_CHANNEL_KALSHI")
+            or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+        )
+    if not channel_id:
+        logger.warning("No arb/Kalshi/predictions channel configured, skipping arb alert")
+        return False
+
+    embed = _build_arb_alert_embed(opportunities, sport=sport)
+
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status in (200, 201):
+                    logger.info(f"Sent arb alert with {len(opportunities)} opportunities")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+    except Exception as e:
+        logger.exception(f"Failed to send arb alert: {e}")
+        return False
+
+
+def send_arb_alert_sync(
+    opportunities: list,
+    sport: str = "nba",
+    channel_id: str | None = None,
+) -> bool:
+    """Synchronous wrapper for send_arb_alert.
+
+    Args:
+        opportunities: List of ArbOpportunity instances.
+        sport: Sport identifier.
+        channel_id: Optional Discord channel override.
+
+    Returns:
+        True if alert was sent successfully.
+    """
+    import asyncio
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                send_arb_alert(opportunities, sport, channel_id),
+                loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(send_arb_alert(opportunities, sport, channel_id))
+    except Exception as e:
+        logger.exception(f"Failed to send arb alert synchronously: {e}")
+        return False
