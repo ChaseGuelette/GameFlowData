@@ -582,14 +582,14 @@ def run_kalshi_daily_summary():
 
 # ---- Arbitrage Scanner Jobs ----
 
-def run_arb_scan_nba():
-    """NBA Polymarket-Kalshi arb scan: scrape, match, detect, alert."""
-    run_job("arb_scan_job.py", extra_args="--sport nba", silent_on_success=True)
-
-
 def run_arb_scan_mlb():
     """MLB Polymarket-Kalshi arb scan: scrape, match, detect, alert."""
-    run_job("arb_scan_job.py", extra_args="--sport mlb", silent_on_success=True)
+    run_job("arb_scan_job.py", extra_args="--sport mlb --mode sport", silent_on_success=True)
+
+
+def run_arb_scan_all_categories():
+    """All-categories Polymarket scrape: ingests sports + politics + crypto + all other markets."""
+    run_job("arb_scan_job.py", extra_args="--mode all", silent_on_success=True)
 
 
 def main():
@@ -839,20 +839,21 @@ def main():
     # Offset 5 min after Kalshi refresh to use fresh Kalshi data.
     # ==============================================================
 
-    # NBA arb scan: every 10 min, 11:05 AM - 11:05 PM ET
-    scheduler.add_job(
-        run_arb_scan_nba,
-        CronTrigger(hour='11-23', minute='5,15,25,35,45,55', timezone=ET),
-        id="arb_scan_nba",
-        name="Arb Scan NBA (every 10 min, 11:05AM-11:05PM ET)",
-    )
-
-    # MLB arb scan: every 10 min, 12:05 PM - 11:05 PM ET
+    # MLB arb scan: every 10 min, 12:05 PM - 11:05 PM ET (sport-specific, game-level)
     scheduler.add_job(
         run_arb_scan_mlb,
         CronTrigger(hour='12-23', minute='5,15,25,35,45,55', timezone=ET),
         id="arb_scan_mlb",
         name="Arb Scan MLB (every 10 min, 12:05PM-11:05PM ET)",
+    )
+
+    # All-categories Polymarket scrape: hourly, 9 AM - 11 PM ET
+    # Populates polymarket_markets with all market categories for broad arb scanning.
+    scheduler.add_job(
+        run_arb_scan_all_categories,
+        CronTrigger(hour='9-23', minute='30', timezone=ET),
+        id="arb_scan_all_categories",
+        name="Arb Scan All Categories (hourly, 9:30AM-11:30PM ET)",
     )
 
     # Log scheduled jobs

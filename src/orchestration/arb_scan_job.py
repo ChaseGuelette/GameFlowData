@@ -39,7 +39,8 @@ logger = logging.getLogger("ArbScanJob")
 
 def run(
     target_date: date,
-    sport: str = "nba",
+    sport: str = "mlb",
+    mode: str = "sport",
     dry_run: bool = False,
     skip_discord: bool = False,
     skip_scrape: bool = False,
@@ -48,7 +49,8 @@ def run(
 
     Args:
         target_date: Date to scan.
-        sport: Target sport ('nba' or 'mlb').
+        sport: Target sport ('nba' or 'mlb'). Ignored when mode='all'.
+        mode: 'sport' (sport-specific scrape) or 'all' (all Polymarket categories).
         dry_run: No DB writes; print results instead.
         skip_discord: Skip Discord alerts.
         skip_scrape: Skip Polymarket scrape (use existing DB data).
@@ -66,17 +68,23 @@ def run(
 
     # Step 1: Scrape Polymarket markets
     if not skip_scrape:
-        logger.info("Step 1: Scraping Polymarket markets...")
+        if mode == "all":
+            logger.info("Step 1: Scraping ALL Polymarket categories...")
+        else:
+            logger.info(f"Step 1: Scraping Polymarket {sport.upper()} markets...")
         try:
             from src.scrapers.polymarket.polymarket_market_scraper import scrape_and_store
 
-            scrape_stats = scrape_and_store(sport=sport, dry_run=dry_run)
+            sport_arg = None if mode == "all" else sport
+            scrape_stats = scrape_and_store(sport=sport_arg, dry_run=dry_run)
             summary["scrape"] = scrape_stats
             logger.info(
                 f"Scrape: {scrape_stats.get('events', 0)} events, "
                 f"{scrape_stats.get('parsed', 0)} markets, "
                 f"{scrape_stats.get('priced', 0)} priced"
             )
+            if scrape_stats.get("by_category"):
+                logger.info(f"  Categories: {scrape_stats['by_category']}")
         except Exception as e:
             logger.error(f"Polymarket scrape failed: {e}", exc_info=True)
             summary["scrape"] = {"error": str(e)}
@@ -177,7 +185,9 @@ def _send_arb_alerts(result, sport: str) -> bool:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Polymarket-Kalshi arbitrage scan pipeline")
     parser.add_argument("--date", type=str, default=date.today().isoformat(), help="Target date (YYYY-MM-DD)")
-    parser.add_argument("--sport", type=str, default="nba", choices=["nba", "mlb"])
+    parser.add_argument("--sport", type=str, default="mlb", choices=["nba", "mlb"])
+    parser.add_argument("--mode", type=str, default="sport", choices=["sport", "all"],
+                        help="'sport' for sport-specific scrape, 'all' for all Polymarket categories")
     parser.add_argument("--dry-run", action="store_true", help="No DB writes, print results")
     parser.add_argument("--skip-discord", action="store_true", help="Skip Discord alerts")
     parser.add_argument("--skip-scrape", action="store_true", help="Skip Polymarket scrape step")
@@ -191,7 +201,9 @@ def main():
     logger.info("=" * 60)
     logger.info("Arb Scan Job")
     logger.info(f"  Date:         {target_date}")
-    logger.info(f"  Sport:        {args.sport.upper()}")
+    logger.info(f"  Mode:         {args.mode.upper()}")
+    if args.mode == "sport":
+        logger.info(f"  Sport:        {args.sport.upper()}")
     logger.info(f"  Dry run:      {args.dry_run}")
     logger.info(f"  Skip Discord: {args.skip_discord}")
     logger.info(f"  Skip Scrape:  {args.skip_scrape}")
@@ -200,6 +212,7 @@ def main():
     summary = run(
         target_date=target_date,
         sport=args.sport,
+        mode=args.mode,
         dry_run=args.dry_run,
         skip_discord=args.skip_discord,
         skip_scrape=args.skip_scrape,

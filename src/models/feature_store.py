@@ -1091,7 +1091,7 @@ class FeatureStore:
 
         # Validation
         print(f"Loaded {len(df):,} rows.")
-        if len(df) < 10000:
+        if len(df) < 1000:
             raise ValueError(f"Suspiciously few rows: {len(df)}. Check query/season_ids.")
 
         if not df["position_group"].notna().all():

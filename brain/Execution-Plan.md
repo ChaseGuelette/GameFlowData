@@ -19,8 +19,10 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 1.5 | Build MLB paper trading | completed | 1.4 | `src/paper_trading/mlb_paper_trader.py` — full bet selection, placement, and resolution. Session 31: `select_bets()` redesigned to mirror Model Picks exactly (queries `is_recommended=true`, uses stored BL probs). No more independent BL re-blending. |
 | 1.6 | Run MLB backtests | completed | 1.2, 1.3 | All 3 stats backtested individually + combined (Jul 1-Sep 28, 1,064 bets, +21.25% ROI, 1.19 Sharpe). Per-stat optimal BL configs promoted. TB/runs/HR confirmed non-viable and dropped. |
 | 1.7 | Add MLB to Railway scheduler | completed | 1.4, 1.6 | MLB jobs in `scheduler.py`: stats at 10/10:30 AM ET, inference at 1:30/6:30 PM ET. Month gate removed. Kalshi split into NBA/MLB separate refresh jobs. Supavisor timeout fix deployed (Session 15). |
+| 1.8 | Build MLB lineup + roster scrapers | completed | None | `mlb_lineup_scraper.py` + `mlb_roster_scraper.py` built. Jobs wired into scheduler (9:30 AM roster, 12:45 PM + 6:10 PM lineup). `_filter_batters_by_lineup()` added to daily runner — filters to confirmed batters per game, falls back gracefully if lineup not yet posted. Migration 025 applied (`mlb_game_lineups` + `mlb_active_roster` tables). |
+| 1.9 | Train + promote batter_hrr model | in_progress | 1.1 | Model trained ✅ (87,336 rows, 28 features, bias ratio=0.9950, val NLL=1.7210). Artifacts at `mlb_run_batter_hrr_20260415_122937/`. Model suite fix applied (`batter_hrr` added to `STAT_TO_NEGBIN_MODEL_NAME` + `STAT_TO_NEGBIN_SHORT`). Sweep fix applied (`BATTER_STAT_FS_MAP` + `STAT_TO_MARKET_KEY` for `batter_hits_runs_rbis` proxy). **Pending**: (1) backfill `batter_hits_runs_rbis` odds 2023-2025, (2) run linker `backfill`, (3) run BL sweep, (4) promote if ROI>0% Z>1.5, (5) verify Kalshi KXMLBHRR ticker. |
 
-**Done when**: MLB pitcher K and batter models are backtested with >5% ROI and running daily on Railway. ✅ **COMPLETE** — 3 models promoted, combined +21.25% ROI, dashboard updated, frontend deployed.
+**Done when**: MLB pitcher K and batter models are backtested with >5% ROI and running daily on Railway. ✅ **COMPLETE** — 3 models promoted, combined +21.25% ROI, dashboard updated, frontend deployed. batter_hrr in progress (step 1.9).
 
 ---
 
@@ -158,14 +160,20 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 
 ## Phase 9: Polymarket-Kalshi Arbitrage Scanner
 
-**Goal**: Monitor Polymarket prediction markets for pure and soft cross-platform arbs against Kalshi. Purely price-based — no sportsbook data, no internal model. Two market layers: player props (thin coverage, starter) and game-level moneylines/totals (the real volume).
+**Goal**: Monitor ALL Polymarket markets for pure and soft cross-platform arbs against Kalshi — not limited to sports. Purely price-based: no sportsbook data, no internal model. Primary targets by expected opportunity density:
+- **Season-long sports futures** (World Series, division winners, award markets) — illiquid enough that pricing gaps persist for minutes/hours
+- **NRFI/YRFI** (No/Yes Run First Inning) — niche MLB market present on both platforms, slower price discovery
+- **Game-level moneylines and totals** — high volume but faster arbitrage bots; gaps close in 2-7 seconds
+- **Non-sports categories** (politics, economics, crypto, weather, culture) — thousands of markets, far fewer arb bots watching them, persistent gaps likely
+- **Player props: dropped** — Polymarket confirmed to have thin player prop coverage; not worth pursuing
 
 | Step | Task | Status | Dependencies | Details |
 |------|------|--------|--------------|---------|
-| 9.1 | Core arb scanner pipeline | completed | Kalshi integration | `polymarket_utils`, `polymarket_client`, `polymarket_market_scraper`, `market_matcher`, `arb_scanner`, `arb_scan_job`. 2 DB tables (`polymarket_markets`, `arb_opportunities`). Runs every 10 min on Railway. DISCORD_CHANNEL_ARB=1492934576467611700. Sportsbook comparison and model-based mispricing removed (Apr 15). |
-| 9.2 | Dry-run validation | not_started | 9.1 deployed | Run `--dry-run` on Railway, verify Polymarket API connectivity, check matched markets for false positives, confirm Discord alerts fire |
-| 9.3 | Game-level arb matching | not_started | 9.2 | Match Kalshi and Polymarket game-level markets (moneylines, totals) by (team1, team2, date, market_type). Requires team name normalization across both platforms — Kalshi uses tickers (e.g. `NBAWIN-LAL-...`), Polymarket uses natural language questions. Higher volume than player props; this is where most arb opportunity lives. |
-| 9.4 | Arb paper trader | not_started | 9.2 | `arb_paper_bets` table (2-leg structure), `ArbPaperTrader` class (P&L for pure/soft arbs), resolution via game outcomes |
-| 9.5 | Arb dashboard page | not_started | 9.1, 9.2 | `/arbitrage` page showing live opportunities from `arb_opportunities` table, sortable by margin/discrepancy |
+| 9.1 | Core arb scanner pipeline | completed | Kalshi integration | `polymarket_utils`, `polymarket_client`, `polymarket_market_scraper`, `market_matcher`, `arb_scanner`, `arb_scan_job`. 2 DB tables (`polymarket_markets`, `arb_opportunities`). Runs every 10 min on Railway. DISCORD_CHANNEL_ARB=1492934576467611700. Sportsbook comparison, model-based mispricing, and player props removed (Apr 15). |
+| 9.2 | Rebuild scraper for game-level + non-sports | not_started | 9.1 | Rewrite `polymarket_market_scraper` to ingest ALL market categories (not just sport tag filtered). Detect moneyline/total/NRFI/futures/non-sports types. Store `market_type`, `category`, `team1`, `team2`, `question` for matching. Run dry-run to confirm data flow into `polymarket_markets`. |
+| 9.3 | Cross-platform market matcher: sports futures + NRFI | not_started | 9.2 | Match Kalshi ↔ Polymarket on: (1) season-long futures by event slug/team normalization, (2) NRFI by game date + teams, (3) game moneylines/totals by (team1, team2, date, market_type). Kalshi uses tickers (e.g. `MLBWIN-NYY-...`), Polymarket uses natural language — requires team name normalization table. |
+| 9.4 | Cross-platform market matcher: non-sports | not_started | 9.2 | Match Kalshi ↔ Polymarket on non-sports categories (politics, crypto, economics, etc.) by question text similarity (fuzzy match on normalized question strings). These markets have fewer competing bots and likely more persistent pricing gaps. |
+| 9.5 | Arb paper trader | not_started | 9.3 | `arb_paper_bets` table (2-leg structure), `ArbPaperTrader` class (P&L for pure/soft arbs), resolution via outcome |
+| 9.6 | Arb dashboard page | not_started | 9.3, 9.4 | `/arbitrage` page showing live opportunities from `arb_opportunities` table, sortable by margin/discrepancy, filterable by category |
 
-**Done when**: Arb scanner running stably on both player props and game-level markets, paper trader tracking simulated P&L, results visible on dashboard.
+**Done when**: Scanner ingesting all Polymarket categories, matching on sports futures + NRFI + non-sports, paper trader tracking simulated P&L, results visible on dashboard.

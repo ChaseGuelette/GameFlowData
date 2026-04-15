@@ -26,6 +26,9 @@ POLYMARKET_SPORT_TAGS: dict[str, int] = {
     "soccer": 100031,
 }
 
+# Inverted lookup: tag_id -> sport key (for category detection)
+_SPORT_TAG_IDS: dict[int, str] = {v: k for k, v in POLYMARKET_SPORT_TAGS.items()}
+
 # ---------------------------------------------------------------------------
 # Stat Mapping: Polymarket question patterns → internal stat keys
 # ---------------------------------------------------------------------------
@@ -81,6 +84,26 @@ def normalize_poly_stat(raw_stat: str) -> str | None:
 # Market Type Detection
 # ---------------------------------------------------------------------------
 
+# NRFI/YRFI patterns
+_NRFI_PATTERN = re.compile(
+    r"\bnrfi\b|\byrfi\b"
+    r"|no\s+run\s+(?:scored\s+)?(?:in\s+)?(?:the\s+)?first\s+inning"
+    r"|yes\s+run\s+(?:scored\s+)?(?:in\s+)?(?:the\s+)?first\s+inning"
+    r"|(?:will\s+there\s+be\s+(?:a\s+)?run[s]?\s+(?:scored\s+)?in\s+the\s+first)",
+    re.IGNORECASE,
+)
+
+# Season-long futures patterns
+_SEASON_FUTURE_PATTERNS = [
+    re.compile(r"world\s+series\s+(?:champion|winner)", re.IGNORECASE),
+    re.compile(r"division\s+winner", re.IGNORECASE),
+    re.compile(r"\b(?:al|nl)\s+(?:champion|pennant|mvp|cy\s+young)", re.IGNORECASE),
+    re.compile(r"(?:regular[\s-]season\s+)?win\s+total", re.IGNORECASE),
+    re.compile(r"(?:rookie|manager)\s+of\s+the\s+year", re.IGNORECASE),
+    re.compile(r"(?:hank\s+aaron|batting\s+champion|era\s+title|strikeout\s+(?:title|leader))", re.IGNORECASE),
+    re.compile(r"(?:mvp|cy\s+young|silver\s+slugger|gold\s+glove)\s+(?:award|winner)", re.IGNORECASE),
+]
+
 # Player prop patterns — "Will {player} record {N}+ {stat}?"
 _PLAYER_PROP_PATTERNS = [
     re.compile(r"will\s+(.+?)\s+(?:record|score|get|have|hit|notch|grab|dish out|dish|tally|collect|make|drain|sink)\s+(\d+)\+?\s+(.+?)\??$", re.IGNORECASE),
@@ -107,18 +130,32 @@ _TOTAL_PATTERNS = [
 ]
 
 
-def detect_market_type(question: str, description: str = "") -> str:
+def detect_market_type(question: str, description: str = "", is_sports: bool = True) -> str:
     """Classify a Polymarket market by type.
 
     Args:
         question: Market question text.
         description: Optional market description for context.
+        is_sports: False for non-sports markets (returns 'binary' immediately).
 
     Returns:
-        Market type: 'player_prop', 'moneyline', 'spread', or 'total'.
-        Falls back to 'moneyline' if unclassified.
+        Market type: 'nrfi', 'season_future', 'player_prop', 'moneyline', 'spread',
+        'total', or 'binary' (non-sports).
+        Falls back to 'moneyline' if sports market type is unclassified.
     """
+    if not is_sports:
+        return "binary"
+
     text = (question + " " + description).strip()
+
+    # NRFI/YRFI (check before player props and moneyline)
+    if _NRFI_PATTERN.search(text):
+        return "nrfi"
+
+    # Season-long futures (check before moneyline to catch "AL Champion" etc.)
+    for pat in _SEASON_FUTURE_PATTERNS:
+        if pat.search(text):
+            return "season_future"
 
     # Check player prop first (most specific)
     for pat in _PLAYER_PROP_PATTERNS:
@@ -255,6 +292,70 @@ def parse_game_market(question: str) -> dict | None:
         }
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Category Detection
+# ---------------------------------------------------------------------------
+
+# Non-sports keyword clusters for slug/title classification
+_CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("politics", ["election", "president", "senate", "congress", "democrat", "republican",
+                  "governor", "ballot", "vote", "primary", "supreme-court", "white-house"]),
+    ("crypto", ["bitcoin", "ethereum", "crypto", "btc", "eth", "defi", "token",
+                "blockchain", "coinbase", "solana", "xrp", "binance"]),
+    ("economics", ["gdp", "inflation", "fed-", "interest-rate", "unemployment", "cpi",
+                   "recession", "federal-reserve", "tariff", "jobs-report"]),
+    ("culture", ["oscar", "grammy", "emmy", "award", "movie", "film", "music",
+                 "celebrity", "box-office", "entertainment", "streaming", "netflix"]),
+    ("weather", ["hurricane", "earthquake", "storm", "temperature", "weather", "climate",
+                 "tornado", "wildfire"]),
+]
+
+
+def detect_category(event: dict) -> tuple[str, str | None]:
+    """Detect (category, sport) from a Polymarket event dict.
+
+    Checks event tags first (most reliable), then falls back to slug/title keywords.
+
+    Args:
+        event: Raw event dict from the Gamma API.
+
+    Returns:
+        Tuple of (category, sport_or_None).
+        E.g. ('sports', 'mlb'), ('politics', None), ('other', None).
+    """
+    tags = event.get("tags") or []
+    slug = (event.get("slug") or "").lower()
+    title = (event.get("title") or "").lower()
+    text = slug + " " + title
+
+    # Check event tags for known sport IDs (most reliable signal)
+    for tag in tags:
+        tag_id = tag.get("id") or tag.get("tagId")
+        if tag_id is not None:
+            try:
+                sport = _SPORT_TAG_IDS.get(int(tag_id))
+                if sport:
+                    return "sports", sport
+            except (ValueError, TypeError):
+                pass
+
+    # Infer sport from slug/title keywords
+    for sport_key in POLYMARKET_SPORT_TAGS:
+        if sport_key in slug or sport_key in title:
+            return "sports", sport_key
+    # Broader sports slug patterns
+    if any(k in text for k in ["-game-", "playoff", "championship", "pennant", "world-series",
+                                "super-bowl", "stanley-cup", "march-madness"]):
+        return "sports", None
+
+    # Non-sports categories
+    for category, keywords in _CATEGORY_KEYWORDS:
+        if any(k in text for k in keywords):
+            return category, None
+
+    return "other", None
 
 
 # ---------------------------------------------------------------------------

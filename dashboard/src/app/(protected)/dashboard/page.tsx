@@ -9,15 +9,15 @@ import { AnalysisModal } from '@/components/analysis/AnalysisModal'
 import { SlateModal } from '@/components/predictions/SlateModal'
 import { TonightsGames, type GameInfo } from '@/components/predictions/TonightsGames'
 import { type Prediction } from '@/types/predictions'
-import { getToday, formatDate, calculateBLConfidence, blendProbability, getGameStatus } from '@/lib/utils'
+import { getToday, formatDate, getGameStatus } from '@/lib/utils'
 import { useGameStatus } from '@/lib/hooks/useGameStatus'
-import { US_STATES, SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS, DFS_BOOKMAKERS } from '@/lib/sportsbook-availability'
-import { BookFilterDropdown } from '@/components/predictions/BookFilterDropdown'
+import { SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS, DFS_BOOKMAKERS } from '@/lib/sportsbook-availability'
+import { FilterPopover } from '@/components/predictions/FilterPopover'
 import { STAT_TO_MARKET } from '@/types/dfs'
 import { useUserBets, placeBetCustom } from '@/lib/hooks/useUserBets'
 import { type TakeBetData } from '@/components/analysis/AnalysisModal'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
-import { DirectionFilter, type DirectionFilterValue } from '@/components/shared/DirectionFilter'
+import { type DirectionFilterValue } from '@/components/shared/DirectionFilter'
 import { useSport } from '@/contexts/SportContext'
 
 export default function DashboardPage() {
@@ -29,8 +29,6 @@ export default function DashboardPage() {
   const [selectedPrediction, setSelectedPrediction] = useState<Prediction | null>(null)
   const [selectedDate, setSelectedDate] = useState<string>(getToday())
   const [availableDates, setAvailableDates] = useState<string[]>([])
-  const [edgeThreshold, setEdgeThreshold] = useState<number>(0.03)  // Default 3%
-  const [blTau, setBlTau] = useState<number | null>(null)  // null = no BL blending
   const [showModelPicks, setShowModelPicks] = useState<boolean>(false)  // Model Picks toggle
   const [showLive, setShowLive] = useState<boolean>(false)  // Live betting toggle
   const [directionFilter, setDirectionFilter] = useState<DirectionFilterValue>('both')
@@ -44,7 +42,6 @@ export default function DashboardPage() {
   const isToday = selectedDate === getToday()
   const gameStatusMap = useGameStatus(isToday)
 
-  const [filtersOpen, setFiltersOpen] = useState(false)
   const [excludedBooks, setExcludedBooks] = useState<Set<string>>(new Set())
   const [bookAvailability, setBookAvailability] = useState<Set<string> | null>(null)
 
@@ -59,24 +56,6 @@ export default function DashboardPage() {
   const [fallbackGames, setFallbackGames] = useState<Array<{home_team: string, away_team: string, commence_time: string}>>([])
 
   const MAX_SLATE_PICKS = 5
-
-  // Optimal model config (from backtest sweep) — sourced from sport-config.ts
-  const MODEL_PICKS_EDGE = config.modelPicksEdge
-  const MODEL_PICKS_TAU = config.modelPicksTau
-
-  // Handle Model Picks toggle - auto-set optimal config
-  const handleModelPicksToggle = (enabled: boolean) => {
-    setShowModelPicks(enabled)
-    if (enabled) {
-      // Set optimal config when enabling Model Picks
-      setEdgeThreshold(MODEL_PICKS_EDGE)
-      setBlTau(MODEL_PICKS_TAU)
-    } else {
-      // Reset to defaults when disabling
-      setEdgeThreshold(0.03)
-      setBlTau(null)
-    }
-  }
 
   // Toggle pick selection for slate
   const handleToggleSelect = (prediction: Prediction) => {
@@ -442,18 +421,6 @@ export default function DashboardPage() {
         model_prob_under: p.bl_under_prob ?? p.model_prob_under,
       }
     }
-    if (blTau !== null && p.pred_mean && p.pred_std) {
-      const confidence = calculateBLConfidence(p.pred_mean, p.pred_std, p.prop_line)
-      const blendedOver = blendProbability(p.model_prob_over, p.implied_prob_over, blTau, confidence)
-      const blendedUnder = blendProbability(p.model_prob_under, p.implied_prob_under, blTau, confidence)
-      return {
-        ...p,
-        over_edge: blendedOver - p.implied_prob_over,
-        under_edge: blendedUnder - p.implied_prob_under,
-        model_prob_over: blendedOver,
-        model_prob_under: blendedUnder,
-      }
-    }
     return p
   })
 
@@ -492,7 +459,7 @@ export default function DashboardPage() {
     }
     // Skip edge threshold for Model Picks (is_recommended already guarantees BL edge >= per-stat threshold)
     if (showModelPicks) return true
-    return Math.max(p.over_edge, p.under_edge) >= edgeThreshold
+    return Math.max(p.over_edge, p.under_edge) >= 0.03
   })
 
   // Sort by max edge (effective edges already computed above)
@@ -562,206 +529,80 @@ export default function DashboardPage() {
             )}
           </p>
         </div>
-        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {/* FilterTabs - always visible as primary nav */}
           <FilterTabs activeFilter={filter} onFilterChange={setFilter} tabs={config.filterTabs} />
 
-          {/* Mobile: Filters toggle button */}
-          <button
-            onClick={() => setFiltersOpen(prev => !prev)}
-            className="sm:hidden flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-100 transition-colors"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-              <path fillRule="evenodd" d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 0-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" clipRule="evenodd" />
-            </svg>
-            Filters
-            {(() => {
-              let count = 0
-              if (userState) count++
-              if (excludedBooks.size > 0) count++
-              if (showLive) count++
-              if (showModelPicks) count++
-              if (directionFilter !== 'both') count++
-              if (edgeThreshold !== 0.03) count++
-              if (blTau !== null) count++
-              if (selectedDate !== getToday()) count++
-              return count > 0 ? (
-                <span className="bg-blue-600 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
-                  {count}
-                </span>
-              ) : null
-            })()}
-          </button>
-
-          {/* Filter controls - hidden on mobile unless toggled, always visible on sm+ */}
-          <div className={`${filtersOpen ? 'flex' : 'hidden'} sm:flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 w-full sm:w-auto ${filtersOpen ? 'mt-2 pt-3 border-t border-slate-700 sm:mt-0 sm:pt-0 sm:border-0' : ''}`}>
-            {/* State Selector */}
-            <div className="relative w-full sm:w-auto">
-              <select
-                value={userState}
-                onChange={(e) => updatePref('userState', e.target.value)}
-                className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
-              >
-                {US_STATES.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.value ? s.value : 'All States'}
-                  </option>
-                ))}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
-                  <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
-                </svg>
-              </div>
-            </div>
-            {/* Sportsbook Filter */}
-            <BookFilterDropdown
-              excludedBooks={excludedBooks}
-              onChange={setExcludedBooks}
-              userState={userState}
-            />
-            {/* Live Betting Toggle */}
-            <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
-              <button
-                onClick={() => setShowLive(false)}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                  !showLive
-                    ? 'bg-slate-700 text-slate-100'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Pre-Game
-              </button>
-              <button
-                onClick={() => setShowLive(true)}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                  showLive
-                    ? 'bg-orange-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                + Live
-              </button>
-            </div>
-            {/* Model Picks Toggle */}
-            <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
-              <button
-                onClick={() => handleModelPicksToggle(false)}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                  !showModelPicks
-                    ? 'bg-slate-700 text-slate-100'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                All Bets
-              </button>
-              <button
-                onClick={() => handleModelPicksToggle(true)}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                  showModelPicks
-                    ? 'bg-green-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Model Picks
-              </button>
-            </div>
-            {/* Direction Filter */}
-            <DirectionFilter activeDirection={directionFilter} onDirectionChange={setDirectionFilter} />
-            {/* Build Slate Toggle */}
+          {/* All Bets / Model Picks Toggle */}
+          <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
             <button
-              onClick={() => {
-                setSlateMode(prev => !prev)
-                if (slateMode) setSelectedPicks(new Set())
-              }}
-              className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
-                slateMode
-                  ? 'bg-blue-600 border-blue-500 text-white'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+              onClick={() => setShowModelPicks(false)}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                !showModelPicks
+                  ? 'bg-slate-700 text-slate-100'
+                  : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              {slateMode ? 'Exit Slate' : 'Build Slate'}
+              All Bets
             </button>
-            {/* Date Selector */}
-            <div className="relative w-full sm:w-auto">
-              <select
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
-              >
-                {availableDates.map((date) => (
-                  <option key={date} value={date}>
-                    {date === getToday() ? `${formatDate(date)} (Today)` : formatDate(date)}
-                  </option>
-                ))}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
-                  <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
-                </svg>
-              </div>
-            </div>
-            {/* Edge Threshold Filter */}
-            <div className="relative w-full sm:w-auto">
-              <select
-                value={edgeThreshold}
-                onChange={(e) => setEdgeThreshold(Number(e.target.value))}
-                className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
-              >
-                <option value={0}>Edge: All</option>
-                <option value={0.03}>Edge: ≥3%</option>
-                {sport === 'mlb' ? (
-                  <>
-                    <option value={0.05}>Edge: ≥5% (K model)</option>
-                    <option value={0.08}>Edge: ≥8% (Hits model)</option>
-                    <option value={0.12}>Edge: ≥12% (RBIs model)</option>
-                    <option value={0.15}>Edge: ≥15%</option>
-                  </>
-                ) : (
-                  <>
-                    <option value={0.05}>Edge: ≥5%</option>
-                    <option value={0.07}>Edge: ≥7%</option>
-                    <option value={0.09}>Edge: ≥9% (Model)</option>
-                    <option value={0.10}>Edge: ≥10%</option>
-                    <option value={0.15}>Edge: ≥15%</option>
-                    <option value={0.20}>Edge: ≥20%</option>
-                  </>
-                )}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
-                  <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
-                </svg>
-              </div>
-            </div>
-            {/* BL Tau Filter */}
-            <div className="relative w-full sm:w-auto">
-              <select
-                value={blTau === null ? 'none' : blTau}
-                onChange={(e) => setBlTau(e.target.value === 'none' ? null : Number(e.target.value))}
-                className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
-              >
-                <option value="none">BL: Off</option>
-                <option value={0.03}>BL: τ=0.03</option>
-                <option value={0.05}>BL: τ=0.05</option>
-                <option value={0.10}>BL: τ=0.10</option>
-                <option value={0.15}>BL: τ=0.15</option>
-                <option value={0.25}>BL: τ=0.25</option>
-                <option value={0.50}>BL: τ=0.50 (Model)</option>
-                {sport === 'mlb' && (
-                  <>
-                    <option value={0.75}>BL: τ=0.75 (Hits model)</option>
-                    <option value={0.90}>BL: τ=0.90 (K/RBI model)</option>
-                  </>
-                )}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
-                  <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
-                </svg>
-              </div>
+            <button
+              onClick={() => setShowModelPicks(true)}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                showModelPicks
+                  ? 'bg-green-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Model Picks
+            </button>
+          </div>
+
+          {/* Date Selector */}
+          <div className="relative">
+            <select
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="appearance-none bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
+            >
+              {availableDates.map((date) => (
+                <option key={date} value={date}>
+                  {date === getToday() ? `${formatDate(date)} (Today)` : formatDate(date)}
+                </option>
+              ))}
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
+                <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+              </svg>
             </div>
           </div>
+
+          {/* Filters Popover */}
+          <FilterPopover
+            userState={userState}
+            onStateChange={(s) => updatePref('userState', s)}
+            excludedBooks={excludedBooks}
+            onBooksChange={setExcludedBooks}
+            showLive={showLive}
+            onShowLiveChange={setShowLive}
+            directionFilter={directionFilter}
+            onDirectionChange={setDirectionFilter}
+          />
+
+          {/* Build Slate Toggle */}
+          <button
+            onClick={() => {
+              setSlateMode(prev => !prev)
+              if (slateMode) setSelectedPicks(new Set())
+            }}
+            className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
+              slateMode
+                ? 'bg-blue-600 border-blue-500 text-white'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {slateMode ? 'Exit Slate' : 'Build Slate'}
+          </button>
         </div>
       </div>
 
