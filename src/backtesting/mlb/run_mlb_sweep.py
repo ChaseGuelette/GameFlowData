@@ -53,6 +53,12 @@ BATTER_STAT_FS_MAP: dict[str, str] = {
     "batter_total_bases": "total_bases",
     "batter_rbis": "rbis",
     "batter_runs_scored": "runs",
+    "batter_hrr": "hrr",
+}
+
+# Stats whose sportsbook market_key in mlb_raw_player_props differs from the internal stat name
+STAT_TO_MARKET_KEY: dict[str, str] = {
+    "batter_hrr": "batter_hits_runs_rbis",
 }
 
 
@@ -421,15 +427,19 @@ def _fetch_lines_for_date(
     if not game_ids or not market_keys:
         return pd.DataFrame()
 
+    # Translate internal stat names to sportsbook market_key values where they differ
+    db_keys = [STAT_TO_MARKET_KEY.get(k, k) for k in market_keys]
+    reverse_map = {v: k for k, v in STAT_TO_MARKET_KEY.items()}
+
     # Build parameterized query
     game_id_placeholders = ", ".join(f":gid_{i}" for i in range(len(game_ids)))
-    market_placeholders = ", ".join(f":mk_{i}" for i in range(len(market_keys)))
+    market_placeholders = ", ".join(f":mk_{i}" for i in range(len(db_keys)))
     book_placeholders = ", ".join(f":bk_{i}" for i in range(len(bookmakers)))
 
     params = {}
     for i, gid in enumerate(game_ids):
         params[f"gid_{i}"] = gid
-    for i, mk in enumerate(market_keys):
+    for i, mk in enumerate(db_keys):
         params[f"mk_{i}"] = mk
     for i, bk in enumerate(bookmakers):
         params[f"bk_{i}"] = bk
@@ -454,7 +464,13 @@ def _fetch_lines_for_date(
 
     with engine.connect() as conn:
         conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
-        return pd.read_sql(query, conn, params=params)
+        df = pd.read_sql(query, conn, params=params)
+
+    # Remap sportsbook market_key back to internal stat names so edge calc can match by pred.stat
+    if reverse_map and not df.empty and "market_key" in df.columns:
+        df["market_key"] = df["market_key"].replace(reverse_map)
+
+    return df
 
 
 # ---------------------------------------------------------------------------

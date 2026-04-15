@@ -22,7 +22,7 @@ import argparse
 import logging
 import sys
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import requests
@@ -122,7 +122,7 @@ class MLBRosterScraper:
                 logger.info(f"  {r['player_name']} ({r['position']}) #{r['jersey_number']}")
             return len(records)
 
-        scraped_at = datetime.now(timezone.utc)
+        scraped_at = datetime.now(UTC)
         with self.engine.begin() as conn:
             for r in records:
                 conn.execute(

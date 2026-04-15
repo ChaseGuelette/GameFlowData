@@ -9,3 +9,4 @@ Session continuity notes. Read the latest handoff at the start of every session.
 - [[handoff-001]] — April 12, 2026 — MLB pitcher K UNDER-only + backtest direction filter. Sweeps run, edge=0.08 locked in for early season.
 - [[handoff-002]] — April 12, 2026 — MLB Kalshi volume investigation, pitcher_outs fix, batter_hrr (H+R+RBI) model groundwork across 6 files, plan doc created.
 - [[handoff-003]] — April 15, 2026 — Migration 023 applied (Stats Vault live). MLB paper trader bet-count diagnosis + 3 fixes: min_odds -200→-500, date dropdown RPC, paper trader redesigned to mirror Model Picks exactly via is_recommended flag.
+- [[handoff-004]] — April 15, 2026 — bet_reasoning JSONB on paper bets (model context in Discord), daily summary fixes (timezone/data/timing), greedy bet sizing, analysis embed clarity overhaul, high-edge alert liquidity filter.
