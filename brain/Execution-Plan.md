@@ -16,7 +16,7 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 1.2 | Train pitcher K model | completed | Data backfills | Artifact exists (`run_20260313_195757`), backtested with good results. |
 | 1.3 | Train batter hits/total_bases models | completed | 1.1 | `batter_hits` promoted (tau=0.75, z_max=1.0, mw=0.8, edge=8%, +33.2% ROI). `batter_rbis` promoted (tau=0.9, z_max=0.25, mw=0.8, edge=12%, +44.2% ROI). DROPPED: `batter_total_bases` (0/540 profitable), `batter_runs_scored` (trivial edge), `batter_home_runs` (no edge). |
 | 1.4 | Build MLB daily runner | completed | 1.2, 1.3 | `src/models/mlb/mlb_daily_runner.py` is production-ready — game discovery, pitcher K predictions, batter predictions scaffolded, prop lines, edge calc, paper bets. Mirrors NBA architecture. |
-| 1.5 | Build MLB paper trading | completed | 1.4 | `src/paper_trading/mlb_paper_trader.py` — full bet selection, placement, and resolution. |
+| 1.5 | Build MLB paper trading | completed | 1.4 | `src/paper_trading/mlb_paper_trader.py` — full bet selection, placement, and resolution. Session 31: `select_bets()` redesigned to mirror Model Picks exactly (queries `is_recommended=true`, uses stored BL probs). No more independent BL re-blending. |
 | 1.6 | Run MLB backtests | completed | 1.2, 1.3 | All 3 stats backtested individually + combined (Jul 1-Sep 28, 1,064 bets, +21.25% ROI, 1.19 Sharpe). Per-stat optimal BL configs promoted. TB/runs/HR confirmed non-viable and dropped. |
 | 1.7 | Add MLB to Railway scheduler | completed | 1.4, 1.6 | MLB jobs in `scheduler.py`: stats at 10/10:30 AM ET, inference at 1:30/6:30 PM ET. Month gate removed. Kalshi split into NBA/MLB separate refresh jobs. Supavisor timeout fix deployed (Session 15). |
 
@@ -35,7 +35,7 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 2.3 | MLB live scoreboards | completed | MLB scoreboard API endpoint | `/api/scoreboard?sport=mlb` via MLB Stats API, `scoreboard: true` in MLB config. |
 | 2.4 | MLB injury reports | not_started | MLB injury data source + scraper | Injury badges on prop cards, flip `injuries: true` |
 | 2.5 | MLB DFS | not_started | MLB DFS salary data source | Salary scraper + DFS optimizer page for MLB |
-| 2.6 | MLB Stats Vault | completed | MLB historical stats tables | Batters + Pitchers tabs with Box/Rates/Consistency categories. DB views `mlb_batters_latest` + `mlb_pitchers_latest` (migration 023). WindowToggle supports L3/L5/L10/L20/SZN. `dec3` format for AVG/OBP/SLG/OPS. `statsVault: true` in MLB config. Pending: apply migration 023 in Supabase. |
+| 2.6 | MLB Stats Vault | completed | MLB historical stats tables | Batters + Pitchers tabs with Box/Rates/Consistency categories. DB views `mlb_batters_latest` (1,242 rows) + `mlb_pitchers_latest` (1,512 rows) applied via migration 023. RLS policies on 4 MLB tables. WindowToggle supports L3/L5/L10/L20/SZN. `dec3` format for AVG/OBP/SLG/OPS. `statsVault: true` in MLB config. ✅ LIVE. |
 
 **Done when**: All feature flags in MLB config are `true` and backed by real data.
 
