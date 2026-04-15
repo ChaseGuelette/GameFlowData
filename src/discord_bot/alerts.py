@@ -1008,19 +1008,78 @@ def _build_kalshi_trade_placed_embed(trade: dict, mode: str = "live") -> dict:
     mode_upper = mode.upper()
     allow_yes = os.environ.get("KALSHI_ALLOW_YES_BETS", "false").lower() == "true"
     no_only_badge = "" if allow_yes else " [NO-ONLY]"
+
+    fields = [
+        {"name": "Side", "value": side, "inline": True},
+        {"name": "Price", "value": f"{fill_price}c", "inline": True},
+        {"name": "Contracts", "value": str(contracts), "inline": True},
+        {"name": "Cost", "value": f"${total_cost:.2f}", "inline": True},
+        {"name": "Edge", "value": f"{edge:.1%}", "inline": True},
+        {"name": "Balance", "value": f"${balance:.2f}", "inline": True},
+    ]
+
+    # Model context field from bet_reasoning
+    r = trade.get("bet_reasoning") or {}
+    if r:
+        lines = []
+
+        # Quantile distribution
+        q_vals = [r.get(f"q{q}") for q in (10, 50, 90)]
+        if all(v is not None for v in q_vals):
+            lines.append(f"Q10/50/90: {q_vals[0]:.1f} / {q_vals[1]:.1f} / {q_vals[2]:.1f}")
+
+        # Recent averages
+        avg_parts = []
+        if r.get("l5_avg") is not None:
+            avg_parts.append(f"L5: {r['l5_avg']:.1f}")
+        if r.get("l3_avg") is not None:
+            avg_parts.append(f"L3: {r['l3_avg']:.1f}")
+        if avg_parts:
+            lines.append("  ".join(avg_parts))
+
+        # Game context
+        ctx_parts = []
+        if r.get("opp_abbrev"):
+            home_flag = "vs" if r.get("is_home") else "@"
+            ctx_parts.append(f"{home_flag} {r['opp_abbrev']}")
+        if r.get("rest_days") is not None:
+            b2b = " (B2B)" if r.get("is_back_to_back") else ""
+            ctx_parts.append(f"{r['rest_days']}d rest{b2b}")
+        if r.get("team_out_count"):
+            ctx_parts.append(f"{r['team_out_count']} tm out")
+        if ctx_parts:
+            lines.append("  |  ".join(ctx_parts))
+
+        # Model probability chain
+        prob_parts = []
+        if r.get("bl_model_prob") is not None:
+            prob_parts.append(f"BL prob: {r['bl_model_prob']:.1%}")
+        elif r.get("model_prob_raw") is not None:
+            prob_parts.append(f"Model: {r['model_prob_raw']:.1%}")
+        if r.get("bl_confidence") is not None:
+            prob_parts.append(f"conf: {r['bl_confidence']:.0%}")
+        if prob_parts:
+            lines.append("  ".join(prob_parts))
+
+        # Sportsbook line comparison
+        if r.get("sportsbook_line") is not None and r.get("line_vs_sportsbook") is not None:
+            diff = r["line_vs_sportsbook"]
+            sign = "+" if diff >= 0 else ""
+            lines.append(f"SB line: {r['sportsbook_line']:.1f} ({sign}{diff:.1f} vs Kalshi)")
+
+        if lines:
+            fields.append({
+                "name": "Model Context",
+                "value": "\n".join(lines),
+                "inline": False,
+            })
+
     return {
         "title": f"KALSHI {mode_upper} TRADE PLACED{no_only_badge}",
         "description": f"**{player}** {stat} {'OVER' if side == 'YES' else 'UNDER'} {line}",
         "color": 0x2ECC71 if mode == "live" else 0x3498DB,  # Green / Blue
         "timestamp": datetime.utcnow().isoformat(),
-        "fields": [
-            {"name": "Side", "value": side, "inline": True},
-            {"name": "Price", "value": f"{fill_price}c", "inline": True},
-            {"name": "Contracts", "value": str(contracts), "inline": True},
-            {"name": "Cost", "value": f"${total_cost:.2f}", "inline": True},
-            {"name": "Edge", "value": f"{edge:.1%}", "inline": True},
-            {"name": "Balance", "value": f"${balance:.2f}", "inline": True},
-        ],
+        "fields": fields,
         "footer": {"text": f"Kalshi {mode.title()} Trading | GameFlowData"},
     }
 
@@ -1254,6 +1313,21 @@ def _build_kalshi_pnl_summary_embed(
             "name": "Win Rate (Yesterday)",
             "value": f"{win_rate:.1%}",
             "inline": True,
+        })
+
+    # Overflow field — bets skipped due to exposure cap (hypothetical P&L)
+    overflow_bets = log_data.get("overflow_bets", 0) if log_data else 0
+    overflow_pnl = log_data.get("overflow_pnl", 0.0) if log_data else 0.0
+    if overflow_bets > 0:
+        total_tracked = (total_resolved or 0) + overflow_bets
+        overflow_pct = overflow_bets / total_tracked if total_tracked > 0 else 0.0
+        embed["fields"].append({
+            "name": "Overflow (Cap-Limited)",
+            "value": (
+                f"{overflow_bets} skipped ({overflow_pct:.0%} of eligible)  |  "
+                f"~${overflow_pnl:+,.2f} hypothetical P&L"
+            ),
+            "inline": False,
         })
 
     return embed
@@ -1517,12 +1591,11 @@ def send_kalshi_analysis_alert_sync(
 
 
 def _build_arb_alert_embed(opportunities: list, sport: str = "nba") -> dict:
-    """Build Discord embed for arbitrage/mispricing opportunities.
+    """Build Discord embed for Kalshi↔Polymarket arbitrage opportunities.
 
     Color coding:
       Pure arb → orange (0xFF8C00)
       Soft arb → yellow (0xFFD700)
-      Sportsbook mispricing → blue (0x3498DB)
 
     Args:
         opportunities: List of ArbOpportunity instances.
@@ -1538,12 +1611,9 @@ def _build_arb_alert_embed(opportunities: list, sport: str = "nba") -> dict:
     if "pure" in arb_types:
         color = 0xFF8C00  # Orange — guaranteed profit
         title_prefix = "PURE ARB DETECTED"
-    elif "soft" in arb_types:
+    else:
         color = 0xFFD700  # Yellow — soft arb
         title_prefix = "Soft Arb Opportunity"
-    else:
-        color = 0x3498DB  # Blue — market intel
-        title_prefix = "Market Mispricing"
 
     embed = {
         "title": f"{title_prefix} — {sport_upper}",
@@ -1576,43 +1646,28 @@ def _build_arb_alert_embed(opportunities: list, sport: str = "nba") -> dict:
         poly_liq = getattr(opp, "poly_liquidity", 0) or 0
         disc = getattr(opp, "price_discrepancy", None)
 
-        if arb_type in ("pure", "soft"):
-            k_side = getattr(opp, "kalshi_side", "?") or "?"
-            k_price = getattr(opp, "kalshi_price", 0) or 0
-            k_vol = getattr(opp, "kalshi_volume", 0) or 0
-            net_margin = getattr(opp, "net_margin", None)
-            est_profit = getattr(opp, "estimated_profit", None)
+        k_side = getattr(opp, "kalshi_side", "?") or "?"
+        k_price = getattr(opp, "kalshi_price", 0) or 0
+        k_vol = getattr(opp, "kalshi_volume", 0) or 0
+        net_margin = getattr(opp, "net_margin", None)
+        est_profit = getattr(opp, "estimated_profit", None)
 
-            type_badge = "PURE ARB" if arb_type == "pure" else "Soft Arb"
-            value_parts = [
-                f"Kalshi {k_side.upper()} {k_price}c | Poly {poly_side.upper()} {poly_price:.0f}c",
-                f"Discrepancy: **{disc:.1%}**" if disc else "",
-            ]
-            if net_margin is not None:
-                value_parts.append(f"Net margin: **{net_margin:.1f}c**")
-            if est_profit is not None:
-                value_parts.append(f"Est. profit: ${est_profit:.2f}")
-            value_parts.append(f"Kalshi vol: {k_vol:,} | Poly liq: ${poly_liq:,.0f}")
+        type_badge = "PURE ARB" if arb_type == "pure" else "Soft Arb"
+        value_parts = [
+            f"Kalshi {k_side.upper()} {k_price}c | Poly {poly_side.upper()} {poly_price:.0f}c",
+            f"Discrepancy: **{disc:.1%}**" if disc else "",
+        ]
+        if net_margin is not None:
+            value_parts.append(f"Net margin: **{net_margin:.1f}c**")
+        if est_profit is not None:
+            value_parts.append(f"Est. profit: ${est_profit:.2f}")
+        value_parts.append(f"Kalshi vol: {k_vol:,} | Poly liq: ${poly_liq:,.0f}")
 
-            embed["fields"].append({
-                "name": f"#{i} [{type_badge}] {player} — {stat} {line or ''}",
-                "value": "\n".join(p for p in value_parts if p),
-                "inline": False,
-            })
-
-        else:
-            # Sportsbook mispricing
-            sb_implied = getattr(opp, "sportsbook_implied", None)
-            sb_str = f"{sb_implied:.1%}" if sb_implied is not None else "?"
-            embed["fields"].append({
-                "name": f"#{i} [SB Mispricing] {player} — {stat} {line or ''}",
-                "value": (
-                    f"Poly {poly_side.upper()} {poly_price:.0f}c vs SB {sb_str}\n"
-                    f"Discrepancy: **{disc:.1%}**" if disc else
-                    f"Poly {poly_side.upper()} {poly_price:.0f}c vs SB {sb_str}"
-                ),
-                "inline": False,
-            })
+        embed["fields"].append({
+            "name": f"#{i} [{type_badge}] {player} — {stat} {line or ''}",
+            "value": "\n".join(p for p in value_parts if p),
+            "inline": False,
+        })
 
     return embed
 

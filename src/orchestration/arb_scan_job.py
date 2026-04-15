@@ -1,13 +1,12 @@
 """
 Arbitrage Scan Job
 ==================
-Orchestrates the full Polymarket-Kalshi arbitrage scanning pipeline:
+Orchestrates the Polymarket-Kalshi arbitrage scanning pipeline:
   1. Scrape Polymarket markets (store in polymarket_markets)
   2. Match against Kalshi markets (find cross-platform pairs)
-  3. Compare against sportsbook consensus (detect mispricings)
-  4. Scan for arbs and mispricings
-  5. Send Discord alerts for pure arbs + significant soft arbs
-  6. Log summary
+  3. Scan for pure arbs and soft arbs
+  4. Send Discord alerts for significant opportunities
+  5. Log summary
 
 Runs on Railway every 10 minutes via scheduler.py.
 Exits gracefully if Polymarket API is unreachable.
@@ -60,10 +59,8 @@ def run(
     summary: dict = {
         "scrape": {},
         "kalshi_matched": 0,
-        "sb_compared": 0,
         "pure_arbs": 0,
         "soft_arbs": 0,
-        "sportsbook_mispricings": 0,
         "alerts_sent": False,
     }
 
@@ -86,8 +83,8 @@ def run(
     else:
         logger.info("Step 1: Skipping Polymarket scrape (--skip-scrape)")
 
-    # Steps 2-4: Run arb scanner (handles matching + scanning internally)
-    logger.info("Steps 2-4: Matching + scanning for arbs...")
+    # Steps 2-3: Match Kalshi ↔ Polymarket and scan for arbs
+    logger.info("Steps 2-3: Matching + scanning for arbs...")
     try:
         from src.arbitrage.arb_scanner import ArbScanner
 
@@ -95,19 +92,13 @@ def run(
         result = scanner.scan(target_date=target_date, sport=sport, dry_run=dry_run)
 
         summary["kalshi_matched"] = result.n_kalshi_matched
-        summary["sb_compared"] = result.n_poly_sportsbook
         summary["pure_arbs"] = len(result.pure_arbs)
         summary["soft_arbs"] = len(result.soft_arbs)
-        summary["sportsbook_mispricings"] = len(result.sportsbook_mispricings)
 
-        logger.info(
-            f"Kalshi matched: {result.n_kalshi_matched}, "
-            f"Sportsbook compared: {result.n_poly_sportsbook}"
-        )
+        logger.info(f"Kalshi matched: {result.n_kalshi_matched}")
         logger.info(
             f"Opportunities: {len(result.pure_arbs)} pure arbs, "
-            f"{len(result.soft_arbs)} soft arbs, "
-            f"{len(result.sportsbook_mispricings)} sportsbook mispricings"
+            f"{len(result.soft_arbs)} soft arbs"
         )
 
         if dry_run:
@@ -118,16 +109,16 @@ def run(
         summary["scan_error"] = str(e)
         return summary
 
-    # Step 5: Discord alerts
+    # Step 4: Discord alerts
     if not skip_discord and not dry_run:
-        logger.info("Step 5: Sending Discord alerts...")
+        logger.info("Step 4: Sending Discord alerts...")
         try:
             alerts_sent = _send_arb_alerts(result, sport)
             summary["alerts_sent"] = alerts_sent
         except Exception as e:
             logger.warning(f"Discord alert failed (non-fatal): {e}")
     else:
-        logger.info("Step 5: Skipping Discord alerts")
+        logger.info("Step 4: Skipping Discord alerts")
 
     return summary
 
@@ -153,15 +144,6 @@ def _print_opportunities(result) -> None:
                 f"Kalshi {opp.kalshi_price}c vs Poly {opp.poly_price:.0f}c"
             )
 
-    if result.sportsbook_mispricings:
-        logger.info(f"=== SPORTSBOOK MISPRICINGS (top 5 of {len(result.sportsbook_mispricings)}) ===")
-        for opp in result.sportsbook_mispricings[:5]:
-            logger.info(
-                f"  {opp.player_name} {opp.stat_type} {opp.line} | "
-                f"Discrepancy: {(opp.price_discrepancy or 0):.1%} | "
-                f"Poly {opp.poly_price:.0f}c vs SB {(opp.sportsbook_implied or 0)*100:.0f}c"
-            )
-
 
 def _send_arb_alerts(result, sport: str) -> bool:
     """Send Discord alerts for significant opportunities.
@@ -176,13 +158,9 @@ def _send_arb_alerts(result, sport: str) -> bool:
     # Always alert on pure arbs
     all_opps.extend(result.pure_arbs)
 
-    # Alert on top soft arbs with >= 8% discrepancy
+    # Alert on soft arbs with >= 8% discrepancy
     significant_soft = [o for o in result.soft_arbs if (o.price_discrepancy or 0) >= 0.08]
     all_opps.extend(significant_soft[:5])
-
-    # Alert on top sportsbook mispricings
-    top_mispricings = result.sportsbook_mispricings[:3]
-    all_opps.extend(top_mispricings)
 
     if not all_opps:
         logger.info("No significant opportunities to alert on")
@@ -229,13 +207,11 @@ def main():
 
     logger.info("=" * 60)
     logger.info("ARB SCAN COMPLETE")
-    logger.info(f"  Scrape:               {summary.get('scrape', {})}")
-    logger.info(f"  Kalshi matched:       {summary.get('kalshi_matched', 0)}")
-    logger.info(f"  Sportsbook compared:  {summary.get('sb_compared', 0)}")
-    logger.info(f"  Pure arbs:            {summary.get('pure_arbs', 0)}")
-    logger.info(f"  Soft arbs:            {summary.get('soft_arbs', 0)}")
-    logger.info(f"  SB mispricings:       {summary.get('sportsbook_mispricings', 0)}")
-    logger.info(f"  Alerts sent:          {summary.get('alerts_sent', False)}")
+    logger.info(f"  Scrape:          {summary.get('scrape', {})}")
+    logger.info(f"  Kalshi matched:  {summary.get('kalshi_matched', 0)}")
+    logger.info(f"  Pure arbs:       {summary.get('pure_arbs', 0)}")
+    logger.info(f"  Soft arbs:       {summary.get('soft_arbs', 0)}")
+    logger.info(f"  Alerts sent:     {summary.get('alerts_sent', False)}")
     logger.info("=" * 60)
 
 

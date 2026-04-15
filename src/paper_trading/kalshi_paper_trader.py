@@ -18,6 +18,7 @@ Configuration via environment variables:
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -196,7 +197,8 @@ class KalshiPaperTrader:
                 yes_price, model_prob, kalshi_implied,
                 raw_edge, taker_fee_adjusted_edge,
                 volume, bid_ask_spread, market_status,
-                bl_model_prob, bl_edge
+                bl_model_prob, bl_edge, bl_confidence,
+                sportsbook_consensus_line, line_vs_sportsbook, market_title
             FROM kalshi_markets
             WHERE sport = :sport
               AND snapshot_time::date = :target_date
@@ -318,7 +320,23 @@ class KalshiPaperTrader:
                 "kalshi_implied": kalshi_implied,
                 "raw_edge": float(row["raw_edge"]) if pd.notna(row["raw_edge"]) else 0,
                 "fee_adjusted_edge": edge,
+                # Extra market context for bet_reasoning
+                "bl_model_prob": float(row["bl_model_prob"]) if pd.notna(row.get("bl_model_prob")) else None,
+                "bl_edge": float(row["bl_edge"]) if pd.notna(row.get("bl_edge")) else None,
+                "bl_confidence": float(row["bl_confidence"]) if pd.notna(row.get("bl_confidence")) else None,
+                "sportsbook_line": float(row["sportsbook_consensus_line"]) if pd.notna(row.get("sportsbook_consensus_line")) else None,
+                "line_vs_sportsbook": float(row["line_vs_sportsbook"]) if pd.notna(row.get("line_vs_sportsbook")) else None,
+                "market_title": str(row["market_title"]) if pd.notna(row.get("market_title")) else None,
+                "volume": int(row["volume"]) if pd.notna(row.get("volume")) else None,
             }
+
+        # Enrich candidates with prediction context (quantiles, features)
+        prediction_ctx = self._fetch_prediction_context(
+            target_date, list(run_candidates.keys())
+        )
+        for pos_key, cand in run_candidates.items():
+            ctx = prediction_ctx.get(pos_key, {})
+            cand["_pred_ctx"] = ctx
 
         # Log bet pool statistics (all NO edges, before threshold filter)
         _tiers = [0, 3, 5, 10, 15]
@@ -359,21 +377,24 @@ class KalshiPaperTrader:
                 "fee_per": fee_per,
             })
 
-        # Proportional scale factor: shrink all bets equally if Kelly total > cap
+        # Greedy allocation by edge priority (replaces proportional scaling).
+        # kelly_info is already sorted best-edge first.
+        # For each bet: place at full Kelly if cap allows, otherwise fit as many
+        # contracts as the remaining cap permits (min 1), otherwise overflow.
+        # This eliminates the floor-to-zero problem that hit proportional scaling
+        # hard when bankroll was small or many candidates competed for the cap.
         remaining_cap = max(0.0, effective_cap - existing_exposure)
         total_kelly_cost = sum(k["kelly_cost"] for k in kelly_info)
-        scale = min(1.0, remaining_cap / total_kelly_cost) if total_kelly_cost > 0 else 0.0
 
         logger.info(
-            f"Proportional sizing: {len(kelly_info)} candidates, "
-            f"Kelly total=${total_kelly_cost:.2f}, remaining cap=${remaining_cap:.2f}, "
-            f"scale={scale:.3f}"
+            f"Greedy sizing: {len(kelly_info)} candidates, "
+            f"Kelly total=${total_kelly_cost:.2f}, remaining cap=${remaining_cap:.2f}"
         )
 
-        # Third pass: apply scale, build final bet dicts
+        # Third pass: greedy allocation
         bets: list[dict[str, Any]] = []
         overflow_bets: list[dict[str, Any]] = []
-        total_exposure = existing_exposure
+        running_exposure = existing_exposure
 
         for k in kelly_info:
             pos_key = k["pos_key"]
@@ -382,9 +403,38 @@ class KalshiPaperTrader:
             side = cand["side"]
             cost_per = k["cost_per"]
             fee_per = k["fee_per"]
+            kelly_contracts = k["kelly_contracts"]
 
-            scaled_contracts = int(math.floor(k["kelly_contracts"] * scale))
-            actual_contracts = min(scaled_contracts, self.max_contracts_per_market)
+            ctx = cand.get("_pred_ctx", {})
+            bet_reasoning: dict[str, Any] = {
+                # Quantiles from daily_predictions (the model's full distribution)
+                "q10": ctx.get("q10"),
+                "q25": ctx.get("q25"),
+                "q50": ctx.get("q50"),
+                "q75": ctx.get("q75"),
+                "q90": ctx.get("q90"),
+                "pred_mean": ctx.get("pred_mean"),
+                "l5_avg": ctx.get("l5_avg"),
+                "l3_avg": ctx.get("l3_avg"),
+                # Game context
+                "opp_abbrev": ctx.get("opp_abbrev"),
+                "rest_days": ctx.get("rest_days"),
+                "is_back_to_back": ctx.get("is_back_to_back"),
+                "team_out_count": ctx.get("team_out_count"),
+                # Model probability chain
+                "model_prob_raw": round(cand["model_prob"], 4),
+                "bl_model_prob": cand.get("bl_model_prob"),
+                "bl_edge": cand.get("bl_edge"),
+                "bl_confidence": cand.get("bl_confidence") or ctx.get("bl_confidence"),
+                # Market context
+                "kalshi_implied": round(cand["kalshi_implied"], 4),
+                "sportsbook_line": cand.get("sportsbook_line"),
+                "line_vs_sportsbook": cand.get("line_vs_sportsbook"),
+                "market_title": cand.get("market_title"),
+                "volume": cand.get("volume"),
+                # Kelly context
+                "kelly_contracts_full": kelly_contracts,
+            }
 
             bet_dict: dict[str, Any] = {
                 "game_date": target_date,
@@ -396,30 +446,49 @@ class KalshiPaperTrader:
                 "line": cand["line"],
                 "side": side,
                 "price": yes_price,
-                "contracts": actual_contracts,
+                "contracts": kelly_contracts,  # updated below if capped
                 "is_maker": False,
-                "expected_fee": round(fee_per * actual_contracts, 4),
+                "expected_fee": round(fee_per * kelly_contracts, 4),
                 "model_prob": round(cand["model_prob"], 4),
                 "kalshi_implied": round(cand["kalshi_implied"], 4),
                 "edge": round(cand["raw_edge"], 4),
                 "fee_adjusted_edge": round(cand["fee_adjusted_edge"], 4),
+                "bet_reasoning": bet_reasoning,
             }
 
-            if actual_contracts <= 0:
-                # Scaled to zero — record as overflow so we can track these bets
-                # Store Kelly-sized contracts in overflow for honest P&L tracking
-                bet_dict["contracts"] = k["kelly_contracts"]
-                bet_dict["expected_fee"] = round(fee_per * k["kelly_contracts"], 4)
+            remaining = max(0.0, effective_cap - running_exposure)
+
+            if remaining <= 0:
+                # Cap exhausted — all remaining bets overflow
                 overflow_bets.append(bet_dict)
                 continue
 
-            total_exposure += actual_contracts * cost_per
+            kelly_full_cost = kelly_contracts * cost_per
+
+            if kelly_full_cost <= remaining:
+                # Full Kelly fits within remaining cap
+                actual_contracts = min(kelly_contracts, self.max_contracts_per_market)
+            else:
+                # Partial cap remaining: take as many contracts as fit, minimum 1
+                actual_contracts = min(
+                    int(math.floor(remaining / cost_per)),
+                    kelly_contracts,
+                    self.max_contracts_per_market,
+                )
+                if actual_contracts <= 0:
+                    # Even 1 contract doesn't fit — overflow
+                    overflow_bets.append(bet_dict)
+                    continue
+
+            bet_dict["contracts"] = actual_contracts
+            bet_dict["expected_fee"] = round(fee_per * actual_contracts, 4)
+            running_exposure += actual_contracts * cost_per
             bets.append(bet_dict)
 
         logger.info(
             f"Selected {len(bets)} Kalshi bets [{_mode_str}] for {target_date} "
-            f"(exposure: ${total_exposure:.2f}/${effective_cap:.2f} cap, "
-            f"{len(overflow_bets)} scaled to zero)"
+            f"(exposure: ${running_exposure:.2f}/${effective_cap:.2f} cap, "
+            f"{len(overflow_bets)} overflow)"
         )
 
         # Log overflow bets that would have been taken without the exposure cap
@@ -461,12 +530,13 @@ class KalshiPaperTrader:
                 game_date, ticker, sport, player_id, player_name,
                 stat_type, line, side, price, contracts,
                 is_maker, expected_fee, model_prob, kalshi_implied,
-                edge, fee_adjusted_edge, status, fill_price
+                edge, fee_adjusted_edge, status, fill_price, bet_reasoning
             ) VALUES (
                 :game_date, :ticker, :sport, :player_id, :player_name,
                 :stat_type, :line, :side, :price, :contracts,
                 :is_maker, :expected_fee, :model_prob, :kalshi_implied,
-                :edge, :fee_adjusted_edge, 'pending', :price
+                :edge, :fee_adjusted_edge, 'pending', :price,
+                CAST(:bet_reasoning AS jsonb)
             )
             ON CONFLICT (game_date, ticker, side)
             DO UPDATE SET
@@ -479,6 +549,7 @@ class KalshiPaperTrader:
                 edge = EXCLUDED.edge,
                 fee_adjusted_edge = EXCLUDED.fee_adjusted_edge,
                 fill_price = EXCLUDED.fill_price,
+                bet_reasoning = EXCLUDED.bet_reasoning,
                 placed_at = NOW()
             WHERE kalshi_paper_bets.status = 'pending'
         """)
@@ -487,7 +558,12 @@ class KalshiPaperTrader:
 
         with self.engine.connect() as conn:
             for bet in bets:
-                conn.execute(query, bet)
+                params = dict(bet)
+                params["bet_reasoning"] = (
+                    json.dumps(params["bet_reasoning"])
+                    if params.get("bet_reasoning") else None
+                )
+                conn.execute(query, params)
             conn.commit()
 
         # Discord notifications for each placed bet
@@ -505,6 +581,7 @@ class KalshiPaperTrader:
                 "total_cost": total_cost,
                 "fee_adjusted_edge": bet["fee_adjusted_edge"],
                 "balance_after": bankroll,
+                "bet_reasoning": bet.get("bet_reasoning"),
             })
 
         logger.info(f"Placed {len(bets)} Kalshi paper bets")
@@ -967,12 +1044,13 @@ class KalshiPaperTrader:
                 game_date, ticker, sport, player_id, player_name,
                 stat_type, line, side, price, contracts,
                 is_maker, expected_fee, model_prob, kalshi_implied,
-                edge, fee_adjusted_edge, status, fill_price
+                edge, fee_adjusted_edge, status, fill_price, bet_reasoning
             ) VALUES (
                 :game_date, :ticker, :sport, :player_id, :player_name,
                 :stat_type, :line, :side, :price, :contracts,
                 :is_maker, :expected_fee, :model_prob, :kalshi_implied,
-                :edge, :fee_adjusted_edge, 'overflow', :price
+                :edge, :fee_adjusted_edge, 'overflow', :price,
+                CAST(:bet_reasoning AS jsonb)
             )
             ON CONFLICT (game_date, ticker, side) DO NOTHING
         """)
@@ -980,11 +1058,99 @@ class KalshiPaperTrader:
         stored = 0
         with self.engine.connect() as conn:
             for bet in overflow_bets:
-                result = conn.execute(query, bet)
+                params = dict(bet)
+                params["bet_reasoning"] = (
+                    json.dumps(params["bet_reasoning"])
+                    if params.get("bet_reasoning") else None
+                )
+                result = conn.execute(query, params)
                 stored += result.rowcount
             conn.commit()
 
         logger.info(f"Stored {stored}/{len(overflow_bets)} overflow bets for tracking")
+
+    # ------------------------------------------------------------------
+    # Prediction context
+    # ------------------------------------------------------------------
+
+    def _fetch_prediction_context(
+        self, target_date: date, pos_keys: list[tuple[int, str]]
+    ) -> dict[tuple[int, str], dict[str, Any]]:
+        """Fetch model prediction context (quantiles + game features) for bet_reasoning.
+
+        Queries daily_predictions for the given (player_id, stat_type) pairs and
+        returns a dict mapping each key to a context dict.  Missing entries are
+        silently omitted — callers should use .get(key, {}).
+        """
+        if not pos_keys:
+            return {}
+
+        pos_keys_set = set(pos_keys)
+        player_ids = list({pk[0] for pk in pos_keys})
+        stat_types = list({pk[1] for pk in pos_keys})
+
+        try:
+            query = text("""
+                SELECT DISTINCT ON (player_id, stat)
+                    player_id, stat,
+                    pred_q10, pred_q25, pred_q50, pred_q75, pred_q90,
+                    pred_mean,
+                    feat_player_avg_stat_l5, feat_player_avg_stat_l3,
+                    feat_opp_abbrev, feat_rest_days, feat_is_back_to_back,
+                    feat_team_out_count, feat_is_home,
+                    feat_player_avg_usg_pct_l5, feat_player_min_floor_l5,
+                    bl_confidence
+                FROM daily_predictions
+                WHERE prediction_date = :pred_date
+                  AND player_id = ANY(:player_ids)
+                  AND stat = ANY(:stats)
+                ORDER BY player_id, stat,
+                         is_recommended DESC NULLS LAST,
+                         created_at DESC
+            """)
+
+            with self.engine.connect() as conn:
+                rows = conn.execute(query, {
+                    "pred_date": target_date,
+                    "player_ids": player_ids,
+                    "stats": stat_types,
+                }).fetchall()
+
+            result: dict[tuple[int, str], dict[str, Any]] = {}
+            for row in rows:
+                pid = int(row[0])
+                stat = row[1]
+                key = (pid, stat)
+                if key not in pos_keys_set:
+                    continue
+                result[key] = {
+                    "q10": float(row[2]) if row[2] is not None else None,
+                    "q25": float(row[3]) if row[3] is not None else None,
+                    "q50": float(row[4]) if row[4] is not None else None,
+                    "q75": float(row[5]) if row[5] is not None else None,
+                    "q90": float(row[6]) if row[6] is not None else None,
+                    "pred_mean": float(row[7]) if row[7] is not None else None,
+                    "l5_avg": float(row[8]) if row[8] is not None else None,
+                    "l3_avg": float(row[9]) if row[9] is not None else None,
+                    "opp_abbrev": row[10],
+                    "rest_days": int(row[11]) if row[11] is not None else None,
+                    "is_back_to_back": bool(row[12]) if row[12] is not None else None,
+                    "team_out_count": int(row[13]) if row[13] is not None else None,
+                    "is_home": bool(row[14]) if row[14] is not None else None,
+                    "usg_pct_l5": float(row[15]) if row[15] is not None else None,
+                    "min_floor_l5": float(row[16]) if row[16] is not None else None,
+                    "bl_confidence": float(row[17]) if row[17] is not None else None,
+                }
+
+            logger.info(
+                f"Fetched prediction context for {len(result)}/{len(pos_keys)} "
+                f"candidates from daily_predictions"
+            )
+            return result
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch prediction context: {e}")
+            return {}
 
     # ------------------------------------------------------------------
     # Discord alerts

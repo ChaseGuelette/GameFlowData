@@ -1,14 +1,11 @@
 """
 Arbitrage Scanner
 =================
-Detects arbitrage opportunities and mispricings between:
-  1. Kalshi ↔ Polymarket (player prop cross-platform arb)
-  2. Polymarket ↔ sportsbook consensus (market intel)
+Detects arbitrage opportunities between Kalshi and Polymarket prediction markets.
 
 Arb types:
-  pure arb:           net cost < 100 (guaranteed profit regardless of outcome)
-  soft arb:           >= 5% price discrepancy between platforms
-  sportsbook_mispricing: Polymarket price differs >= 8% from sportsbook consensus
+  pure arb:  net cost < 100 (guaranteed profit regardless of outcome)
+  soft arb:  >= 5% price discrepancy between platforms
 
 Usage:
     from src.arbitrage.arb_scanner import ArbScanner
@@ -26,16 +23,15 @@ logger = logging.getLogger(__name__)
 
 # Thresholds
 SOFT_ARB_THRESHOLD = 0.05       # 5% price discrepancy = soft arb
-SPORTSBOOK_DISC_THRESHOLD = 0.08  # 8% discrepancy = sportsbook mispricing alert
 MIN_KALSHI_VOLUME = 20          # Minimum Kalshi volume for consideration
 MIN_POLY_LIQUIDITY = 100.0      # Minimum Polymarket liquidity (USD)
 
 
 @dataclass
 class ArbOpportunity:
-    """A detected arbitrage or mispricing opportunity."""
+    """A detected arbitrage opportunity between Kalshi and Polymarket."""
     sport: str
-    arb_type: str               # 'pure', 'soft', 'sportsbook_mispricing'
+    arb_type: str               # 'pure' or 'soft'
     market_type: str
     player_name: str | None
     stat_type: str | None
@@ -50,7 +46,6 @@ class ArbOpportunity:
     kalshi_price: int | None = None
     kalshi_volume: int | None = None
     kalshi_fee: float | None = None
-    sportsbook_implied: float | None = None
     combined_cost: float | None = None
     gross_margin: float | None = None
     net_margin: float | None = None
@@ -67,17 +62,15 @@ class ScanResult:
     scan_date: date
     scan_time: datetime
     n_kalshi_matched: int
-    n_poly_sportsbook: int
     pure_arbs: list[ArbOpportunity]
     soft_arbs: list[ArbOpportunity]
-    sportsbook_mispricings: list[ArbOpportunity]
     total_opportunities: int
     best_margin: float | None = None
     errors: list[str] = field(default_factory=list)
 
 
 class ArbScanner:
-    """Detects and stores arbitrage opportunities across prediction markets."""
+    """Detects and stores arbitrage opportunities between Kalshi and Polymarket."""
 
     def __init__(self, engine=None):
         """Initialize the scanner.
@@ -122,15 +115,7 @@ class ArbScanner:
             logger.error(f"Kalshi matching failed: {e}")
             errors.append(f"kalshi_match: {e}")
 
-        # Step 2: Match Polymarket ↔ sportsbook
-        sb_comparisons = []
-        try:
-            sb_comparisons = matcher.match_sportsbook_markets(target_date, sport)
-        except Exception as e:
-            logger.error(f"Sportsbook comparison failed: {e}")
-            errors.append(f"sb_comparison: {e}")
-
-        # Step 3: Detect arbs from Kalshi matches
+        # Step 2: Detect arbs from matched pairs
         pure_arbs: list[ArbOpportunity] = []
         soft_arbs: list[ArbOpportunity] = []
 
@@ -142,21 +127,13 @@ class ArbScanner:
                 else:
                     soft_arbs.append(opp)
 
-        # Step 4: Detect mispricings from sportsbook comparisons
-        sb_mispricings: list[ArbOpportunity] = []
-        for comp in sb_comparisons:
-            opp = self._detect_sportsbook_mispricing(comp)
-            if opp:
-                sb_mispricings.append(opp)
-
         # Sort by best margin/discrepancy
         pure_arbs.sort(key=lambda o: o.net_margin or 0, reverse=True)
         soft_arbs.sort(key=lambda o: abs(o.price_discrepancy or 0), reverse=True)
-        sb_mispricings.sort(key=lambda o: o.price_discrepancy or 0, reverse=True)
 
-        all_opps = pure_arbs + soft_arbs + sb_mispricings
+        all_opps = pure_arbs + soft_arbs
 
-        # Step 5: Store to DB
+        # Step 3: Store to DB
         if not dry_run and all_opps:
             try:
                 stored = self._store_opportunities(all_opps, scan_time)
@@ -176,19 +153,15 @@ class ArbScanner:
             scan_date=target_date,
             scan_time=scan_time,
             n_kalshi_matched=len(kalshi_matched),
-            n_poly_sportsbook=len(sb_comparisons),
             pure_arbs=pure_arbs,
             soft_arbs=soft_arbs,
-            sportsbook_mispricings=sb_mispricings,
             total_opportunities=len(all_opps),
             best_margin=best_margin,
             errors=errors,
         )
 
         logger.info(
-            f"Scan complete: {len(pure_arbs)} pure arbs, "
-            f"{len(soft_arbs)} soft arbs, "
-            f"{len(sb_mispricings)} sportsbook mispricings"
+            f"Scan complete: {len(pure_arbs)} pure arbs, {len(soft_arbs)} soft arbs"
         )
         return result
 
@@ -289,47 +262,6 @@ class ArbScanner:
 
         return opps
 
-    def _detect_sportsbook_mispricing(self, comp) -> ArbOpportunity | None:
-        """Convert a SportsbookComparison into an ArbOpportunity if threshold met.
-
-        Args:
-            comp: SportsbookComparison instance.
-
-        Returns:
-            ArbOpportunity if discrepancy >= threshold, else None.
-        """
-        if comp.price_discrepancy < SPORTSBOOK_DISC_THRESHOLD:
-            return None
-
-        poly_implied = comp.poly_yes_price / 100.0
-        sb_implied = comp.sportsbook_implied
-
-        # Determine which side looks favorable
-        if poly_implied > sb_implied:
-            # Poly overpriced → buy NO (poly thinks it's more likely than sportsbook)
-            poly_side = "no"
-            poly_price = 100 - comp.poly_yes_price
-        else:
-            # Poly underpriced → buy YES
-            poly_side = "yes"
-            poly_price = comp.poly_yes_price
-
-        return ArbOpportunity(
-            sport=comp.sport,
-            arb_type="sportsbook_mispricing",
-            market_type=comp.market_type,
-            player_name=comp.player_name,
-            stat_type=comp.stat_type,
-            line=comp.line,
-            poly_condition_id=comp.poly_condition_id,
-            poly_side=poly_side,
-            poly_price=poly_price,
-            poly_liquidity=comp.poly_liquidity,
-            poly_fee=0.0,
-            sportsbook_implied=sb_implied,
-            price_discrepancy=comp.price_discrepancy,
-        )
-
     # ------------------------------------------------------------------
     # DB Storage
     # ------------------------------------------------------------------
@@ -353,13 +285,13 @@ class ArbScanner:
                 scan_time, sport, arb_type, market_type, player_name, stat_type, line,
                 kalshi_ticker, kalshi_side, kalshi_price, kalshi_volume, kalshi_fee,
                 poly_condition_id, poly_side, poly_price, poly_liquidity, poly_fee,
-                sportsbook_implied, combined_cost, gross_margin, net_margin,
+                combined_cost, gross_margin, net_margin,
                 price_discrepancy, min_fillable, estimated_profit, status
             ) VALUES (
                 :scan_time, :sport, :arb_type, :market_type, :player_name, :stat_type, :line,
                 :kalshi_ticker, :kalshi_side, :kalshi_price, :kalshi_volume, :kalshi_fee,
                 :poly_condition_id, :poly_side, :poly_price, :poly_liquidity, :poly_fee,
-                :sportsbook_implied, :combined_cost, :gross_margin, :net_margin,
+                :combined_cost, :gross_margin, :net_margin,
                 :price_discrepancy, :min_fillable, :estimated_profit, 'detected'
             )
         """)
@@ -385,7 +317,6 @@ class ArbScanner:
                     "poly_price": opp.poly_price,
                     "poly_liquidity": opp.poly_liquidity,
                     "poly_fee": opp.poly_fee,
-                    "sportsbook_implied": opp.sportsbook_implied,
                     "combined_cost": opp.combined_cost,
                     "gross_margin": opp.gross_margin,
                     "net_margin": opp.net_margin,

@@ -1,9 +1,7 @@
 """
 Market Matcher
 ==============
-Cross-platform market matching logic:
-  1. Kalshi ↔ Polymarket player prop pairs (for arb detection)
-  2. Polymarket ↔ sportsbook consensus (for mispricing detection)
+Cross-platform market matching logic for Kalshi ↔ Polymarket player prop pairs.
 
 Matching modes:
   - Exact: same player_id + stat_type + line
@@ -12,7 +10,7 @@ Matching modes:
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 from sqlalchemy import text
@@ -47,28 +45,8 @@ class MatchedMarket:
     match_confidence: float  # 0.0 - 1.0
 
 
-@dataclass
-class SportsbookComparison:
-    """A Polymarket market compared against sportsbook consensus."""
-    poly_condition_id: str
-    poly_yes_price: float
-    poly_liquidity: float
-    sportsbook_implied: float      # Sportsbook implied probability (0-1)
-    price_discrepancy: float       # |poly_implied - sportsbook_implied|
-    sport: str
-    market_type: str
-    player_name: str | None = None
-    stat_type: str | None = None
-    line: float | None = None
-    team1: str | None = None
-    team2: str | None = None
-    question: str | None = None
-    sportsbook_source: str = "consensus"
-    extra: dict = field(default_factory=dict)
-
-
 class MarketMatcher:
-    """Matches Polymarket markets against Kalshi and sportsbook data."""
+    """Matches Polymarket player prop markets against Kalshi markets."""
 
     def __init__(self, engine=None):
         """Initialize the matcher.
@@ -82,7 +60,7 @@ class MarketMatcher:
         self.engine = engine
 
     # ------------------------------------------------------------------
-    # Kalshi Matching
+    # Kalshi ↔ Polymarket Matching
     # ------------------------------------------------------------------
 
     def match_kalshi_markets(
@@ -120,7 +98,6 @@ class MarketMatcher:
         )
 
         # Build Kalshi lookup: {(player_id, stat_type, line) -> kalshi_row}
-        # Keyed by normalized tuples
         kalshi_by_pid: dict[tuple, dict] = {}
         kalshi_by_name: dict[tuple, list[dict]] = {}
 
@@ -224,127 +201,6 @@ class MarketMatcher:
         return matched
 
     # ------------------------------------------------------------------
-    # Sportsbook Comparison
-    # ------------------------------------------------------------------
-
-    def match_sportsbook_markets(
-        self,
-        target_date: date,
-        sport: str = "nba",
-    ) -> list[SportsbookComparison]:
-        """Compare all Polymarket markets against sportsbook consensus lines.
-
-        For player props: joins against daily_predictions / mlb_daily_predictions
-        to get sportsbook-implied probability (derived from odds).
-
-        Args:
-            target_date: Date to compare.
-            sport: Sport ('nba' or 'mlb').
-
-        Returns:
-            List of SportsbookComparison instances where discrepancy >= 3%.
-        """
-        poly_rows = self._load_poly_all(target_date, sport)
-        if not poly_rows:
-            logger.info(f"No Polymarket markets for {target_date} {sport}")
-            return []
-
-        comparisons: list[SportsbookComparison] = []
-
-        # Separate props vs game markets
-        props = [m for m in poly_rows if m.get("market_type") == "player_prop"]
-        others = [m for m in poly_rows if m.get("market_type") != "player_prop"]
-
-        # Compare player props vs sportsbook
-        if props:
-            prop_comps = self._compare_props_vs_sportsbook(props, target_date, sport)
-            comparisons.extend(prop_comps)
-
-        # Compare game-level markets vs sportsbook (best-effort)
-        if others:
-            game_comps = self._compare_game_markets_vs_sportsbook(others, target_date, sport)
-            comparisons.extend(game_comps)
-
-        # Filter to meaningful discrepancies (>= 3%)
-        min_disc = 0.03
-        filtered = [c for c in comparisons if c.price_discrepancy >= min_disc]
-        logger.info(
-            f"Sportsbook comparison: {len(comparisons)} pairs, "
-            f"{len(filtered)} with >= {min_disc:.0%} discrepancy"
-        )
-        return filtered
-
-    def _compare_props_vs_sportsbook(
-        self,
-        poly_props: list[dict],
-        target_date: date,
-        sport: str,
-    ) -> list[SportsbookComparison]:
-        """Compare Polymarket player props against sportsbook consensus.
-
-        Loads the most recent sportsbook odds from daily_predictions
-        (NBA) or mlb_daily_predictions (MLB) and computes discrepancy.
-        """
-        # Build lookup from sportsbook predictions: (player_id, stat_type) -> implied_prob
-        sb_lookup: dict[tuple, float] = {}
-        try:
-            sb_lookup = self._load_sportsbook_props(target_date, sport)
-        except Exception as e:
-            logger.warning(f"Could not load sportsbook props: {e}")
-
-        comparisons = []
-        for poly in poly_props:
-            pid = poly.get("player_id")
-            stat = poly.get("stat_type") or ""
-            poly_yes_price = float(poly.get("yes_price") or 0)
-
-            if poly_yes_price <= 0:
-                continue
-
-            poly_implied = poly_yes_price / 100.0
-
-            # Try to find sportsbook implied prob
-            sb_implied = None
-            if pid:
-                key = (pid, stat)
-                sb_implied = sb_lookup.get(key)
-
-            if sb_implied is None:
-                continue
-
-            discrepancy = abs(poly_implied - sb_implied)
-
-            comparisons.append(SportsbookComparison(
-                poly_condition_id=poly.get("condition_id", ""),
-                poly_yes_price=poly_yes_price,
-                poly_liquidity=float(poly.get("liquidity") or 0),
-                sportsbook_implied=sb_implied,
-                price_discrepancy=discrepancy,
-                sport=sport,
-                market_type="player_prop",
-                player_name=poly.get("player_name"),
-                stat_type=stat,
-                line=_opt_float(poly.get("line")),
-                question=poly.get("question"),
-            ))
-
-        return comparisons
-
-    def _compare_game_markets_vs_sportsbook(
-        self,
-        poly_games: list[dict],  # noqa: ARG002
-        target_date: date,  # noqa: ARG002
-        sport: str,  # noqa: ARG002
-    ) -> list[SportsbookComparison]:
-        """Compare Polymarket game-level markets against sportsbook data.
-
-        Best-effort: tries to match team names from Polymarket questions
-        against data in raw_player_props_combined game columns.
-        Game-level matching requires sport-specific team normalization — Phase 2.
-        """
-        return []
-
-    # ------------------------------------------------------------------
     # DB Loaders
     # ------------------------------------------------------------------
 
@@ -386,74 +242,6 @@ class MarketMatcher:
             if rows:
                 return [dict(row._mapping) for row in rows]
         return []
-
-    def _load_poly_all(self, target_date: date, sport: str) -> list[dict]:
-        """Load most recent Polymarket snapshot (all types) for target_date."""
-        for days_back in range(4):
-            check_date = target_date - timedelta(days=days_back)
-            query = text("""
-                SELECT DISTINCT ON (condition_id)
-                    condition_id, player_name, stat_type, line, yes_price, no_price,
-                    yes_bid, yes_ask, liquidity, player_id, market_type, team1, team2, question
-                FROM polymarket_markets
-                WHERE sport = :sport
-                  AND snapshot_time::date = :target_date
-                  AND market_status = 'open'
-                ORDER BY condition_id, snapshot_time DESC
-            """)
-            with self.engine.connect() as conn:
-                rows = conn.execute(query, {"sport": sport, "target_date": check_date}).fetchall()
-            if rows:
-                return [dict(row._mapping) for row in rows]
-        return []
-
-    def _load_sportsbook_props(self, target_date: date, sport: str) -> dict[tuple, float]:
-        """Load sportsbook-implied probability for (player_id, stat_type) pairs.
-
-        For NBA: uses daily_predictions (over_prob column).
-        For MLB: uses mlb_daily_predictions (over_prob column).
-
-        Returns:
-            Dict mapping (player_id, stat_type) -> implied probability (0-1).
-        """
-        lookup: dict[tuple, float] = {}
-
-        if sport == "nba":
-            query = text("""
-                SELECT DISTINCT ON (player_id, stat)
-                    player_id, stat,
-                    over_prob AS implied_prob
-                FROM daily_predictions
-                WHERE prediction_date = :target_date
-                  AND player_id IS NOT NULL
-                  AND over_prob IS NOT NULL
-                ORDER BY player_id, stat, created_at DESC
-            """)
-        else:
-            query = text("""
-                SELECT DISTINCT ON (player_id, stat)
-                    player_id, stat,
-                    over_prob AS implied_prob
-                FROM mlb_daily_predictions
-                WHERE prediction_date = :target_date
-                  AND player_id IS NOT NULL
-                  AND over_prob IS NOT NULL
-                ORDER BY player_id, stat, created_at DESC
-            """)
-
-        try:
-            with self.engine.connect() as conn:
-                rows = conn.execute(query, {"target_date": target_date}).fetchall()
-            for row in rows:
-                pid = row[0]
-                stat = row[1] or ""
-                prob = row[2]
-                if pid and stat and prob is not None:
-                    lookup[(pid, stat)] = float(prob)
-        except Exception as e:
-            logger.warning(f"Sportsbook props query failed: {e}")
-
-        return lookup
 
 
 # ---------------------------------------------------------------------------

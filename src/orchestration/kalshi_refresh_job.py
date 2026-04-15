@@ -291,6 +291,8 @@ def _send_high_edge_alerts(target_date: date, sport: str, min_edge: float = 0.05
           AND market_status = 'open'
           AND maker_fee_adjusted_edge IS NOT NULL
           AND maker_fee_adjusted_edge >= :min_edge
+          AND volume >= 20
+          AND bid_ask_spread <= 15
         ORDER BY ticker, snapshot_time DESC
     """)
 

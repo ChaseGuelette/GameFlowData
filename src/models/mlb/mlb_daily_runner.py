@@ -112,6 +112,7 @@ class MLBDailyPredictionRunner:
         )
         if batter_stats and has_batter_models:
             batters = self._get_batters_for_games(games, target_date)
+            batters = self._filter_batters_by_lineup(batters, target_date)
             logger.info(f"Found {len(batters)} active batters")
 
             if batters:
@@ -300,6 +301,60 @@ class MLBDailyPredictionRunner:
                 })
 
         return batters
+
+    def _filter_batters_by_lineup(
+        self, batters: list[dict], target_date: date
+    ) -> list[dict]:
+        """Filter batters to only those confirmed in today's lineup (per game).
+
+        For each game: if lineup data exists in mlb_game_lineups, only include
+        batters confirmed in batting positions 1-9. Falls back to all active
+        batters for any game where lineups haven't been posted yet.
+        """
+        if not batters:
+            return batters
+
+        game_pks = list({b["game_id"] for b in batters})
+        query = text("""
+            SELECT DISTINCT player_id, game_pk
+            FROM mlb_game_lineups
+            WHERE game_date = :d
+              AND game_pk IN :pks
+              AND is_pitcher = false
+        """).bindparams(bindparam("pks", expanding=True))
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(query, {"d": target_date, "pks": game_pks}).fetchall()
+
+        if not rows:
+            logger.info("No lineup data available yet — using all active batters (fallback)")
+            return batters
+
+        # Build per-game lineup sets
+        lineup_by_game: dict[int, set[int]] = {}
+        for row in rows:
+            lineup_by_game.setdefault(row.game_pk, set()).add(row.player_id)
+
+        confirmed_games = len(lineup_by_game)
+        confirmed_players = sum(len(v) for v in lineup_by_game.values())
+        logger.info(
+            f"Lineup confirmed for {confirmed_games}/{len(game_pks)} games "
+            f"({confirmed_players} players) — filtering batter list"
+        )
+
+        filtered = []
+        for b in batters:
+            game_pk = b["game_id"]
+            if game_pk in lineup_by_game:
+                # Lineup is confirmed for this game — only include lineup players
+                if b["player_id"] in lineup_by_game[game_pk]:
+                    filtered.append(b)
+            else:
+                # Lineup not yet posted for this game — include all active batters
+                filtered.append(b)
+
+        logger.info(f"Lineup filter: {len(batters)} → {len(filtered)} batters")
+        return filtered
 
     def _run_pitcher_predictions(
         self,

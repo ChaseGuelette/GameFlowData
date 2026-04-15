@@ -95,11 +95,16 @@ def fetch_boxscore(game_id: str) -> dict | None:
         return None
 
 
-def get_regular_season_games_by_date(schedule: dict) -> dict[str, list[dict]]:
+def get_games_by_date(schedule: dict) -> dict[str, list[dict]]:
     """
-    Parse schedule into {date_str: [game_dicts]} for regular season games only.
+    Parse schedule into {date_str: [game_dicts]} for all competitive games.
+    Includes regular season (002), Play-In tournament (005), and Playoffs (004).
+    Excludes pre-season (001) and All-Star (003).
     date_str format: 'YYYY-MM-DD'
     """
+    # Game ID prefixes we care about
+    INCLUDED_PREFIXES = ("002", "004", "005")
+
     games_by_date = {}
     dates = schedule.get("leagueSchedule", {}).get("gameDates", [])
 
@@ -112,15 +117,15 @@ def get_regular_season_games_by_date(schedule: dict) -> dict[str, list[dict]]:
         except ValueError:
             continue
 
-        # Filter to regular season games (game_id starts with "002")
-        reg_games = [
+        # Include regular season (002), playoffs (004), play-in (005); skip pre-season/all-star
+        final_games = [
             g for g in d.get("games", [])
-            if g.get("gameId", "").startswith("002")
+            if g.get("gameId", "").startswith(INCLUDED_PREFIXES)
             and g.get("gameStatus", 0) == 3  # Final only
         ]
 
-        if reg_games:
-            games_by_date[date_str] = reg_games
+        if final_games:
+            games_by_date[date_str] = final_games
 
     return games_by_date
 
@@ -406,8 +411,8 @@ def scrape_games_cdn(
     # 1. Fetch schedule
     print("\nFetching NBA schedule from CDN...")
     schedule = fetch_schedule()
-    games_by_date = get_regular_season_games_by_date(schedule)
-    print(f"Found {sum(len(g) for g in games_by_date.values())} regular season games across {len(games_by_date)} dates")
+    games_by_date = get_games_by_date(schedule)
+    print(f"Found {sum(len(g) for g in games_by_date.values())} games (regular season + play-in + playoffs) across {len(games_by_date)} dates")
 
     # 2. Determine which games to scrape
     existing_ids = get_existing_game_ids(engine)
@@ -424,7 +429,7 @@ def scrape_games_cdn(
                     else:
                         print(f"  Skipping {g['gameId']} ({date_str}) - already in DB")
             else:
-                print(f"  No regular season games found for {date_str}")
+                print(f"  No games found for {date_str}")
     elif scrape_all_missing:
         for date_str in sorted(games_by_date.keys()):
             for g in games_by_date[date_str]:

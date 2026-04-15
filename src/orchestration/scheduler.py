@@ -534,6 +534,16 @@ def run_mlb_lines_props_only():
     run_job("mlb_lines_job.py", extra_args="--live --props-only", silent_on_success=True)
 
 
+def run_mlb_lineup_scraper():
+    """Scrape confirmed MLB batting lineups from the MLB Stats API."""
+    run_job("mlb_lineup_scraper_job.py")
+
+
+def run_mlb_roster_scraper():
+    """Scrape 26-man active MLB rosters (IL/availability tracking)."""
+    run_job("mlb_roster_scraper_job.py")
+
+
 def run_mlb_inference():
     """Run MLB inference with paper betting, checking if MLB daily stats succeeded first.
 
@@ -697,6 +707,14 @@ def main():
     # MLB Jobs
     # ==============================================================
 
+    # 9:30 AM ET - MLB active roster (IL tracking, availability)
+    scheduler.add_job(
+        run_mlb_roster_scraper,
+        CronTrigger(hour=9, minute=30, timezone=ET),
+        id="mlb_roster_scraper",
+        name="MLB Active Roster (9:30 AM ET)",
+    )
+
     # 10:00 AM ET - MLB daily stats (results from last night)
     scheduler.add_job(
         run_mlb_daily_stats,
@@ -729,6 +747,14 @@ def main():
         name="MLB Props Only (1 PM ET)",
     )
 
+    # 12:45 PM ET - MLB lineup confirmation (afternoon games; before 1:30 PM inference)
+    scheduler.add_job(
+        run_mlb_lineup_scraper,
+        CronTrigger(hour=12, minute=45, timezone=ET),
+        id="mlb_lineup_scraper_1pm",
+        name="MLB Lineup Scraper (12:45 PM ET)",
+    )
+
     # 1:30 PM ET - MLB inference (afternoon/evening games)
     scheduler.add_job(
         run_mlb_inference,
@@ -751,6 +777,14 @@ def main():
         CronTrigger(hour=18, minute=0, timezone=ET),
         id="mlb_lines_props_6pm",
         name="MLB Props Only (6 PM ET)",
+    )
+
+    # 6:10 PM ET - MLB lineup confirmation (evening games; before 6:30 PM inference)
+    scheduler.add_job(
+        run_mlb_lineup_scraper,
+        CronTrigger(hour=18, minute=10, timezone=ET),
+        id="mlb_lineup_scraper_6pm",
+        name="MLB Lineup Scraper (6:10 PM ET)",
     )
 
     # 6:30 PM ET - MLB inference refresh (evening games)

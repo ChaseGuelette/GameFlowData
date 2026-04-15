@@ -108,7 +108,7 @@ def _get_yesterday_daily_log() -> dict:
             ).fetchone()
 
         if row and row[2] is not None:  # bankroll_after not null → row exists
-            return {
+            log = {
                 "daily_pnl": float(row[0] or 0),
                 "total_pnl": float(row[1] or 0),
                 "bankroll": float(row[2]),
@@ -116,6 +116,9 @@ def _get_yesterday_daily_log() -> dict:
                 "bets_lost": int(row[4] or 0),
                 "total_bets": int(row[5] or 0),
             }
+            # Augment with overflow stats from kalshi_paper_bets
+            log.update(_get_overflow_stats(engine, yesterday))
+            return log
 
         # No entry for yesterday — use latest available (P&L only, no bet record)
         with engine.connect() as conn:
@@ -137,6 +140,8 @@ def _get_yesterday_daily_log() -> dict:
                 "bets_won": 0,
                 "bets_lost": 0,
                 "total_bets": 0,
+                "overflow_bets": 0,
+                "overflow_pnl": 0.0,
             }
 
     except Exception as e:
@@ -148,12 +153,40 @@ def _get_yesterday_daily_log() -> dict:
 
         bankroll = KalshiPaperTrader().get_bankroll()
         return {"daily_pnl": 0.0, "total_pnl": 0.0, "bankroll": bankroll,
-                "bets_won": 0, "bets_lost": 0, "total_bets": 0}
+                "bets_won": 0, "bets_lost": 0, "total_bets": 0,
+                "overflow_bets": 0, "overflow_pnl": 0.0}
     except Exception:
         pass
 
     return {"daily_pnl": 0.0, "total_pnl": 0.0, "bankroll": 100.0,
-            "bets_won": 0, "bets_lost": 0, "total_bets": 0}
+            "bets_won": 0, "bets_lost": 0, "total_bets": 0,
+            "overflow_bets": 0, "overflow_pnl": 0.0}
+
+
+def _get_overflow_stats(engine, game_date) -> dict:
+    """Query overflow bet stats for a given game_date from kalshi_paper_bets."""
+    try:
+        from sqlalchemy import text
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE status IN ('overflow_won', 'overflow_lost'))
+                            AS overflow_bets,
+                        COALESCE(SUM(pnl) FILTER (WHERE status IN ('overflow_won', 'overflow_lost')), 0)
+                            AS overflow_pnl
+                    FROM kalshi_paper_bets
+                    WHERE game_date = :game_date
+                      AND status LIKE 'overflow%'
+                """),
+                {"game_date": game_date},
+            ).fetchone()
+        if row:
+            return {"overflow_bets": int(row[0] or 0), "overflow_pnl": float(row[1] or 0)}
+    except Exception as e:
+        logger.warning(f"Failed to query overflow stats: {e}")
+    return {"overflow_bets": 0, "overflow_pnl": 0.0}
 
 
 def _send_pnl_summary(resolution_result: dict, log_data: dict, dry_run: bool = False) -> None:
@@ -163,7 +196,9 @@ def _send_pnl_summary(resolution_result: dict, log_data: dict, dry_run: bool = F
     if dry_run:
         logger.info(
             f"  Would send P&L summary: bankroll=${log_data['bankroll']:.2f}, "
-            f"daily_pnl=${log_data['daily_pnl']:+.2f}, total_pnl=${log_data['total_pnl']:+.2f}"
+            f"daily_pnl=${log_data['daily_pnl']:+.2f}, total_pnl=${log_data['total_pnl']:+.2f}, "
+            f"overflow={log_data.get('overflow_bets', 0)} bets "
+            f"(${log_data.get('overflow_pnl', 0.0):+.2f} hypothetical)"
         )
         return
 

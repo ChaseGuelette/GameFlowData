@@ -158,13 +158,14 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 
 ## Phase 9: Polymarket-Kalshi Arbitrage Scanner
 
-**Goal**: Monitor Polymarket prediction markets for cross-platform arbs against Kalshi and mispricings vs. sportsbook consensus.
+**Goal**: Monitor Polymarket prediction markets for pure and soft cross-platform arbs against Kalshi. Purely price-based — no sportsbook data, no internal model. Two market layers: player props (thin coverage, starter) and game-level moneylines/totals (the real volume).
 
 | Step | Task | Status | Dependencies | Details |
 |------|------|--------|--------------|---------|
-| 9.1 | Core arb scanner pipeline | completed | Kalshi integration | `polymarket_utils`, `polymarket_client`, `polymarket_market_scraper`, `market_matcher`, `arb_scanner`, `arb_scan_job`. 2 DB tables (`polymarket_markets`, `arb_opportunities`). Runs every 10 min on Railway. DISCORD_CHANNEL_ARB=1492934576467611700. |
-| 9.2 | Dry-run validation | not_started | 9.1 deployed | Run `--dry-run` on Railway, verify Polymarket API connectivity, check 20-30 matched markets for false positives, confirm Discord alerts fire |
-| 9.3 | Arb paper trader | not_started | 9.2 | `arb_paper_bets` table (2-leg structure), `ArbPaperTrader` class (P&L for pure/soft arbs, sportsbook directional), resolution via existing stat results |
-| 9.4 | Arb dashboard page | not_started | 9.1, 9.2 | `/arbitrage` page showing live opportunities from `arb_opportunities` table, sortable by margin/discrepancy |
+| 9.1 | Core arb scanner pipeline | completed | Kalshi integration | `polymarket_utils`, `polymarket_client`, `polymarket_market_scraper`, `market_matcher`, `arb_scanner`, `arb_scan_job`. 2 DB tables (`polymarket_markets`, `arb_opportunities`). Runs every 10 min on Railway. DISCORD_CHANNEL_ARB=1492934576467611700. Sportsbook comparison and model-based mispricing removed (Apr 15). |
+| 9.2 | Dry-run validation | not_started | 9.1 deployed | Run `--dry-run` on Railway, verify Polymarket API connectivity, check matched markets for false positives, confirm Discord alerts fire |
+| 9.3 | Game-level arb matching | not_started | 9.2 | Match Kalshi and Polymarket game-level markets (moneylines, totals) by (team1, team2, date, market_type). Requires team name normalization across both platforms — Kalshi uses tickers (e.g. `NBAWIN-LAL-...`), Polymarket uses natural language questions. Higher volume than player props; this is where most arb opportunity lives. |
+| 9.4 | Arb paper trader | not_started | 9.2 | `arb_paper_bets` table (2-leg structure), `ArbPaperTrader` class (P&L for pure/soft arbs), resolution via game outcomes |
+| 9.5 | Arb dashboard page | not_started | 9.1, 9.2 | `/arbitrage` page showing live opportunities from `arb_opportunities` table, sortable by margin/discrepancy |
 
-**Done when**: Arb scanner running stably with accurate matches, paper trader tracking simulated P&L, results visible on dashboard.
+**Done when**: Arb scanner running stably on both player props and game-level markets, paper trader tracking simulated P&L, results visible on dashboard.
