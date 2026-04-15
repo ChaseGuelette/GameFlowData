@@ -14,20 +14,16 @@ Configuration via environment variables:
 
 from __future__ import annotations
 
-import gzip
 import logging
 import os
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
-from src.models.black_litterman import BlackLittermanBlender
-from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL_CONFIGS
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +43,6 @@ MLB_DNP_COLUMNS: dict[str, str] = {
     "mlb_player_game_stats_pitching": "did_not_play",
     "mlb_player_game_stats_batting": "did_not_play",
 }
-
-SUPPORTED_STATS = set(MLB_STATS.keys())
-
 
 def _get_env_float(name: str, default: float) -> float:
     val = os.environ.get(name)
@@ -71,17 +64,14 @@ class MLBPaperTrader:
     """
     Converts MLB daily predictions into paper bets and tracks P&L.
 
-    Uses per-stat edge thresholds from mlb_stat_config.py.
-    Supports Black-Litterman blending via bl_tau.
+    Selects bets that match exactly what the Model Picks page shows:
+    any prediction with is_recommended=True (set by the inference job's
+    BL blending). Uses pre-computed bl_over_prob/bl_under_prob for Kelly sizing.
     """
 
     kelly_fraction: float = field(default_factory=lambda: DEFAULT_KELLY_FRACTION)
     max_bet_pct: float | None = None
     starting_bankroll: float = field(default_factory=lambda: DEFAULT_BANKROLL)
-    min_odds: int = -200
-    max_odds: int = 200
-    _bl_blenders: dict = field(init=False, default_factory=dict)
-    _default_bl_blender: BlackLittermanBlender = field(init=False)
 
     def __post_init__(self):
         self.engine = get_engine()
@@ -89,52 +79,6 @@ class MLBPaperTrader:
             f"MLBPaperTrader initialized: bankroll=${self.starting_bankroll:,.0f}, "
             f"kelly={self.kelly_fraction}"
         )
-        self._bl_blenders = {
-            stat_name: BlackLittermanBlender(bl_cfg)
-            for stat_name, bl_cfg in STAT_BL_CONFIGS.items()
-        }
-        self._default_bl_blender = BlackLittermanBlender(DEFAULT_BL_CONFIG)
-        logger.info(f"BL blending enabled for stats: {list(self._bl_blenders.keys())}")
-
-    def _load_samples_for_date(self, game_date: date) -> dict[tuple, np.ndarray]:
-        """Load all MC samples for a date from mlb_daily_prediction_samples."""
-        query = text("""
-            SELECT player_id, game_id, stat, n_samples, samples_gz
-            FROM mlb_daily_prediction_samples
-            WHERE prediction_date = :game_date
-        """)
-
-        samples_dict: dict[tuple, np.ndarray] = {}
-        with self.engine.connect() as conn:
-            results = conn.execute(query, {"game_date": game_date}).fetchall()
-
-        for row in results:
-            player_id = int(row[0])
-            game_id = int(row[1])
-            stat = str(row[2])
-            n_samples = int(row[3])
-            blob = row[4]
-
-            if isinstance(blob, memoryview):
-                blob = bytes(blob)
-
-            try:
-                samples = np.frombuffer(
-                    gzip.decompress(blob), dtype=np.float64, count=n_samples
-                )
-                samples_dict[(player_id, game_id, stat)] = samples
-            except Exception as e:
-                logger.warning(f"Failed to decompress samples for {player_id}/{stat}: {e}")
-
-        logger.info(f"Loaded {len(samples_dict)} MLB sample arrays for {game_date}")
-        return samples_dict
-
-    def _get_edge_threshold(self, stat: str) -> float:
-        """Get edge threshold for a stat from MLB stat config."""
-        cfg = MLB_STATS.get(stat)
-        if cfg is not None:
-            return cfg.get("edge_threshold", 0.08)
-        return 0.08
 
     def _american_to_decimal(self, odds: float) -> float:
         if odds is None or pd.isna(odds):
@@ -184,38 +128,35 @@ class MLBPaperTrader:
 
     def select_bets(self, game_date: date) -> list[dict[str, Any]]:
         """
-        Query mlb_daily_predictions for game_date, filter by edge threshold,
-        and calculate Kelly stakes.
+        Select bets matching exactly what the Model Picks page shows.
+
+        Queries mlb_daily_predictions for rows with is_recommended=True and uses
+        the pre-computed BL edges/probs stored by the inference job. Direction is
+        whichever of bl_over_edge / bl_under_edge is higher (mirrors inference logic).
         """
         bankroll = self._get_current_bankroll()
 
-        # Load MC samples for BL blending
-        samples_dict: dict[tuple, np.ndarray] = self._load_samples_for_date(game_date)
-        if not samples_dict:
-            logger.warning(f"BL enabled but no samples found for {game_date}")
-
-        # Query predictions with edge
         query = text("""
             SELECT
                 id as prediction_id,
-                prediction_date,
                 player_id,
                 player_name,
-                game_id,
                 stat,
-                model_type,
                 line,
                 over_odds,
                 under_odds,
-                over_prob,
-                under_prob,
+                bl_over_prob,
+                bl_under_prob,
+                bl_over_edge,
+                bl_under_edge,
                 implied_over,
-                implied_under,
-                over_edge,
-                under_edge
+                implied_under
             FROM mlb_daily_predictions
             WHERE prediction_date = :game_date
+              AND is_recommended = true
               AND line IS NOT NULL
+              AND bl_over_edge IS NOT NULL
+              AND bl_under_edge IS NOT NULL
             ORDER BY player_name, stat
         """)
 
@@ -223,103 +164,53 @@ class MLBPaperTrader:
             df = pd.read_sql(query, conn, params={"game_date": game_date})
 
         if df.empty:
-            logger.warning(f"No MLB predictions found for {game_date}")
+            logger.warning(f"No recommended MLB predictions found for {game_date}")
             return []
 
         bets = []
         for _, row in df.iterrows():
-            stat = str(row["stat"])
-            if stat not in SUPPORTED_STATS:
-                continue
-
-            threshold = self._get_edge_threshold(stat)
-            player_id = int(row["player_id"])
-            game_id = int(row["game_id"])
-            line = float(row["line"]) if pd.notna(row["line"]) else None
-
-            if line is None:
-                continue
-
             over_odds = row["over_odds"]
             under_odds = row["under_odds"]
-
             if pd.isna(over_odds) or pd.isna(under_odds):
                 continue
 
-            over_odds = int(over_odds)
-            under_odds = int(under_odds)
+            bl_over_edge = float(row["bl_over_edge"])
+            bl_under_edge = float(row["bl_under_edge"])
 
-            # Apply per-stat BL blending
-            blender = self._bl_blenders.get(stat, self._default_bl_blender)
-            samples = samples_dict.get((player_id, game_id, stat))
-            if samples is not None and len(samples) > 0:
-                bl_result = blender.blend_prediction(
-                    samples=samples,
-                    line=line,
-                    over_odds=over_odds,
-                    under_odds=under_odds,
-                )
-                over_prob = bl_result["posterior_over"]
-                under_prob = bl_result["posterior_under"]
-                implied_over = bl_result["market_over"]
-                implied_under = bl_result["market_under"]
-                over_edge = over_prob - implied_over
-                under_edge = under_prob - implied_under
-            else:
-                continue
-
-            # Select the direction with higher edge that meets threshold
-            allowed_dirs = MLB_STATS.get(stat, {}).get("allowed_directions")
-            direction = None
-            edge = 0.0
-            odds = 0
-            model_prob = 0.0
-            implied_prob = 0.0
-
-            over_allowed = allowed_dirs is None or "over" in allowed_dirs
-            under_allowed = allowed_dirs is None or "under" in allowed_dirs
-
-            if over_allowed and over_edge > under_edge and over_edge >= threshold:
+            if bl_over_edge >= bl_under_edge:
                 direction = "over"
-                edge = over_edge
-                odds = over_odds
-                model_prob = over_prob
-                implied_prob = implied_over
-            elif under_allowed and under_edge >= threshold:
+                edge = bl_over_edge
+                odds = int(over_odds)
+                model_prob = float(row["bl_over_prob"])
+                implied_prob = float(row["implied_over"])
+            else:
                 direction = "under"
-                edge = under_edge
-                odds = under_odds
-                model_prob = under_prob
-                implied_prob = implied_under
-
-            if direction is None:
-                continue
-
-            if pd.isna(odds) or odds < self.min_odds or odds > self.max_odds:
-                continue
+                edge = bl_under_edge
+                odds = int(under_odds)
+                model_prob = float(row["bl_under_prob"])
+                implied_prob = float(row["implied_under"])
 
             stake = self._calculate_kelly_stake(odds, model_prob, bankroll)
             if stake <= 0:
                 continue
 
-            bet = {
+            bets.append({
                 "prediction_id": int(row["prediction_id"]),
                 "game_date": game_date,
-                "player_id": player_id,
+                "player_id": int(row["player_id"]),
                 "player_name": row["player_name"],
-                "stat_type": stat,
+                "stat_type": str(row["stat"]),
                 "line": float(row["line"]),
                 "bet_direction": direction,
                 "odds_at_bet": float(odds),
-                "implied_prob": float(implied_prob),
-                "model_prob": float(model_prob),
-                "edge": float(edge),
+                "implied_prob": implied_prob,
+                "model_prob": model_prob,
+                "edge": edge,
                 "stake": round(stake, 2),
                 "kelly_fraction": self.kelly_fraction,
-            }
-            bets.append(bet)
+            })
 
-        logger.info(f"Selected {len(bets)} MLB bets for {game_date}")
+        logger.info(f"Selected {len(bets)} MLB bets for {game_date} (is_recommended=True)")
         return bets
 
     def place_bets(self, bets: list[dict[str, Any]]) -> int:

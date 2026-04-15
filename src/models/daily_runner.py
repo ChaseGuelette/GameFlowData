@@ -406,7 +406,9 @@ class DailyPredictionRunner:
             for game_date_entry in data.get("leagueSchedule", {}).get("gameDates", []):
                 if game_date_entry.get("gameDate") == target_str:
                     for game in game_date_entry.get("games", []):
-                        if game.get("weekNumber", 0) > 0:  # Regular season only
+                        game_id_str = str(game.get("gameId", ""))
+                        is_playoff = game_id_str.startswith("004")
+                        if game.get("weekNumber", 0) > 0 or is_playoff:  # Regular season + playoffs
                             home_abbrev = game["homeTeam"]["teamTricode"]
                             away_abbrev = game["awayTeam"]["teamTricode"]
                             games.append({

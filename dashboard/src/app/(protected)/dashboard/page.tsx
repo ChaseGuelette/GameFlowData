@@ -310,14 +310,11 @@ export default function DashboardPage() {
           uniqueDates = datesData.map((d: { prediction_date: string }) => d.prediction_date)
         }
       } else {
-        // Direct query for other sports
-        const { data: datesData } = await supabase
-          .from(config.predictionsTable)
-          .select('prediction_date')
-          .order('prediction_date', { ascending: false })
-          .limit(30)
-        if (datesData) {
-          uniqueDates = [...new Set(datesData.map((d: { prediction_date: string }) => d.prediction_date))]
+        // Use RPC for MLB to get distinct dates (direct query limits rows, not dates)
+        const { data: datesData, error: datesError } = await supabase
+          .rpc('get_mlb_prediction_dates', { days_back: 60 })
+        if (!datesError && datesData) {
+          uniqueDates = datesData.map((d: { prediction_date: string }) => d.prediction_date)
         }
       }
 

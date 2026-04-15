@@ -1173,6 +1173,7 @@ def _build_kalshi_pnl_summary_embed(
     bankroll: float,
     daily_pnl: float,
     total_pnl: float,
+    log_data: dict | None = None,
 ) -> dict:
     """Build Discord embed for Kalshi daily P&L summary.
 
@@ -1181,13 +1182,20 @@ def _build_kalshi_pnl_summary_embed(
         bankroll: Current Kalshi paper bankroll
         daily_pnl: Yesterday's P&L (from daily log)
         total_pnl: Cumulative P&L (from daily log)
+        log_data: Full daily log dict including bets_won/bets_lost/total_bets (preferred source)
 
     Returns:
         Discord embed dict
     """
-    wins = resolution_result.get("total_won", 0)
-    losses = resolution_result.get("total_lost", 0)
-    total_resolved = resolution_result.get("total_resolved", 0)
+    # Prefer daily log bet record (reflects full day); fall back to resolution_result
+    if log_data and log_data.get("total_bets", 0) > 0:
+        wins = log_data.get("bets_won", 0)
+        losses = log_data.get("bets_lost", 0)
+        total_resolved = log_data.get("total_bets", 0)
+    else:
+        wins = resolution_result.get("total_won", 0)
+        losses = resolution_result.get("total_lost", 0)
+        total_resolved = resolution_result.get("total_resolved", 0)
 
     if daily_pnl > 0:
         color = 0x2ECC71  # Green
@@ -1210,8 +1218,8 @@ def _build_kalshi_pnl_summary_embed(
         "timestamp": datetime.utcnow().isoformat(),
         "fields": [
             {
-                "name": "Today's Record",
-                "value": record if total_resolved > 0 else "No bets resolved",
+                "name": "Yesterday's Record",
+                "value": record if total_resolved > 0 else "No bets yesterday",
                 "inline": True,
             },
             {
@@ -1243,7 +1251,7 @@ def _build_kalshi_pnl_summary_embed(
     if wins + losses > 0:
         win_rate = wins / (wins + losses)
         embed["fields"].append({
-            "name": "Win Rate (Today)",
+            "name": "Win Rate (Yesterday)",
             "value": f"{win_rate:.1%}",
             "inline": True,
         })
@@ -1257,6 +1265,7 @@ async def send_kalshi_pnl_summary(
     daily_pnl: float,
     total_pnl: float,
     channel_id: str | None = None,
+    log_data: dict | None = None,
 ) -> bool:
     """Send Kalshi daily P&L summary to Discord performance channel."""
     load_dotenv()
@@ -1271,7 +1280,7 @@ async def send_kalshi_pnl_summary(
         logger.warning("DISCORD_CHANNEL_PERFORMANCE not configured, skipping Kalshi P&L summary")
         return False
 
-    embed = _build_kalshi_pnl_summary_embed(resolution_result, bankroll, daily_pnl, total_pnl)
+    embed = _build_kalshi_pnl_summary_embed(resolution_result, bankroll, daily_pnl, total_pnl, log_data=log_data)
 
     url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
     headers = {
@@ -1301,6 +1310,7 @@ def send_kalshi_pnl_summary_sync(
     daily_pnl: float,
     total_pnl: float,
     channel_id: str | None = None,
+    log_data: dict | None = None,
 ) -> bool:
     """Synchronous wrapper for send_kalshi_pnl_summary."""
     import asyncio
@@ -1309,13 +1319,13 @@ def send_kalshi_pnl_summary_sync(
         try:
             loop = asyncio.get_running_loop()
             future = asyncio.run_coroutine_threadsafe(
-                send_kalshi_pnl_summary(resolution_result, bankroll, daily_pnl, total_pnl, channel_id),
+                send_kalshi_pnl_summary(resolution_result, bankroll, daily_pnl, total_pnl, channel_id, log_data),
                 loop,
             )
             return future.result(timeout=30)
         except RuntimeError:
             return asyncio.run(
-                send_kalshi_pnl_summary(resolution_result, bankroll, daily_pnl, total_pnl, channel_id)
+                send_kalshi_pnl_summary(resolution_result, bankroll, daily_pnl, total_pnl, channel_id, log_data)
             )
     except Exception as e:
         logger.exception(f"Failed to send Kalshi P&L summary synchronously: {e}")
@@ -1360,17 +1370,16 @@ def _build_kalshi_analysis_embed(metrics) -> dict:
 
     # Overall
     embed["fields"].append({
-        "name": "Overall (14d)",
+        "name": f"Overall (14d) — {metrics.n_bets} bets",
         "value": (
-            f"{metrics.n_bets} bets | "
-            f"{metrics.win_rate:.1%} win | "
-            f"{metrics.break_even:.1%} BE | "
-            f"{metrics.alpha:+.1%} alpha"
+            f"{metrics.win_rate:.1%} actual win  |  "
+            f"{metrics.break_even:.1%} needed to break even  |  "
+            f"**{metrics.alpha:+.1%} edge**"
         ),
         "inline": False,
     })
 
-    # Z-score (14d window + all-time)
+    # Z-score (14d window + all-time) — statistical confidence that edge is real
     z_alltime_str = (
         f"{metrics.z_score_alltime:.1f}σ"
         if not math.isnan(metrics.z_score_alltime)
@@ -1380,12 +1389,13 @@ def _build_kalshi_analysis_embed(metrics) -> dict:
         f" (n={metrics.n_bets_alltime})" if metrics.n_bets_alltime > 0 else ""
     )
     embed["fields"].append({
-        "name": "Z-Score",
+        "name": "Statistical Confidence (Z-Score)",
         "value": (
-            f"14d: **{z_str}** ({verdict})\n"
-            f"All-time: **{z_alltime_str}**{alltime_label}"
+            f"14d: **{z_str}** — {verdict}\n"
+            f"All-time: **{z_alltime_str}**{alltime_label}\n"
+            f"*(>2σ = likely real edge, >3σ = strong edge)*"
         ),
-        "inline": True,
+        "inline": False,
     })
 
     # P&L & ROI
@@ -1398,36 +1408,36 @@ def _build_kalshi_analysis_embed(metrics) -> dict:
         "inline": False,
     })
 
-    # 95% CI
-    ci_lo, ci_hi = metrics.ci_95
-    embed["fields"].append({
-        "name": "95% CI",
-        "value": f"[{ci_lo:.1%}, {ci_hi:.1%}]",
-        "inline": True,
-    })
-
-    # By stat
+    # By stat — actual win% vs break-even for each stat type
     if metrics.by_stat:
-        stat_parts = []
+        stat_lines = []
         for s in metrics.by_stat[:6]:
-            stat_parts.append(
-                f"{s['stat'].upper()}: {s['win_rate']:.0%} win (n={s['total']})"
+            alpha_str = f"{s['alpha']:+.0%}"
+            flag = " ⚠️" if s["alpha"] < -0.03 else ""
+            stat_lines.append(
+                f"**{s['stat']}** (n={s['total']}): "
+                f"{s['win_rate']:.0%} win / {s['break_even']:.0%} BE = "
+                f"{alpha_str} edge{flag}"
             )
         embed["fields"].append({
-            "name": "By Stat",
-            "value": " | ".join(stat_parts),
+            "name": "By Stat  (win% / break-even% = edge)",
+            "value": "\n".join(stat_lines),
             "inline": False,
         })
 
-    # By edge bucket
+    # By edge bucket — does the model's edge prediction translate to real outperformance?
     if metrics.by_edge_bucket:
         bucket_lines = []
         for b in metrics.by_edge_bucket:
+            alpha_str = f"{b['alpha']:+.0%}"
+            flag = " ⚠️" if b["alpha"] < 0 else " ✅"
             bucket_lines.append(
-                f"{b['bucket']}: {b['win_rate']:.0%} (n={b['total']})"
+                f"**{b['bucket']} edge** (n={b['total']}): "
+                f"{b['win_rate']:.0%} win / {b['break_even']:.0%} BE = "
+                f"{alpha_str}{flag}"
             )
         embed["fields"].append({
-            "name": "By Edge Bucket",
+            "name": "By Edge Bucket  (win% / break-even% = actual edge)",
             "value": "\n".join(bucket_lines),
             "inline": False,
         })

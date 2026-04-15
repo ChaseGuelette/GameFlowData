@@ -228,11 +228,15 @@ def compute_kalshi_analysis(lookback_days: int = 14) -> KalshiAnalysisMetrics | 
         grp_pnl = float(grp["pnl"].sum())
         grp_cost = float(grp["total_cost"].sum())
         grp_roi = grp_pnl / grp_cost if grp_cost > 0 else 0.0
+        grp_be = float(grp["break_even"].mean())
+        grp_win_rate = grp_wins / grp_total
         by_stat.append({
             "stat": str(stat),
             "wins": grp_wins,
             "total": grp_total,
-            "win_rate": grp_wins / grp_total,
+            "win_rate": grp_win_rate,
+            "break_even": grp_be,
+            "alpha": grp_win_rate - grp_be,
             "pnl": grp_pnl,
             "roi": grp_roi,
         })
@@ -248,11 +252,15 @@ def compute_kalshi_analysis(lookback_days: int = 14) -> KalshiAnalysisMetrics | 
         grp_wins = int(grp["is_won"].sum())
         grp_total = len(grp)
         grp_pnl = float(grp["pnl"].sum())
+        grp_be = float(grp["break_even"].mean())
+        grp_win_rate = grp_wins / grp_total
         by_edge_bucket.append({
             "bucket": bucket,
             "wins": grp_wins,
             "total": grp_total,
-            "win_rate": grp_wins / grp_total,
+            "win_rate": grp_win_rate,
+            "break_even": grp_be,
+            "alpha": grp_win_rate - grp_be,
             "pnl": grp_pnl,
         })
 

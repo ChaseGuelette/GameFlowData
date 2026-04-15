@@ -256,6 +256,7 @@ def generate_snapshot_timestamps(start_from=None, end_at=None):
         ("2024-25 Regular", datetime(2024, 10, 22), datetime(2025, 4, 15), 2, target_hours),
         ("2024-25 Playoffs", datetime(2025, 4, 16), datetime(2025, 6, 20), 1, [19]),
         ("2025-26 Regular", datetime(2025, 10, 20), datetime(2026, 4, 15), 2, target_hours),
+        ("2025-26 Playoffs", datetime(2026, 4, 16), datetime(2026, 6, 20), 1, [19]),
     ]
 
     for season_name, season_start, season_end, num_snapshots, hours in seasons:

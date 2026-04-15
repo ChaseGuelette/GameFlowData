@@ -16,6 +16,7 @@ Schedule (ET):
 
     12:00 PM - lines_job --live (full)
     12:15 PM - inference_job (full MC)
+    12:30 PM - kalshi_daily_summary_job
 
     4:00 PM  - lines_job --live --parallel (full)
     4:15 PM  - inference_job (full MC)
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shlex
 import signal
@@ -42,6 +44,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
 # Configure logging
 logging.basicConfig(
@@ -385,8 +388,6 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
 
 def _validate_environment():
     """Log status of required and optional env vars at startup."""
-    import os
-
     required = [
         ("DATABASE_URL", "Required for all jobs"),
         ("ODDS_API_KEY", "Required for lines scraping"),
@@ -398,6 +399,7 @@ def _validate_environment():
         ("DISCORD_CHANNEL_PREDICTIONS", "Prediction alerts"),
         ("DISCORD_CHANNEL_PERFORMANCE", "P&L summaries"),
         ("KALSHI_API_KEY", "Kalshi prediction markets"),
+        ("NBA_PLAYOFF_MODE", "Use playoff model for NBA inference (set true Apr 19 - Jun 20)"),
     ]
 
     logger.info("Environment check:")
@@ -462,7 +464,13 @@ def run_lines_props_only():
 
 def run_inference(skip_bets: bool = False):
     """Run inference, checking if daily stats succeeded first."""
-    extra = "--skip-bets" if skip_bets else ""
+    extra_parts = []
+    if skip_bets:
+        extra_parts.append("--skip-bets")
+    if os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes"):
+        extra_parts.append("--model-dir src/models/artifacts/production_playoffs")
+        logger.info("NBA playoff mode active — using production_playoffs model")
+    extra = " ".join(extra_parts)
     if not check_dependency("daily_stats_job.py", max_age_hours=8):
         logger.warning(
             "Daily stats job has not succeeded in the last 8 hours — "
@@ -603,10 +611,12 @@ def main():
     # Schedule jobs (all times in America/New_York ET)
     # ==============================================================
 
+    ET = "America/New_York"
+
     # 11:00 AM ET - Daily stats (moved from 9 AM so last night's games are in DB)
     scheduler.add_job(
         run_daily_stats,
-        CronTrigger(hour=11, minute=0),
+        CronTrigger(hour=11, minute=0, timezone=ET),
         id="daily_stats",
         name="Daily Stats (11 AM ET)",
     )
@@ -614,7 +624,7 @@ def main():
     # 11:30 AM ET - Retry daily stats if 11 AM run failed
     scheduler.add_job(
         run_daily_stats_retry,
-        CronTrigger(hour=11, minute=30),
+        CronTrigger(hour=11, minute=30, timezone=ET),
         id="daily_stats_retry",
         name="Daily Stats Retry (11:30 AM ET)",
     )
@@ -624,7 +634,7 @@ def main():
     # 12:00 PM ET - Full lines scrape (live)
     scheduler.add_job(
         run_lines_full,
-        CronTrigger(hour=12, minute=0),
+        CronTrigger(hour=12, minute=0, timezone=ET),
         id="lines_noon_full",
         name="Lines Full Parallel (12 PM ET)",
     )
@@ -632,7 +642,7 @@ def main():
     # 12:15 PM ET - Full inference
     scheduler.add_job(
         run_inference,
-        CronTrigger(hour=12, minute=15),
+        CronTrigger(hour=12, minute=15, timezone=ET),
         id="inference_noon",
         name="Inference (12:15 PM ET)",
     )
@@ -641,14 +651,14 @@ def main():
 
     scheduler.add_job(
         run_lines_props_only_silent,
-        CronTrigger(hour='11-23', minute='*/5'),
+        CronTrigger(hour='11-23', minute='*/5', timezone=ET),
         id="props_every_5",
         name="Props Only (every 5 min, 11AM-11PM ET)",
     )
 
     scheduler.add_job(
         run_edge_refresh_silent,
-        CronTrigger(hour='11-23', minute='2,7,12,17,22,27,32,37,42,47,52,57'),
+        CronTrigger(hour='11-23', minute='2,7,12,17,22,27,32,37,42,47,52,57', timezone=ET),
         id="edge_refresh_every_5",
         name="Edge Refresh (every 5 min, 11AM-11PM ET)",
     )
@@ -658,7 +668,7 @@ def main():
     # 4:00 PM ET - Full lines scrape (live, parallel)
     scheduler.add_job(
         run_lines_full_parallel,
-        CronTrigger(hour=16, minute=0),
+        CronTrigger(hour=16, minute=0, timezone=ET),
         id="lines_4pm_full",
         name="Lines Full Parallel (4 PM ET)",
     )
@@ -666,7 +676,7 @@ def main():
     # 4:15 PM ET - Full inference (skip bets — already placed at noon)
     scheduler.add_job(
         lambda: run_inference(skip_bets=True),
-        CronTrigger(hour=16, minute=15),
+        CronTrigger(hour=16, minute=15, timezone=ET),
         id="inference_4pm",
         name="Inference (4:15 PM ET, skip bets)",
     )
@@ -678,7 +688,7 @@ def main():
     # 3:00 AM ET - Archive old props (rows > 30 days)
     scheduler.add_job(
         run_archive_old_props,
-        CronTrigger(hour=3, minute=0),
+        CronTrigger(hour=3, minute=0, timezone=ET),
         id="archive_old_props",
         name="Archive Old Props (3 AM ET)",
     )
@@ -690,7 +700,7 @@ def main():
     # 10:00 AM ET - MLB daily stats (results from last night)
     scheduler.add_job(
         run_mlb_daily_stats,
-        CronTrigger(hour=10, minute=0),
+        CronTrigger(hour=10, minute=0, timezone=ET),
         id="mlb_daily_stats",
         name="MLB Daily Stats (10 AM ET)",
     )
@@ -698,7 +708,7 @@ def main():
     # 10:30 AM ET - Retry MLB daily stats if 10 AM failed
     scheduler.add_job(
         run_mlb_daily_stats_retry,
-        CronTrigger(hour=10, minute=30),
+        CronTrigger(hour=10, minute=30, timezone=ET),
         id="mlb_daily_stats_retry",
         name="MLB Daily Stats Retry (10:30 AM ET)",
     )
@@ -706,7 +716,7 @@ def main():
     # 12:00 PM ET - MLB full lines scrape (game lines + props + linker)
     scheduler.add_job(
         run_mlb_lines_full,
-        CronTrigger(hour=12, minute=0),
+        CronTrigger(hour=12, minute=0, timezone=ET),
         id="mlb_lines_full_noon",
         name="MLB Full Lines (12 PM ET)",
     )
@@ -714,7 +724,7 @@ def main():
     # 1:00 PM ET - MLB props-only refresh before afternoon games
     scheduler.add_job(
         run_mlb_lines_props_only,
-        CronTrigger(hour=13, minute=0),
+        CronTrigger(hour=13, minute=0, timezone=ET),
         id="mlb_lines_props_1pm",
         name="MLB Props Only (1 PM ET)",
     )
@@ -722,7 +732,7 @@ def main():
     # 1:30 PM ET - MLB inference (afternoon/evening games)
     scheduler.add_job(
         run_mlb_inference,
-        CronTrigger(hour=13, minute=30),
+        CronTrigger(hour=13, minute=30, timezone=ET),
         id="mlb_inference_1pm",
         name="MLB Inference (1:30 PM ET)",
     )
@@ -730,7 +740,7 @@ def main():
     # 5:00 PM ET - MLB full lines scrape (catch new evening props)
     scheduler.add_job(
         run_mlb_lines_full,
-        CronTrigger(hour=17, minute=0),
+        CronTrigger(hour=17, minute=0, timezone=ET),
         id="mlb_lines_full_5pm",
         name="MLB Full Lines (5 PM ET)",
     )
@@ -738,7 +748,7 @@ def main():
     # 6:00 PM ET - MLB props-only refresh before evening games
     scheduler.add_job(
         run_mlb_lines_props_only,
-        CronTrigger(hour=18, minute=0),
+        CronTrigger(hour=18, minute=0, timezone=ET),
         id="mlb_lines_props_6pm",
         name="MLB Props Only (6 PM ET)",
     )
@@ -746,7 +756,7 @@ def main():
     # 6:30 PM ET - MLB inference refresh (evening games)
     scheduler.add_job(
         run_mlb_inference,
-        CronTrigger(hour=18, minute=30),
+        CronTrigger(hour=18, minute=30, timezone=ET),
         id="mlb_inference_6pm",
         name="MLB Inference (6:30 PM ET)",
     )
@@ -755,26 +765,37 @@ def main():
     # Kalshi Prediction Markets
     # ==============================================================
 
-    # 8:00 AM ET - Kalshi daily summary: resolve pending bets + P&L/analysis to Discord
+    # 12:30 PM ET - Kalshi daily summary: resolve pending bets + P&L/analysis to Discord
+    # Runs after NBA daily stats (11 AM) + first Kalshi refresh resolves remaining bets (~11:10 AM)
+    # so yesterday's daily log always exists and shows accurate data.
     scheduler.add_job(
         run_kalshi_daily_summary,
-        CronTrigger(hour=8, minute=0),
+        CronTrigger(hour=12, minute=30, timezone=ET),
         id="kalshi_daily_summary",
-        name="Kalshi Daily Summary (8 AM ET)",
+        name="Kalshi Daily Summary (12:30 PM ET)",
+    )
+
+    # ONE-TIME: Apr 15 2026 noon ET — test new embed format after deploy
+    # Remove after confirmed working.
+    scheduler.add_job(
+        run_kalshi_daily_summary,
+        DateTrigger(run_date="2026-04-15 12:00:00", timezone=ET),
+        id="kalshi_daily_summary_test_apr15",
+        name="Kalshi Daily Summary TEST (Apr 15 noon ET)",
     )
 
     # Every 10 min, 11 AM - 11 PM ET — scrape markets + compute edges
     # Job exits gracefully if KALSHI_API_KEY is not set
     scheduler.add_job(
         run_kalshi_refresh,
-        CronTrigger(hour='11-23', minute='*/10'),
+        CronTrigger(hour='11-23', minute='*/10', timezone=ET),
         id="kalshi_refresh_nba",
         name="Kalshi NBA Refresh (every 10 min, 11AM-11PM ET)",
     )
 
     scheduler.add_job(
         run_kalshi_refresh_mlb,
-        CronTrigger(hour='11-23', minute='*/10'),
+        CronTrigger(hour='11-23', minute='*/10', timezone=ET),
         id="kalshi_refresh_mlb",
         name="Kalshi MLB Refresh (every 10 min, 11AM-11PM ET)",
     )
@@ -787,7 +808,7 @@ def main():
     # NBA arb scan: every 10 min, 11:05 AM - 11:05 PM ET
     scheduler.add_job(
         run_arb_scan_nba,
-        CronTrigger(hour='11-23', minute='5,15,25,35,45,55'),
+        CronTrigger(hour='11-23', minute='5,15,25,35,45,55', timezone=ET),
         id="arb_scan_nba",
         name="Arb Scan NBA (every 10 min, 11:05AM-11:05PM ET)",
     )
@@ -795,7 +816,7 @@ def main():
     # MLB arb scan: every 10 min, 12:05 PM - 11:05 PM ET
     scheduler.add_job(
         run_arb_scan_mlb,
-        CronTrigger(hour='12-23', minute='5,15,25,35,45,55'),
+        CronTrigger(hour='12-23', minute='5,15,25,35,45,55', timezone=ET),
         id="arb_scan_mlb",
         name="Arb Scan MLB (every 10 min, 12:05PM-11:05PM ET)",
     )

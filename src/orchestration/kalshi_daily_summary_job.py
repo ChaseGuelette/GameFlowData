@@ -76,9 +76,9 @@ def _resolve_pending(dry_run: bool = False) -> dict:
 
 
 def _get_yesterday_daily_log() -> dict:
-    """Fetch yesterday's bankroll/P&L from kalshi_paper_trading_daily_log.
+    """Fetch yesterday's bankroll/P&L/record from kalshi_paper_trading_daily_log.
 
-    Returns a dict with keys: bankroll, daily_pnl, total_pnl.
+    Returns a dict with keys: bankroll, daily_pnl, total_pnl, bets_won, bets_lost, total_bets.
     Falls back to current bankroll on failure.
     """
     yesterday = date.today() - timedelta(days=1)
@@ -90,30 +90,38 @@ def _get_yesterday_daily_log() -> dict:
 
         engine = get_engine()
 
-        # Get yesterday's row
+        # Get yesterday's row (sum across sports in case there are multiple rows)
         with engine.connect() as conn:
             row = conn.execute(
                 text("""
-                    SELECT total_pnl, cumulative_pnl, bankroll_after
+                    SELECT
+                        SUM(total_pnl)       AS daily_pnl,
+                        MAX(cumulative_pnl)  AS total_pnl,
+                        MAX(bankroll_after)  AS bankroll,
+                        SUM(bets_won)        AS bets_won,
+                        SUM(bets_lost)       AS bets_lost,
+                        SUM(total_bets)      AS total_bets
                     FROM kalshi_paper_trading_daily_log
                     WHERE game_date = :game_date
-                    LIMIT 1
                 """),
                 {"game_date": yesterday},
             ).fetchone()
 
-        if row:
+        if row and row[2] is not None:  # bankroll_after not null → row exists
             return {
-                "daily_pnl": float(row[0]),
-                "total_pnl": float(row[1]),
+                "daily_pnl": float(row[0] or 0),
+                "total_pnl": float(row[1] or 0),
                 "bankroll": float(row[2]),
+                "bets_won": int(row[3] or 0),
+                "bets_lost": int(row[4] or 0),
+                "total_bets": int(row[5] or 0),
             }
 
-        # No entry for yesterday — use latest available
+        # No entry for yesterday — use latest available (P&L only, no bet record)
         with engine.connect() as conn:
             row = conn.execute(
                 text("""
-                    SELECT total_pnl, cumulative_pnl, bankroll_after
+                    SELECT cumulative_pnl, bankroll_after
                     FROM kalshi_paper_trading_daily_log
                     ORDER BY game_date DESC
                     LIMIT 1
@@ -124,8 +132,11 @@ def _get_yesterday_daily_log() -> dict:
             logger.info("No daily log entry for yesterday; using most recent entry")
             return {
                 "daily_pnl": 0.0,
-                "total_pnl": float(row[1]),
-                "bankroll": float(row[2]),
+                "total_pnl": float(row[0] or 0),
+                "bankroll": float(row[1]),
+                "bets_won": 0,
+                "bets_lost": 0,
+                "total_bets": 0,
             }
 
     except Exception as e:
@@ -136,11 +147,13 @@ def _get_yesterday_daily_log() -> dict:
         from src.paper_trading.kalshi_paper_trader import KalshiPaperTrader
 
         bankroll = KalshiPaperTrader().get_bankroll()
-        return {"daily_pnl": 0.0, "total_pnl": 0.0, "bankroll": bankroll}
+        return {"daily_pnl": 0.0, "total_pnl": 0.0, "bankroll": bankroll,
+                "bets_won": 0, "bets_lost": 0, "total_bets": 0}
     except Exception:
         pass
 
-    return {"daily_pnl": 0.0, "total_pnl": 0.0, "bankroll": 100.0}
+    return {"daily_pnl": 0.0, "total_pnl": 0.0, "bankroll": 100.0,
+            "bets_won": 0, "bets_lost": 0, "total_bets": 0}
 
 
 def _send_pnl_summary(resolution_result: dict, log_data: dict, dry_run: bool = False) -> None:
@@ -162,6 +175,7 @@ def _send_pnl_summary(resolution_result: dict, log_data: dict, dry_run: bool = F
             bankroll=log_data["bankroll"],
             daily_pnl=log_data["daily_pnl"],
             total_pnl=log_data["total_pnl"],
+            log_data=log_data,
         )
         if sent:
             logger.info("COMPLETED: Sent Kalshi P&L summary to Discord")
@@ -229,7 +243,9 @@ def main():
     logger.info(
         f"Daily log: bankroll=${log_data['bankroll']:.2f}, "
         f"daily_pnl=${log_data['daily_pnl']:+.2f}, "
-        f"total_pnl=${log_data['total_pnl']:+.2f}"
+        f"total_pnl=${log_data['total_pnl']:+.2f}, "
+        f"record={log_data['bets_won']}W-{log_data['bets_lost']}L "
+        f"({log_data['total_bets']} total bets)"
     )
 
     # Step 3: Send P&L summary embed
