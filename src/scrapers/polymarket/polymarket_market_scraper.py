@@ -23,6 +23,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import sys
 from datetime import UTC, datetime
@@ -82,7 +83,14 @@ def _parse_event_markets(event: dict, category: str, sport: str | None) -> list[
         market_type = detect_market_type(question, description, is_sports=is_sports)
 
         # Extract token IDs for CLOB pricing
-        tokens = mkt.get("tokens") or mkt.get("clobTokenIds") or []
+        # clobTokenIds comes back as a JSON string from the Gamma API, not a parsed list
+        raw_tokens = mkt.get("tokens") or mkt.get("clobTokenIds") or []
+        if isinstance(raw_tokens, str):
+            try:
+                raw_tokens = json.loads(raw_tokens)
+            except (ValueError, json.JSONDecodeError):
+                raw_tokens = []
+        tokens = raw_tokens
         token_id_yes = None
         token_id_no = None
 
@@ -102,6 +110,36 @@ def _parse_event_markets(event: dict, category: str, sport: str | None) -> list[
 
         condition_id = mkt.get("conditionId") or mkt.get("condition_id") or mkt.get("id", "")
 
+        # Prices: Gamma API returns outcomePrices as a JSON string ["yes_price", "no_price"]
+        # on a 0-1 scale. Convert to cents (0-100).
+        yes_price = None
+        no_price = None
+        yes_ask = None
+        raw_prices = mkt.get("outcomePrices")
+        if raw_prices:
+            try:
+                prices = json.loads(raw_prices) if isinstance(raw_prices, str) else raw_prices
+                if len(prices) >= 2:
+                    yes_price = round(float(prices[0]) * 100, 2)
+                    no_price = round(float(prices[1]) * 100, 2)
+            except (ValueError, TypeError, json.JSONDecodeError):
+                pass
+        # bestAsk gives the ask for YES token (0-1 scale)
+        best_ask_raw = mkt.get("bestAsk")
+        if best_ask_raw is not None:
+            try:
+                yes_ask = round(float(best_ask_raw) * 100, 2)
+            except (ValueError, TypeError):
+                pass
+        # Derive yes_bid from spread if available
+        yes_bid = None
+        spread_raw = mkt.get("spread")
+        if yes_ask is not None and spread_raw is not None:
+            try:
+                yes_bid = round(yes_ask - float(spread_raw) * 100, 2)
+            except (ValueError, TypeError):
+                pass
+
         record: dict = {
             "condition_id": condition_id,
             "token_id_yes": token_id_yes,
@@ -118,10 +156,10 @@ def _parse_event_markets(event: dict, category: str, sport: str | None) -> list[
             "player_id": None,
             "team1": None,
             "team2": None,
-            "yes_price": None,
-            "no_price": None,
-            "yes_bid": None,
-            "yes_ask": None,
+            "yes_price": yes_price,
+            "no_price": no_price,
+            "yes_bid": yes_bid,
+            "yes_ask": yes_ask,
             "volume": _safe_float(mkt.get("volume")),
             "liquidity": _safe_float(mkt.get("liquidity")),
             "market_status": "open" if mkt.get("active", True) else "closed",
@@ -165,57 +203,20 @@ def _safe_float(val) -> float | None:
 
 def _apply_prices(
     parsed_markets: list[dict],
-    client: PolymarketClient,
+    client: PolymarketClient,  # noqa: ARG001 — kept for future orderbook enrichment
 ) -> None:
-    """Batch fetch prices for all markets and apply them in-place.
+    """Count priced markets. Prices are already extracted from Gamma API outcomePrices.
+
+    The Polymarket Gamma API returns outcomePrices directly in the market dict,
+    so no CLOB API call is needed for basic YES/NO prices. This function exists
+    as a hook for future orderbook enrichment (bid/ask depth) via the CLOB API.
 
     Args:
-        parsed_markets: List of parsed market dicts (mutated in place).
-        client: PolymarketClient instance.
+        parsed_markets: List of parsed market dicts (prices already populated).
+        client: PolymarketClient instance (reserved for future orderbook calls).
     """
-    all_token_ids: list[str] = []
-    for m in parsed_markets:
-        if m.get("token_id_yes"):
-            all_token_ids.append(m["token_id_yes"])
-        if m.get("token_id_no"):
-            all_token_ids.append(m["token_id_no"])
-
-    if not all_token_ids:
-        logger.info("No token IDs found — skipping price fetch")
-        return
-
-    logger.info(f"Fetching midpoints for {len(all_token_ids)} tokens...")
-    midpoints = client.get_batch_midpoints(all_token_ids)
-
-    logger.info(f"Fetching orderbooks for {len(all_token_ids)} tokens...")
-    orderbooks = client.get_batch_orderbooks(all_token_ids)
-
-    for m in parsed_markets:
-        yes_tid = m.get("token_id_yes")
-        no_tid = m.get("token_id_no")
-
-        if yes_tid and yes_tid in midpoints:
-            m["yes_price"] = round(midpoints[yes_tid] * 100, 2)
-        if no_tid and no_tid in midpoints:
-            m["no_price"] = round(midpoints[no_tid] * 100, 2)
-
-        if m["yes_price"] is not None and m["no_price"] is None:
-            m["no_price"] = round(100 - m["yes_price"], 2)
-        elif m["no_price"] is not None and m["yes_price"] is None:
-            m["yes_price"] = round(100 - m["no_price"], 2)
-
-        if yes_tid and yes_tid in orderbooks:
-            ob = orderbooks[yes_tid]
-            bids = ob.get("bids", [])
-            asks = ob.get("asks", [])
-            if bids:
-                best_bid = bids[0] if isinstance(bids[0], int | float) else bids[0].get("price", 0)
-                m["yes_bid"] = round(float(best_bid) * 100, 2)
-            if asks:
-                best_ask = asks[0] if isinstance(asks[0], int | float) else asks[0].get("price", 0)
-                m["yes_ask"] = round(float(best_ask) * 100, 2)
-
-    logger.info(f"Applied prices to {sum(1 for m in parsed_markets if m.get('yes_price') is not None)} markets")
+    priced = sum(1 for m in parsed_markets if m.get("yes_price") is not None)
+    logger.info(f"Prices available for {priced}/{len(parsed_markets)} markets (from Gamma API)")
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +250,7 @@ def store_markets(engine, parsed_markets: list[dict], snapshot_time: datetime) -
             :team1, :team2, :yes_price, :no_price, :yes_bid, :yes_ask,
             :volume, :liquidity, :market_status, :end_date, :snapshot_time
         )
-        ON CONFLICT (condition_id, snapshot_time)
+        ON CONFLICT (condition_id)
         DO UPDATE SET
             yes_price = EXCLUDED.yes_price,
             no_price = EXCLUDED.no_price,
@@ -259,38 +260,50 @@ def store_markets(engine, parsed_markets: list[dict], snapshot_time: datetime) -
             liquidity = EXCLUDED.liquidity,
             market_status = EXCLUDED.market_status,
             player_id = EXCLUDED.player_id,
-            category = EXCLUDED.category
+            category = EXCLUDED.category,
+            sport = EXCLUDED.sport,
+            team1 = EXCLUDED.team1,
+            team2 = EXCLUDED.team2,
+            snapshot_time = EXCLUDED.snapshot_time
     """)
 
+    rows = [
+        {
+            "condition_id": m.get("condition_id", ""),
+            "token_id_yes": m.get("token_id_yes"),
+            "token_id_no": m.get("token_id_no"),
+            "event_slug": m.get("event_slug", ""),
+            "sport": m.get("sport"),
+            "category": m.get("category", "other"),
+            "market_type": m.get("market_type", "binary"),
+            "player_name": m.get("player_name"),
+            "stat_type": m.get("stat_type"),
+            "line": m.get("line"),
+            "question": m.get("question", ""),
+            "player_id": m.get("player_id"),
+            "team1": m.get("team1"),
+            "team2": m.get("team2"),
+            "yes_price": m.get("yes_price"),
+            "no_price": m.get("no_price"),
+            "yes_bid": m.get("yes_bid"),
+            "yes_ask": m.get("yes_ask"),
+            "volume": m.get("volume"),
+            "liquidity": m.get("liquidity"),
+            "market_status": m.get("market_status", "open"),
+            "end_date": m.get("end_date"),
+            "snapshot_time": snapshot_time,
+        }
+        for m in parsed_markets
+    ]
+
+    # Batch insert in chunks of 500 to keep transactions manageable
+    CHUNK = 500
     count = 0
-    with engine.begin() as conn:
-        for m in parsed_markets:
-            conn.execute(stmt, {
-                "condition_id": m.get("condition_id", ""),
-                "token_id_yes": m.get("token_id_yes"),
-                "token_id_no": m.get("token_id_no"),
-                "event_slug": m.get("event_slug", ""),
-                "sport": m.get("sport"),
-                "category": m.get("category", "other"),
-                "market_type": m.get("market_type", "binary"),
-                "player_name": m.get("player_name"),
-                "stat_type": m.get("stat_type"),
-                "line": m.get("line"),
-                "question": m.get("question", ""),
-                "player_id": m.get("player_id"),
-                "team1": m.get("team1"),
-                "team2": m.get("team2"),
-                "yes_price": m.get("yes_price"),
-                "no_price": m.get("no_price"),
-                "yes_bid": m.get("yes_bid"),
-                "yes_ask": m.get("yes_ask"),
-                "volume": m.get("volume"),
-                "liquidity": m.get("liquidity"),
-                "market_status": m.get("market_status", "open"),
-                "end_date": m.get("end_date"),
-                "snapshot_time": snapshot_time,
-            })
-            count += 1
+    for i in range(0, len(rows), CHUNK):
+        chunk = rows[i:i + CHUNK]
+        with engine.begin() as conn:
+            conn.execute(stmt, chunk)
+        count += len(chunk)
 
     return count
 
