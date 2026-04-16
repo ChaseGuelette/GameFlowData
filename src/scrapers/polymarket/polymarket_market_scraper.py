@@ -296,14 +296,16 @@ def store_markets(engine, parsed_markets: list[dict], snapshot_time: datetime) -
         for m in parsed_markets
     ]
 
-    # Batch insert in chunks of 500 to keep transactions manageable
+    # Batch upsert in chunks of 500 within a single connection.
+    # Opening one connection for all chunks avoids 142 Supavisor round-trips
+    # (was causing ~24 min runtime; single connection reduces this to ~2-3 min).
     CHUNK = 500
     count = 0
-    for i in range(0, len(rows), CHUNK):
-        chunk = rows[i:i + CHUNK]
-        with engine.begin() as conn:
+    with engine.begin() as conn:
+        for i in range(0, len(rows), CHUNK):
+            chunk = rows[i:i + CHUNK]
             conn.execute(stmt, chunk)
-        count += len(chunk)
+            count += len(chunk)
 
     return count
 
