@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { HistoryFilters, type StatusFilter } from '@/components/history/HistoryFilters'
 import { HistorySummary } from '@/components/history/HistorySummary'
 import { BetList } from '@/components/history/BetList'
+import { EditBetModal } from '@/components/history/EditBetModal'
 import { DfsEntrySummary } from '@/components/history/DfsEntrySummary'
 import { DfsEntryList } from '@/components/history/DfsEntryList'
 import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFilter'
@@ -44,6 +45,7 @@ export default function HistoryPage() {
   const [filter, setFilter] = useState<StatusFilter>('all')
   const [betSource, setBetSource] = useState<BetSource>('model')
   const [activeTab, setActiveTab] = useState<HistoryTab>('my_bets')
+  const [editingBet, setEditingBet] = useState<PaperBet | null>(null)
 
   // Date range state
   const [startDate, setStartDate] = useState(getDefaultStartDate)
@@ -124,7 +126,7 @@ export default function HistoryPage() {
     ? directionFilteredMyBets.filter(b => b.status !== 'cancelled')
     : directionFilteredMyBets.filter(b => b.status === myBetsFilter)
 
-  // Remove a pending bet
+  // Remove a bet (any status)
   const handleRemoveBet = useCallback(async (betId: number) => {
     const supabase = createClient()
     const { error } = await supabase
@@ -137,6 +139,14 @@ export default function HistoryPage() {
       return
     }
 
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) await supabase.rpc('rebuild_user_daily_log', { target_user_id: user.id })
+
+    myBetsQuery.refetch()
+  }, [myBetsQuery])
+
+  const handleEditSaved = useCallback(() => {
+    setEditingBet(null)
     myBetsQuery.refetch()
   }, [myBetsQuery])
 
@@ -279,7 +289,7 @@ export default function HistoryPage() {
           ) : (
             <>
               <HistorySummary bets={directionFilteredMyBets} />
-              <BetList bets={filteredMyBets} onRemove={handleRemoveBet} />
+              <BetList bets={filteredMyBets} onRemove={handleRemoveBet} onEdit={setEditingBet} />
               {myBets.length >= PAGE_SIZE && (
                 <div className="text-center py-4 text-sm text-slate-500">
                   Showing first {PAGE_SIZE} results. Narrow date range for more.
@@ -330,6 +340,15 @@ export default function HistoryPage() {
             </>
           )}
         </>
+      )}
+
+      {/* Edit Bet Modal */}
+      {editingBet && (
+        <EditBetModal
+          bet={editingBet}
+          onClose={() => setEditingBet(null)}
+          onSaved={handleEditSaved}
+        />
       )}
 
       {/* DFS Entries Tab */}

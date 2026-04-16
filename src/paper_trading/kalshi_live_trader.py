@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Supported stat types per sport (skip markets without trained models)
 SUPPORTED_STATS: dict[str, set[str]] = {
     "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
-    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_rbis"},
+    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_rbis", "batter_hrr"},
 }
 
 
@@ -919,10 +919,11 @@ class KalshiLiveTrader:
 
             mlb_res = MLB_STAT_RESOLUTION.get(stat_type)
             if mlb_res is not None:
-                table, column = mlb_res
+                table, columns = mlb_res
+                col_expr = " + ".join(f"s.{c}" for c in columns)
                 with self.engine.connect() as conn:
                     rows = conn.execute(text(f"""
-                        SELECT s.player_id, s.{column} as actual_value, s.did_not_play
+                        SELECT s.player_id, {col_expr} as actual_value, s.did_not_play
                         FROM {table} s
                         WHERE s.game_date = :game_date
                     """), {"game_date": game_date}).fetchall()

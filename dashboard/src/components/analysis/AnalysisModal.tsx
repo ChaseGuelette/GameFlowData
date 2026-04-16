@@ -117,6 +117,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   const { config } = useSport()
   const [history, setHistory] = useState<PlayerGameStats[]>([])
   const [mlbHistoryValues, setMlbHistoryValues] = useState<number[]>([])
+  const [mlbRawRows, setMlbRawRows] = useState<Record<string, unknown>[]>([])
   const [bookmakerLines, setBookmakerLines] = useState<BookmakerLine[]>([])
   const [loading, setLoading] = useState(true)
   const [linesLoading, setLinesLoading] = useState(true)
@@ -178,7 +179,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
           ? supabase.from('mlb_player_game_stats_pitching').select('game_date, so')
               .eq('player_id', prediction.player_id).eq('did_not_play', false)
               .order('game_date', { ascending: false }).limit(5)
-          : supabase.from('mlb_player_game_stats_batting').select('game_date, h, tb, hr, rbi, r')
+          : supabase.from('mlb_player_game_stats_batting').select('game_date, h, ab, tb, hr, rbi, r')
               .eq('player_id', prediction.player_id).eq('did_not_play', false)
               .order('game_date', { ascending: false }).limit(5)
 
@@ -188,6 +189,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
           const reversed = [...data].reverse()
           setHistory(reversed.map((row) => ({ game_date: (row as { game_date: string }).game_date } as PlayerGameStats)))
           setMlbHistoryValues(reversed.map((row) => Number((row as Record<string, unknown>)[col]) || 0))
+          setMlbRawRows(reversed as Record<string, unknown>[])
         }
         setLoading(false)
         return
@@ -251,11 +253,12 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         )
 
         const lineMap = new Map<string, BookmakerLine>()
-        // Track each bookmaker's latest snapshot_time for staleness filtering
+        // Track each bookmaker+line's latest snapshot_time for staleness filtering
         const snapshotMap = new Map<string, string>()
 
         for (const row of sorted) {
-          const key = row.bookmaker
+          // Key on bookmaker+line so DraftKings 0.5 and DraftKings 2.5 are independent entries
+          const key = `${row.bookmaker}:${row.line}`
           if (!lineMap.has(key)) {
             lineMap.set(key, {
               bookmaker: row.bookmaker,
@@ -284,7 +287,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         const allLines = Array.from(lineMap.values())
           .filter(l => {
             if (l.over_odds === 0 || l.under_odds === 0) return false
-            const bookmakerSnapshot = snapshotMap.get(l.bookmaker) || ''
+            const bookmakerSnapshot = snapshotMap.get(`${l.bookmaker}:${l.line}`) || ''
             if (!newestSnapshot || !bookmakerSnapshot) return true // no timestamp data, keep it
             const age = new Date(newestSnapshot).getTime() - new Date(bookmakerSnapshot).getTime()
             return age <= staleCutoffMs
@@ -318,6 +321,11 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   const statColumn = STAT_COLUMN_MAP[prediction.stat] ?? null
   const comboComponents = COMBO_COMPONENTS[prediction.stat]
   const statLabel = STAT_LABELS[prediction.stat]
+  const isPitcherStat = config.sport === 'mlb' && prediction.stat.startsWith('pitcher_')
+  const mlbStatCol = MLB_STAT_HISTORY[prediction.stat]?.column
+  // Binary model: quantiles are all 0/1 (Bernoulli output), show probability instead of bars
+  const isBinaryDistribution = prediction.q10 === 0 && prediction.q25 === 0 &&
+    prediction.q50 === 0 && prediction.q90 <= 1
 
   // Calculate L5 average for the relevant stat (sum components for combos)
   const l5Avg = history.length > 0
@@ -493,7 +501,18 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                     <tr className="text-slate-400 border-b border-slate-700">
                       <th className="text-left py-2 px-1.5 sm:px-2">Date</th>
                       {config.sport === 'mlb' ? (
-                        <th className="text-center py-2 px-1.5 sm:px-2">{statLabel}</th>
+                        isPitcherStat ? (
+                          <th className="text-center py-2 px-1.5 sm:px-2">K</th>
+                        ) : (
+                          <>
+                            <th className="text-center py-2 px-1.5 sm:px-2 text-slate-500">AB</th>
+                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'h' ? 'text-slate-200' : ''}`}>H</th>
+                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'tb' ? 'text-slate-200' : ''}`}>TB</th>
+                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'hr' ? 'text-slate-200' : ''}`}>HR</th>
+                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'rbi' ? 'text-slate-200' : ''}`}>RBI</th>
+                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'r' ? 'text-slate-200' : ''}`}>R</th>
+                          </>
+                        )
                       ) : (
                         <>
                           <th className="text-center py-2 px-1.5 sm:px-2">MIN</th>
@@ -510,12 +529,36 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                   <tbody>
                     {history.map((game, i) => {
                       if (config.sport === 'mlb') {
+                        const rawRow = mlbRawRows[i] || {}
                         return (
                           <tr key={i} className="border-b border-slate-700/50">
                             <td className="py-2 px-1.5 sm:px-2 text-slate-300">{game.game_date}</td>
-                            <td className="text-center py-2 px-1.5 sm:px-2 text-slate-50 font-medium">
-                              {mlbHistoryValues[i] ?? '—'}
-                            </td>
+                            {isPitcherStat ? (
+                              <td className="text-center py-2 px-1.5 sm:px-2 text-slate-50 font-medium">
+                                {mlbHistoryValues[i] ?? '—'}
+                              </td>
+                            ) : (
+                              <>
+                                <td className="text-center py-2 px-1.5 sm:px-2 text-slate-500">
+                                  {String(rawRow['ab'] ?? '—')}
+                                </td>
+                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'h' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                  {String(rawRow['h'] ?? '—')}
+                                </td>
+                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'tb' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                  {String(rawRow['tb'] ?? '—')}
+                                </td>
+                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'hr' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                  {String(rawRow['hr'] ?? '—')}
+                                </td>
+                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'rbi' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                  {String(rawRow['rbi'] ?? '—')}
+                                </td>
+                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'r' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                  {String(rawRow['r'] ?? '—')}
+                                </td>
+                              </>
+                            )}
                           </tr>
                         )
                       }
@@ -762,14 +805,36 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         {/* Quantile Summary */}
         <div className="p-4 sm:p-6 border-b border-slate-700">
           <h3 className="text-lg font-semibold text-slate-50 mb-4">Model Prediction Distribution</h3>
-          <QuantileSummary
-            q10={prediction.q10}
-            q25={prediction.q25}
-            q50={prediction.q50}
-            q75={prediction.q75}
-            q90={prediction.q90}
-            line={prediction.prop_line}
-          />
+          {isBinaryDistribution && Number.isFinite(prediction.pred_mean) ? (
+            <div className="space-y-3">
+              <p className="text-xs text-slate-500">
+                Binary model — predicts whether the player records any {statLabel.toLowerCase()} (0 or 1+).
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-700/50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-slate-400 mb-1">P({statLabel} ≥ 1)</div>
+                  <div className="text-2xl font-bold text-green-400">
+                    {(prediction.pred_mean * 100).toFixed(1)}%
+                  </div>
+                </div>
+                <div className="bg-slate-700/50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-slate-400 mb-1">P(No {statLabel})</div>
+                  <div className="text-2xl font-bold text-red-400">
+                    {((1 - prediction.pred_mean) * 100).toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <QuantileSummary
+              q10={prediction.q10}
+              q25={prediction.q25}
+              q50={prediction.q50}
+              q75={prediction.q75}
+              q90={prediction.q90}
+              line={prediction.prop_line}
+            />
+          )}
         </div>
 
         {/* Edge Summary — updates to reflect selected sportsbook line when available */}

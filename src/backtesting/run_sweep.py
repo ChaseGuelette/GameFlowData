@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -31,12 +32,16 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.backtesting.backtest_harness import BacktestHarness
 from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
+from src.config.combo_config import MARKET_TO_STAT
 from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
 from src.models.feature_store import FeatureStore
 from src.models.monte_carlo import MonteCarloPredictor, load_combined_calibration_offsets, load_copula_params
 from src.models.quantile_trainer import PlayerPropsModelPipeline
+
+_MIN_PROB = 1e-6
+_MAX_PROB = 1.0 - 1e-6
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,17 +63,20 @@ class SweepConfig:
     edge_threshold: float
     kelly_fraction: float
     z_max: float = 1.0  # BL confidence saturation point
+    max_weight: float = 0.50  # Hard cap on BL blending weight
 
     @property
     def label(self) -> str:
         if self.tau is None:
             return f"no_BL | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
-        return f"tau={self.tau} z_max={self.z_max} | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
+        mw = f" mw={self.max_weight}" if self.max_weight != 0.50 else ""
+        return f"tau={self.tau} z_max={self.z_max}{mw} | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
 
     def to_dict(self) -> dict:
         return {
             "tau": self.tau,
             "z_max": self.z_max,
+            "max_weight": self.max_weight,
             "edge_threshold": self.edge_threshold,
             "kelly_fraction": self.kelly_fraction,
         }
@@ -95,21 +103,28 @@ def build_sweep_grid(
     edge_thresholds: list[float],
     kelly_fractions: list[float],
     z_max_values: list[float] | None = None,
+    max_weight_values: list[float] | None = None,
 ) -> list[SweepConfig]:
     """Generate Cartesian product of parameter values.
 
-    Note: z_max only applies when tau is not None. For no-BL configs,
-    z_max is ignored but we still include one config per (edge, kelly) pair.
+    Note: z_max and max_weight only apply when tau is not None. For no-BL
+    configs, they are ignored and only one config per (edge, kelly) is added.
     """
     if z_max_values is None:
         z_max_values = [1.0]
+    if max_weight_values is None:
+        max_weight_values = [0.50]
 
     configs = []
-    for tau, edge, kelly, z_max in itertools.product(tau_values, edge_thresholds, kelly_fractions, z_max_values):
-        # For no-BL, z_max doesn't matter, so only add one config per (edge, kelly)
-        if tau is None and z_max != z_max_values[0]:
+    for tau, edge, kelly, z_max, mw in itertools.product(
+        tau_values, edge_thresholds, kelly_fractions, z_max_values, max_weight_values,
+    ):
+        # For no-BL, BL params don't matter — only add one config per (edge, kelly)
+        if tau is None and (z_max != z_max_values[0] or mw != max_weight_values[0]):
             continue
-        configs.append(SweepConfig(tau=tau, edge_threshold=edge, kelly_fraction=kelly, z_max=z_max))
+        configs.append(SweepConfig(
+            tau=tau, edge_threshold=edge, kelly_fraction=kelly, z_max=z_max, max_weight=mw,
+        ))
     return configs
 
 
@@ -203,6 +218,216 @@ def run_shared_phases(
 
 
 # ---------------------------------------------------------------------------
+# Phase 0b: pre-compute base probabilities (runs once, reused across configs)
+# ---------------------------------------------------------------------------
+
+def precompute_base_probabilities(
+    game_dates: list[date],
+    date_predictions: dict[date, pd.DataFrame],
+    date_samples: dict[date, dict],
+    prefetched_lines: dict[date, pd.DataFrame],
+) -> pd.DataFrame:
+    """Compute model & market probabilities for every (player, game, stat, line, bookie) row.
+
+    Called once after Phase 1. Per-config sweep only needs vectorized BL math on this
+    DataFrame — no harness instantiation, no iterrows per config.
+
+    Columns added:
+        model_over, model_under  — empirical CDF from MC samples (constant across configs)
+        market_over, market_under — devigged market probs (constant across configs)
+        model_logit, market_logit — log-odds (constant across configs)
+        z_raw                    — |mean - line| / std before z_max clipping (constant)
+    """
+    all_frames = []
+
+    for game_date in game_dates:
+        raw_preds = date_predictions.get(game_date)
+        lines_df = prefetched_lines.get(game_date)
+        samples_dict = date_samples.get(game_date, {})
+
+        if raw_preds is None or raw_preds.empty or lines_df is None or lines_df.empty:
+            continue
+
+        # Merge predictions × lines (identical to _calculate_edges logic)
+        ld = lines_df.copy()
+        ld["stat"] = ld["market_key"].map(MARKET_TO_STAT)
+        line_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds"]
+        if "bookmaker" in ld.columns:
+            line_cols.append("bookmaker")
+        merged = raw_preds.merge(ld[line_cols], on=["player_id", "game_id", "stat"], how="left")
+        merged = merged.dropna(subset=["line", "over_odds", "under_odds"]).reset_index(drop=True)
+
+        if merged.empty:
+            continue
+
+        merged["game_date"] = game_date
+
+        # Model probs + raw z-score — samples lookup requires per-row access (runs ONCE total)
+        model_overs = np.zeros(len(merged))
+        z_raws = np.zeros(len(merged))
+        for i, row in enumerate(merged.itertuples(index=False)):
+            key = (row.player_id, row.game_id, row.stat)
+            samples = samples_dict.get(key)
+            if samples is not None and len(samples) > 0:
+                model_overs[i] = float((samples > row.line).mean())
+                std = float(np.std(samples))
+                z_raws[i] = abs(float(np.mean(samples)) - row.line) / std if std > 1e-6 else 0.0
+            else:
+                model_overs[i] = 0.5
+
+        merged["model_over"] = model_overs
+        merged["model_under"] = 1.0 - model_overs
+        merged["z_raw"] = z_raws
+
+        # Vectorized devig
+        over_odds = merged["over_odds"].values.astype(float)
+        under_odds = merged["under_odds"].values.astype(float)
+        dec_over = np.where(over_odds > 0, 1.0 + over_odds / 100.0, 1.0 - 100.0 / over_odds)
+        dec_under = np.where(under_odds > 0, 1.0 + under_odds / 100.0, 1.0 - 100.0 / under_odds)
+        raw_over = 1.0 / np.clip(dec_over, 1.01, None)
+        raw_under = 1.0 / np.clip(dec_under, 1.01, None)
+        booksum = np.clip(raw_over + raw_under, 1e-9, None)
+        market_over = np.clip(raw_over / booksum, _MIN_PROB, _MAX_PROB)
+        market_under = np.clip(raw_under / booksum, _MIN_PROB, _MAX_PROB)
+        merged["market_over"] = market_over
+        merged["market_under"] = market_under
+
+        # Pre-compute log-odds for BL blend formula
+        mo_clipped = np.clip(model_overs, _MIN_PROB, _MAX_PROB)
+        merged["model_logit"] = np.log(mo_clipped / (1.0 - mo_clipped))
+        merged["market_logit"] = np.log(market_over / (1.0 - market_over))
+
+        all_frames.append(merged)
+
+    if not all_frames:
+        return pd.DataFrame()
+
+    return pd.concat(all_frames, ignore_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Fast per-config execution using pre-computed base probabilities
+# ---------------------------------------------------------------------------
+
+def run_single_config_fast(
+    config: SweepConfig,
+    precomputed_df: pd.DataFrame,
+    game_dates: list[date],
+    actuals_df: pd.DataFrame,
+    voids_df: pd.DataFrame,
+    starting_bankroll: float,
+    allowed_bets: list[tuple[str, str]] | None,
+    filter_best_bets_fn,
+    max_bet_pct: float | None = None,
+    flat_bet_size: float | None = None,
+) -> SweepResult:
+    """Fast per-config sweep using pre-computed base probabilities.
+
+    Replaces run_single_config() in the sweep loop. Per-config work is:
+      - Vectorized numpy BL math (no iterrows, no harness instantiation)
+      - _filter_best_bets per date (~90 rows/date — negligible)
+      - BetSimulator sequential by date (required for bankroll tracking)
+
+    ~10–50x faster than run_single_config() on large sweeps.
+    """
+    t0 = time.time()
+
+    if precomputed_df.empty:
+        empty_metrics = MetricsCalculator().calculate(
+            pd.DataFrame(), pd.DataFrame(), starting_bankroll=starting_bankroll
+        )
+        return SweepResult(
+            config=config, metrics=empty_metrics,
+            bets_df=pd.DataFrame(), predictions_df=pd.DataFrame(),
+            all_edges_df=pd.DataFrame(), elapsed_seconds=time.time() - t0,
+        )
+
+    # ── Vectorized BL computation (replaces iterrows in _calculate_edges) ──
+    z_raw = precomputed_df["z_raw"].values
+    model_logit = precomputed_df["model_logit"].values
+    market_logit = precomputed_df["market_logit"].values
+    model_over = precomputed_df["model_over"].values
+    market_over = precomputed_df["market_over"].values
+    market_under = precomputed_df["market_under"].values
+
+    if config.tau is None:
+        posterior_over = model_over.copy()
+    else:
+        confidence = np.minimum(z_raw / config.z_max, 1.0)
+        w = np.minimum(config.tau * confidence, config.max_weight)
+        posterior_logit = market_logit + w * (model_logit - market_logit)
+        posterior_over = 1.0 / (1.0 + np.exp(-posterior_logit))
+
+    posterior_under = 1.0 - posterior_over
+
+    # Build working DataFrame with only the columns needed by filter + simulator
+    keep_cols = [c for c in [
+        "game_date", "player_id", "game_id", "stat", "line", "over_odds", "under_odds", "bookmaker",
+    ] if c in precomputed_df.columns]
+    preds = precomputed_df[keep_cols].copy()
+    preds["over_prob"]       = posterior_over
+    preds["under_prob"]      = posterior_under
+    preds["implied_over"]    = market_over
+    preds["implied_under"]   = market_under
+    preds["over_edge"]       = posterior_over - market_over
+    preds["under_edge"]      = posterior_under - market_under
+    preds["posterior_over"]  = posterior_over
+    preds["posterior_under"] = posterior_under
+
+    # ── Simulation loop (sequential for bankroll tracking) ─────────────────
+    stat_config = StatConfigSet(
+        global_edge_threshold=config.edge_threshold,
+        global_bl_tau=config.tau,
+    )
+    simulator = BetSimulator(
+        edge_threshold=config.edge_threshold,
+        starting_bankroll=starting_bankroll,
+        kelly_fraction=config.kelly_fraction,
+        max_bet_pct=max_bet_pct,
+        flat_bet_size=flat_bet_size,
+        allowed_bets=set(allowed_bets) if allowed_bets else None,
+        stat_config=stat_config,
+    )
+
+    all_date_preds: list[pd.DataFrame] = []
+    for game_date in game_dates:
+        day_df = preds[preds["game_date"] == game_date]
+        if day_df.empty:
+            continue
+
+        day_filtered = filter_best_bets_fn(day_df)
+        if day_filtered.empty:
+            continue
+
+        all_date_preds.append(day_filtered)
+
+        if len(voids_df) > 0:
+            simulator.resolve_voids(voids_df)
+        if len(actuals_df) > 0:
+            simulator.resolve_bets(actuals_df)
+        simulator.evaluate_predictions(day_filtered, game_date)
+
+    # Final resolution
+    if len(voids_df) > 0:
+        simulator.resolve_voids(voids_df)
+    if len(actuals_df) > 0:
+        simulator.resolve_bets(actuals_df)
+
+    bets_df = simulator.to_dataframe()
+    predictions_df = (
+        pd.concat(all_date_preds, ignore_index=True) if all_date_preds else pd.DataFrame()
+    )
+    metrics = MetricsCalculator().calculate(predictions_df, bets_df, starting_bankroll=starting_bankroll)
+
+    return SweepResult(
+        config=config, metrics=metrics,
+        bets_df=bets_df, predictions_df=predictions_df,
+        all_edges_df=pd.DataFrame(),   # skipped in sweep mode for speed
+        elapsed_seconds=time.time() - t0,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Per-config sweep execution (Phase 1.5 + 2 + metrics)
 # ---------------------------------------------------------------------------
 
@@ -239,7 +464,7 @@ def run_single_config(
     # Create BL blender for this config (used as fallback, but per-stat blenders are in harness)
     bl_blender = None
     if config.tau is not None:
-        bl_blender = BlackLittermanBlender(BLConfig(tau=config.tau, z_max=config.z_max))
+        bl_blender = BlackLittermanBlender(BLConfig(tau=config.tau, z_max=config.z_max, max_weight=config.max_weight))
 
     # Create a lightweight harness to reuse _calculate_edges and _filter_best_bets
     config_harness = BacktestHarness(
@@ -486,6 +711,7 @@ def save_results(
         row = {
             "tau": r.config.tau,
             "z_max": r.config.z_max,
+            "max_weight": r.config.max_weight,
             "edge_threshold": r.config.edge_threshold,
             "kelly_fraction": r.config.kelly_fraction,
             "total_bets": m.total_bets,
@@ -655,6 +881,16 @@ Examples:
         default=[1.0],
         help="BL z_max values to sweep (confidence saturation point). Lower=more aggressive. (default: 1.0)",
     )
+    parser.add_argument(
+        "--max-weight", type=float, nargs="+",
+        default=[0.50],
+        help="BL max blending weight values to sweep. Hard cap on model influence. (default: 0.50)",
+    )
+    parser.add_argument(
+        "--direction", choices=["over", "under", "both"], default="both",
+        help="Restrict bet direction for all stats (default: both). "
+             "Shorthand for --allowed-bets pts:dir reb:dir ast:dir.",
+    )
 
     # Model / data config (mirrors run_backtest.py)
     parser.add_argument("--model-dir", type=str, default="src/models/artifacts", help="Path to model artifacts")
@@ -709,6 +945,7 @@ Examples:
                 parser.error(f"Invalid --tau value '{v}'. Use 'none' or a float (e.g., 0.05).")
 
     # Parse allowed_bets
+    # --direction is a shorthand that expands to per-stat pairs; --allowed-bets overrides it
     allowed_bets = None
     if args.allowed_bets:
         allowed_bets = []
@@ -717,13 +954,15 @@ Examples:
             if len(parts) != 2 or parts[1] not in ("over", "under"):
                 parser.error(f"Invalid --allowed-bets value '{pair}'. Use format stat:side (e.g., pts:under)")
             allowed_bets.append((parts[0], parts[1]))
+    elif args.direction != "both":
+        allowed_bets = [(stat, args.direction) for stat in args.stats]
 
     # Parse dates
     start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
     end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
 
     # Build sweep grid
-    configs = build_sweep_grid(tau_values, args.edge, args.kelly, args.z_max)
+    configs = build_sweep_grid(tau_values, args.edge, args.kelly, args.z_max, args.max_weight)
     logger.info(f"Sweep grid: {len(configs)} configurations")
     for i, c in enumerate(configs, 1):
         logger.info(f"  Config {i}: {c.label}")
@@ -790,6 +1029,14 @@ Examples:
     total_predictions = sum(len(df) for df in date_predictions.values())
     logger.info(f"Phase 0-1 complete in {phase01_time:.1f}s")
 
+    # Phase 0b: pre-compute base probabilities once (vectorizes per-config edge calc)
+    logger.info("Phase 0b: Precomputing base probabilities...")
+    t0b = time.time()
+    precomputed_df = precompute_base_probabilities(
+        game_dates, date_predictions, date_samples, prefetched_lines
+    )
+    logger.info(f"  {len(precomputed_df):,} rows precomputed in {time.time() - t0b:.1f}s")
+
     # Sweep loop
     logger.info("=" * 60)
     logger.info(f"SWEEP: Running {len(configs)} configurations...")
@@ -799,24 +1046,15 @@ Examples:
     for i, config in enumerate(configs, 1):
         logger.info(f"Config {i}/{len(configs)}: {config.label}")
 
-        result = run_single_config(
+        result = run_single_config_fast(
             config=config,
-            engine=engine,
-            feature_store=feature_store,
-            model_pipeline=pipeline,
-            predictor=predictor,
+            precomputed_df=precomputed_df,
             game_dates=game_dates,
-            prefetched_lines=prefetched_lines,
             actuals_df=actuals_df,
             voids_df=voids_df,
-            date_predictions=date_predictions,
-            date_samples=date_samples,
-            stats=args.stats,
             starting_bankroll=args.starting_bankroll,
-            bookmakers=args.bookmakers,
             allowed_bets=allowed_bets,
-            start_date=start_date,
-            end_date=end_date,
+            filter_best_bets_fn=loader_harness._filter_best_bets,
             max_bet_pct=args.max_bet_pct,
             flat_bet_size=args.flat_bet,
         )

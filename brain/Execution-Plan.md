@@ -38,8 +38,25 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 2.4 | MLB injury reports | not_started | MLB injury data source + scraper | Injury badges on prop cards, flip `injuries: true` |
 | 2.5 | MLB DFS | not_started | MLB DFS salary data source | Salary scraper + DFS optimizer page for MLB |
 | 2.6 | MLB Stats Vault | completed | MLB historical stats tables | Batters + Pitchers tabs with Box/Rates/Consistency categories. DB views `mlb_batters_latest` (1,242 rows) + `mlb_pitchers_latest` (1,512 rows) applied via migration 023. RLS policies on 4 MLB tables. WindowToggle supports L3/L5/L10/L20/SZN. `dec3` format for AVG/OBP/SLG/OPS. `statsVault: true` in MLB config. ✅ LIVE. |
+| 2.7 | MLB Ask AI | completed | MLB tables populated | `/api/ask` MLB branch (Session 35): 2-round parallel data fetching from `mlb_player_game_stats`, `mlb_player_average_batting/pitching`, `mlb_game_schedule`, `mlb_park_factors`, `mlb_players`. Opposing pitcher enrichment for batters (ERA, K/9, WHIP, last 5 starts, handedness). Binary model framing for Bernoulli stats. `askChat: true` flipped in MLB sport config. ✅ LIVE. |
 
 **Done when**: All feature flags in MLB config are `true` and backed by real data.
+
+---
+
+## Phase 2.6: Track Record & Credibility
+
+**Goal**: Give users and prospects a verifiable public-facing track record that doubles as a marketing asset.
+
+| Step | Task | Status | Dependencies | Details |
+|------|------|--------|--------------|---------|
+| 2.6.1 | DB migration 026 + RPCs | completed | None | `user_bets.prediction_id/player_id` nullable, `source` column added (`prop_card`/`manual`/`csv_import`), new unique constraint `(user_id, game_date, player_name, stat_type, bet_direction)`. New table `user_bets_daily_log` (RLS). RPCs `rebuild_user_daily_log` + `get_track_record_summary`. All applied to Supabase. |
+| 2.6.2 | CSV import pipeline | completed | 2.6.1 | `dashboard/src/lib/csv/parseBets.ts` — parses Excel export format, stat normalization, date handling, PnL calculation, error/warning reporting. `CsvUpload.tsx` — drag-and-drop, preview table, batched upsert (100/batch), calls rebuild RPC. |
+| 2.6.3 | Track Record page | completed | 2.6.1, 2.6.2 | `/track-record` route. Source toggle (My Bets / Paper / Combined). KPI banner (4 cards). `BankrollChart`. `MonthlyGrid` — expandable monthly cards with daily drilldown + per-bet list. `StatBreakdown`. `ModelMetrics` — edge accuracy buckets, streaks, profitable days. Manual bet entry form (`ManualBetForm`). Navbar link added. Build clean. |
+| 2.6.4 | History page edit/delete | completed | None | `EditBetModal.tsx` — pre-filled form, UPDATE by id, auto-calculates PnL, optional override. Delete: two-step confirm on ALL bet statuses (not just pending). Both operations call `rebuild_user_daily_log` to keep track record in sync. |
+| 2.6.5 | Make track record shareable | not_started | 2.6.3 | Public URL for admin's track record. `get_track_record_summary(uuid)` RPC is already built with auth.uid() check. Needs public route + toggle for Chase's user_id. |
+
+**Done when**: Chase can import his Excel history, track record page renders accurate monthly P&L, page is shareable with prospects.
 
 ---
 
@@ -170,7 +187,7 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | Step | Task | Status | Dependencies | Details |
 |------|------|--------|--------------|---------|
 | 9.1 | Core arb scanner pipeline | completed | Kalshi integration | `polymarket_utils`, `polymarket_client`, `polymarket_market_scraper`, `market_matcher`, `arb_scanner`, `arb_scan_job`. 2 DB tables (`polymarket_markets`, `arb_opportunities`). Runs every 10 min on Railway. DISCORD_CHANNEL_ARB=1492934576467611700. Sportsbook comparison, model-based mispricing, and player props removed (Apr 15). |
-| 9.2 | Rebuild scraper for game-level + non-sports | not_started | 9.1 | Rewrite `polymarket_market_scraper` to ingest ALL market categories (not just sport tag filtered). Detect moneyline/total/NRFI/futures/non-sports types. Store `market_type`, `category`, `team1`, `team2`, `question` for matching. Run dry-run to confirm data flow into `polymarket_markets`. |
+| 9.2 | Rebuild scraper for game-level + non-sports | completed | 9.1 | Full rewrite of `polymarket_market_scraper` to ingest ALL Polymarket categories (sport tag filter was broken — returned 0 events). Fixes: (1) prices from Gamma API `outcomePrices` field (CLOB /midpoints returned 400), (2) `clobTokenIds` is a JSON string — required `json.loads()`, (3) upsert on `condition_id` only — one row per market updated in place (was creating 69K new rows per hourly run), (4) batch executemany 500/chunk (was row-by-row, ~30 min). Added `category` column (DB migration), made `sport` nullable. Category detection via event tag IDs + slug/title keywords. Market types: `nrfi`, `season_future`, `binary`, `player_prop`, `moneyline`, `total`, `spread`. Result: **70,651 markets across 7 categories** stored in ~2 min. Scheduler: hourly all-categories job at :30 past each hour (9:30AM–11:30PM ET). Deployed to Railway. |
 | 9.3 | Cross-platform market matcher: sports futures + NRFI | not_started | 9.2 | Match Kalshi ↔ Polymarket on: (1) season-long futures by event slug/team normalization, (2) NRFI by game date + teams, (3) game moneylines/totals by (team1, team2, date, market_type). Kalshi uses tickers (e.g. `MLBWIN-NYY-...`), Polymarket uses natural language — requires team name normalization table. |
 | 9.4 | Cross-platform market matcher: non-sports | not_started | 9.2 | Match Kalshi ↔ Polymarket on non-sports categories (politics, crypto, economics, etc.) by question text similarity (fuzzy match on normalized question strings). These markets have fewer competing bots and likely more persistent pricing gaps. |
 | 9.5 | Arb paper trader | not_started | 9.3 | `arb_paper_bets` table (2-leg structure), `ArbPaperTrader` class (P&L for pure/soft arbs), resolution via outcome |

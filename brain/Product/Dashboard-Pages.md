@@ -12,7 +12,7 @@
 - Config file: `dashboard/src/lib/sport-config.ts` — table names, stat types, team data, CDN URLs, feature flags, column mappings
 - Context: `dashboard/src/contexts/SportContext.tsx` — `useSport()` hook, localStorage persistence
 - Sport toggle pill in Navbar (NBA/MLB), nav links conditionally shown per feature flags
-- MLB feature flags: DFS=false, **Stats Vault=true (Session 27)**, AskChat=false, Injuries=false, Prediction Markets=false
+- MLB feature flags: DFS=false, **Stats Vault=true (Session 27)**, **AskChat=true (Session 35)**, Injuries=false, Prediction Markets=false
 - NBA: Prediction Markets enabled (`predictionMarkets: true`), MLB: disabled until Kalshi MLB data available
 - MLB stat types: pitcher_strikeouts, batter_hits, batter_total_bases, batter_home_runs, batter_rbis, batter_runs_scored
 - MLB tables: `mlb_daily_predictions`, `mlb_paper_bets`, `mlb_paper_trading_daily_log`
@@ -35,21 +35,24 @@
 ## Protected Routes (`(protected)/`)
 | Route | Purpose |
 |-------|---------|
-| `/dashboard` | Main predictions — PropCards, FilterTabs, date selector, edge/BL/sportsbook/direction filters, live scoreboard. DFS-only predictions (PrizePicks, Fliff, etc.) filtered out at query level (Session 21). |
+| `/dashboard` | Main predictions — PropCards, FilterTabs, date selector, model picks toggle, live scoreboard. **Session 35**: Collapsed 10+ filter controls to 4 (FilterTabs + All Bets/Model Picks toggle + Date selector + ⚙ Filters popover + Build Slate button). Removed Edge/BL tau selectors; hardcoded 0.03 edge threshold. `FilterPopover` contains State, Books, Game Status, Direction. DFS-only predictions filtered out at query level. |
 | `/dfs` | DFS Edge Finder — 3 modes, 6 stats, platform filters, slip type selector |
-| `/history` | My Bets + Model History — status/direction filters, date range, per-stat win rates |
+| `/history` | My Bets + Model History — status/direction filters, date range, per-stat win rates. **Session 34**: Edit (pencil icon) + two-step confirm delete on ALL bet statuses (not just pending). EditBetModal pre-fills all fields; saves via UPDATE + calls `rebuild_user_daily_log`. |
 | `/performance` | My Bets + Props + DFS tabs — bankroll chart, stat breakdown, KPI cards |
 | `/stats` | Data Vault — NBA: player/team/defense/play-type heatmap tables, percentile coloring. MLB (Session 27): `MLBStatsPage` component with Batters/Pitchers tabs, Box/Rates/Consistency categories, L3/L5/L10/L20/SZN window support. Requires migration 023 in Supabase. |
 | `/account` | Profile + bankroll settings + community card |
 | `/subscribe` | Subscription page (currently redirects to /dashboard) |
 | `/prediction-markets` | Kalshi prediction markets — edge overlay, sortable/filterable table, detail modal with fee breakdown, orderbook, countdown |
+| `/track-record` | Track record & diagnostics — My Bets / Paper Trading / Combined source toggle, KPI banner, bankroll chart, monthly summary grid (expandable to daily drilldown + per-bet list), stat breakdown, model metrics (edge accuracy, streaks). CSV import modal (drag-and-drop, 10-row preview, batched upsert) + manual bet entry form. Calls `rebuild_user_daily_log` RPC after any change. |
 
 ## Analysis Modal
 Click any PropCard to open:
 - L5 game chart
+- **MLB batting table** (Session 35): shows all 6 stats (AB, H, TB, HR, RBI, R) with target stat column highlighted. Was previously only showing target stat.
 - Model context insights
-- AI Q&A chat (Claude Haiku, 20 questions/day)
-- Quantile distribution visualization
+- AI Q&A chat (Claude Haiku, 20 questions/day) — **now live for MLB** (Session 35)
+- **Quantile / Binary distribution**: Binary models (batter hits/HR — q10=q25=q50=0) now show `P(stat ≥ 1)` and `P(No stat)` probability cards instead of misleading quantile bars (Session 35).
+- **Line shopping fix** (Session 35): Deduplication key changed from `bookmaker` → `bookmaker:line` so books with multiple lines (e.g. DraftKings 0.5 AND 2.5) both appear instead of collapsing.
 - Line shopping by state
 - Kelly sizing recommendation
 - "Take Bet" button with confidence stars (1-5)

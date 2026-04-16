@@ -64,7 +64,7 @@ def _get_env_float(name: str, default: float) -> float:
 # Supported stat types per sport (skip markets without trained models)
 SUPPORTED_STATS: dict[str, set[str]] = {
     "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
-    "mlb": {"pitcher_strikeouts", "pitcher_outs", "batter_hits", "batter_rbis", "batter_hrr"},
+    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_rbis", "batter_hrr"},
 }
 
 DEFAULT_BANKROLL = _get_env_float("KALSHI_PAPER_TRADING_BANKROLL", 100.0)
@@ -176,7 +176,7 @@ class KalshiPaperTrader:
         bankroll = self.get_bankroll()
 
         # Bankroll-proportional exposure cap
-        daily_exposure_pct = _get_env_float("KALSHI_DAILY_EXPOSURE_PCT", 0.60)
+        daily_exposure_pct = _get_env_float("KALSHI_DAILY_EXPOSURE_PCT", 0.90)
         min_exposure = _get_env_float("KALSHI_MIN_DAILY_EXPOSURE", 80.0)
         max_exposure = _get_env_float("KALSHI_MAX_DAILY_EXPOSURE", 500.0)
         dynamic_cap = bankroll * daily_exposure_pct
@@ -779,10 +779,11 @@ class KalshiPaperTrader:
             # Try MLB resolution
             mlb_res = MLB_STAT_RESOLUTION.get(stat_type)
             if mlb_res is not None:
-                table, column = mlb_res
+                table, columns = mlb_res
+                col_expr = " + ".join(f"s.{c}" for c in columns)
 
                 actuals_query = text(f"""
-                    SELECT s.player_id, s.{column} as actual_value,
+                    SELECT s.player_id, {col_expr} as actual_value,
                            s.did_not_play
                     FROM {table} s
                     WHERE s.game_date = :game_date

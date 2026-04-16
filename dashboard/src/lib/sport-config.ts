@@ -207,7 +207,7 @@ export const MLB_CONFIG: SportConfig = {
   features: {
     dfs: false,
     statsVault: true,
-    askChat: false,
+    askChat: true,
     injuries: false,
     scoreboard: true,
     predictionMarkets: false,

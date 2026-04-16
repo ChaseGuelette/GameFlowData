@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 ARTIFACTS_DIR = Path(__file__).resolve().parents[1] / "src" / "models" / "artifacts"
-PRODUCTION_DIR = ARTIFACTS_DIR / "production"
+PRODUCTION_DIR = ARTIFACTS_DIR / "production"  # default; overridden by --name
 
 REQUIRED_FILES = [
     "minutes_model.joblib",
@@ -57,8 +57,10 @@ def list_runs():
     return runs
 
 
-def promote(run_name: str | None = None):
-    """Promote a model run to production."""
+def promote(run_name: str | None = None, target_name: str = "production"):
+    """Promote a model run to a named production folder."""
+    target_dir = ARTIFACTS_DIR / target_name
+
     runs = sorted([
         d for d in ARTIFACTS_DIR.iterdir()
         if d.is_dir()
@@ -89,25 +91,25 @@ def promote(run_name: str | None = None):
             print(f"  - {f}")
         sys.exit(1)
 
-    # Clear existing production folder
-    if PRODUCTION_DIR.exists():
-        print("Removing existing production model...")
-        shutil.rmtree(PRODUCTION_DIR)
+    # Clear existing target folder
+    if target_dir.exists():
+        print(f"Removing existing {target_name} model...")
+        shutil.rmtree(target_dir)
 
-    # Copy to production
-    print(f"Copying {source.name} to production/...")
-    shutil.copytree(source, PRODUCTION_DIR)
+    # Copy to target
+    print(f"Copying {source.name} to {target_name}/...")
+    shutil.copytree(source, target_dir)
 
     # Create a marker file with source info
-    marker = PRODUCTION_DIR / ".source"
+    marker = target_dir / ".source"
     marker.write_text(source.name)
 
-    print("\n✓ Model promoted to production!")
+    print(f"\n✓ Model promoted to {target_name}!")
     print(f"  Source: {source.name}")
-    print(f"  Target: {PRODUCTION_DIR.relative_to(ARTIFACTS_DIR.parent.parent.parent)}")
+    print(f"  Target: src/models/artifacts/{target_name}/")
     print("\nNext steps:")
-    print("  git add src/models/artifacts/production/")
-    print(f"  git commit -m 'Promote {source.name} to production'")
+    print(f"  git add src/models/artifacts/{target_name}/")
+    print(f"  git commit -m 'Promote {source.name} to {target_name}'")
 
 
 def main():
@@ -125,12 +127,17 @@ def main():
         action="store_true",
         help="List available model runs",
     )
+    parser.add_argument(
+        "--name",
+        default="production",
+        help="Target production folder name (default: production). Use 'production_playoffs' for playoff model.",
+    )
     args = parser.parse_args()
 
     if args.list:
         list_runs()
     else:
-        promote(args.run_name)
+        promote(args.run_name, target_name=args.name)
 
 
 if __name__ == "__main__":

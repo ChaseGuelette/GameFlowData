@@ -27,15 +27,15 @@ from src.db.client import get_engine
 
 logger = logging.getLogger(__name__)
 
-# Stat resolution: stat_type -> (table, column) for resolving actual values.
-# For compound stats, column is a SQL expression: used as `s.{column}` in queries,
-# so "h + r + rbi" produces `s.h + r + rbi` (unambiguous with one table alias).
-MLB_STAT_RESOLUTION: dict[str, tuple[str, str]] = {
-    "pitcher_strikeouts": ("mlb_player_game_stats_pitching", "so"),
-    "pitcher_outs":       ("mlb_player_game_stats_pitching", "outs_recorded"),
-    "batter_hits":        ("mlb_player_game_stats_batting",  "h"),
-    "batter_rbis":        ("mlb_player_game_stats_batting",  "rbi"),
-    "batter_hrr":         ("mlb_player_game_stats_batting",  "h + r + rbi"),
+# Stat resolution: stat_type -> (table, columns) for resolving actual values.
+# columns is a list of column names; compound stats use multiple columns summed as
+# `s.col1 + s.col2 + ...` in queries.
+MLB_STAT_RESOLUTION: dict[str, tuple[str, list[str]]] = {
+    "pitcher_strikeouts": ("mlb_player_game_stats_pitching", ["so"]),
+    "pitcher_outs":       ("mlb_player_game_stats_pitching", ["outs_recorded"]),
+    "batter_hits":        ("mlb_player_game_stats_batting",  ["h"]),
+    "batter_rbis":        ("mlb_player_game_stats_batting",  ["rbi"]),
+    "batter_hrr":         ("mlb_player_game_stats_batting",  ["h", "r", "rbi"]),
 }
 
 # DNP detection columns per table
@@ -275,13 +275,14 @@ class MLBPaperTrader:
                 logger.warning(f"No resolution table for stat: {stat_type}")
                 continue
 
-            table_name, column_name = resolution
+            table_name, columns = resolution
+            col_expr = " + ".join(f"s.{c}" for c in columns)
             dnp_col = MLB_DNP_COLUMNS.get(table_name, "did_not_play")
 
             actuals_query = text(f"""
                 SELECT
                     s.player_id,
-                    s.{column_name} as actual_value,
+                    {col_expr} as actual_value,
                     s.{dnp_col} as did_not_play
                 FROM {table_name} s
                 WHERE s.game_date = :game_date

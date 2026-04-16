@@ -392,6 +392,174 @@ RULES:
 - If the user asks about something not covered by the data, say so honestly.`
 }
 
+// --- MLB stat labels ---
+const MLB_STAT_LABELS: Record<string, string> = {
+  pitcher_strikeouts: 'Strikeouts',
+  batter_hits: 'Hits',
+  batter_total_bases: 'Total Bases',
+  batter_home_runs: 'Home Runs',
+  batter_rbis: 'RBI',
+  batter_runs_scored: 'Runs',
+}
+
+// --- MLB system prompt ---
+function buildMlbSystemPrompt(
+  prediction: Prediction,
+  isPitcher: boolean,
+  gameLog: Array<Record<string, unknown>>,
+  rollingAvgs: Record<string, unknown> | null,
+  playerInfo: Record<string, unknown> | null,
+  gameInfo: Record<string, unknown> | null,
+  parkFactors: Record<string, unknown> | null,
+  oppPitcherAvgs: Record<string, unknown> | null,
+  oppPitcherLog: Array<Record<string, unknown>>,
+  oppPitcherInfo: Record<string, unknown> | null,
+  insights: Insight[],
+  bookmakerLines: BookmakerLine[],
+  isOverBet: boolean,
+  edge: number,
+  probability: number,
+): string {
+  const statLabel = MLB_STAT_LABELS[prediction.stat] || prediction.stat
+  const direction = isOverBet ? 'Over' : 'Under'
+
+  // Game log
+  let gameLogSection = 'No recent game data available.'
+  if (gameLog.length > 0) {
+    if (isPitcher) {
+      const rows = gameLog.map((g, i) => {
+        const date = formatShortDate(String(g.game_date || ''))
+        const role = g.is_starter ? 'SP' : 'RP'
+        return `#${String(i + 1).padEnd(3)}${date.padEnd(6)}| ${String(g.ip ?? '-').padEnd(5)} IP | ${g.so ?? '-'} K | ${g.h_allowed ?? '-'} H | ${g.er ?? '-'} ER | ${g.bb ?? '-'} BB | ${g.hr_allowed ?? '-'} HR | ${g.pitches_thrown ?? '-'} P | ${role}`
+      })
+      gameLogSection = `LAST ${gameLog.length} APPEARANCES (most recent first):\n${rows.join('\n')}`
+    } else {
+      const rows = gameLog.map((g, i) => {
+        const date = formatShortDate(String(g.game_date || ''))
+        const spot = g.lineup_position ? ` Lineup #${g.lineup_position}` : ''
+        return `#${String(i + 1).padEnd(3)}${date.padEnd(6)}| ${g.ab ?? '-'} AB | ${g.h ?? '-'} H | ${g.doubles ?? '-'} 2B | ${g.hr ?? '-'} HR | ${g.rbi ?? '-'} RBI | ${g.r ?? '-'} R | ${g.tb ?? '-'} TB | ${g.bb ?? '-'} BB | ${g.so ?? '-'} K | AVG ${Number(g.avg ?? 0).toFixed(3)}${spot}`
+      })
+      gameLogSection = `LAST ${gameLog.length} GAMES (most recent first):\n${rows.join('\n')}`
+    }
+  }
+
+  // Rolling averages
+  let avgSection = ''
+  if (rollingAvgs) {
+    if (isPitcher) {
+      avgSection = `ROLLING AVERAGES (PITCHER):
+  SO: L3=${rollingAvgs.avg_so_l3 ?? '?'} | L5=${rollingAvgs.avg_so_l5 ?? '?'} | SZN=${rollingAvgs.avg_so_szn ?? '?'} (std dev L3: ${rollingAvgs.std_so_l3 ?? '?'})
+  IP: L3=${rollingAvgs.avg_ip_l3 ?? '?'} | L5=${rollingAvgs.avg_ip_l5 ?? '?'} | SZN=${rollingAvgs.avg_ip_szn ?? '?'}
+  ER: L3=${rollingAvgs.avg_er_l3 ?? '?'} | L5=${rollingAvgs.avg_er_l5 ?? '?'}
+  ERA L5: ${rollingAvgs.avg_era_l5 ?? '?'} | WHIP L5: ${rollingAvgs.avg_whip_l5 ?? '?'} | K/9 L5: ${rollingAvgs.avg_k_per_9_l5 ?? '?'} | BB/9 L5: ${rollingAvgs.avg_bb_per_9_l5 ?? '?'}
+  Pitches L5: ${rollingAvgs.avg_pitches_thrown_l5 ?? '?'} | Days rest: ${rollingAvgs.days_rest ?? '?'} | Pitch count last start: ${rollingAvgs.pitch_count_last_start ?? '?'}`
+    } else {
+      avgSection = `ROLLING AVERAGES (BATTER):
+  H: L5=${rollingAvgs.avg_h_l5 ?? '?'} | L10=${rollingAvgs.avg_h_l10 ?? '?'} | SZN=${rollingAvgs.avg_h_szn ?? '?'}
+  HR: L5=${rollingAvgs.avg_hr_l5 ?? '?'} | L10=${rollingAvgs.avg_hr_l10 ?? '?'} | SZN=${rollingAvgs.avg_hr_szn ?? '?'}
+  TB: L5=${rollingAvgs.avg_tb_l5 ?? '?'} | L10=${rollingAvgs.avg_tb_l10 ?? '?'} | SZN=${rollingAvgs.avg_tb_szn ?? '?'}
+  RBI: L5=${rollingAvgs.avg_rbi_l5 ?? '?'} | L10=${rollingAvgs.avg_rbi_l10 ?? '?'} | SZN=${rollingAvgs.avg_rbi_szn ?? '?'}
+  R: L5=${rollingAvgs.avg_r_l5 ?? '?'} | L10=${rollingAvgs.avg_r_l10 ?? '?'} | SZN=${rollingAvgs.avg_r_szn ?? '?'}
+  AB L5: ${rollingAvgs.avg_ab_l5 ?? '?'} | L10: ${rollingAvgs.avg_ab_l10 ?? '?'} | BB L5: ${rollingAvgs.avg_bb_l5 ?? '?'} | SO L5: ${rollingAvgs.avg_so_l5 ?? '?'}
+  AVG L10: ${rollingAvgs.avg_batting_avg_l10 ?? '?'} | OBP: ${rollingAvgs.avg_obp_l10 ?? '?'} | SLG: ${rollingAvgs.avg_slg_l10 ?? '?'} | OPS: ${rollingAvgs.avg_ops_l10 ?? '?'}
+  Rest days: ${rollingAvgs.rest_days ?? '?'} | Games last 7 days: ${rollingAvgs.games_last_7d ?? '?'}`
+    }
+  }
+
+  // Park factors
+  let parkSection = ''
+  if (parkFactors) {
+    const rf = Number(parkFactors.runs_factor ?? 1).toFixed(3)
+    const hrf = Number(parkFactors.hr_factor ?? 1).toFixed(3)
+    const hf = Number(parkFactors.hits_factor ?? 1).toFixed(3)
+    const sof = Number(parkFactors.so_factor ?? 1).toFixed(3)
+    parkSection = `PARK FACTORS (${parkFactors.venue_name || 'Stadium'}, 1.000 = league avg, >1.000 = inflates stat):
+  Runs: ${rf} | HR: ${hrf} | Hits: ${hf} | K: ${sof}`
+  }
+
+  // Game context
+  let gameSection = ''
+  if (gameInfo) {
+    gameSection = `GAME CONTEXT:
+  Venue: ${gameInfo.venue_name || 'Unknown'}
+  Matchup: ${prediction.team_abbrev || '???'} vs ${prediction.opponent_abbrev || '???'}`
+  }
+
+  // Opposing pitcher (for batters only)
+  let oppPitcherSection = ''
+  if (!isPitcher && (oppPitcherAvgs || oppPitcherLog.length > 0)) {
+    const name = oppPitcherInfo?.player_name as string || 'Probable Pitcher'
+    const throws = oppPitcherInfo?.throws as string || '?'
+    const lines = [`OPPOSING PITCHER: ${name} (Throws: ${throws})`]
+    if (oppPitcherAvgs) {
+      lines.push(
+        `  ERA L5: ${oppPitcherAvgs.avg_era_l5 ?? '?'} | WHIP L5: ${oppPitcherAvgs.avg_whip_l5 ?? '?'} | K/9 L5: ${oppPitcherAvgs.avg_k_per_9_l5 ?? '?'} | BB/9 L5: ${oppPitcherAvgs.avg_bb_per_9_l5 ?? '?'}`,
+        `  SO avg: L3=${oppPitcherAvgs.avg_so_l3 ?? '?'} | L5=${oppPitcherAvgs.avg_so_l5 ?? '?'} | IP L5: ${oppPitcherAvgs.avg_ip_l5 ?? '?'} | H allowed L5: ${oppPitcherAvgs.avg_h_allowed_l5 ?? '?'}`,
+        `  Days rest: ${oppPitcherAvgs.days_rest ?? '?'}`,
+      )
+    }
+    if (oppPitcherLog.length > 0) {
+      const startRows = oppPitcherLog.map((g, i) =>
+        `    #${i + 1} ${formatShortDate(String(g.game_date || ''))}: ${g.ip ?? '-'} IP | ${g.so ?? '-'} K | ${g.h_allowed ?? '-'} H | ${g.er ?? '-'} ER | ${g.bb ?? '-'} BB`
+      )
+      lines.push(`  Last ${oppPitcherLog.length} starts:\n${startRows.join('\n')}`)
+    }
+    oppPitcherSection = lines.join('\n')
+  }
+
+  // Sportsbook lines
+  let linesSection = ''
+  if (bookmakerLines.length > 0) {
+    const lineStrs = bookmakerLines.slice(0, 6).map(l =>
+      `  ${l.bookmaker}: Line ${l.line} | Over ${l.over_odds >= 0 ? '+' : ''}${l.over_odds} | Under ${l.under_odds >= 0 ? '+' : ''}${l.under_odds}`
+    )
+    linesSection = `SPORTSBOOK LINES:\n${lineStrs.join('\n')}`
+  }
+
+  // Model prediction
+  const isBinary = prediction.q10 === 0 && prediction.q25 === 0 && prediction.q50 === 0 && prediction.q90 <= 1
+  const quantileSection = isBinary
+    ? `MODEL PREDICTION (Binary — predicts whether player records any ${statLabel.toLowerCase()}):
+  P(${statLabel} ≥ 1): ${(probability * 100).toFixed(1)}% | P(No ${statLabel}): ${((1 - probability) * 100).toFixed(1)}%
+  Bet: ${direction} ${prediction.prop_line} | Edge: ${(edge * 100).toFixed(1)}%`
+    : `MODEL QUANTILE PREDICTIONS:
+  Q10=${prediction.q10} | Q25=${prediction.q25} | Q50=${prediction.q50} | Q75=${prediction.q75} | Q90=${prediction.q90}
+  Prop Line: ${prediction.prop_line} | Direction: ${direction} | Probability: ${(probability * 100).toFixed(1)}% | Edge: ${(edge * 100).toFixed(1)}%`
+
+  // Insights (usually empty for MLB since feat_ fields are NBA-specific)
+  let insightSection = ''
+  if (insights.length > 0) {
+    insightSection = `MODEL INSIGHTS:\n${insights.map(i => `  [${i.sentiment}] ${i.text}`).join('\n')}`
+  }
+
+  const playerPos = playerInfo ? ` | Position: ${playerInfo.primary_position || '?'} | ${isPitcher ? `Throws: ${playerInfo.throws || '?'}` : `Bats: ${playerInfo.bats || '?'}`}` : ''
+
+  const sections = [gameLogSection, avgSection, gameSection, parkSection, oppPitcherSection, quantileSection, linesSection, insightSection].filter(Boolean)
+
+  return `You are a sharp MLB analytics assistant for the GameFlowData platform. The user is analyzing a player prop bet and has questions.
+
+PLAYER: ${prediction.player_name || 'Unknown'} (${prediction.team_abbrev || '???'})${playerPos}
+OPPONENT: ${prediction.opponent_abbrev || '???'}
+STAT: ${statLabel}
+BET: ${direction} ${prediction.prop_line}
+
+${sections.join('\n\n')}
+
+RULES:
+- Only reference data provided above. Do not make up stats or games.
+- Cite specific games, dates, and numbers when relevant.
+- Keep responses to 2-4 short paragraphs.
+- Be direct and analytical. Avoid generic hedging like "it depends on many factors."
+- Use markdown: **bold** for emphasis, bullet points for lists.
+- ${isPitcher
+    ? 'When discussing K trends, cite the SO averages and K/9 rate. Mention days rest, pitch count last start, and whether the range (std dev) is consistent or volatile.'
+    : 'When discussing hit probability, reference both the rolling averages and the OPPOSING PITCHER section. Pitcher handedness, K/9, and ERA are crucial context. For binary stats like HR, note recent HR rate vs historical.'
+  }
+- Park factors above 1.000 inflate that stat vs league average; below 1.000 suppresses it.
+- ${!isPitcher ? 'The opposing pitcher section is critical — a high-K/9 pitcher suppresses hit probability. A low-ERA pitcher is harder to score off.' : 'For pitcher strikeout props, K/9 rate and IP (how long they stay in) are the primary drivers.'}
+- If the user asks about something not covered by the data, say so honestly.`
+}
+
 export async function POST(request: NextRequest) {
   // Auth
   const supabase = await createClient()
@@ -424,6 +592,211 @@ export async function POST(request: NextRequest) {
 
   const { prediction, insights, bookmakerLines, isOverBet, edge, probability } = playerContext
 
+  // --- MLB branch ---
+  const isMlb = prediction.stat.startsWith('batter_') || prediction.stat.startsWith('pitcher_')
+
+  if (isMlb) {
+    const isPitcher = prediction.stat.startsWith('pitcher_')
+
+    // Round 1: parallel base queries
+    const [gameLogRes, rollingAvgRes, playerInfoRes, gameInfoRes] = await Promise.all([
+      isPitcher
+        ? supabase
+            .from('mlb_player_game_stats_pitching')
+            .select('game_date, ip, so, h_allowed, er, bb, hr_allowed, pitches_thrown, is_starter, era')
+            .eq('player_id', prediction.player_id)
+            .eq('did_not_play', false)
+            .order('game_date', { ascending: false })
+            .limit(10)
+        : supabase
+            .from('mlb_player_game_stats_batting')
+            .select('game_date, lineup_position, is_starter, pa, ab, h, doubles, hr, rbi, r, bb, so, tb, avg')
+            .eq('player_id', prediction.player_id)
+            .eq('did_not_play', false)
+            .order('game_date', { ascending: false })
+            .limit(15),
+      isPitcher
+        ? supabase
+            .from('mlb_player_average_pitching')
+            .select('avg_so_l3, avg_so_l5, avg_so_szn, avg_ip_l3, avg_ip_l5, avg_ip_szn, avg_er_l3, avg_er_l5, avg_era_l5, avg_whip_l5, avg_k_per_9_l5, avg_bb_per_9_l5, avg_pitches_thrown_l5, std_so_l3, days_rest, pitch_count_last_start')
+            .eq('player_id', prediction.player_id)
+            .order('game_date', { ascending: false })
+            .limit(1)
+        : supabase
+            .from('mlb_player_average_batting')
+            .select('avg_h_l5, avg_h_l10, avg_h_szn, avg_hr_l5, avg_hr_l10, avg_hr_szn, avg_tb_l5, avg_tb_l10, avg_tb_szn, avg_rbi_l5, avg_rbi_l10, avg_rbi_szn, avg_r_l5, avg_r_l10, avg_r_szn, avg_ab_l5, avg_ab_l10, avg_bb_l5, avg_so_l5, avg_batting_avg_l10, avg_obp_l10, avg_slg_l10, avg_ops_l10, rest_days, games_last_7d')
+            .eq('player_id', prediction.player_id)
+            .order('game_date', { ascending: false })
+            .limit(1),
+      supabase
+        .from('mlb_players')
+        .select('player_name, primary_position, bats, throws')
+        .eq('player_id', prediction.player_id)
+        .limit(1),
+      prediction.game_id
+        ? supabase
+            .from('mlb_game_schedule')
+            .select('home_team_id, away_team_id, venue_id, venue_name, probable_pitcher_home_id, probable_pitcher_away_id')
+            .eq('game_id', prediction.game_id)
+            .limit(1)
+        : Promise.resolve({ data: [], error: null }),
+    ])
+
+    const mlbGameLog = (gameLogRes.data || []) as Array<Record<string, unknown>>
+    const mlbRollingAvgs = (rollingAvgRes.data?.[0] || null) as Record<string, unknown> | null
+    const mlbPlayerInfo = (playerInfoRes.data?.[0] || null) as Record<string, unknown> | null
+    const mlbGameInfo = (gameInfoRes.data?.[0] || null) as Record<string, unknown> | null
+
+    // Round 2: park factors + player team_id + opp pitcher (parallel)
+    let parkFactors: Record<string, unknown> | null = null
+    let oppPitcherAvgs: Record<string, unknown> | null = null
+    let oppPitcherLog: Array<Record<string, unknown>> = []
+    let oppPitcherInfo: Record<string, unknown> | null = null
+
+    if (mlbGameInfo) {
+      const venueId = mlbGameInfo.venue_id as number | null
+
+      // Get player team_id to determine home/away
+      const teamStatTable = isPitcher ? 'mlb_player_game_stats_pitching' : 'mlb_player_game_stats_batting'
+      const playerTeamRes = await supabase
+        .from(teamStatTable)
+        .select('team_id')
+        .eq('player_id', prediction.player_id)
+        .order('game_date', { ascending: false })
+        .limit(1)
+
+      const playerTeamId = playerTeamRes.data?.[0]?.team_id as number | null
+
+      // Determine opposing pitcher id
+      let oppPitcherId: number | null = null
+      if (playerTeamId && !isPitcher) {
+        const isHome = playerTeamId === (mlbGameInfo.home_team_id as number)
+        const homeId = mlbGameInfo.probable_pitcher_home_id as number | null
+        const awayId = mlbGameInfo.probable_pitcher_away_id as number | null
+        oppPitcherId = isHome ? awayId : homeId
+      }
+
+      const [pfRes, oppAvgRes, oppLogRes, oppInfoRes] = await Promise.all([
+        venueId
+          ? supabase
+              .from('mlb_park_factors')
+              .select('runs_factor, hr_factor, hits_factor, so_factor, venue_name')
+              .eq('venue_id', venueId)
+              .order('season', { ascending: false })
+              .limit(1)
+          : Promise.resolve({ data: null, error: null }),
+        oppPitcherId
+          ? supabase
+              .from('mlb_player_average_pitching')
+              .select('avg_so_l3, avg_so_l5, avg_ip_l5, avg_era_l5, avg_whip_l5, avg_k_per_9_l5, avg_bb_per_9_l5, avg_h_allowed_l5, days_rest')
+              .eq('player_id', oppPitcherId)
+              .order('game_date', { ascending: false })
+              .limit(1)
+          : Promise.resolve({ data: null, error: null }),
+        oppPitcherId
+          ? supabase
+              .from('mlb_player_game_stats_pitching')
+              .select('game_date, ip, so, h_allowed, er, bb, pitches_thrown')
+              .eq('player_id', oppPitcherId)
+              .eq('did_not_play', false)
+              .order('game_date', { ascending: false })
+              .limit(5)
+          : Promise.resolve({ data: null, error: null }),
+        oppPitcherId
+          ? supabase
+              .from('mlb_players')
+              .select('player_name, throws')
+              .eq('player_id', oppPitcherId)
+              .limit(1)
+          : Promise.resolve({ data: null, error: null }),
+      ])
+
+      parkFactors = (pfRes.data as Array<Record<string, unknown>> | null)?.[0] ?? null
+      if (oppPitcherId) {
+        oppPitcherAvgs = (oppAvgRes.data as Array<Record<string, unknown>> | null)?.[0] ?? null
+        oppPitcherLog = (oppLogRes.data as Array<Record<string, unknown>> | null) ?? []
+        oppPitcherInfo = (oppInfoRes.data as Array<Record<string, unknown>> | null)?.[0] ?? null
+      }
+    }
+
+    // Build MLB system prompt
+    const mlbSystemPrompt = buildMlbSystemPrompt(
+      prediction,
+      isPitcher,
+      mlbGameLog,
+      mlbRollingAvgs,
+      mlbPlayerInfo,
+      mlbGameInfo,
+      parkFactors,
+      oppPitcherAvgs,
+      oppPitcherLog,
+      oppPitcherInfo,
+      insights,
+      bookmakerLines,
+      isOverBet,
+      edge,
+      probability,
+    )
+
+    // Call Claude
+    const mlbMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+      ...conversationHistory.slice(-5).map(m => ({ role: m.role, content: m.content })),
+      { role: 'user' as const, content: question },
+    ]
+
+    try {
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+      const response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2048,
+        system: mlbSystemPrompt,
+        messages: mlbMessages,
+      })
+
+      const answer = response.content.filter(b => b.type === 'text').map(b => b.text).join('')
+
+      const gameDate = prediction.prediction_date || new Date().toISOString().split('T')[0]
+      const persistPromise = (async () => {
+        try {
+          const { data: convData } = await supabase
+            .from('chat_conversations')
+            .upsert({
+              user_id: user.id,
+              player_id: prediction.player_id,
+              player_name: prediction.player_name || 'Unknown',
+              stat: prediction.stat,
+              game_date: gameDate,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'user_id,player_id,stat,game_date' })
+            .select('id')
+            .single()
+
+          if (convData?.id) {
+            await supabase.from('chat_messages').insert([
+              { conversation_id: convData.id, role: 'user', content: question.trim() },
+              { conversation_id: convData.id, role: 'assistant', content: answer },
+            ])
+          }
+          return convData?.id ?? null
+        } catch (e) {
+          console.error('MLB chat persistence error:', e)
+          return null
+        }
+      })()
+
+      const conversationId = await Promise.race([
+        persistPromise,
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 2000)),
+      ])
+
+      return NextResponse.json({ answer, remaining, conversation_id: conversationId })
+    } catch (err) {
+      console.error('MLB Anthropic API error:', err)
+      return NextResponse.json({ error: 'Failed to generate response. Please try again.', remaining }, { status: 500 })
+    }
+  }
+
+  // --- NBA branch (unchanged) ---
   const oppAbbrev = prediction.opponent_abbrev || prediction.feat_opp_team_abbrev
 
   // --- Data enrichment: 5 parallel queries ---

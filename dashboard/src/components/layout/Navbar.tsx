@@ -92,6 +92,9 @@ export function Navbar() {
               <Link href="/performance" className={navLinkClasses('/performance')}>
                 Performance
               </Link>
+              <Link href="/track-record" className={navLinkClasses('/track-record')}>
+                Track Record
+              </Link>
               {config.features.statsVault && (
                 <Link href="/stats" className={navLinkClasses('/stats')}>
                   Data Vault
@@ -169,6 +172,9 @@ export function Navbar() {
           </Link>
           <Link href="/performance" className={mobileNavLinkClasses('/performance')}>
             Performance
+          </Link>
+          <Link href="/track-record" className={mobileNavLinkClasses('/track-record')}>
+            Track Record
           </Link>
           {config.features.statsVault && (
             <Link href="/stats" className={mobileNavLinkClasses('/stats')}>
