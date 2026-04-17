@@ -304,6 +304,14 @@ class KalshiPaperTrader:
             else:
                 continue
 
+            # Per-stat direction restriction (matches daily runner allowed_directions)
+            if sport == "mlb":
+                from src.models.mlb.mlb_stat_config import MLB_STATS as _MLB_STATS
+                _allowed = _MLB_STATS.get(stat_type, {}).get("allowed_directions", ["over", "under"])
+                _direction = "over" if side == "yes" else "under"
+                if _direction not in _allowed:
+                    continue
+
             # Same-run dedup: keep best edge per (player_id, stat_type)
             if pos_key in run_candidates and edge <= run_candidates[pos_key]["fee_adjusted_edge"]:
                 continue
@@ -766,6 +774,7 @@ class KalshiPaperTrader:
                     FROM {table} s
                     WHERE s.game_date = :game_date
                       AND s.player_id IS NOT NULL
+                      AND s.min > 0
                 """)
 
                 with self.engine.connect() as conn:

@@ -870,11 +870,26 @@ class MLBDailyPredictionRunner:
                 predictions_df.at[idx, "bl_over_edge"] = bl_over_edge
                 predictions_df.at[idx, "bl_under_edge"] = bl_under_edge
 
-                # Use per-stat edge threshold
+                # Use per-stat edge threshold and allowed_directions
                 stat_config = MLB_STATS.get(stat, {})
                 edge_threshold = stat_config.get("edge_threshold", 0.08)
-                max_bl_edge = max(bl_over_edge, bl_under_edge)
-                if max_bl_edge >= edge_threshold:
+                allowed_dirs = stat_config.get("allowed_directions")
+
+                # Pick the best direction, then fall back if restricted
+                if bl_over_edge >= bl_under_edge:
+                    best_dir, best_edge = "over", bl_over_edge
+                else:
+                    best_dir, best_edge = "under", bl_under_edge
+
+                if allowed_dirs and best_dir not in allowed_dirs:
+                    other_dir = "under" if best_dir == "over" else "over"
+                    other_edge = bl_under_edge if best_dir == "over" else bl_over_edge
+                    if other_dir in allowed_dirs:
+                        best_dir, best_edge = other_dir, other_edge
+                    else:
+                        best_edge = -1  # No allowed direction has edge
+
+                if best_edge >= edge_threshold:
                     predictions_df.at[idx, "is_recommended"] = True
                     recommended_count += 1
 

@@ -96,14 +96,13 @@ class TestPaperTraderBetSelection:
 
     @patch("src.paper_trading.paper_trader.get_engine")
     def test_select_bets_over_direction(self, mock_get_engine):
-        """Test bet selection chooses over when over_edge is higher."""
+        """Test bet selection chooses over when bl_over_edge is higher."""
         mock_engine = MagicMock()
         mock_get_engine.return_value = mock_engine
 
-        # Mock the database queries
+        # Simulates DB returning is_recommended=True rows with BL probs
         predictions_df = pd.DataFrame([{
             "prediction_id": 1,
-            "prediction_date": date(2024, 1, 15),
             "player_id": 101,
             "player_name": "Test Player",
             "game_id": "0022400001",
@@ -111,12 +110,12 @@ class TestPaperTraderBetSelection:
             "line": 20.5,
             "over_odds": -110.0,
             "under_odds": -110.0,
-            "over_prob": 0.62,
-            "under_prob": 0.38,
+            "bl_over_prob": 0.62,
+            "bl_under_prob": 0.38,
+            "bl_over_edge": 0.10,  # Higher BL edge → over
+            "bl_under_edge": -0.10,
             "implied_over": 0.52,
             "implied_under": 0.48,
-            "over_edge": 0.10,  # Higher edge
-            "under_edge": -0.10,
         }])
 
         bankroll_result = MagicMock()
@@ -132,23 +131,21 @@ class TestPaperTraderBetSelection:
         mock_engine.connect = mock_connect
 
         with patch("pandas.read_sql", return_value=predictions_df):
-            # Disable BL blending to test raw edge selection
-            trader = PaperTrader(edge_threshold=0.05, bl_tau=None)
+            trader = PaperTrader()
             bets = trader.select_bets(date(2024, 1, 15))
 
         assert len(bets) == 1
         assert bets[0]["bet_direction"] == "over"
-        assert bets[0]["edge"] == 0.10
+        assert bets[0]["edge"] == pytest.approx(0.10)
 
     @patch("src.paper_trading.paper_trader.get_engine")
     def test_select_bets_under_direction(self, mock_get_engine):
-        """Test bet selection chooses under when under_edge is higher."""
+        """Test bet selection chooses under when bl_under_edge is higher."""
         mock_engine = MagicMock()
         mock_get_engine.return_value = mock_engine
 
         predictions_df = pd.DataFrame([{
             "prediction_id": 1,
-            "prediction_date": date(2024, 1, 15),
             "player_id": 101,
             "player_name": "Test Player",
             "game_id": "0022400001",
@@ -156,12 +153,12 @@ class TestPaperTraderBetSelection:
             "line": 8.5,
             "over_odds": -110.0,
             "under_odds": -110.0,
-            "over_prob": 0.42,
-            "under_prob": 0.58,
+            "bl_over_prob": 0.42,
+            "bl_under_prob": 0.58,
+            "bl_over_edge": -0.10,
+            "bl_under_edge": 0.10,  # Higher BL edge → under
             "implied_over": 0.52,
             "implied_under": 0.48,
-            "over_edge": -0.10,
-            "under_edge": 0.10,  # Higher edge
         }])
 
         bankroll_result = MagicMock()
@@ -177,37 +174,25 @@ class TestPaperTraderBetSelection:
         mock_engine.connect = mock_connect
 
         with patch("pandas.read_sql", return_value=predictions_df):
-            # Disable BL blending to test raw edge selection
-            trader = PaperTrader(edge_threshold=0.05, bl_tau=None)
+            trader = PaperTrader()
             bets = trader.select_bets(date(2024, 1, 15))
 
         assert len(bets) == 1
         assert bets[0]["bet_direction"] == "under"
-        assert bets[0]["edge"] == 0.10
+        assert bets[0]["edge"] == pytest.approx(0.10)
 
     @patch("src.paper_trading.paper_trader.get_engine")
-    def test_select_bets_filters_no_edge(self, mock_get_engine):
-        """Test bet selection filters out predictions without sufficient edge."""
+    def test_select_bets_no_recommended(self, mock_get_engine):
+        """Test bet selection returns empty when no is_recommended rows exist."""
         mock_engine = MagicMock()
         mock_get_engine.return_value = mock_engine
 
-        predictions_df = pd.DataFrame([{
-            "prediction_id": 1,
-            "prediction_date": date(2024, 1, 15),
-            "player_id": 101,
-            "player_name": "Test Player",
-            "game_id": "0022400001",
-            "stat": "ast",
-            "line": 5.5,
-            "over_odds": -110.0,
-            "under_odds": -110.0,
-            "over_prob": 0.53,
-            "under_prob": 0.47,
-            "implied_over": 0.52,
-            "implied_under": 0.48,
-            "over_edge": 0.01,  # Below threshold
-            "under_edge": -0.01,
-        }])
+        # DB returns empty DataFrame (no is_recommended=True rows)
+        empty_df = pd.DataFrame(columns=[
+            "prediction_id", "player_id", "player_name", "game_id", "stat",
+            "line", "over_odds", "under_odds", "bl_over_prob", "bl_under_prob",
+            "bl_over_edge", "bl_under_edge", "implied_over", "implied_under",
+        ])
 
         bankroll_result = MagicMock()
         bankroll_result.fetchone.return_value = (10000.0,)
@@ -221,11 +206,11 @@ class TestPaperTraderBetSelection:
 
         mock_engine.connect = mock_connect
 
-        with patch("pandas.read_sql", return_value=predictions_df):
-            trader = PaperTrader(edge_threshold=0.05)
+        with patch("pandas.read_sql", return_value=empty_df):
+            trader = PaperTrader()
             bets = trader.select_bets(date(2024, 1, 15))
 
-        assert len(bets) == 0  # No bets meet threshold
+        assert len(bets) == 0  # No recommended predictions
 
 
 class TestPaperTraderResolution:

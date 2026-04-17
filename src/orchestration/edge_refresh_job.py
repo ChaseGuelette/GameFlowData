@@ -64,10 +64,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("EdgeRefreshJob")
 
-# BL constants (must match daily_runner.py)
-DEFAULT_BL_TAU = 0.5
-DEFAULT_BL_Z_MAX = 1.0
-DEFAULT_BL_EDGE_THRESHOLD = 0.09
+# BL constants — must match daily_runner.py exactly
+# Regular season: tau=0.5, z_max=1.0, mw=0.5, edge=0.09
+# Playoffs:       tau=0.9, z_max=0.25, mw=0.8, edge=0.12
+_PLAYOFF_MODE = os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes")
+
+DEFAULT_BL_TAU = 0.9 if _PLAYOFF_MODE else 0.5
+DEFAULT_BL_Z_MAX = 0.25 if _PLAYOFF_MODE else 1.0
+DEFAULT_BL_MAX_WEIGHT = 0.8 if _PLAYOFF_MODE else 0.5
+DEFAULT_BL_EDGE_THRESHOLD = 0.12 if _PLAYOFF_MODE else 0.09
+
+# Sanity check thresholds (must match daily_runner.py)
+MAX_Q50_DIVERGENCE = 0.30
+L5_ABOVE_LINE_MARGIN = 0.0
 
 # STAT_TO_MARKET and MARKET_TO_STAT imported from src.config.combo_config
 
@@ -587,7 +596,7 @@ def recalculate_edges(
     df["bl_confidence"] = None
     df["is_recommended"] = False
 
-    bl_config = BLConfig(tau=DEFAULT_BL_TAU, z_max=DEFAULT_BL_Z_MAX)
+    bl_config = BLConfig(tau=DEFAULT_BL_TAU, z_max=DEFAULT_BL_Z_MAX, max_weight=DEFAULT_BL_MAX_WEIGHT)
     blender = BlackLittermanBlender(config=bl_config)
 
     bl_computed = 0
@@ -625,8 +634,37 @@ def recalculate_edges(
 
             max_bl_edge = max(bl_over_edge, bl_under_edge)
             if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
-                df.at[idx, "is_recommended"] = True
-                recommended_count += 1
+                # Sanity checks for under recommendations (must match daily_runner.py)
+                skip = False
+                rec_direction = "under" if bl_under_edge > bl_over_edge else "over"
+                if rec_direction == "under":
+                    feat_l5 = row.get("feat_player_avg_stat_l5")
+                    pred_q50 = row.get("pred_q50")
+                    line_val = row.get("line")
+
+                    # Check 1: Q50 divergence
+                    if pd.notna(feat_l5) and pd.notna(pred_q50) and feat_l5 > 0:
+                        divergence = (feat_l5 - pred_q50) / feat_l5
+                        if divergence > MAX_Q50_DIVERGENCE:
+                            logger.warning(
+                                f"SANITY CHECK [Q50]: Skipping {row.get('player_name', '?')} "
+                                f"{row['stat']} under rec — Q50={pred_q50:.1f} is "
+                                f"{divergence:.0%} below L5={feat_l5:.1f}"
+                            )
+                            skip = True
+
+                    # Check 2: L5 above line
+                    if not skip and pd.notna(feat_l5) and feat_l5 > 0 and pd.notna(line_val) and line_val > 0:
+                        if feat_l5 >= line_val * (1 + L5_ABOVE_LINE_MARGIN):
+                            logger.warning(
+                                f"SANITY CHECK [L5>LINE]: Skipping {row.get('player_name', '?')} "
+                                f"{row['stat']} under rec — L5 avg={feat_l5:.1f} >= line={line_val:.1f}"
+                            )
+                            skip = True
+
+                if not skip:
+                    df.at[idx, "is_recommended"] = True
+                    recommended_count += 1
 
         bl_computed += 1
 
@@ -978,6 +1016,11 @@ def main():
     logger.info("=" * 60)
     logger.info(f"EDGE REFRESH JOB START: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"Target Date: {target_date} | Stats: {args.stats}")
+    logger.info(
+        f"BL Config: tau={DEFAULT_BL_TAU}, z_max={DEFAULT_BL_Z_MAX}, "
+        f"mw={DEFAULT_BL_MAX_WEIGHT}, edge={DEFAULT_BL_EDGE_THRESHOLD} "
+        f"({'PLAYOFF' if _PLAYOFF_MODE else 'regular season'})"
+    )
     logger.info("=" * 60)
 
     try:

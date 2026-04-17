@@ -24,6 +24,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
+from src.models.mlb.mlb_stat_config import MLB_STATS
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,7 @@ class MLBPaperTrader:
             FROM mlb_daily_predictions
             WHERE prediction_date = :game_date
               AND is_recommended = true
+              AND stat IN ('pitcher_strikeouts', 'batter_hits', 'batter_rbis')
               AND line IS NOT NULL
               AND bl_over_edge IS NOT NULL
               AND bl_under_edge IS NOT NULL
@@ -177,14 +179,27 @@ class MLBPaperTrader:
             bl_over_edge = float(row["bl_over_edge"])
             bl_under_edge = float(row["bl_under_edge"])
 
+            # Determine direction respecting allowed_directions from config
+            stat = str(row["stat"])
+            allowed_dirs = MLB_STATS.get(stat, {}).get("allowed_directions")
+
             if bl_over_edge >= bl_under_edge:
-                direction = "over"
+                raw_dir = "over"
+            else:
+                raw_dir = "under"
+
+            if allowed_dirs and raw_dir not in allowed_dirs:
+                # Override to the allowed direction
+                direction = "under" if raw_dir == "over" else "over"
+            else:
+                direction = raw_dir
+
+            if direction == "over":
                 edge = bl_over_edge
                 odds = int(over_odds)
                 model_prob = float(row["bl_over_prob"])
                 implied_prob = float(row["implied_over"])
             else:
-                direction = "under"
                 edge = bl_under_edge
                 odds = int(under_odds)
                 model_prob = float(row["bl_under_prob"])

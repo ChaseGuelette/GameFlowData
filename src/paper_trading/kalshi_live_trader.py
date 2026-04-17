@@ -438,6 +438,14 @@ class KalshiLiveTrader:
             else:
                 continue
 
+            # Per-stat direction restriction (matches daily runner allowed_directions)
+            if sport == "mlb":
+                from src.models.mlb.mlb_stat_config import MLB_STATS as _MLB_STATS
+                _allowed = _MLB_STATS.get(stat_type, {}).get("allowed_directions", ["over", "under"])
+                _direction = "over" if side == "yes" else "under"
+                if _direction not in _allowed:
+                    continue
+
             # Same-run dedup: keep best edge per (player_id, stat_type)
             if pos_key in run_candidates and edge <= run_candidates[pos_key]["fee_adjusted_edge"]:
                 continue
@@ -465,7 +473,7 @@ class KalshiLiveTrader:
         # Second pass: Kelly size and apply exposure/balance caps
         trades: list[dict[str, Any]] = []
 
-        for pos_key, cand in run_candidates.items():
+        for pos_key, cand in sorted(run_candidates.items(), key=lambda kv: kv[1]["fee_adjusted_edge"], reverse=True):
             ticker = cand["ticker"]
             side = cand["side"]
             yes_price = cand["yes_price"]
@@ -912,6 +920,7 @@ class KalshiLiveTrader:
                         SELECT s.player_id, ({col_expr}) as actual_value
                         FROM {table} s
                         WHERE s.game_date = :game_date AND s.player_id IS NOT NULL
+                          AND s.min > 0
                     """), {"game_date": game_date}).fetchall()
                 for row in rows:
                     actuals[(int(row[0]), stat_type)] = float(row[1]) if row[1] is not None else None

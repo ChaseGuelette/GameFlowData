@@ -16,6 +16,7 @@ Usage:
 import argparse
 import gzip
 import logging
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -224,9 +225,25 @@ class KalshiEdgeCalculator:
         for (pid, gid, stat), samples in samples_dict.items():
             player_samples.setdefault(pid, []).append((gid, stat, samples))
 
-        # BL blender — same config as proven NBA Model Picks (tau=0.5, z_max=1.0)
-        bl_config = BLConfig(tau=0.5, z_max=1.0)
-        blender = BlackLittermanBlender(config=bl_config)
+        # BL blenders — per-stat configs matching the daily runners exactly.
+        # MLB: per-stat optimized configs from STAT_BL_CONFIGS (mlb_stat_config.py)
+        # NBA: playoff-aware config matching daily_runner.py (NBA_PLAYOFF_MODE env var)
+        if sport == "mlb":
+            from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, STAT_BL_CONFIGS
+            stat_blenders: dict[str, BlackLittermanBlender] = {
+                stat: BlackLittermanBlender(config=cfg)
+                for stat, cfg in STAT_BL_CONFIGS.items()
+            }
+            default_blender = BlackLittermanBlender(config=DEFAULT_BL_CONFIG)
+        else:
+            # NBA: regular season tau=0.5/z_max=1.0/mw=0.5; playoffs tau=0.9/z_max=0.25/mw=0.8
+            _playoff = os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes")
+            if _playoff:
+                _bl_cfg = BLConfig(tau=0.9, z_max=0.25, max_weight=0.8)
+            else:
+                _bl_cfg = BLConfig(tau=0.5, z_max=1.0, max_weight=0.5)
+            stat_blenders = {}
+            default_blender = BlackLittermanBlender(config=_bl_cfg)
 
         updates = []
 
@@ -295,21 +312,24 @@ class KalshiEdgeCalculator:
             line_diff = (line - sb_line) if sb_line is not None else None
 
             # --- Black-Litterman blending ---
+            # Select the per-stat blender (MLB uses per-stat configs; NBA uses sport-level config)
+            _blender = stat_blenders.get(market_stat, default_blender)
+
             # 1. Get market prior (sportsbook devigged, or Kalshi fallback)
             sb_odds = self._find_sportsbook_odds(pid, market_stat, target_date, sport)
             if sb_odds:
                 over_odds, under_odds, _sb_line = sb_odds
-                market_over, _market_under = blender.devig(over_odds, under_odds)
+                market_over, _market_under = _blender.devig(over_odds, under_odds)
             else:
                 market_over = kalshi_implied
 
             # 2. model_prob_over already computed with correct >= logic above
 
             # 3. Confidence from MC samples
-            bl_confidence = blender.compute_confidence(matched_samples, line)
+            bl_confidence = _blender.compute_confidence(matched_samples, line)
 
             # 4. Blend in log-odds space
-            bl_prob_over = blender.blend(model_prob_over, market_over, bl_confidence)
+            bl_prob_over = _blender.blend(model_prob_over, market_over, bl_confidence)
 
             # 5. BL fee-adjusted edge (best side, taker)
             bl_taker_edge_yes = fee_adjusted_edge(bl_prob_over, yes_price, is_yes=True, is_maker=False)

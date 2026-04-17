@@ -36,4 +36,5 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-028]] - Polymarket-Kalshi Arbitrage Scanner: full pipeline (scraper, matcher, scanner, job), 2 DB tables, Discord alerts, Railway env var
 - [[handoff-029]] - Track Record page (migration 026, CSV import, 5 components, hook, page, navbar link) + History page edit/delete for all bet statuses
 - [[handoff-030]] - Backtesting 55x speedup docs, MLB sweep fast path, playoff model deployed (tau=0.9/z_max=0.25/mw=0.8/edge=0.12, +19.3% ROI OOS), NBA_PLAYOFF_MODE=true on Railway
+- [[handoff-031]] - Kalshi game-level arb pipeline activated: KALSHI_GAME_SERIES populated (27 series via /events API), 4 bugs fixed, MIN_KALSHI_BID=3c filter, 29 clean pure arbs from 203 matched pairs
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

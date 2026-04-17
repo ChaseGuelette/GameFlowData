@@ -209,12 +209,11 @@ class PaperTrader:
 
     def select_bets(self, game_date: date) -> list[dict[str, Any]]:
         """
-        Query daily_predictions for game_date, filter by edge threshold,
-        and calculate Kelly stakes.
+        Select bets matching exactly what the Model Picks page shows.
 
-        Uses stored BL-blended edges (bl_over_edge/bl_under_edge) computed by
-        the inference_job and edge_refresh_job. Falls back to raw Monte Carlo
-        edges when BL values are not in the DB.
+        Queries daily_predictions for rows with is_recommended=True and uses
+        stored BL edges/probs. Direction is whichever of bl_over_edge /
+        bl_under_edge is higher (mirrors inference/edge_refresh logic).
 
         Skips games that have already started (no live betting).
 
@@ -227,11 +226,10 @@ class PaperTrader:
         if started_game_ids:
             logger.info(f"Excluding {len(started_game_ids) // 2} started games from bet selection")
 
-        # Query predictions including stored BL values
+        # Query only is_recommended predictions with BL values present
         query = text("""
             SELECT
                 id as prediction_id,
-                prediction_date,
                 player_id,
                 player_name,
                 game_id,
@@ -239,20 +237,18 @@ class PaperTrader:
                 line,
                 over_odds,
                 under_odds,
-                over_prob,
-                under_prob,
-                implied_over,
-                implied_under,
-                over_edge,
-                under_edge,
                 bl_over_prob,
                 bl_under_prob,
                 bl_over_edge,
-                bl_under_edge
+                bl_under_edge,
+                implied_over,
+                implied_under
             FROM daily_predictions
             WHERE prediction_date = :game_date
-              AND stat IN ('pts', 'reb', 'ast', 'pra', 'pr', 'pa', 'ra')
+              AND is_recommended = true
               AND line IS NOT NULL
+              AND bl_over_edge IS NOT NULL
+              AND bl_under_edge IS NOT NULL
             ORDER BY player_name, stat
         """)
 
@@ -260,113 +256,63 @@ class PaperTrader:
             df = pd.read_sql(query, conn, params={"game_date": game_date})
 
         if df.empty:
-            logger.warning(f"No predictions found for {game_date}")
+            logger.warning(f"No recommended predictions found for {game_date}")
             return []
 
         bets = []
         skipped_live = 0
         for _, row in df.iterrows():
-            stat = str(row["stat"])
-            threshold = self._get_edge_threshold(stat)
             game_id = str(row["game_id"])
-            line = float(row["line"]) if pd.notna(row["line"]) else None
 
             # Skip games already in progress
             if game_id in started_game_ids or game_id.lstrip("0") in started_game_ids:
                 skipped_live += 1
                 continue
 
-            if line is None:
-                continue
-
             over_odds = row["over_odds"]
             under_odds = row["under_odds"]
-
-            # Skip if missing odds
             if pd.isna(over_odds) or pd.isna(under_odds):
                 continue
 
-            over_odds = int(over_odds)
-            under_odds = int(under_odds)
+            bl_over_edge = float(row["bl_over_edge"])
+            bl_under_edge = float(row["bl_under_edge"])
 
-            # Use stored BL edges when available (computed by inference/edge_refresh job),
-            # fall back to raw Monte Carlo edges otherwise
-            bl_over = row.get("bl_over_edge")
-            bl_under = row.get("bl_under_edge")
-            if pd.notna(bl_over) and pd.notna(bl_under):
-                over_edge = float(bl_over)
-                under_edge = float(bl_under)
-                bl_over_prob = row.get("bl_over_prob")
-                bl_under_prob = row.get("bl_under_prob")
-                over_prob = float(bl_over_prob) if pd.notna(bl_over_prob) else (
-                    float(row["implied_over"]) + over_edge if pd.notna(row.get("implied_over")) else 0.5
-                )
-                under_prob = float(bl_under_prob) if pd.notna(bl_under_prob) else (
-                    float(row["implied_under"]) + under_edge if pd.notna(row.get("implied_under")) else 0.5
-                )
-                implied_over = float(row["implied_over"]) if pd.notna(row.get("implied_over")) else 0.5
-                implied_under = float(row["implied_under"]) if pd.notna(row.get("implied_under")) else 0.5
-            else:
-                # No BL computed — use raw stored values
-                over_edge = float(row["over_edge"]) if pd.notna(row.get("over_edge")) else 0
-                under_edge = float(row["under_edge"]) if pd.notna(row.get("under_edge")) else 0
-                over_prob = float(row["over_prob"]) if pd.notna(row.get("over_prob")) else 0.5
-                under_prob = float(row["under_prob"]) if pd.notna(row.get("under_prob")) else 0.5
-                implied_over = float(row["implied_over"]) if pd.notna(row.get("implied_over")) else 0.5
-                implied_under = float(row["implied_under"]) if pd.notna(row.get("implied_under")) else 0.5
-
-            # Select the direction with higher edge that meets threshold
-            direction = None
-            edge = 0.0
-            odds = 0
-            model_prob = 0.0
-            implied_prob = 0.0
-
-            if over_edge > under_edge and over_edge >= threshold:
+            if bl_over_edge >= bl_under_edge:
                 direction = "over"
-                edge = over_edge
-                odds = over_odds
-                model_prob = over_prob
-                implied_prob = implied_over
-            elif under_edge >= threshold:
+                edge = bl_over_edge
+                odds = int(over_odds)
+                model_prob = float(row["bl_over_prob"]) if pd.notna(row["bl_over_prob"]) else 0.5
+                implied_prob = float(row["implied_over"]) if pd.notna(row["implied_over"]) else 0.5
+            else:
                 direction = "under"
-                edge = under_edge
-                odds = under_odds
-                model_prob = under_prob
-                implied_prob = implied_under
+                edge = bl_under_edge
+                odds = int(under_odds)
+                model_prob = float(row["bl_under_prob"]) if pd.notna(row["bl_under_prob"]) else 0.5
+                implied_prob = float(row["implied_under"]) if pd.notna(row["implied_under"]) else 0.5
 
-            if direction is None:
-                continue
-
-            # Filter extreme odds
-            if pd.isna(odds) or odds < self.min_odds or odds > self.max_odds:
-                continue
-
-            # Calculate stake
             stake = self._calculate_kelly_stake(odds, model_prob, bankroll)
             if stake <= 0:
                 continue
 
-            bet = {
+            bets.append({
                 "prediction_id": int(row["prediction_id"]),
                 "game_date": game_date,
                 "player_id": int(row["player_id"]),
                 "player_name": row["player_name"],
-                "stat_type": row["stat"],
+                "stat_type": str(row["stat"]),
                 "line": float(row["line"]),
                 "bet_direction": direction,
                 "odds_at_bet": float(odds),
-                "implied_prob": float(implied_prob),
-                "model_prob": float(model_prob),
-                "edge": float(edge),
+                "implied_prob": implied_prob,
+                "model_prob": model_prob,
+                "edge": edge,
                 "stake": round(stake, 2),
                 "kelly_fraction": self.kelly_fraction,
-            }
-            bets.append(bet)
+            })
 
         if skipped_live > 0:
             logger.info(f"Skipped {skipped_live} predictions for games already in progress")
-        logger.info(f"Selected {len(bets)} bets for {game_date}")
+        logger.info(f"Selected {len(bets)} bets for {game_date} (is_recommended=True)")
         return bets
 
     def place_bets(self, bets: list[dict[str, Any]]) -> int:
