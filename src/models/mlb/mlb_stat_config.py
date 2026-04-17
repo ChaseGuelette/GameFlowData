@@ -18,8 +18,8 @@ MLB_STATS: dict[str, dict] = {
     # NegBin stats (discrete counts — overdispersed)
     "batter_rbis": {"model_type": "negbin", "edge_threshold": 0.08, "allowed_directions": ["over"]},
     # Combined batter offensive contribution: hits + runs scored + RBIs
-    # Targets Kalshi's H+R+RBI prop markets (Kalshi-only, no sportsbook equivalent)
-    "batter_hrr": {"model_type": "negbin", "edge_threshold": 0.10},
+    # Sportsbook market: batter_hits_runs_rbis (DK/FD/etc). Backtest: 270 bets, +19.76% ROI, Sharpe 2.32
+    "batter_hrr": {"model_type": "negbin", "edge_threshold": 0.15},
 }
 
 # Per-stat optimal BL configs from backtest sweeps.
@@ -28,6 +28,7 @@ STAT_BL_CONFIGS: dict[str, BLConfig] = {
     "pitcher_strikeouts": BLConfig(tau=0.9, z_max=0.25, max_weight=0.80),
     "batter_hits": BLConfig(tau=0.75, z_max=1.0, max_weight=0.80),
     "batter_rbis": BLConfig(tau=0.9, z_max=0.5, max_weight=0.65),
+    "batter_hrr": BLConfig(tau=0.9, z_max=0.25, max_weight=0.65),
 }
 
 # Fallback BL config for stats without a sweep-optimized config
