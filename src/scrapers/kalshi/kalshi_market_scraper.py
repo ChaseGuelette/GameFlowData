@@ -625,12 +625,25 @@ def scrape_and_store(
         logger.info("=== DRY RUN -- parsed markets ===")
         for m in parsed_markets:
             mid_p = kalshi_mid_to_prob(m.get("yes_bid", 0), m.get("yes_ask", 0))
-            logger.info(
-                f"  {m['player_name']:25s} | {m['stat_type']:20s} | "
-                f"line={m['line']:5.1f} | YES={m.get('yes_price', 0):3d}c | "
-                f"mid={mid_p:.1%} | vol={m.get('volume', 0):5d} | "
-                f"pid={'linked' if m.get('player_id') else 'UNLINKED'}"
-            )
+            if m.get("player_name") is not None:
+                # Player prop market
+                line_val = m.get("line") or 0
+                logger.info(
+                    f"  {m['player_name']:25s} | {m['stat_type']:20s} | "
+                    f"line={line_val:5.1f} | YES={m.get('yes_price', 0):3d}c | "
+                    f"mid={mid_p:.1%} | vol={m.get('volume', 0):5d} | "
+                    f"pid={'linked' if m.get('player_id') else 'UNLINKED'}"
+                )
+            else:
+                # Game-level market
+                t1 = m.get("team1") or "?"
+                t2 = m.get("team2") or "?"
+                mtype = m.get("market_type", "game")
+                logger.info(
+                    f"  [{mtype:12s}] {t1:4s} vs {t2:4s} | "
+                    f"YES={m.get('yes_price', 0):3d}c | mid={mid_p:.1%} | "
+                    f"vol={m.get('volume', 0):5d} | {m.get('market_title', '')[:50]}"
+                )
     else:
         stored = store_markets(engine, parsed_markets, snapshot_time)
         stats["stored"] = stored

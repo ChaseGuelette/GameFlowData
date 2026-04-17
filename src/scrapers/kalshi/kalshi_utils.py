@@ -31,10 +31,7 @@ KALSHI_STAT_MAP: dict[str, str] = {
     "K": "pitcher_strikeouts",
     "HITS": "batter_hits",
     "RBI": "batter_rbis",
-    # TODO: confirm Kalshi's exact ticker key for H+R+RBI markets
-    # Find it by looking at a live HRR market ticker on Kalshi (e.g., KXMLBHRR-26APR12...)
-    # and reading the middle segment after "KXMLB" — that key goes here.
-    "HRR": "batter_hrr",
+    "HRR": "batter_hrr",  # Confirmed: KXMLBHRR series is live (8 events as of Apr 2026)
 }
 
 # Reverse map: our stat keys → Kalshi ticker stat keys
@@ -63,10 +60,7 @@ KALSHI_PROP_SERIES: dict[str, dict[str, str]] = {
     "mlb": {
         "KXMLBHIT": "batter_hits",
         "KXMLBKS": "pitcher_strikeouts",
-        # TODO: verify the real Kalshi series ticker for H+R+RBI markets.
-        # Find a live HRR market on Kalshi, check the ticker prefix (e.g., KXMLBHRR-26APR12...).
-        # Update "KXMLBHRR" below with the confirmed prefix before deploying.
-        "KXMLBHRR": "batter_hrr",
+        "KXMLBHRR": "batter_hrr",  # Confirmed live: 8 events as of Apr 2026
     },
 }
 
@@ -77,21 +71,70 @@ for _sport, _series_map in KALSHI_PROP_SERIES.items():
 
 # ---------------------------------------------------------------------------
 # Game-Level Series: sport/outcome markets (moneyline, NRFI, totals, futures)
-# Populated after running kalshi_discovery.py locally.
+# Confirmed via /events API enumeration on 2026-04-16.
 # Format: series_ticker -> {"market_type": ..., "sport": ...}
-#
-# TODO: Run `python -m src.scrapers.kalshi.kalshi_discovery --output discovery.json`
-# and populate this dict with the game-level series discovered.
-# Examples of likely series tickers (confirm via discovery script):
-#   "KXMLBNRFI":    {"market_type": "nrfi",          "sport": "mlb"},
-#   "KXMLBML":      {"market_type": "moneyline",      "sport": "mlb"},
-#   "KXNBA":        {"market_type": "season_future",  "sport": "nba"},
-#   "KXMLB":        {"market_type": "season_future",  "sport": "mlb"},
 # ---------------------------------------------------------------------------
 
 KALSHI_GAME_SERIES: dict[str, dict[str, str]] = {
-    # series_ticker -> {market_type, sport}
-    # Populated after kalshi_discovery.py run — see TODO above.
+    # -----------------------------------------------------------------------
+    # MLB — Game outcomes
+    # -----------------------------------------------------------------------
+    "KXMLBGAME":     {"market_type": "moneyline",     "sport": "mlb"},  # Game winner (45 events)
+    "KXMLBRFI":      {"market_type": "yrfi",           "sport": "mlb"},  # First inning run YES/NO (45 events)
+    "KXMLBTOTAL":    {"market_type": "total",          "sport": "mlb"},  # Game total runs (11 events)
+    "KXMLBSPREAD":   {"market_type": "spread",         "sport": "mlb"},  # Run line (11 events)
+    "KXMLBTEAMTOTAL": {"market_type": "team_total",   "sport": "mlb"},  # Team total runs (11 events)
+    "KXMLBF5":       {"market_type": "f5_moneyline",   "sport": "mlb"},  # First 5 innings winner (11 events)
+    "KXMLBF5SPREAD": {"market_type": "f5_spread",      "sport": "mlb"},  # First 5 innings spread (11 events)
+    "KXMLBF5TOTAL":  {"market_type": "f5_total",       "sport": "mlb"},  # First 5 innings total (11 events)
+    # -----------------------------------------------------------------------
+    # MLB — Season futures
+    # -----------------------------------------------------------------------
+    "KXMLB":         {"market_type": "season_future",  "sport": "mlb"},  # World Series champion
+    "KXMLBAL":       {"market_type": "season_future",  "sport": "mlb"},  # AL champion
+    "KXMLBNL":       {"market_type": "season_future",  "sport": "mlb"},  # NL champion
+    "KXMLBALEAST":   {"market_type": "division_future", "sport": "mlb"},
+    "KXMLBALCENT":   {"market_type": "division_future", "sport": "mlb"},
+    "KXMLBALWEST":   {"market_type": "division_future", "sport": "mlb"},
+    "KXMLBNLEAST":   {"market_type": "division_future", "sport": "mlb"},
+    "KXMLBNLCENT":   {"market_type": "division_future", "sport": "mlb"},
+    "KXMLBNLWEST":   {"market_type": "division_future", "sport": "mlb"},
+    # -----------------------------------------------------------------------
+    # NBA — Game outcomes (active during playoffs)
+    # -----------------------------------------------------------------------
+    "KXNBAGAME":     {"market_type": "moneyline",      "sport": "nba"},  # Game winner (26 events)
+    "KXNBASPREAD":   {"market_type": "spread",          "sport": "nba"},  # Game spread (2 events)
+    "KXNBATOTAL":    {"market_type": "total",           "sport": "nba"},  # Game total (2 events)
+    "KXNBATEAMTOTAL": {"market_type": "team_total",    "sport": "nba"},  # Team totals (2 events)
+    "KXNBA1HWINNER": {"market_type": "h1_moneyline",   "sport": "nba"},  # First half winner (2 events)
+    "KXNBA1HSPREAD": {"market_type": "h1_spread",      "sport": "nba"},  # First half spread (2 events)
+    "KXNBA1HTOTAL":  {"market_type": "h1_total",       "sport": "nba"},  # First half total (2 events)
+    "KXNBA2HWINNER": {"market_type": "h2_moneyline",   "sport": "nba"},  # Second half winner (2 events)
+    "KXNBA2HSPREAD": {"market_type": "h2_spread",      "sport": "nba"},  # Second half spread (2 events)
+    "KXNBA2HTOTAL":  {"market_type": "h2_total",       "sport": "nba"},  # Second half total (2 events)
+    # -----------------------------------------------------------------------
+    # NBA — Playoff series markets
+    # -----------------------------------------------------------------------
+    "KXNBASERIES":      {"market_type": "series_winner",   "sport": "nba"},  # Series winner (6 events)
+    "KXNBASERIESGAMES": {"market_type": "series_games",    "sport": "nba"},  # Series length (6 events)
+    "KXNBASERIESSCORE": {"market_type": "series_score",    "sport": "nba"},  # Exact series score (6 events)
+    "KXNBASERIESSPREAD": {"market_type": "series_spread",  "sport": "nba"},  # Series spread (6 events)
+    # -----------------------------------------------------------------------
+    # NBA — Season futures
+    # -----------------------------------------------------------------------
+    "KXNBA":         {"market_type": "season_future",  "sport": "nba"},  # NBA champion
+    "KXNBAEAST":     {"market_type": "conference_future", "sport": "nba"},
+    "KXNBAWEST":     {"market_type": "conference_future", "sport": "nba"},
+    # -----------------------------------------------------------------------
+    # NHL — Playoff series markets
+    # -----------------------------------------------------------------------
+    "KXNHLSERIES":      {"market_type": "series_winner",   "sport": "nhl"},  # Series winner (6 events)
+    "KXNHLSERIESGAMES": {"market_type": "series_games",    "sport": "nhl"},
+    "KXNHLSERIESSCORE": {"market_type": "series_score",    "sport": "nhl"},
+    "KXNHLSERIESSPREAD": {"market_type": "series_spread",  "sport": "nhl"},
+    "KXNHL":            {"market_type": "season_future",   "sport": "nhl"},  # Stanley Cup champion
+    "KXNHLEAST":        {"market_type": "conference_future", "sport": "nhl"},
+    "KXNHLWEST":        {"market_type": "conference_future", "sport": "nhl"},
 }
 
 # ---------------------------------------------------------------------------

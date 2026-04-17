@@ -493,20 +493,27 @@ class MarketMatcher:
     # ------------------------------------------------------------------
 
     def _load_kalshi_game_markets(self, target_date: date, sport: str) -> list[dict]:
-        """Load most recent Kalshi game-level (non-prop) snapshot for target_date."""
-        for days_back in range(4):
-            check_date = target_date - timedelta(days=days_back)
-            query = text("""
-                SELECT DISTINCT ON (ticker)
-                    ticker, market_type, team1, team2, line,
-                    yes_price, no_price, yes_bid, yes_ask, volume, market_title
-                FROM kalshi_markets
-                WHERE sport = :sport
-                  AND snapshot_time::date = :target_date
-                  AND market_status = 'open'
-                  AND market_type != 'player_prop'
-                ORDER BY ticker, snapshot_time DESC
-            """)
+        """Load most recent Kalshi game-level (non-prop) snapshot for target_date.
+
+        Checks target_date ± 1 day to handle UTC/ET timezone boundary crossings
+        (snapshots stored after midnight UTC may have next-day dates).
+        """
+        # Check target_date +1 first (most recent), then today, then 3 days back
+        check_dates = [target_date + timedelta(days=1), target_date] + [
+            target_date - timedelta(days=d) for d in range(1, 4)
+        ]
+        query = text("""
+            SELECT DISTINCT ON (ticker)
+                ticker, market_type, team1, team2, line,
+                yes_price, no_price, yes_bid, yes_ask, volume, market_title
+            FROM kalshi_markets
+            WHERE sport = :sport
+              AND snapshot_time::date = :target_date
+              AND market_status = 'open'
+              AND market_type != 'player_prop'
+            ORDER BY ticker, snapshot_time DESC
+        """)
+        for check_date in check_dates:
             with self.engine.connect() as conn:
                 rows = conn.execute(query, {"sport": sport, "target_date": check_date}).fetchall()
             if rows:
