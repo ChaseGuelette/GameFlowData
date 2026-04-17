@@ -292,13 +292,14 @@ def _send_job_alert(
         logger.warning(f"Failed to send Discord alert for {script_name}: {e}")
 
 
-def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = False):
+def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = False, timeout: int = 2700):
     """Run a job script as a subprocess and send alert on completion.
 
     Args:
         script_name: The script to run.
         extra_args: Additional CLI arguments.
         silent_on_success: If True, skip Discord alerts on success (still alert on failure).
+        timeout: Subprocess timeout in seconds (default 2700 = 45 min).
     """
     script_path = PROJECT_ROOT / "src" / "orchestration" / script_name
     cmd = [sys.executable, str(script_path)] + (shlex.split(extra_args) if extra_args else [])
@@ -317,7 +318,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=2700,  # 45 minute global timeout
+            timeout=timeout,
         )
 
         stdout = result.stdout or ""
@@ -339,14 +340,15 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
     except subprocess.TimeoutExpired as e:
         duration = time.time() - start_time
         job_status = "timeout"
-        logger.error(f"Job timed out after 45 minutes: {script_name}")
+        timeout_mins = int(timeout // 60)
+        logger.error(f"Job timed out after {timeout_mins} minutes: {script_name}")
         partial_stdout = ""
-        partial_stderr = "Job timed out after 45 minutes"
+        partial_stderr = f"Job timed out after {timeout_mins} minutes"
         if e.stdout:
             partial_stdout = e.stdout if isinstance(e.stdout, str) else e.stdout.decode(errors="replace")
         if e.stderr:
             partial_stderr = (e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace"))
-            partial_stderr += "\n\nJob timed out after 45 minutes"
+            partial_stderr += f"\n\nJob timed out after {timeout_mins} minutes"
         _send_job_alert(
             script_name,
             success=False,
@@ -588,8 +590,17 @@ def run_arb_scan_mlb():
 
 
 def run_arb_scan_all_categories():
-    """All-categories Polymarket scrape + arb scan including non-sports markets."""
-    run_job("arb_scan_job.py", extra_args="--mode all --include-non-sports", silent_on_success=True)
+    """Non-sports Polymarket arb SCAN only (no scrape). Uses existing polymarket_markets data."""
+    run_job("arb_scan_job.py", extra_args="--mode all --include-non-sports --skip-scrape --skip-paper", silent_on_success=True)
+
+
+def run_nonsports_scrape():
+    """Scrape ALL Polymarket categories into polymarket_markets (no scan/paper-trade).
+
+    Slow job (~45-90 min) — runs 2x/day with extended timeout.
+    Scan jobs read from this data via --skip-scrape.
+    """
+    run_job("arb_scan_job.py", extra_args="--mode all --scrape-only", silent_on_success=False, timeout=7200)
 
 
 def main():
@@ -847,13 +858,24 @@ def main():
         name="Arb Scan MLB (every 10 min, 12:05PM-11:05PM ET)",
     )
 
-    # All-categories Polymarket scrape: hourly, 9 AM - 11 PM ET
-    # Populates polymarket_markets with all market categories for broad arb scanning.
+    # Non-sports scrape: 2x/day (9 AM + 5 PM ET), 2-hour timeout.
+    # Fetches all 70k+ Polymarket markets and stores to polymarket_markets.
+    # The scan jobs below then read from this existing data via --skip-scrape.
+    scheduler.add_job(
+        run_nonsports_scrape,
+        CronTrigger(hour='9,17', minute='0', timezone=ET),
+        id="nonsports_scrape",
+        name="Non-Sports Polymarket Scrape (9AM + 5PM ET, 2hr timeout)",
+    )
+
+    # Non-sports arb SCAN: every 30 min, 10 AM - 11 PM ET.
+    # Fast (<2 min) — uses existing polymarket_markets data, no re-scrape.
+    # Matches Kalshi non-sports (politics, crypto, economics) vs Polymarket.
     scheduler.add_job(
         run_arb_scan_all_categories,
-        CronTrigger(hour='9-23', minute='30', timezone=ET),
+        CronTrigger(hour='10-23', minute='0,30', timezone=ET),
         id="arb_scan_all_categories",
-        name="Arb Scan All Categories (hourly, 9:30AM-11:30PM ET)",
+        name="Arb Scan Non-Sports (every 30 min, 10AM-11PM ET, scan-only)",
     )
 
     # Log scheduled jobs

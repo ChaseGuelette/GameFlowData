@@ -52,12 +52,26 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
-  // 4. All remaining routes require authentication (no subscription check)
+  // 4. All remaining routes require authentication
   if (!user) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     url.searchParams.set('redirectTo', pathname)
     return NextResponse.redirect(url)
+  }
+
+  // 4b. Subscription gate (only when SUBSCRIPTION_REQUIRED=true)
+  const SUBSCRIPTION_EXEMPT_ROUTES = ['/subscribe', '/account']
+  if (
+    process.env.SUBSCRIPTION_REQUIRED === 'true' &&
+    !SUBSCRIPTION_EXEMPT_ROUTES.some(route => pathname.startsWith(route))
+  ) {
+    const { data: isSubscribed } = await supabase.rpc('is_subscribed', { check_user_id: user.id })
+    if (!isSubscribed) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/subscribe'
+      return NextResponse.redirect(url)
+    }
   }
 
   // 5. Admin routes — require is_admin() check

@@ -1787,3 +1787,216 @@ def send_arb_alert_sync(
     except Exception as e:
         logger.exception(f"Failed to send arb alert synchronously: {e}")
         return False
+
+
+# =============================================================================
+# Arb Paper Trading Alerts
+# =============================================================================
+
+
+def _build_arb_paper_placement_embed(bet: dict) -> dict:
+    """Build Discord embed for an arb paper bet placement.
+
+    Color: Cyan (0x00BFFF) for pure arbs.
+    """
+    sport = (bet.get("sport") or "mlb").upper()
+    arb_type = (bet.get("arb_type") or "pure").upper()
+    mtype = (bet.get("market_type") or "moneyline").upper()
+    team1 = bet.get("team1") or "?"
+    team2 = bet.get("team2") or "?"
+    game_date = bet.get("game_date") or "unknown"
+    description = bet.get("description") or f"{team1} vs {team2}"
+
+    kalshi_ticker = bet.get("kalshi_ticker") or "—"
+    kalshi_side = (bet.get("kalshi_side") or "yes").upper()
+    kalshi_price = bet.get("kalshi_price") or 0
+    kalshi_contracts = bet.get("kalshi_contracts") or 10
+
+    poly_condition_id = bet.get("poly_condition_id") or "—"
+    poly_side = (bet.get("poly_side") or "no").upper()
+    poly_price = bet.get("poly_price") or 0
+    poly_contracts = bet.get("poly_contracts") or 10
+
+    combined_cost = bet.get("combined_cost") or 0
+    net_margin = bet.get("net_margin") or 0
+    est_profit = net_margin * kalshi_contracts / 100
+
+    fields = [
+        {"name": "Game", "value": f"{description}\n{game_date}", "inline": True},
+        {"name": "Type", "value": f"{arb_type} | {mtype}", "inline": True},
+        {"name": "\u200b", "value": "\u200b", "inline": True},
+        {
+            "name": "Kalshi Leg",
+            "value": f"{kalshi_side} @ {kalshi_price}¢ × {kalshi_contracts} contracts\n`{kalshi_ticker}`",
+            "inline": True,
+        },
+        {
+            "name": "Poly Leg",
+            "value": f"{poly_side} @ {poly_price:.0f}¢ × {poly_contracts} contracts\n`{poly_condition_id[:20]}...`",
+            "inline": True,
+        },
+        {"name": "\u200b", "value": "\u200b", "inline": True},
+        {
+            "name": "Economics",
+            "value": (
+                f"Combined cost: {combined_cost:.1f}¢\n"
+                f"Net margin: **{net_margin:.1f}¢**/contract\n"
+                f"Est. profit: **${est_profit:.2f}**"
+            ),
+            "inline": False,
+        },
+    ]
+
+    return {
+        "title": f"📋 Arb Paper Bet Placed | {sport}",
+        "color": 0x00BFFF,
+        "fields": fields,
+        "footer": {"text": "Arb Paper Trading | GameFlowData"},
+    }
+
+
+def _build_arb_paper_summary_embed(summary: dict) -> dict:
+    """Build Discord embed for arb paper trading daily summary.
+
+    Color: Green if profitable, red if loss.
+    """
+    log_date = summary.get("log_date") or "today"
+    sport = (summary.get("sport") or "mlb").upper()
+    arbs_placed = summary.get("arbs_placed") or 0
+    arbs_resolved = summary.get("arbs_resolved") or 0
+    arbs_profit = summary.get("arbs_profit") or 0
+    arbs_loss = summary.get("arbs_loss") or 0
+    arbs_cancelled = summary.get("arbs_cancelled") or 0
+    total_pnl = summary.get("total_pnl") or 0.0
+    cumulative_pnl = summary.get("cumulative_pnl") or 0.0
+
+    color = 0x00FF00 if total_pnl >= 0 else 0xFF0000
+    pnl_sign = "+" if total_pnl >= 0 else ""
+    cum_sign = "+" if cumulative_pnl >= 0 else ""
+
+    win_rate = arbs_profit / max(arbs_resolved, 1) * 100
+
+    fields = [
+        {"name": "Date", "value": str(log_date), "inline": True},
+        {"name": "Sport", "value": sport, "inline": True},
+        {"name": "\u200b", "value": "\u200b", "inline": True},
+        {
+            "name": "Record",
+            "value": f"{arbs_profit}W – {arbs_loss}L – {arbs_cancelled}C\n({win_rate:.0f}% win rate)",
+            "inline": True,
+        },
+        {
+            "name": "P&L",
+            "value": (
+                f"Today: **{pnl_sign}${total_pnl:.2f}**\n"
+                f"Cumulative: **{cum_sign}${cumulative_pnl:.2f}**"
+            ),
+            "inline": True,
+        },
+        {
+            "name": "Volume",
+            "value": f"Placed: {arbs_placed} | Resolved: {arbs_resolved}",
+            "inline": True,
+        },
+    ]
+
+    return {
+        "title": f"📊 Arb Paper Trading Daily Summary | {sport}",
+        "color": color,
+        "fields": fields,
+        "footer": {"text": f"Arb Paper Trading | GameFlowData | {log_date}"},
+    }
+
+
+async def send_arb_paper_trade_alert(
+    alert_type: str,
+    data: dict,
+    channel_id: str | None = None,
+) -> bool:
+    """Send an arb paper trading alert to Discord.
+
+    Args:
+        alert_type: "placed" or "daily_summary".
+        data: Dict with bet or summary details.
+        channel_id: Optional Discord channel override.
+
+    Returns:
+        True if alert was sent successfully.
+    """
+    load_dotenv()
+
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping arb paper alert")
+        return False
+
+    if not channel_id:
+        channel_id = (
+            os.getenv("DISCORD_CHANNEL_ARB")
+            or os.getenv("DISCORD_CHANNEL_KALSHI")
+            or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+        )
+    if not channel_id:
+        logger.warning("No arb/Kalshi channel configured, skipping arb paper alert")
+        return False
+
+    if alert_type == "placed":
+        embed = _build_arb_paper_placement_embed(data)
+    elif alert_type == "daily_summary":
+        embed = _build_arb_paper_summary_embed(data)
+    else:
+        logger.error(f"Unknown arb paper alert type: {alert_type}")
+        return False
+
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status in (200, 201):
+                    logger.info(f"Sent arb paper {alert_type} alert")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+    except Exception as e:
+        logger.exception(f"Failed to send arb paper alert: {e}")
+        return False
+
+
+def send_arb_paper_trade_alert_sync(
+    alert_type: str,
+    data: dict,
+    channel_id: str | None = None,
+) -> bool:
+    """Synchronous wrapper for send_arb_paper_trade_alert.
+
+    Args:
+        alert_type: "placed" or "daily_summary".
+        data: Dict with bet or summary details.
+        channel_id: Optional Discord channel override.
+
+    Returns:
+        True if alert was sent successfully.
+    """
+    import asyncio
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                send_arb_paper_trade_alert(alert_type, data, channel_id),
+                loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(send_arb_paper_trade_alert(alert_type, data, channel_id))
+    except Exception as e:
+        logger.exception(f"Failed to send arb paper alert synchronously: {e}")
+        return False

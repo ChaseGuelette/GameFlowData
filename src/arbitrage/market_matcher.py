@@ -18,6 +18,7 @@ Matching modes:
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from difflib import SequenceMatcher
@@ -31,6 +32,74 @@ NEAR_LINE_TOLERANCE = 0.5
 
 # Non-sports fuzzy match threshold
 NON_SPORTS_SIMILARITY_THRESHOLD = 0.80
+
+# Month abbreviation map for Kalshi ticker date parsing
+_KALSHI_MONTH_MAP = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+# Kalshi game ticker: KXMLBGAME-26APR191340BALCLE-CLE → date 2026-04-19, time 13:40
+# Pattern: 2-digit year + 3-letter month + 2-digit day (+ 4-digit HHMM optional)
+_KALSHI_DATE_RE = re.compile(r"(\d{2})([A-Z]{3})(\d{2})(\d{4})?")
+
+# Polymarket slug date: mlb-bal-cle-2026-04-19 → date 2026-04-19
+_POLY_SLUG_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})$")
+
+
+def _extract_date_from_kalshi_ticker(ticker: str) -> date | None:
+    """Extract game date from a Kalshi game ticker.
+
+    Example: KXMLBGAME-26APR191340BALCLE-CLE → 2026-04-19
+    Returns None if the ticker doesn't contain a parseable date.
+    """
+    m = _KALSHI_DATE_RE.search(ticker.upper())
+    if not m:
+        return None
+    yy, mon_str, dd = int(m.group(1)), m.group(2), int(m.group(3))
+    month = _KALSHI_MONTH_MAP.get(mon_str)
+    if month is None:
+        return None
+    year = 2000 + yy
+    try:
+        return date(year, month, dd)
+    except ValueError:
+        return None
+
+
+def _extract_time_from_kalshi_ticker(ticker: str) -> tuple[int, int] | None:
+    """Extract game start time (hour, minute) ET from a Kalshi game ticker.
+
+    Example: KXMLBGAME-26APR162040SEASD → (20, 40) ET
+    Returns None if no time is encoded.
+    """
+    m = _KALSHI_DATE_RE.search(ticker.upper())
+    if not m or not m.group(4):
+        return None
+    time_str = m.group(4)
+    if len(time_str) == 4:
+        try:
+            hh, mm = int(time_str[:2]), int(time_str[2:])
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                return (hh, mm)
+        except ValueError:
+            pass
+    return None
+
+
+def _extract_date_from_poly_slug(slug: str) -> date | None:
+    """Extract game date from a Polymarket event slug.
+
+    Example: mlb-bal-cle-2026-04-19 → 2026-04-19
+    Returns None if no parseable date found.
+    """
+    m = _POLY_SLUG_DATE_RE.search(slug)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -299,21 +368,26 @@ class MarketMatcher:
             f"for {sport.upper()} {target_date}"
         )
 
-        def _team_key(t1, t2, mtype, line=None):
-            """Build a match key from canonical team abbreviations."""
-            base = (frozenset({(t1 or "").upper(), (t2 or "").upper()}), mtype)
+        def _team_key(t1, t2, mtype, game_date_val, line=None):
+            """Build a match key from canonical team abbreviations, market type, and date."""
+            # Include game_date in key to prevent cross-date matching.
+            # date may be None for rows where we can't parse it — those will only match
+            # other None-date rows (i.e., they won't cross-match dated rows).
+            base = (frozenset({(t1 or "").upper(), (t2 or "").upper()}), mtype, game_date_val)
             if mtype == "total" and line is not None:
                 return base + (round(float(line) * 2) / 2,)  # round to nearest 0.5
             return base
 
-        # Build Kalshi lookup
+        # Build Kalshi lookup: key includes game date extracted from ticker
         kalshi_by_key: dict[tuple, dict] = {}
         for row in kalshi_rows:
             t1 = normalize_team(row.get("team1") or "", sport=sport) or (row.get("team1") or "")
             t2 = normalize_team(row.get("team2") or "", sport=sport) or (row.get("team2") or "")
             mtype = row.get("market_type") or "moneyline"
             line = row.get("line")
-            key = _team_key(t1, t2, mtype, line)
+            # Extract date from Kalshi ticker (most reliable source)
+            kalshi_date = _extract_date_from_kalshi_ticker(row.get("ticker") or "")
+            key = _team_key(t1, t2, mtype, kalshi_date, line)
             kalshi_by_key[key] = row
 
         matched: list[MatchedMarket] = []
@@ -328,16 +402,18 @@ class MarketMatcher:
             t2 = normalize_team(poly.get("team2") or "", sport=sport) or (poly.get("team2") or "")
             mtype = poly.get("market_type") or "moneyline"
             line = poly.get("line")
+            # Extract date from Polymarket event slug
+            poly_date = _extract_date_from_poly_slug(poly.get("event_slug") or "")
 
-            key = _team_key(t1, t2, mtype, line)
+            key = _team_key(t1, t2, mtype, poly_date, line)
             kalshi_row = kalshi_by_key.get(key)
 
             # For totals: try without line (sometimes lines differ slightly)
             if kalshi_row is None and mtype == "total":
-                base_key = (frozenset({t1.upper(), t2.upper()}), mtype)
+                base_key = (frozenset({t1.upper(), t2.upper()}), mtype, poly_date)
                 for k, v in kalshi_by_key.items():
-                    if len(k) >= 2 and k[:2] == base_key:
-                        k_line = k[2] if len(k) > 2 else None
+                    if len(k) >= 3 and k[:3] == base_key:
+                        k_line = k[3] if len(k) > 3 else None
                         p_line = float(line or 0)
                         if k_line is not None and abs(float(k_line) - p_line) <= NEAR_LINE_TOLERANCE:
                             kalshi_row = v
@@ -348,9 +424,16 @@ class MarketMatcher:
 
             seen_poly.add(cid)
 
+            # Resolved game date: prefer Kalshi ticker date, fall back to poly slug date,
+            # then target_date as last resort
+            kalshi_date_resolved = _extract_date_from_kalshi_ticker(kalshi_row.get("ticker") or "")
+            resolved_game_date = kalshi_date_resolved or poly_date or target_date
+
             desc = f"{t1 or '?'} vs {t2 or '?'} [{mtype.upper()}]"
             if line is not None:
                 desc += f" {line}"
+            if resolved_game_date:
+                desc += f" on {resolved_game_date}"
 
             matched.append(MatchedMarket(
                 kalshi_ticker=kalshi_row.get("ticker", ""),
@@ -375,7 +458,7 @@ class MarketMatcher:
                 market_type=mtype,
                 team1=t1 or None,
                 team2=t2 or None,
-                game_date=target_date,
+                game_date=resolved_game_date,
                 description=desc,
             ))
 
@@ -526,7 +609,7 @@ class MarketMatcher:
             check_date = target_date - timedelta(days=days_back)
             query = text("""
                 SELECT DISTINCT ON (condition_id)
-                    condition_id, market_type, team1, team2, line,
+                    condition_id, event_slug, market_type, team1, team2, line,
                     yes_price, no_price, yes_bid, yes_ask, liquidity, question
                 FROM polymarket_markets
                 WHERE sport = :sport
@@ -542,7 +625,10 @@ class MarketMatcher:
         return []
 
     def _load_kalshi_non_sports(self) -> list[dict]:
-        """Load recent Kalshi non-sports markets (no sport tag, or KALSHI_GAME_SERIES non-sports)."""
+        """Load recent Kalshi non-sports markets (no sport tag, or KALSHI_GAME_SERIES non-sports).
+
+        Uses a 4-hour window to tolerate gaps in the Kalshi refresh job (which runs every 10 min).
+        """
         query = text("""
             SELECT DISTINCT ON (ticker)
                 ticker, market_title, market_type,
@@ -550,16 +636,21 @@ class MarketMatcher:
             FROM kalshi_markets
             WHERE (sport IS NULL OR sport = '')
               AND market_status = 'open'
-              AND snapshot_time >= NOW() - INTERVAL '2 hours'
+              AND snapshot_time >= NOW() - INTERVAL '4 hours'
             ORDER BY ticker, snapshot_time DESC
-            LIMIT 500
         """)
         with self.engine.connect() as conn:
             rows = conn.execute(query).fetchall()
         return [dict(row._mapping) for row in rows]
 
     def _load_poly_non_sports(self, categories: list[str] | None = None) -> list[dict]:
-        """Load recent Polymarket non-sports markets."""
+        """Load Polymarket non-sports markets (most recent snapshot per market).
+
+        No freshness filter — polymarket_markets is populated by a dedicated scrape job
+        that runs 2x/day. The DISTINCT ON guarantees we get the latest snapshot for each
+        market regardless of when it was scraped. Only markets with actual prices are returned.
+        Filters to markets with liquidity > 100 to reduce noise and O(n×m) matching cost.
+        """
         if categories:
             query = text("""
                 SELECT DISTINCT ON (condition_id)
@@ -568,9 +659,9 @@ class MarketMatcher:
                 FROM polymarket_markets
                 WHERE category = ANY(:categories)
                   AND market_status = 'open'
-                  AND snapshot_time >= NOW() - INTERVAL '2 hours'
+                  AND yes_price IS NOT NULL
+                  AND liquidity > 100
                 ORDER BY condition_id, snapshot_time DESC
-                LIMIT 500
             """)
             with self.engine.connect() as conn:
                 rows = conn.execute(query, {"categories": categories}).fetchall()
@@ -582,9 +673,9 @@ class MarketMatcher:
                 FROM polymarket_markets
                 WHERE category NOT IN ('sports')
                   AND market_status = 'open'
-                  AND snapshot_time >= NOW() - INTERVAL '2 hours'
+                  AND yes_price IS NOT NULL
+                  AND liquidity > 100
                 ORDER BY condition_id, snapshot_time DESC
-                LIMIT 500
             """)
             with self.engine.connect() as conn:
                 rows = conn.execute(query).fetchall()

@@ -61,6 +61,7 @@ class KalshiEdgeCalculator:
             WHERE sport = :sport
               AND snapshot_time::date = :target_date
               AND market_status = 'open'
+              AND line IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
         """)
 
@@ -74,7 +75,7 @@ class KalshiEdgeCalculator:
                 "ticker": row[1],
                 "player_name": row[2],
                 "stat_type": row[3],
-                "line": float(row[4]),
+                "line": float(row[4]) if row[4] is not None else None,
                 "player_id": row[5],
                 "yes_price": row[6],
                 "no_price": row[7],
@@ -273,6 +274,9 @@ class KalshiEdgeCalculator:
             # Sportsbooks use half-integer lines (YES wins if actual > N)
             # For integer lines: use >= ; for half-integer lines: use >
             line = market["line"]
+            if line is None:
+                stats["no_samples"] += 1
+                continue
             if line == int(line):
                 model_prob_over = float((matched_samples >= line).mean())
             else:

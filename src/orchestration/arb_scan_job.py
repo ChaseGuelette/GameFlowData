@@ -44,6 +44,8 @@ def run(
     dry_run: bool = False,
     skip_discord: bool = False,
     skip_scrape: bool = False,
+    skip_paper: bool = False,
+    scrape_only: bool = False,
     include_game: bool = True,
     include_non_sports: bool = False,
 ) -> dict:
@@ -56,6 +58,9 @@ def run(
         dry_run: No DB writes; print results instead.
         skip_discord: Skip Discord alerts.
         skip_scrape: Skip Polymarket scrape (use existing DB data).
+        skip_paper: Skip arb paper trading steps.
+        scrape_only: Run scrape only (Step 1) then exit — no matching, scanning, or paper trading.
+                     Used by the dedicated non-sports scrape job that runs 2x/day.
         include_game: Also match game-level markets (moneyline, NRFI, totals).
         include_non_sports: Also match non-sports binary markets (politics, crypto, etc.).
 
@@ -68,7 +73,23 @@ def run(
         "pure_arbs": 0,
         "soft_arbs": 0,
         "alerts_sent": False,
+        "paper_placed": 0,
+        "paper_resolved": 0,
     }
+
+    # Step 0: Resolve any pending arb paper bets from previous game dates
+    arb_trader = None
+    if not dry_run and not skip_paper:
+        logger.info("Step 0: Resolving pending arb paper bets...")
+        try:
+            from src.paper_trading.arb_paper_trader import ArbPaperTrader
+            arb_trader = ArbPaperTrader()
+            resolve_result = arb_trader.resolve_all_pending(sport=sport)
+            summary["paper_resolved"] = resolve_result.get("resolved", 0)
+            logger.info(f"Resolved {summary['paper_resolved']} arb paper bets")
+        except Exception as e:
+            logger.warning(f"Arb paper resolution failed (non-fatal): {e}")
+            arb_trader = None
 
     # Step 1: Scrape Polymarket markets
     if not skip_scrape:
@@ -94,6 +115,12 @@ def run(
             summary["scrape"] = {"error": str(e)}
     else:
         logger.info("Step 1: Skipping Polymarket scrape (--skip-scrape)")
+
+    # Scrape-only mode: exit here without running match/scan/paper-trade.
+    # Used by the dedicated non-sports scrape job (2x/day, long timeout).
+    if scrape_only:
+        logger.info("Scrape-only mode — exiting after Step 1.")
+        return summary
 
     # Steps 2-3: Match Kalshi ↔ Polymarket and scan for arbs
     logger.info("Steps 2-3: Matching + scanning for arbs...")
@@ -126,6 +153,22 @@ def run(
         logger.error(f"Arb scan failed: {e}", exc_info=True)
         summary["scan_error"] = str(e)
         return summary
+
+    # Step 3.5: Paper trade detected arbs
+    if not dry_run and not skip_paper:
+        logger.info("Step 3.5: Paper trading detected arb opportunities...")
+        try:
+            if arb_trader is None:
+                from src.paper_trading.arb_paper_trader import ArbPaperTrader
+                arb_trader = ArbPaperTrader()
+            new_arbs = arb_trader.select_arbs(sport=sport)
+            placed = arb_trader.place_arbs(new_arbs)
+            summary["paper_placed"] = placed
+            logger.info(f"Paper traded {placed} arb opportunities")
+        except Exception as e:
+            logger.warning(f"Arb paper trading failed (non-fatal): {e}")
+    else:
+        logger.info("Step 3.5: Skipping arb paper trading")
 
     # Step 4: Discord alerts
     if not skip_discord and not dry_run:
@@ -201,6 +244,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="No DB writes, print results")
     parser.add_argument("--skip-discord", action="store_true", help="Skip Discord alerts")
     parser.add_argument("--skip-scrape", action="store_true", help="Skip Polymarket scrape step")
+    parser.add_argument("--skip-paper", action="store_true", help="Skip arb paper trading steps")
+    parser.add_argument("--scrape-only", action="store_true",
+                        help="Only run Step 1 (scrape) then exit — no matching, scanning, or paper trading")
     parser.add_argument("--no-game", action="store_true",
                         help="Skip game-level market matching (moneyline, NRFI, totals)")
     parser.add_argument("--include-non-sports", action="store_true",
@@ -219,8 +265,10 @@ def main():
     if args.mode == "sport":
         logger.info(f"  Sport:        {args.sport.upper()}")
     logger.info(f"  Dry run:          {args.dry_run}")
+    logger.info(f"  Scrape only:      {args.scrape_only}")
     logger.info(f"  Skip Discord:     {args.skip_discord}")
     logger.info(f"  Skip Scrape:      {args.skip_scrape}")
+    logger.info(f"  Skip Paper:       {args.skip_paper}")
     logger.info(f"  Include game:     {not args.no_game}")
     logger.info(f"  Include non-sports: {args.include_non_sports}")
     logger.info("=" * 60)
@@ -232,6 +280,8 @@ def main():
         dry_run=args.dry_run,
         skip_discord=args.skip_discord,
         skip_scrape=args.skip_scrape,
+        skip_paper=args.skip_paper,
+        scrape_only=args.scrape_only,
         include_game=not args.no_game,
         include_non_sports=args.include_non_sports,
     )
@@ -243,6 +293,8 @@ def main():
     logger.info(f"  Pure arbs:       {summary.get('pure_arbs', 0)}")
     logger.info(f"  Soft arbs:       {summary.get('soft_arbs', 0)}")
     logger.info(f"  Alerts sent:     {summary.get('alerts_sent', False)}")
+    logger.info(f"  Paper placed:    {summary.get('paper_placed', 0)}")
+    logger.info(f"  Paper resolved:  {summary.get('paper_resolved', 0)}")
     logger.info("=" * 60)
 
 

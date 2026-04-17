@@ -15,7 +15,7 @@ Usage:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timezone
 
 from sqlalchemy import text
 
@@ -209,6 +209,9 @@ class ArbScanner:
           Direction A: Buy Kalshi YES + Buy Poly NO (combined cost = k_yes + poly_no)
           Direction B: Buy Kalshi NO + Buy Poly YES (combined cost = k_no + poly_yes)
 
+        For game markets, skips pairs where the game has already started to avoid
+        stale-price contamination from live/post-game states.
+
         Args:
             pair: MatchedMarket instance.
 
@@ -219,6 +222,29 @@ class ArbScanner:
         from src.scrapers.polymarket.polymarket_utils import polymarket_fee
 
         opps = []
+
+        # Pre-game filter for game-level markets
+        # Kalshi tickers encode game start time: KXMLBGAME-26APR162040SEASD → 20:40 ET
+        # Skip if the game has already started (live/post-game prices are stale on Poly).
+        if getattr(pair, "market_type", "player_prop") != "player_prop":
+            ticker = getattr(pair, "kalshi_ticker", "") or ""
+            if ticker:
+                from src.arbitrage.market_matcher import (
+                    _extract_date_from_kalshi_ticker,
+                    _extract_time_from_kalshi_ticker,
+                )
+                game_date_val = _extract_date_from_kalshi_ticker(ticker)
+                game_time_val = _extract_time_from_kalshi_ticker(ticker)
+                if game_date_val is not None and game_time_val is not None:
+                    import zoneinfo
+                    et_tz = zoneinfo.ZoneInfo("America/New_York")
+                    game_start_et = datetime(
+                        game_date_val.year, game_date_val.month, game_date_val.day,
+                        game_time_val[0], game_time_val[1], tzinfo=et_tz,
+                    )
+                    now_et = datetime.now(et_tz)
+                    if now_et >= game_start_et:
+                        return []  # Game has started or ended — skip
 
         k_yes = pair.kalshi_yes_price
         k_no = pair.kalshi_no_price or (100 - k_yes)
