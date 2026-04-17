@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 SOFT_ARB_THRESHOLD = 0.05       # 5% price discrepancy = soft arb
 MIN_KALSHI_VOLUME = 20          # Minimum Kalshi volume for consideration
 MIN_POLY_LIQUIDITY = 100.0      # Minimum Polymarket liquidity (USD)
+MIN_KALSHI_BID = 3              # Min bid on the Kalshi side we want to buy (cents).
+                                # YES bid < 3c or NO bid < 3c means no real market exists.
 
 
 @dataclass
@@ -223,6 +225,10 @@ class ArbScanner:
         p_yes = pair.poly_yes_price
         p_no = pair.poly_no_price or (100 - p_yes)
 
+        # Bid available on each Kalshi side (NO bid ≈ 100 - YES ask)
+        k_yes_bid = pair.kalshi_yes_bid or 0
+        k_no_bid = max(100 - (pair.kalshi_yes_ask or 100), 0)
+
         # Liquidity checks
         if pair.kalshi_volume < MIN_KALSHI_VOLUME:
             return []
@@ -251,10 +257,15 @@ class ArbScanner:
         # Depth on thinner side (rough estimate)
         min_depth = min(pair.kalshi_volume, int(pair.poly_liquidity / max(p_yes, 1)))
 
-        for direction, combined, gross, net, k_side, p_side, k_price_for_fee, p_price in [
-            ("A", combined_a, gross_a, net_a, "yes", "no", k_yes, p_no),
-            ("B", combined_b, gross_b, net_b, "no", "yes", k_no, p_yes),
+        for direction, combined, gross, net, k_side, p_side, k_price_for_fee, p_price, k_bid in [
+            ("A", combined_a, gross_a, net_a, "yes", "no", k_yes, p_no, k_yes_bid),
+            ("B", combined_b, gross_b, net_b, "no", "yes", k_no, p_yes, k_no_bid),
         ]:
+            # Skip if no real bid exists on the Kalshi side we'd be buying.
+            # A bid of 1-2c means no actual buyer — the price is a stale placeholder.
+            if k_bid < MIN_KALSHI_BID:
+                continue
+
             is_pure = net > 0
             is_soft = discrepancy >= SOFT_ARB_THRESHOLD and not is_pure
 
