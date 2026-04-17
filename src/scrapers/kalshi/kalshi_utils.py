@@ -138,6 +138,30 @@ KALSHI_GAME_SERIES: dict[str, dict[str, str]] = {
 }
 
 # ---------------------------------------------------------------------------
+# Non-Sports Series: economics, crypto, politics
+# Stored with sport=NULL in kalshi_markets for non-sports arb matching.
+# Format: series_ticker -> {"category": ..., "description": ...}
+# ---------------------------------------------------------------------------
+
+KALSHI_NON_SPORTS_SERIES: dict[str, dict[str, str]] = {
+    # -----------------------------------------------------------------------
+    # Economics / Macro
+    # -----------------------------------------------------------------------
+    "KXGDP":          {"category": "economics", "description": "US Real GDP growth"},
+    "KXFED":          {"category": "economics", "description": "Federal funds rate / FOMC decisions"},
+    "KXCPI":          {"category": "economics", "description": "Consumer Price Index (inflation)"},
+    # -----------------------------------------------------------------------
+    # Crypto / Digital Assets
+    # -----------------------------------------------------------------------
+    "KXBTC":          {"category": "crypto", "description": "Bitcoin price range"},
+    "KXBTCD":         {"category": "crypto", "description": "Bitcoin daily close price"},
+    "KXETH":          {"category": "crypto", "description": "Ethereum price range"},
+    "KXETHD":         {"category": "crypto", "description": "Ethereum daily close price"},
+    "KXDOGE":         {"category": "crypto", "description": "Dogecoin price range"},
+    "KXXRP":          {"category": "crypto", "description": "XRP/Ripple price range"},
+}
+
+# ---------------------------------------------------------------------------
 # Probability Conversion
 # ---------------------------------------------------------------------------
 

@@ -66,14 +66,14 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 
 | Step | Task | Status | Dependencies | Details |
 |------|------|--------|--------------|---------|
-| 3.1 | Add Stripe columns to `user_subscriptions` | not_started | None | `stripe_customer_id`, `stripe_subscription_id` |
-| 3.2 | Build `/subscribe` page with Checkout | not_started | 3.1 | Stripe Checkout session creation |
-| 3.3 | Build Stripe webhook handler | not_started | 3.1 | `api/stripe/webhook/route.ts` |
-| 3.4 | Add Customer Portal to `/account` | not_started | 3.1 | Self-service billing management |
-| 3.5 | Test full subscription flow | not_started | 3.2, 3.3, 3.4 | Sign up → pay → access → cancel |
-| 3.6 | Set pricing tiers | not_started | Market research | Competitive analysis needed |
+| 3.1 | Add Stripe columns to `user_subscriptions` | completed | None | Migration `add_stripe_columns` applied. `stripe_customer_id`, `stripe_subscription_id` + 4 indexes. |
+| 3.2 | Build `/subscribe` page with Checkout | completed | 3.1 | Monthly $19.99 + Annual $199 cards. 7-day trial. Calls `POST /api/stripe/checkout`. Trial abuse prevention. |
+| 3.3 | Build Stripe webhook handler | completed | 3.1 | `api/stripe/webhook/route.ts`. Handles 4 events. Service-role admin client. Stripe v22 dahlia API compatible. |
+| 3.4 | Add Customer Portal to `/account` | completed | 3.1 | Dynamic status badge, Manage Billing button, Subscribe Now CTA. Portal via `POST /api/stripe/portal`. |
+| 3.5 | Test full subscription flow | not_started | 3.2, 3.3, 3.4 | **Blocked**: need Stripe account + env vars filled in. Test with `stripe listen` + test card 4242... |
+| 3.6 | Set pricing tiers | completed | Market research | $19.99/mo + $199/yr (saves 17%). 7-day trial. Middleware gate: `SUBSCRIPTION_REQUIRED=false` (flip when ready). |
 
-**Done when**: Users can subscribe, access predictions, manage billing, and cancel — all self-service.
+**Done when**: Users can subscribe, access predictions, manage billing, and cancel — all self-service. ✅ Code complete — pending Stripe Dashboard setup + env vars to activate.
 
 ---
 

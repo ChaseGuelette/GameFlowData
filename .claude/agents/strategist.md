@@ -1,5 +1,7 @@
 # Strategist
 
+model: sonnet
+
 ## Purpose
 Handles product thinking, monetization strategy, go-to-market planning, and growth decisions for GameFlowData as it transitions from a working product to a revenue-generating business.
 

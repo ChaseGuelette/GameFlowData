@@ -108,32 +108,33 @@ def classify_series(series_ticker: str, sample_title: str = "") -> str:
 def discover_all_series(
     client: KalshiClient,
     status: str = "open",
-    max_markets: int = 10000,
+    max_events: int = 5000,
     pause_between_pages: float = 0.2,
 ) -> dict[str, list[dict]]:
-    """Enumerate ALL Kalshi series by paginating through all markets.
+    """Enumerate ALL Kalshi series by paginating through all EVENTS.
 
-    Collects unique series_ticker values and samples 5 markets from each.
+    Uses /events endpoint which returns series_ticker (unlike /markets).
+    Collects unique series_ticker values and samples 5 events from each.
 
     Args:
         client: Authenticated KalshiClient.
-        status: Market status to query ("open", "closed", "settled").
-        max_markets: Stop after fetching this many total markets (safety cap).
+        status: Event status to query ("open", "closed", "settled").
+        max_events: Stop after fetching this many total events (safety cap).
         pause_between_pages: Sleep between pages to respect rate limits.
 
     Returns:
         Dict mapping series_ticker -> list of sample market dicts.
     """
-    logger.info(f"Starting discovery (status={status}, max={max_markets})...")
+    logger.info(f"Starting discovery via /events (status={status}, max={max_events})...")
 
     series_samples: dict[str, list[dict]] = defaultdict(list)
     total_fetched = 0
     cursor = None
     page_num = 0
 
-    while total_fetched < max_markets:
+    while total_fetched < max_events:
         page_num += 1
-        result = client.list_markets(
+        result = client.list_events(
             status=status,
             limit=200,
             cursor=cursor,
@@ -142,35 +143,42 @@ def discover_all_series(
             logger.error("API call returned None — stopping")
             break
 
-        markets = result.get("markets", [])
-        if not markets:
-            logger.info("No more markets returned")
+        events = result.get("events", [])
+        if not events:
+            logger.info("No more events returned")
             break
 
-        for mkt in markets:
-            series = mkt.get("series_ticker") or ""
+        for evt in events:
+            series = evt.get("series_ticker") or ""
             if not series:
                 continue
+            # Each event may have nested markets; extract a sample market title
+            markets = evt.get("markets") or []
+            sample_title = markets[0].get("title", "") if markets else evt.get("title", "")
+            sample_ticker = markets[0].get("ticker", "") if markets else ""
+            # Use first market volume if available
+            sample_vol = 0
+            if markets:
+                sample_vol = markets[0].get("volume_fp") or markets[0].get("volume") or 0
             # Keep up to 5 samples per series
             if len(series_samples[series]) < 5:
                 series_samples[series].append({
-                    "ticker": mkt.get("ticker", ""),
-                    "title": mkt.get("title", ""),
-                    "event_ticker": mkt.get("event_ticker", ""),
-                    "volume": mkt.get("volume_fp") or mkt.get("volume") or 0,
-                    "open_interest": mkt.get("open_interest_fp") or mkt.get("open_interest") or 0,
-                    "yes_bid": mkt.get("yes_bid_dollars") or 0,
-                    "yes_ask": mkt.get("yes_ask_dollars") or 0,
-                    "status": mkt.get("status", ""),
-                    "close_time": mkt.get("close_time") or "",
+                    "ticker": sample_ticker,
+                    "title": sample_title,
+                    "event_ticker": evt.get("event_ticker", ""),
+                    "volume": sample_vol,
+                    "yes_bid": 0,
+                    "yes_ask": 0,
+                    "status": evt.get("status", ""),
+                    "close_time": evt.get("close_time") or "",
                 })
 
-        total_fetched += len(markets)
+        total_fetched += len(events)
         cursor = result.get("cursor")
 
         if page_num % 5 == 0:
             logger.info(
-                f"  Page {page_num}: fetched {total_fetched} total, "
+                f"  Page {page_num}: fetched {total_fetched} events, "
                 f"{len(series_samples)} unique series so far..."
             )
 
@@ -181,7 +189,7 @@ def discover_all_series(
         time.sleep(pause_between_pages)
 
     logger.info(
-        f"Discovery complete: {total_fetched} markets fetched, "
+        f"Discovery complete: {total_fetched} events fetched, "
         f"{len(series_samples)} unique series found"
     )
     return dict(series_samples)
@@ -299,7 +307,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--max-markets", type=int, default=10000,
-        help="Max total markets to fetch (default: 10000)",
+        help="Max total events to fetch (default: 10000)",
     )
     parser.add_argument(
         "--output", type=str, default=None,
@@ -326,7 +334,7 @@ def main():
     series_samples = discover_all_series(
         client,
         status=args.status,
-        max_markets=args.max_markets,
+        max_events=args.max_markets,
         pause_between_pages=args.pause,
     )
 

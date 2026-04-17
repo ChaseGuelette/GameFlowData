@@ -43,6 +43,7 @@ from src.db.client import get_engine
 from src.scrapers.kalshi.kalshi_client import KalshiClient
 from src.scrapers.kalshi.kalshi_utils import (
     KALSHI_GAME_SERIES,
+    KALSHI_NON_SPORTS_SERIES,
     KALSHI_PROP_SERIES,
     kalshi_mid_to_prob,
 )
@@ -648,6 +649,126 @@ def scrape_and_store(
         stored = store_markets(engine, parsed_markets, snapshot_time)
         stats["stored"] = stored
         logger.info(f"Stored {stored} markets in kalshi_markets")
+
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Non-Sports Scrape
+# ---------------------------------------------------------------------------
+
+
+def scrape_non_sports_and_store(dry_run: bool = False) -> dict:
+    """Scrape all Kalshi non-sports markets and store with sport=NULL.
+
+    Fetches economics (KXGDP, KXFED, KXCPI) and crypto (KXBTC, KXETH, etc.)
+    series. Markets are stored with sport=NULL so they're picked up by the
+    non-sports arb matcher in market_matcher.py.
+
+    No player/team linking needed — just title + prices.
+
+    Args:
+        dry_run: Print parsed markets without DB writes.
+
+    Returns:
+        Summary dict with counts.
+    """
+    snapshot_time = datetime.now(UTC)
+    stats: dict = {"raw": 0, "parsed": 0, "stored": 0, "by_series": {}}
+
+    if not KALSHI_NON_SPORTS_SERIES:
+        logger.info("No non-sports series configured in KALSHI_NON_SPORTS_SERIES")
+        return stats
+
+    client = KalshiClient()
+    if not client.is_authenticated:
+        logger.warning("No Kalshi credentials — non-sports scrape skipped")
+        return stats
+
+    parsed_markets: list[dict] = []
+
+    for series_ticker, info in KALSHI_NON_SPORTS_SERIES.items():
+        category = info.get("category", "other")
+        desc = info.get("description", series_ticker)
+
+        time.sleep(0.5)  # gentle pacing between series
+        raw = client.list_all_markets(series_ticker=series_ticker)
+        series_count = 0
+
+        for market in raw:
+            if market.get("status") not in ("active", "open"):
+                continue
+
+            ticker = market.get("ticker", "")
+            title = market.get("title", "")
+            if not ticker or not title:
+                continue
+
+            yes_bid_dollars = float(market.get("yes_bid_dollars") or 0)
+            yes_ask_dollars = float(market.get("yes_ask_dollars") or 0)
+            last_price_dollars = float(market.get("last_price_dollars") or 0)
+
+            yes_bid_cents = round(yes_bid_dollars * 100)
+            yes_ask_cents = round(yes_ask_dollars * 100)
+            yes_price_cents = (
+                round(last_price_dollars * 100)
+                if last_price_dollars
+                else round((yes_bid_dollars + yes_ask_dollars) / 2 * 100)
+            )
+            if yes_price_cents <= 0 and yes_bid_cents <= 0:
+                continue  # No price data — skip
+
+            try:
+                volume = int(float(market.get("volume_fp") or market.get("volume") or 0))
+            except (ValueError, TypeError):
+                volume = 0
+
+            parsed_markets.append({
+                "ticker": ticker,
+                "event_ticker": market.get("event_ticker", ""),
+                "series_ticker": series_ticker,
+                "sport": None,               # NULL = non-sports
+                "market_type": "binary",
+                "category": category,
+                "player_name": None,
+                "stat_type": None,
+                "line": None,
+                "team1": None,
+                "team2": None,
+                "market_title": title,
+                "player_id": None,
+                "yes_price": yes_price_cents,
+                "no_price": 100 - yes_price_cents,
+                "yes_bid": yes_bid_cents,
+                "yes_ask": yes_ask_cents,
+                "volume": volume,
+                "open_interest": 0,
+                "close_time": market.get("close_time") or market.get("expected_expiration_time"),
+                "market_status": "open",
+            })
+            series_count += 1
+
+        if series_count:
+            logger.info(f"  {series_ticker} ({desc}): {series_count} markets")
+        stats["by_series"][series_ticker] = series_count
+
+    stats["raw"] = sum(len(client.list_all_markets(s)) for s in [])  # already counted above
+    stats["parsed"] = len(parsed_markets)
+
+    if dry_run:
+        logger.info("=== DRY RUN — non-sports markets ===")
+        for m in parsed_markets:
+            mid_p = kalshi_mid_to_prob(m.get("yes_bid", 0), m.get("yes_ask", 0))
+            logger.info(
+                f"  [{m.get('category','?'):12s}] {m.get('series_ticker',''):10s} | "
+                f"YES={m.get('yes_price', 0):3d}c | mid={mid_p:.1%} | "
+                f"vol={m.get('volume', 0):6d} | {m.get('market_title', '')[:60]}"
+            )
+    else:
+        engine = get_engine()
+        stored = store_markets(engine, parsed_markets, snapshot_time)
+        stats["stored"] = stored
+        logger.info(f"Stored {stored} non-sports Kalshi markets")
 
     return stats
 

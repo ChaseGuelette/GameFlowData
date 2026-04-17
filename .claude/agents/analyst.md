@@ -1,5 +1,7 @@
 # Analyst
 
+model: sonnet
+
 ## Purpose
 Monitors model performance, runs calibration diagnostics, designs and executes backtests, and provides data-driven insights on NBA/MLB/NCAAB model health.
 

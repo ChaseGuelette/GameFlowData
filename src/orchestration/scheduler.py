@@ -76,6 +76,7 @@ JOB_NAMES = {
     "archive_old_props_job.py": "Archive Old Props",
     "kalshi_daily_summary_job.py": "Kalshi Daily Summary",
     "arb_scan_job.py": "Arb Scanner",
+    "kalshi_nonsports_refresh_job.py": "Kalshi Non-Sports Refresh",
 }
 
 # In-memory job status tracking for dependency checks.
@@ -582,6 +583,15 @@ def run_kalshi_daily_summary():
     run_job("kalshi_daily_summary_job.py")
 
 
+def run_kalshi_nonsports_refresh():
+    """Kalshi non-sports market refresh: scrape economics/crypto markets with sport=NULL.
+
+    Stores markets so the non-sports arb scanner can match them against Polymarket.
+    Exits gracefully if KALSHI_API_KEY is not set.
+    """
+    run_job("kalshi_nonsports_refresh_job.py", silent_on_success=True)
+
+
 # ---- Arbitrage Scanner Jobs ----
 
 def run_arb_scan_mlb():
@@ -843,6 +853,16 @@ def main():
         CronTrigger(hour='11-23', minute='*/10', timezone=ET),
         id="kalshi_refresh_mlb",
         name="Kalshi MLB Refresh (every 10 min, 11AM-11PM ET)",
+    )
+
+    # Every 10 min, 11 AM - 11 PM ET — scrape non-sports (economics/crypto) markets
+    # Stores with sport=NULL so non-sports arb scan can match vs Polymarket.
+    # Exits gracefully if KALSHI_API_KEY is not set.
+    scheduler.add_job(
+        run_kalshi_nonsports_refresh,
+        CronTrigger(hour='11-23', minute='*/10', timezone=ET),
+        id="kalshi_nonsports_refresh",
+        name="Kalshi Non-Sports Refresh (every 10 min, 11AM-11PM ET)",
     )
 
     # ==============================================================

@@ -485,3 +485,64 @@ class KalshiClient:
 
         logger.info(f"Fetched {len(all_markets)} markets (series={series_ticker})")
         return all_markets
+
+    def list_events(
+        self,
+        series_ticker: str | None = None,
+        status: str = "open",
+        limit: int = 200,
+        cursor: str | None = None,
+    ) -> dict | None:
+        """List events with optional filters.
+
+        The /events endpoint returns series_ticker (unlike /markets).
+        Use this for discovery of non-sports and other categories.
+
+        Args:
+            series_ticker: Filter by series (e.g., "KXBTC").
+            status: Event status filter ("open", "closed", "settled").
+            limit: Max results per page (max 200).
+            cursor: Pagination cursor.
+
+        Returns:
+            API response dict with "events" and "cursor" keys.
+        """
+        params = {"status": status, "limit": limit}
+        if series_ticker:
+            params["series_ticker"] = series_ticker
+        if cursor:
+            params["cursor"] = cursor
+
+        return self._request("GET", "/events", params=params)
+
+    def list_all_events(
+        self,
+        series_ticker: str | None = None,
+        status: str = "open",
+    ) -> list[dict]:
+        """Paginate through all events for a series.
+
+        Returns:
+            Full list of event dicts (each with markets nested inside).
+        """
+        all_events = []
+        cursor = None
+
+        while True:
+            result = self.list_events(
+                series_ticker=series_ticker,
+                status=status,
+                cursor=cursor,
+            )
+            if result is None:
+                break
+
+            events = result.get("events", [])
+            all_events.extend(events)
+
+            cursor = result.get("cursor")
+            if not cursor or not events:
+                break
+
+        logger.info(f"Fetched {len(all_events)} events (series={series_ticker})")
+        return all_events

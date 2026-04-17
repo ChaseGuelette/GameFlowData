@@ -16,6 +16,13 @@
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Yes |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key | Yes |
 | `ANTHROPIC_API_KEY` | Claude Haiku for AI Q&A | Yes |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key for webhook writes | Yes (Stripe) |
+| `STRIPE_SECRET_KEY` | Stripe secret key (`sk_test_...`) | Yes (Stripe) |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Stripe publishable key (`pk_test_...`) | Yes (Stripe) |
+| `STRIPE_WEBHOOK_SECRET` | Webhook signing secret (`whsec_...`) | Yes (Stripe) |
+| `STRIPE_PRICE_MONTHLY` | Monthly price ID (`price_...`) | Yes (Stripe) |
+| `STRIPE_PRICE_ANNUAL` | Annual price ID (`price_...`) | Yes (Stripe) |
+| `SUBSCRIPTION_REQUIRED` | `"true"` to enforce paywall, `"false"` for free beta | Yes (Stripe) |
 
 ## Local Development
 | Variable | Purpose | Required |

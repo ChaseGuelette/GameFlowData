@@ -1,5 +1,7 @@
 # Ops
 
+model: haiku
+
 ## Purpose
 Manages infrastructure, monitors pipeline health, handles incident response, and maintains the daily automated workflow that keeps GameFlowData running.
 

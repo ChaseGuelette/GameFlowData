@@ -1,5 +1,7 @@
 # Builder
 
+model: sonnet
+
 ## Purpose
 Implements features, fixes bugs, and ships code across the GameFlowData stack — Python ML backend, Next.js dashboard, database migrations, and orchestration scripts.
 
