@@ -15,7 +15,7 @@ Usage:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from sqlalchemy import text
 
