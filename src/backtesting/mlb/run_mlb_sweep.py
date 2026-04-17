@@ -61,6 +61,9 @@ STAT_TO_MARKET_KEY: dict[str, str] = {
     "batter_hrr": "batter_hits_runs_rbis",
 }
 
+_MIN_PROB: float = 1e-6
+_MAX_PROB: float = 1.0 - 1e-6
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -620,6 +623,179 @@ def compute_edges_for_config(
 
 
 # ---------------------------------------------------------------------------
+# Fast path: precompute once, vectorized BL per config
+# ---------------------------------------------------------------------------
+
+def precompute_mlb_base_probs(
+    game_dates: list[date],
+    date_predictions: dict[date, list[DatePrediction]],
+    date_lines: dict[date, pd.DataFrame],
+    date_actuals: dict[date, dict[tuple[int, str], float]],
+) -> pd.DataFrame:
+    """Build flat DataFrame with model probs, market probs, z_raw, logits — computed once before sweep.
+
+    Replaces per-config calls to compute_edges_for_config + _select_sharpest_line (iterrows).
+    """
+    rows = []
+    for gd in game_dates:
+        preds = date_predictions.get(gd)
+        if not preds:
+            continue
+        lines_df = date_lines.get(gd)
+        if lines_df is None or lines_df.empty:
+            continue
+
+        ldf = lines_df.dropna(subset=["over_odds", "under_odds"]).copy()
+        if ldf.empty:
+            continue
+
+        # Vectorized best-line selection: compute booksum, pick lowest-vig per (player_id, market_key)
+        over_arr = ldf["over_odds"].values.astype(float)
+        under_arr = ldf["under_odds"].values.astype(float)
+        raw_over = np.where(over_arr > 0, 100.0 / (over_arr + 100.0), np.abs(over_arr) / (np.abs(over_arr) + 100.0))
+        raw_under = np.where(under_arr > 0, 100.0 / (under_arr + 100.0), np.abs(under_arr) / (np.abs(under_arr) + 100.0))
+        ldf["_raw_over"] = raw_over
+        ldf["_raw_under"] = raw_under
+        ldf["_booksum"] = raw_over + raw_under
+
+        best_idx = ldf.groupby(["player_id", "market_key"])["_booksum"].idxmin()
+        best_lines = ldf.loc[best_idx.values].set_index(["player_id", "market_key"])
+
+        actuals_dict = date_actuals.get(gd, {})
+
+        for pred in preds:
+            try:
+                bl_row = best_lines.loc[(pred.player_id, pred.stat)]
+            except KeyError:
+                continue
+
+            line_val = float(bl_row["line"])
+            over_odds = float(bl_row["over_odds"])
+            under_odds = float(bl_row["under_odds"])
+            raw_o = float(bl_row["_raw_over"])
+            raw_u = float(bl_row["_raw_under"])
+            booksum = raw_o + raw_u
+
+            model_over = float((pred.samples > line_val).mean())
+            model_over = min(max(model_over, _MIN_PROB), _MAX_PROB)
+            market_over = min(max(raw_o / booksum, _MIN_PROB), _MAX_PROB)
+
+            s_std = float(pred.samples.std())
+            z_raw = abs(float(pred.samples.mean()) - line_val) / max(s_std, 1e-6)
+
+            model_logit = float(np.log(model_over / (1.0 - model_over)))
+            market_logit = float(np.log(market_over / (1.0 - market_over)))
+
+            rows.append({
+                "game_date": gd,
+                "player_id": pred.player_id,
+                "game_id": pred.game_id,
+                "stat": pred.stat,
+                "line": line_val,
+                "over_odds": over_odds,
+                "under_odds": under_odds,
+                "bookmaker": bl_row["bookmaker"],
+                "model_over": model_over,
+                "market_over": market_over,
+                "market_under": 1.0 - market_over,
+                "z_raw": z_raw,
+                "model_logit": model_logit,
+                "market_logit": market_logit,
+                "actual": actuals_dict.get((pred.player_id, pred.stat)),
+            })
+
+    return pd.DataFrame(rows)
+
+
+def run_single_config_fast_mlb(
+    config: SweepConfig,
+    precomputed_df: pd.DataFrame,
+    game_dates: list[date],
+    starting_bankroll: float,
+    allowed_bets: set[tuple[str, str]] | None = None,
+    max_bet_pct: float | None = None,
+    flat_bet_size: float | None = None,
+) -> SweepResult:
+    """Vectorized config evaluation using precomputed base probabilities.
+
+    Replaces run_single_config: skips iterrows, rebuilds no lookup dicts per-config.
+    """
+    t0 = time.time()
+
+    if precomputed_df.empty:
+        empty_metrics = MetricsCalculator().calculate(pd.DataFrame(), pd.DataFrame(), starting_bankroll=starting_bankroll)
+        return SweepResult(
+            config=config, metrics=empty_metrics,
+            bets_df=pd.DataFrame(), predictions_df=pd.DataFrame(),
+            elapsed_seconds=time.time() - t0,
+        )
+
+    model_over = precomputed_df["model_over"].values.copy()
+    market_over = precomputed_df["market_over"].values
+    market_under = precomputed_df["market_under"].values
+    z_raw = precomputed_df["z_raw"].values
+    model_logit = precomputed_df["model_logit"].values
+    market_logit = precomputed_df["market_logit"].values
+
+    # Vectorized BL math — only work that varies per config
+    if config.tau is None:
+        posterior_over = model_over.copy()
+    else:
+        confidence = np.minimum(z_raw / config.z_max, 1.0)
+        w = np.minimum(config.tau * confidence, config.max_weight)
+        posterior_logit = market_logit + w * (model_logit - market_logit)
+        posterior_over = 1.0 / (1.0 + np.exp(-posterior_logit))
+
+    posterior_under = 1.0 - posterior_over
+
+    df = precomputed_df.assign(
+        over_prob=posterior_over,
+        under_prob=posterior_under,
+        implied_over=market_over,
+        implied_under=market_under,
+        over_edge=posterior_over - market_over,
+        under_edge=posterior_under - market_under,
+    )
+
+    # Build actuals lookup once — passed to _resolve_bets_from_lookup each day
+    actuals_mask = df["actual"].notna()
+    actuals_sub = df.loc[actuals_mask, ["player_id", "game_id", "stat", "actual"]]
+    actuals_lookup: dict = dict(zip(
+        zip(actuals_sub["player_id"], actuals_sub["game_id"], actuals_sub["stat"]),
+        actuals_sub["actual"],
+    ))
+
+    simulator = BetSimulator(
+        edge_threshold=config.edge_threshold,
+        starting_bankroll=starting_bankroll,
+        kelly_fraction=config.kelly_fraction,
+        max_bet_pct=max_bet_pct,
+        flat_bet_size=flat_bet_size,
+        allowed_bets=allowed_bets,
+    )
+
+    all_pred_dfs = []
+    for gd in game_dates:
+        day_df = df[df["game_date"] == gd]
+        if day_df.empty:
+            continue
+        simulator.evaluate_predictions(day_df, gd)
+        simulator._resolve_bets_from_lookup(actuals_lookup)
+        all_pred_dfs.append(day_df)
+
+    predictions_df = pd.concat(all_pred_dfs, ignore_index=True) if all_pred_dfs else pd.DataFrame()
+    bets_df = simulator.to_dataframe()
+    metrics = MetricsCalculator().calculate(predictions_df, bets_df, starting_bankroll=starting_bankroll)
+
+    elapsed = time.time() - t0
+    return SweepResult(
+        config=config, metrics=metrics,
+        bets_df=bets_df, predictions_df=predictions_df,
+        elapsed_seconds=elapsed,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Per-config sweep execution
 # ---------------------------------------------------------------------------
 
@@ -1138,6 +1314,12 @@ def main():
     phase01_time = time.time() - t_shared
     total_predictions = sum(len(preds) for preds in date_predictions.values())
 
+    # Phase 0b: Precompute base probabilities + lookup tables once (used by fast sweep path)
+    logger.info("Phase 0b: Precomputing base probabilities...")
+    t_pre = time.time()
+    precomputed_df = precompute_mlb_base_probs(game_dates, date_predictions, date_lines, date_actuals)
+    logger.info(f"  {len(precomputed_df):,} rows precomputed in {time.time() - t_pre:.1f}s")
+
     results: list[SweepResult] = []
 
     if args.combined:
@@ -1200,12 +1382,10 @@ def main():
         for i, config in enumerate(configs, 1):
             logger.info(f"Config {i}/{len(configs)}: {config.label}")
 
-            result = run_single_config(
+            result = run_single_config_fast_mlb(
                 config=config,
+                precomputed_df=precomputed_df,
                 game_dates=game_dates,
-                date_predictions=date_predictions,
-                date_lines=date_lines,
-                date_actuals=date_actuals,
                 starting_bankroll=args.starting_bankroll,
                 max_bet_pct=args.max_bet_pct,
                 flat_bet_size=args.flat_bet,

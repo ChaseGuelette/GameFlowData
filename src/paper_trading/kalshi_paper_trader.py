@@ -64,7 +64,7 @@ def _get_env_float(name: str, default: float) -> float:
 # Supported stat types per sport (skip markets without trained models)
 SUPPORTED_STATS: dict[str, set[str]] = {
     "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
-    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_rbis", "batter_hrr"},
+    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_hrr"},
 }
 
 DEFAULT_BANKROLL = _get_env_float("KALSHI_PAPER_TRADING_BANKROLL", 100.0)
@@ -709,9 +709,10 @@ class KalshiPaperTrader:
         self._update_daily_log(target_date)
 
         # Discord notifications for resolved bets (not overflow — those are hypothetical)
-        bankroll = self.get_bankroll()
+        running_balance = self.get_bankroll()
         for update in updates:
             if update["status"] in ("won", "lost"):
+                running_balance += update["pnl"]
                 self._send_trade_alert("resolved", {
                     "player_name": update["player_name"],
                     "stat_type": update["stat_type"],
@@ -720,7 +721,7 @@ class KalshiPaperTrader:
                     "actual_value": update["actual_value"],
                     "pnl": update["pnl"],
                     "status": update["status"],
-                    "balance_after": bankroll,
+                    "balance_after": running_balance,
                 })
 
         real_resolved = sum(1 for u in updates if not u["is_overflow"])

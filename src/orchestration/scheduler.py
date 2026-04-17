@@ -583,13 +583,13 @@ def run_kalshi_daily_summary():
 # ---- Arbitrage Scanner Jobs ----
 
 def run_arb_scan_mlb():
-    """MLB Polymarket-Kalshi arb scan: scrape, match, detect, alert."""
+    """MLB Polymarket-Kalshi arb scan: scrape, match (props + game-level), detect, alert."""
     run_job("arb_scan_job.py", extra_args="--sport mlb --mode sport", silent_on_success=True)
 
 
 def run_arb_scan_all_categories():
-    """All-categories Polymarket scrape: ingests sports + politics + crypto + all other markets."""
-    run_job("arb_scan_job.py", extra_args="--mode all", silent_on_success=True)
+    """All-categories Polymarket scrape + arb scan including non-sports markets."""
+    run_job("arb_scan_job.py", extra_args="--mode all --include-non-sports", silent_on_success=True)
 
 
 def main():

@@ -130,7 +130,7 @@ _TOTAL_PATTERNS = [
 ]
 
 
-def detect_market_type(question: str, description: str = "", is_sports: bool = True) -> str:
+def detect_market_type(question: str, description: str = "", is_sports: bool = True) -> str:  # noqa: C901
     """Classify a Polymarket market by type.
 
     Args:
@@ -147,6 +147,7 @@ def detect_market_type(question: str, description: str = "", is_sports: bool = T
         return "binary"
 
     text = (question + " " + description).strip()
+    text_lower = text.lower()
 
     # NRFI/YRFI (check before player props and moneyline)
     if _NRFI_PATTERN.search(text):
@@ -156,6 +157,10 @@ def detect_market_type(question: str, description: str = "", is_sports: bool = T
     for pat in _SEASON_FUTURE_PATTERNS:
         if pat.search(text):
             return "season_future"
+
+    # Spread: explicit "Spread:" prefix used by some platforms
+    if text_lower.startswith("spread:") or re.search(r"\bspread[:\s]", text, re.IGNORECASE):
+        return "spread"
 
     # Check player prop first (most specific)
     for pat in _PLAYER_PROP_PATTERNS:
@@ -178,7 +183,6 @@ def detect_market_type(question: str, description: str = "", is_sports: bool = T
             return "moneyline"
 
     # Extra heuristics
-    text_lower = text.lower()
     if any(kw in text_lower for kw in ["record", "score", "assists", "rebounds", "strikeout", "home run"]):
         return "player_prop"
     if "total" in text_lower and any(c.isdigit() for c in text):
@@ -265,9 +269,40 @@ def parse_game_market(question: str) -> dict | None:
             "market_type": "moneyline",
         }
 
+    # Moneyline: "{Team} vs. {Team}" or "{Team} vs {Team}"
+    m = re.search(
+        r"^(.+?)\s+vs\.?\s+(.+?)(?:\s*[\(\[].*[\)\]])?\s*\??$",
+        q, re.IGNORECASE,
+    )
+    if m:
+        t1 = m.group(1).strip()
+        t2 = m.group(2).strip()
+        # Avoid matching player prop questions like "Player vs Player"
+        # by requiring at least 3 chars and no digit+word prop indicators
+        if len(t1) >= 3 and len(t2) >= 3 and not re.search(r"\d\+", q):
+            return {
+                "team1": t1,
+                "team2": t2,
+                "line": None,
+                "market_type": "moneyline",
+            }
+
     # Spread: "Will the {team} win by {N}+ points?"
     m = re.search(
         r"will\s+(?:the\s+)?(.+?)\s+win\s+by\s+(\d+\.?\d*)\+?\s+(?:points?|runs?|goals?)\??$",
+        q, re.IGNORECASE,
+    )
+    if m:
+        return {
+            "team1": m.group(1).strip(),
+            "team2": None,
+            "line": float(m.group(2)),
+            "market_type": "spread",
+        }
+
+    # Spread: "Spread: {Team} (-N)" style
+    m = re.search(
+        r"spread:\s*(.+?)\s*\([+-]?(\d+\.?\d*)\)",
         q, re.IGNORECASE,
     )
     if m:

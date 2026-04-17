@@ -1,17 +1,26 @@
 """
 Market Matcher
 ==============
-Cross-platform market matching logic for Kalshi ↔ Polymarket player prop pairs.
+Cross-platform market matching logic for Kalshi ↔ Polymarket pairs.
 
 Matching modes:
-  - Exact: same player_id + stat_type + line
-  - Near: same player_id + stat_type + line within 0.5
-  - Fuzzy: name match + stat_type + line (when player_id is NULL on Poly side)
+  Player props:
+    - Exact: same player_id + stat_type + line
+    - Near: same player_id + stat_type + line within 0.5
+    - Fuzzy: name match + stat_type + line (when player_id is NULL on Poly side)
+
+  Game-level markets:
+    - frozenset({canonical_team1, canonical_team2}) + date + market_type
+    - Additional key for totals: + line
+
+  Non-sports markets:
+    - Fuzzy question-text similarity (SequenceMatcher >= 0.80)
 """
 
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
+from difflib import SequenceMatcher
 
 from sqlalchemy import text
 
@@ -20,10 +29,13 @@ logger = logging.getLogger(__name__)
 # Maximum line difference to consider a "near match"
 NEAR_LINE_TOLERANCE = 0.5
 
+# Non-sports fuzzy match threshold
+NON_SPORTS_SIMILARITY_THRESHOLD = 0.80
+
 
 @dataclass
 class MatchedMarket:
-    """A matched Kalshi + Polymarket pair for the same player prop."""
+    """A matched Kalshi + Polymarket pair for any market type."""
     kalshi_ticker: str
     kalshi_yes_price: float
     kalshi_no_price: float
@@ -41,8 +53,14 @@ class MatchedMarket:
     stat_type: str
     line: float
     sport: str
-    match_type: str | None  # 'exact', 'near', 'fuzzy'
+    match_type: str | None  # 'exact', 'near', 'fuzzy', 'game', 'text_similarity'
     match_confidence: float  # 0.0 - 1.0
+    # New game-level / non-sports fields (backward-compatible defaults)
+    market_type: str = "player_prop"
+    team1: str | None = None
+    team2: str | None = None
+    game_date: date | None = None
+    description: str | None = None  # human-readable match context
 
 
 class MarketMatcher:
@@ -242,6 +260,328 @@ class MarketMatcher:
             if rows:
                 return [dict(row._mapping) for row in rows]
         return []
+
+    # ------------------------------------------------------------------
+    # Game-Level Matching
+    # ------------------------------------------------------------------
+
+    def match_game_markets(
+        self,
+        target_date: date,
+        sport: str,
+    ) -> list["MatchedMarket"]:
+        """Match Kalshi ↔ Polymarket on game-level markets for a given date.
+
+        Match key: frozenset({canonical_team1, canonical_team2}) + market_type
+        For totals: also match on line (within 0.5 tolerance).
+
+        Args:
+            target_date: Date to load snapshots for.
+            sport: Sport to match ('nba' or 'mlb').
+
+        Returns:
+            List of MatchedMarket instances.
+        """
+        from src.arbitrage.team_normalizer import normalize_team
+
+        kalshi_rows = self._load_kalshi_game_markets(target_date, sport)
+        if not kalshi_rows:
+            logger.info(f"No Kalshi game markets for {target_date} {sport}")
+            return []
+
+        poly_rows = self._load_poly_game_markets(target_date, sport)
+        if not poly_rows:
+            logger.info(f"No Poly game markets for {target_date} {sport}")
+            return []
+
+        logger.info(
+            f"Matching {len(kalshi_rows)} Kalshi game mkts × {len(poly_rows)} Poly game mkts "
+            f"for {sport.upper()} {target_date}"
+        )
+
+        def _team_key(t1, t2, mtype, line=None):
+            """Build a match key from canonical team abbreviations."""
+            base = (frozenset({(t1 or "").upper(), (t2 or "").upper()}), mtype)
+            if mtype == "total" and line is not None:
+                return base + (round(float(line) * 2) / 2,)  # round to nearest 0.5
+            return base
+
+        # Build Kalshi lookup
+        kalshi_by_key: dict[tuple, dict] = {}
+        for row in kalshi_rows:
+            t1 = normalize_team(row.get("team1") or "", sport=sport) or (row.get("team1") or "")
+            t2 = normalize_team(row.get("team2") or "", sport=sport) or (row.get("team2") or "")
+            mtype = row.get("market_type") or "moneyline"
+            line = row.get("line")
+            key = _team_key(t1, t2, mtype, line)
+            kalshi_by_key[key] = row
+
+        matched: list[MatchedMarket] = []
+        seen_poly: set[str] = set()
+
+        for poly in poly_rows:
+            cid = poly.get("condition_id", "")
+            if cid in seen_poly:
+                continue
+
+            t1 = normalize_team(poly.get("team1") or "", sport=sport) or (poly.get("team1") or "")
+            t2 = normalize_team(poly.get("team2") or "", sport=sport) or (poly.get("team2") or "")
+            mtype = poly.get("market_type") or "moneyline"
+            line = poly.get("line")
+
+            key = _team_key(t1, t2, mtype, line)
+            kalshi_row = kalshi_by_key.get(key)
+
+            # For totals: try without line (sometimes lines differ slightly)
+            if kalshi_row is None and mtype == "total":
+                base_key = (frozenset({t1.upper(), t2.upper()}), mtype)
+                for k, v in kalshi_by_key.items():
+                    if len(k) >= 2 and k[:2] == base_key:
+                        k_line = k[2] if len(k) > 2 else None
+                        p_line = float(line or 0)
+                        if k_line is not None and abs(float(k_line) - p_line) <= NEAR_LINE_TOLERANCE:
+                            kalshi_row = v
+                            break
+
+            if kalshi_row is None:
+                continue
+
+            seen_poly.add(cid)
+
+            desc = f"{t1 or '?'} vs {t2 or '?'} [{mtype.upper()}]"
+            if line is not None:
+                desc += f" {line}"
+
+            matched.append(MatchedMarket(
+                kalshi_ticker=kalshi_row.get("ticker", ""),
+                kalshi_yes_price=float(kalshi_row.get("yes_price") or 0),
+                kalshi_no_price=float(kalshi_row.get("no_price") or 0),
+                kalshi_volume=int(kalshi_row.get("volume") or 0),
+                kalshi_yes_bid=float(kalshi_row.get("yes_bid") or 0),
+                kalshi_yes_ask=float(kalshi_row.get("yes_ask") or 0),
+                poly_condition_id=cid,
+                poly_yes_price=float(poly.get("yes_price") or 0),
+                poly_no_price=float(poly.get("no_price") or 0),
+                poly_liquidity=float(poly.get("liquidity") or 0),
+                poly_yes_bid=_opt_float(poly.get("yes_bid")),
+                poly_yes_ask=_opt_float(poly.get("yes_ask")),
+                player_id=None,
+                player_name="",
+                stat_type="",
+                line=float(line or 0),
+                sport=sport,
+                match_type="game",
+                match_confidence=0.95,
+                market_type=mtype,
+                team1=t1 or None,
+                team2=t2 or None,
+                game_date=target_date,
+                description=desc,
+            ))
+
+        logger.info(f"Found {len(matched)} Kalshi↔Poly game-level matched pairs")
+        return matched
+
+    # ------------------------------------------------------------------
+    # Non-Sports Matching
+    # ------------------------------------------------------------------
+
+    def match_non_sports_markets(
+        self,
+        categories: list[str] | None = None,
+    ) -> list["MatchedMarket"]:
+        """Match Kalshi ↔ Polymarket on non-sports binary markets via question similarity.
+
+        Uses SequenceMatcher with normalized question text.
+        Threshold: NON_SPORTS_SIMILARITY_THRESHOLD (0.80).
+
+        Args:
+            categories: Optional list of Polymarket categories to include
+                        (e.g., ['politics', 'crypto', 'economics']). None = all non-sports.
+
+        Returns:
+            List of MatchedMarket instances.
+        """
+        kalshi_rows = self._load_kalshi_non_sports()
+        if not kalshi_rows:
+            logger.info("No Kalshi non-sports markets found")
+            return []
+
+        poly_rows = self._load_poly_non_sports(categories)
+        if not poly_rows:
+            logger.info("No Poly non-sports markets found")
+            return []
+
+        logger.info(
+            f"Matching {len(kalshi_rows)} Kalshi non-sports × {len(poly_rows)} Poly non-sports"
+        )
+
+        def _norm_q(q: str) -> str:
+            """Normalize question for comparison."""
+            import re
+            import unicodedata
+            q = unicodedata.normalize("NFKD", q).encode("ASCII", "ignore").decode("utf-8")
+            q = q.lower().strip()
+            q = re.sub(r"[^\w\s]", " ", q)
+            q = re.sub(r"\s+", " ", q)
+            return q
+
+        # Normalize Kalshi questions
+        kalshi_norm = [(row, _norm_q(row.get("market_title") or "")) for row in kalshi_rows]
+
+        matched: list[MatchedMarket] = []
+        seen_poly: set[str] = set()
+
+        for poly in poly_rows:
+            cid = poly.get("condition_id", "")
+            if cid in seen_poly:
+                continue
+
+            poly_q_norm = _norm_q(poly.get("question") or "")
+            if not poly_q_norm:
+                continue
+
+            best_score = 0.0
+            best_kalshi = None
+
+            for k_row, k_norm in kalshi_norm:
+                if not k_norm:
+                    continue
+                score = SequenceMatcher(None, poly_q_norm, k_norm).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_kalshi = k_row
+
+            if best_kalshi is None or best_score < NON_SPORTS_SIMILARITY_THRESHOLD:
+                continue
+
+            seen_poly.add(cid)
+            desc = f"[{poly.get('category', 'other').upper()}] {poly.get('question', '')[:60]}"
+
+            matched.append(MatchedMarket(
+                kalshi_ticker=best_kalshi.get("ticker", ""),
+                kalshi_yes_price=float(best_kalshi.get("yes_price") or 0),
+                kalshi_no_price=float(best_kalshi.get("no_price") or 0),
+                kalshi_volume=int(best_kalshi.get("volume") or 0),
+                kalshi_yes_bid=float(best_kalshi.get("yes_bid") or 0),
+                kalshi_yes_ask=float(best_kalshi.get("yes_ask") or 0),
+                poly_condition_id=cid,
+                poly_yes_price=float(poly.get("yes_price") or 0),
+                poly_no_price=float(poly.get("no_price") or 0),
+                poly_liquidity=float(poly.get("liquidity") or 0),
+                poly_yes_bid=_opt_float(poly.get("yes_bid")),
+                poly_yes_ask=_opt_float(poly.get("yes_ask")),
+                player_id=None,
+                player_name="",
+                stat_type="",
+                line=0.0,
+                sport="",
+                match_type="text_similarity",
+                match_confidence=best_score,
+                market_type=poly.get("market_type") or "binary",
+                team1=None,
+                team2=None,
+                game_date=None,
+                description=desc,
+            ))
+
+        logger.info(f"Found {len(matched)} Kalshi↔Poly non-sports matched pairs")
+        return matched
+
+    # ------------------------------------------------------------------
+    # Additional DB Loaders
+    # ------------------------------------------------------------------
+
+    def _load_kalshi_game_markets(self, target_date: date, sport: str) -> list[dict]:
+        """Load most recent Kalshi game-level (non-prop) snapshot for target_date."""
+        for days_back in range(4):
+            check_date = target_date - timedelta(days=days_back)
+            query = text("""
+                SELECT DISTINCT ON (ticker)
+                    ticker, market_type, team1, team2, line,
+                    yes_price, no_price, yes_bid, yes_ask, volume, market_title
+                FROM kalshi_markets
+                WHERE sport = :sport
+                  AND snapshot_time::date = :target_date
+                  AND market_status = 'open'
+                  AND market_type != 'player_prop'
+                ORDER BY ticker, snapshot_time DESC
+            """)
+            with self.engine.connect() as conn:
+                rows = conn.execute(query, {"sport": sport, "target_date": check_date}).fetchall()
+            if rows:
+                return [dict(row._mapping) for row in rows]
+        return []
+
+    def _load_poly_game_markets(self, target_date: date, sport: str) -> list[dict]:
+        """Load most recent Polymarket game-level snapshot for target_date."""
+        for days_back in range(4):
+            check_date = target_date - timedelta(days=days_back)
+            query = text("""
+                SELECT DISTINCT ON (condition_id)
+                    condition_id, market_type, team1, team2, line,
+                    yes_price, no_price, yes_bid, yes_ask, liquidity, question
+                FROM polymarket_markets
+                WHERE sport = :sport
+                  AND snapshot_time::date = :target_date
+                  AND market_type IN ('moneyline', 'nrfi', 'total', 'spread', 'season_future')
+                  AND market_status = 'open'
+                ORDER BY condition_id, snapshot_time DESC
+            """)
+            with self.engine.connect() as conn:
+                rows = conn.execute(query, {"sport": sport, "target_date": check_date}).fetchall()
+            if rows:
+                return [dict(row._mapping) for row in rows]
+        return []
+
+    def _load_kalshi_non_sports(self) -> list[dict]:
+        """Load recent Kalshi non-sports markets (no sport tag, or KALSHI_GAME_SERIES non-sports)."""
+        query = text("""
+            SELECT DISTINCT ON (ticker)
+                ticker, market_title, market_type,
+                yes_price, no_price, yes_bid, yes_ask, volume
+            FROM kalshi_markets
+            WHERE (sport IS NULL OR sport = '')
+              AND market_status = 'open'
+              AND snapshot_time >= NOW() - INTERVAL '2 hours'
+            ORDER BY ticker, snapshot_time DESC
+            LIMIT 500
+        """)
+        with self.engine.connect() as conn:
+            rows = conn.execute(query).fetchall()
+        return [dict(row._mapping) for row in rows]
+
+    def _load_poly_non_sports(self, categories: list[str] | None = None) -> list[dict]:
+        """Load recent Polymarket non-sports markets."""
+        if categories:
+            query = text("""
+                SELECT DISTINCT ON (condition_id)
+                    condition_id, question, category, market_type,
+                    yes_price, no_price, yes_bid, yes_ask, liquidity
+                FROM polymarket_markets
+                WHERE category = ANY(:categories)
+                  AND market_status = 'open'
+                  AND snapshot_time >= NOW() - INTERVAL '2 hours'
+                ORDER BY condition_id, snapshot_time DESC
+                LIMIT 500
+            """)
+            with self.engine.connect() as conn:
+                rows = conn.execute(query, {"categories": categories}).fetchall()
+        else:
+            query = text("""
+                SELECT DISTINCT ON (condition_id)
+                    condition_id, question, category, market_type,
+                    yes_price, no_price, yes_bid, yes_ask, liquidity
+                FROM polymarket_markets
+                WHERE category NOT IN ('sports')
+                  AND market_status = 'open'
+                  AND snapshot_time >= NOW() - INTERVAL '2 hours'
+                ORDER BY condition_id, snapshot_time DESC
+                LIMIT 500
+            """)
+            with self.engine.connect() as conn:
+                rows = conn.execute(query).fetchall()
+        return [dict(row._mapping) for row in rows]
 
 
 # ---------------------------------------------------------------------------

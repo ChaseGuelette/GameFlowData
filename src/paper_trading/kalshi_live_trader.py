@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Supported stat types per sport (skip markets without trained models)
 SUPPORTED_STATS: dict[str, set[str]] = {
     "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
-    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_rbis", "batter_hrr"},
+    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_hrr"},
 }
 
 

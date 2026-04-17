@@ -44,6 +44,8 @@ def run(
     dry_run: bool = False,
     skip_discord: bool = False,
     skip_scrape: bool = False,
+    include_game: bool = True,
+    include_non_sports: bool = False,
 ) -> dict:
     """Run the full arbitrage scanning pipeline.
 
@@ -54,6 +56,8 @@ def run(
         dry_run: No DB writes; print results instead.
         skip_discord: Skip Discord alerts.
         skip_scrape: Skip Polymarket scrape (use existing DB data).
+        include_game: Also match game-level markets (moneyline, NRFI, totals).
+        include_non_sports: Also match non-sports binary markets (politics, crypto, etc.).
 
     Returns:
         Summary dict with step results.
@@ -97,7 +101,13 @@ def run(
         from src.arbitrage.arb_scanner import ArbScanner
 
         scanner = ArbScanner()
-        result = scanner.scan(target_date=target_date, sport=sport, dry_run=dry_run)
+        result = scanner.scan(
+            target_date=target_date,
+            sport=sport,
+            dry_run=dry_run,
+            include_game=include_game,
+            include_non_sports=include_non_sports,
+        )
 
         summary["kalshi_matched"] = result.n_kalshi_matched
         summary["pure_arbs"] = len(result.pure_arbs)
@@ -191,6 +201,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="No DB writes, print results")
     parser.add_argument("--skip-discord", action="store_true", help="Skip Discord alerts")
     parser.add_argument("--skip-scrape", action="store_true", help="Skip Polymarket scrape step")
+    parser.add_argument("--no-game", action="store_true",
+                        help="Skip game-level market matching (moneyline, NRFI, totals)")
+    parser.add_argument("--include-non-sports", action="store_true",
+                        help="Also match non-sports markets (politics, crypto, economics)")
     return parser.parse_args()
 
 
@@ -204,9 +218,11 @@ def main():
     logger.info(f"  Mode:         {args.mode.upper()}")
     if args.mode == "sport":
         logger.info(f"  Sport:        {args.sport.upper()}")
-    logger.info(f"  Dry run:      {args.dry_run}")
-    logger.info(f"  Skip Discord: {args.skip_discord}")
-    logger.info(f"  Skip Scrape:  {args.skip_scrape}")
+    logger.info(f"  Dry run:          {args.dry_run}")
+    logger.info(f"  Skip Discord:     {args.skip_discord}")
+    logger.info(f"  Skip Scrape:      {args.skip_scrape}")
+    logger.info(f"  Include game:     {not args.no_game}")
+    logger.info(f"  Include non-sports: {args.include_non_sports}")
     logger.info("=" * 60)
 
     summary = run(
@@ -216,6 +232,8 @@ def main():
         dry_run=args.dry_run,
         skip_discord=args.skip_discord,
         skip_scrape=args.skip_scrape,
+        include_game=not args.no_game,
+        include_non_sports=args.include_non_sports,
     )
 
     logger.info("=" * 60)

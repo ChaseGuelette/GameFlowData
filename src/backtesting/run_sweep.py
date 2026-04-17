@@ -309,15 +309,51 @@ def precompute_base_probabilities(
 # Fast per-config execution using pre-computed base probabilities
 # ---------------------------------------------------------------------------
 
+def _filter_best_bets_fast(predictions_df: pd.DataFrame) -> pd.DataFrame:
+    """Vectorized line-shopping + bet-dedup. Replaces BacktestHarness._filter_best_bets
+    in the sweep hot-path (no iterrows).
+
+    Stage 1: For each (player, game, stat), pick the bookmaker with best over edge
+             AND independently the one with best under edge; compare to choose side.
+    Stage 2: One bet per (player, game) — keep highest edge stat.
+    """
+    if predictions_df.empty:
+        return predictions_df
+
+    dedup_key = ["player_id", "game_id", "stat"]
+    df = predictions_df.reset_index(drop=True)
+
+    # Stage 1: idxmax per group — O(n log n), fully vectorized
+    best_over_idx = df.groupby(dedup_key)["over_edge"].idxmax()
+    best_under_idx = df.groupby(dedup_key)["under_edge"].idxmax()
+
+    best_over_rows = df.loc[best_over_idx.values].reset_index(drop=True)
+    best_under_rows = df.loc[best_under_idx.values].reset_index(drop=True)
+
+    use_over = best_over_rows["over_edge"].values >= best_under_rows["under_edge"].values
+    selected_idxs = np.where(use_over, best_over_idx.values, best_under_idx.values)
+
+    result = df.loc[selected_idxs].copy().reset_index(drop=True)
+    result["max_edge"] = np.maximum(
+        best_over_rows["over_edge"].values,
+        best_under_rows["under_edge"].values,
+    )
+
+    # Stage 2: one bet per (player, game)
+    result = result.sort_values("max_edge", ascending=False).drop_duplicates(
+        subset=["player_id", "game_id"], keep="first"
+    )
+    return result
+
+
 def run_single_config_fast(
     config: SweepConfig,
     precomputed_df: pd.DataFrame,
     game_dates: list[date],
-    actuals_df: pd.DataFrame,
-    voids_df: pd.DataFrame,
+    actuals_lookup: dict,
+    void_keys: set,
     starting_bankroll: float,
     allowed_bets: list[tuple[str, str]] | None,
-    filter_best_bets_fn,
     max_bet_pct: float | None = None,
     flat_bet_size: float | None = None,
 ) -> SweepResult:
@@ -395,23 +431,24 @@ def run_single_config_fast(
         if day_df.empty:
             continue
 
-        day_filtered = filter_best_bets_fn(day_df)
+        day_filtered = _filter_best_bets_fast(day_df)
         if day_filtered.empty:
             continue
 
         all_date_preds.append(day_filtered)
 
-        if len(voids_df) > 0:
-            simulator.resolve_voids(voids_df)
-        if len(actuals_df) > 0:
-            simulator.resolve_bets(actuals_df)
+        # Use pre-built lookups — no iterrows per date
+        if void_keys:
+            simulator._resolve_voids_from_keys(void_keys)
+        if actuals_lookup:
+            simulator._resolve_bets_from_lookup(actuals_lookup)
         simulator.evaluate_predictions(day_filtered, game_date)
 
     # Final resolution
-    if len(voids_df) > 0:
-        simulator.resolve_voids(voids_df)
-    if len(actuals_df) > 0:
-        simulator.resolve_bets(actuals_df)
+    if void_keys:
+        simulator._resolve_voids_from_keys(void_keys)
+    if actuals_lookup:
+        simulator._resolve_bets_from_lookup(actuals_lookup)
 
     bets_df = simulator.to_dataframe()
     predictions_df = (
@@ -1029,13 +1066,27 @@ Examples:
     total_predictions = sum(len(df) for df in date_predictions.values())
     logger.info(f"Phase 0-1 complete in {phase01_time:.1f}s")
 
-    # Phase 0b: pre-compute base probabilities once (vectorizes per-config edge calc)
-    logger.info("Phase 0b: Precomputing base probabilities...")
+    # Phase 0b: pre-compute base probabilities + lookup dicts once (reused across all configs)
+    logger.info("Phase 0b: Precomputing base probabilities and lookup tables...")
     t0b = time.time()
     precomputed_df = precompute_base_probabilities(
         game_dates, date_predictions, date_samples, prefetched_lines
     )
-    logger.info(f"  {len(precomputed_df):,} rows precomputed in {time.time() - t0b:.1f}s")
+    # Pre-build actuals/voids lookups once — avoids rebuilding per date per config
+    actuals_lookup: dict = {}
+    if len(actuals_df) > 0:
+        actuals_lookup = dict(zip(
+            zip(actuals_df["player_id"], actuals_df["game_id"], actuals_df["stat"]),
+            actuals_df["actual_value"],
+        ))
+    void_keys: set = set()
+    if len(voids_df) > 0:
+        void_keys = set(zip(voids_df["player_id"], voids_df["game_id"]))
+    logger.info(
+        f"  {len(precomputed_df):,} rows precomputed, "
+        f"{len(actuals_lookup):,} actuals, {len(void_keys):,} void keys  "
+        f"({time.time() - t0b:.1f}s)"
+    )
 
     # Sweep loop
     logger.info("=" * 60)
@@ -1050,11 +1101,10 @@ Examples:
             config=config,
             precomputed_df=precomputed_df,
             game_dates=game_dates,
-            actuals_df=actuals_df,
-            voids_df=voids_df,
+            actuals_lookup=actuals_lookup,
+            void_keys=void_keys,
             starting_bankroll=args.starting_bankroll,
             allowed_bets=allowed_bets,
-            filter_best_bets_fn=loader_harness._filter_best_bets,
             max_bet_pct=args.max_bet_pct,
             flat_bet_size=args.flat_bet,
         )

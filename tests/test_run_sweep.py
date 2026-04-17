@@ -39,7 +39,7 @@ class TestSweepConfig:
     def test_to_dict(self):
         config = SweepConfig(tau=0.10, edge_threshold=0.05, kelly_fraction=0.125)
         d = config.to_dict()
-        assert d == {"tau": 0.10, "z_max": 1.0, "edge_threshold": 0.05, "kelly_fraction": 0.125}
+        assert d == {"tau": 0.10, "z_max": 1.0, "max_weight": 0.50, "edge_threshold": 0.05, "kelly_fraction": 0.125}
 
     def test_to_dict_none_tau(self):
         config = SweepConfig(tau=None, edge_threshold=0.05, kelly_fraction=0.125)

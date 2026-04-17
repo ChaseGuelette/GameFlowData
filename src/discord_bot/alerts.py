@@ -1317,15 +1317,21 @@ def _build_kalshi_pnl_summary_embed(
 
     # Overflow field — bets skipped due to exposure cap (hypothetical P&L)
     overflow_bets = log_data.get("overflow_bets", 0) if log_data else 0
-    overflow_pnl = log_data.get("overflow_pnl", 0.0) if log_data else 0.0
+    overflow_pnl  = log_data.get("overflow_pnl", 0.0) if log_data else 0.0
+    overflow_won  = log_data.get("overflow_won", 0) if log_data else 0
+    overflow_lost = log_data.get("overflow_lost", 0) if log_data else 0
+    overflow_cost = log_data.get("overflow_cost", 0.0) if log_data else 0.0
     if overflow_bets > 0:
         total_tracked = (total_resolved or 0) + overflow_bets
         overflow_pct = overflow_bets / total_tracked if total_tracked > 0 else 0.0
+        ov_wr = overflow_won / overflow_bets if overflow_bets > 0 else 0.0
+        ov_roi = overflow_pnl / overflow_cost if overflow_cost > 0 else 0.0
         embed["fields"].append({
-            "name": "Overflow (Cap-Limited)",
+            "name": "Overflow (Cap-Limited) — hypothetical",
             "value": (
-                f"{overflow_bets} skipped ({overflow_pct:.0%} of eligible)  |  "
-                f"~${overflow_pnl:+,.2f} hypothetical P&L"
+                f"{overflow_bets} skipped ({overflow_pct:.0%} of eligible)  "
+                f"{overflow_won}W-{overflow_lost}L  {ov_wr:.0%} win\n"
+                f"~${overflow_pnl:+,.2f} P&L  |  ~{ov_roi:+.0%} ROI"
             ),
             "inline": False,
         })
@@ -1638,21 +1644,41 @@ def _build_arb_alert_embed(opportunities: list, sport: str = "nba") -> dict:
     shown = opportunities[:5]
     for i, opp in enumerate(shown, 1):
         arb_type = getattr(opp, "arb_type", "unknown")
-        player = getattr(opp, "player_name", None) or "Unknown"
-        stat = str(getattr(opp, "stat_type", "") or "").upper()
-        line = getattr(opp, "line", None)
+        market_type = getattr(opp, "market_type", "player_prop") or "player_prop"
         poly_price = getattr(opp, "poly_price", 0) or 0
         poly_side = getattr(opp, "poly_side", "yes") or "yes"
         poly_liq = getattr(opp, "poly_liquidity", 0) or 0
         disc = getattr(opp, "price_discrepancy", None)
-
         k_side = getattr(opp, "kalshi_side", "?") or "?"
         k_price = getattr(opp, "kalshi_price", 0) or 0
         k_vol = getattr(opp, "kalshi_volume", 0) or 0
         net_margin = getattr(opp, "net_margin", None)
         est_profit = getattr(opp, "estimated_profit", None)
+        extra = getattr(opp, "extra", {}) or {}
 
         type_badge = "PURE ARB" if arb_type == "pure" else "Soft Arb"
+
+        # Build human-readable market label based on market_type
+        if market_type == "player_prop":
+            player = getattr(opp, "player_name", None) or "Unknown"
+            stat = str(getattr(opp, "stat_type", "") or "").upper()
+            line = getattr(opp, "line", None)
+            market_label = f"{player} — {stat} {line or ''}"
+        elif market_type in ("moneyline", "nrfi", "total", "spread", "season_future"):
+            team1 = extra.get("team1") or getattr(opp, "team1", None) or ""
+            team2 = extra.get("team2") or getattr(opp, "team2", None) or ""
+            teams = f"{team1} vs {team2}" if team1 and team2 else (team1 or team2 or "?")
+            line = getattr(opp, "line", None)
+            mtype_label = market_type.upper().replace("_", " ")
+            market_label = f"{teams} [{mtype_label}]"
+            if line:
+                market_label += f" {line}"
+        else:
+            # Non-sports binary
+            desc = extra.get("description") or getattr(opp, "description", None) or ""
+            cat = (getattr(opp, "sport", "") or market_type or "binary").upper()
+            market_label = f"[{cat}] {desc[:50]}" if desc else f"[{cat}] Binary market"
+
         value_parts = [
             f"Kalshi {k_side.upper()} {k_price}c | Poly {poly_side.upper()} {poly_price:.0f}c",
             f"Discrepancy: **{disc:.1%}**" if disc else "",
@@ -1664,7 +1690,7 @@ def _build_arb_alert_embed(opportunities: list, sport: str = "nba") -> dict:
         value_parts.append(f"Kalshi vol: {k_vol:,} | Poly liq: ${poly_liq:,.0f}")
 
         embed["fields"].append({
-            "name": f"#{i} [{type_badge}] {player} — {stat} {line or ''}",
+            "name": f"#{i} [{type_badge}] {market_label}",
             "value": "\n".join(p for p in value_parts if p),
             "inline": False,
         })

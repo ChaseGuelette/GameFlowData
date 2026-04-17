@@ -2,14 +2,25 @@
 
 > Part of [[Models]]
 
-## Current Production Model
+## Current Production Models
+
+### Regular Season (`production/`)
 - **Run ID**: `nba_run_20260323_212931`
 - **Trained on**: Seasons 22023 + 22024 + 22025 (3 full seasons)
 - **Architecture**: XGBoost quantile regression (Q10/Q25/Q50/Q75/Q90) with per-quantile feature selection and isotonic calibration
 - **Stats**: PTS, REB, AST + combo markets (PRA, PR, PA, RA)
 - **Simulation**: 10,000 Gaussian copula Monte Carlo samples per player (PTS rho=0.314, AST rho=0.176)
-- **Blending**: Black-Litterman log-odds with tau=0.09, linear ramp confidence via z-score (sportsbook). Kalshi uses tau=0.5, z_max=1.0 (same as Model Picks)
+- **BL Config (regular season)**: tau=0.5, z_max=1.0, max_weight=0.5, edge=0.09
 - **Calibration offsets**: NONE deployed (4x confirmed to hurt ROI)
+
+### Playoffs (`production_playoffs/`)
+- **Run ID**: `nba_run_20260415_152608`
+- **Trained on**: Seasons 42019, 42020, 42021, 42022, 42023 (5 playoff seasons)
+- **Calibrated on**: 42024 (mild contamination — not training overlap)
+- **Out-of-sample validated**: 42025 — **63.6% hit, +19.3% ROI, 272 bets, Sharpe 2.33**
+- **BL Config (playoffs)**: tau=0.9, z_max=0.25, max_weight=0.8, edge=0.12
+- **Deployed**: `NBA_PLAYOFF_MODE=true` set on Railway (Apr 16, 2026). Activates playoffs model dir + BL config simultaneously.
+- **CDN game discovery**: Playoff game IDs (prefix `004`) already supported — no code change needed
 
 ## Latest Calibration Check (Apr 3, 2026 — 11 days old, HOLD)
 | Metric | Value |
@@ -68,9 +79,10 @@ Full catalog: `docs/nba_feature_catalog.md`
 | `src/models/quantile_trainer.py` | Per-quantile XGBoost with isotonic calibration |
 | `src/models/monte_carlo.py` | 10K-sample Gaussian copula MC predictor |
 | `src/models/black_litterman.py` | Log-odds Bayesian market blending |
-| `src/models/daily_runner.py` | Production inference pipeline |
+| `src/models/daily_runner.py` | Production inference pipeline (dual-mode: regular/playoffs via `NBA_PLAYOFF_MODE`) |
 | `src/models/prediction_store.py` | Prediction + sample storage (gzip BYTEA) |
-| `src/models/artifacts/production/` | Live model artifacts |
+| `src/models/artifacts/production/` | Regular season model artifacts |
+| `src/models/artifacts/production_playoffs/` | Playoff model artifacts |
 
 ## Archived
 - **THREES model** (Session 24): Poor market coverage (50% missing lines), insufficient volume. Code in `archive/threes_model/`. Scrapers still collect data.

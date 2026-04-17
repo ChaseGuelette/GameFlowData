@@ -35,4 +35,5 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-027]] - Bot Tracker enhancements (Value column + Kalshi link), ruff fixes, MLB Model Picks per-stat params, BL tau restored for MLB, MLB Stats Vault (migration 023 pending apply)
 - [[handoff-028]] - Polymarket-Kalshi Arbitrage Scanner: full pipeline (scraper, matcher, scanner, job), 2 DB tables, Discord alerts, Railway env var
 - [[handoff-029]] - Track Record page (migration 026, CSV import, 5 components, hook, page, navbar link) + History page edit/delete for all bet statuses
+- [[handoff-030]] - Backtesting 55x speedup docs, MLB sweep fast path, playoff model deployed (tau=0.9/z_max=0.25/mw=0.8/edge=0.12, +19.3% ROI OOS), NBA_PLAYOFF_MODE=true on Railway
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

@@ -364,33 +364,26 @@ class BetSimulator:
 
         Expected columns: player_id, game_id, stat, actual_value
         """
+        actuals_lookup = dict(zip(
+            zip(actuals_df["player_id"], actuals_df["game_id"], actuals_df["stat"]),
+            actuals_df["actual_value"],
+        ))
+        return self._resolve_bets_from_lookup(actuals_lookup)
+
+    def _resolve_bets_from_lookup(self, actuals_lookup: dict) -> int:
+        """Resolve bets using a pre-built (player_id, game_id, stat) -> actual_value dict."""
         resolved_count = 0
-
-        # Build lookup for actuals
-        actuals_lookup = {}
-        for _, row in actuals_df.iterrows():
-            key = (row["player_id"], row["game_id"], row["stat"])
-            actuals_lookup[key] = row["actual_value"]
-
-        # Resolve each unresolved bet
         for bet in self.bets:
             if bet.outcome is not None:
                 continue
-
             key = (bet.player_id, bet.game_id, bet.stat)
             if key in actuals_lookup:
                 bet.resolve(actuals_lookup[key])
                 resolved_count += 1
-
-                # Update bankroll based on outcome
                 if bet.outcome == BetOutcome.WIN:
-                    # Return stake + profit
                     self.current_bankroll += bet.stake + bet.profit
                 elif bet.outcome == BetOutcome.PUSH:
-                    # Return stake only
                     self.current_bankroll += bet.stake
-                # On LOSS, money is already gone (deducted at placement)
-
         return resolved_count
 
     def resolve_voids(self, voids_df: pd.DataFrame) -> int:
@@ -401,28 +394,21 @@ class BetSimulator:
         """
         if voids_df.empty:
             return 0
+        void_keys = set(zip(voids_df["player_id"], voids_df["game_id"]))
+        return self._resolve_voids_from_keys(void_keys)
 
+    def _resolve_voids_from_keys(self, void_keys: set) -> int:
+        """Resolve bets using a pre-built set of (player_id, game_id) void keys."""
         voided_count = 0
-
-        # Build set of (player_id, game_id) for fast lookup
-        # We don't need 'stat' because if a player didn't play, ALL their props are void
-        void_keys = set()
-        for _, row in voids_df.iterrows():
-            void_keys.add((row["player_id"], row["game_id"]))
-
         for bet in self.bets:
             if bet.outcome is not None:
                 continue
-
             if (bet.player_id, bet.game_id) in void_keys:
                 bet.outcome = BetOutcome.PUSH
-                bet.actual = 0  # No stats recorded
+                bet.actual = 0
                 bet.profit = 0.0
-
-                # Refund stake
                 self.current_bankroll += bet.stake
                 voided_count += 1
-
         return voided_count
 
     def to_dataframe(self) -> pd.DataFrame:

@@ -76,6 +76,25 @@ for _sport, _series_map in KALSHI_PROP_SERIES.items():
     INTERNAL_STAT_TO_SERIES[_sport] = {stat: series for series, stat in _series_map.items()}
 
 # ---------------------------------------------------------------------------
+# Game-Level Series: sport/outcome markets (moneyline, NRFI, totals, futures)
+# Populated after running kalshi_discovery.py locally.
+# Format: series_ticker -> {"market_type": ..., "sport": ...}
+#
+# TODO: Run `python -m src.scrapers.kalshi.kalshi_discovery --output discovery.json`
+# and populate this dict with the game-level series discovered.
+# Examples of likely series tickers (confirm via discovery script):
+#   "KXMLBNRFI":    {"market_type": "nrfi",          "sport": "mlb"},
+#   "KXMLBML":      {"market_type": "moneyline",      "sport": "mlb"},
+#   "KXNBA":        {"market_type": "season_future",  "sport": "nba"},
+#   "KXMLB":        {"market_type": "season_future",  "sport": "mlb"},
+# ---------------------------------------------------------------------------
+
+KALSHI_GAME_SERIES: dict[str, dict[str, str]] = {
+    # series_ticker -> {market_type, sport}
+    # Populated after kalshi_discovery.py run — see TODO above.
+}
+
+# ---------------------------------------------------------------------------
 # Probability Conversion
 # ---------------------------------------------------------------------------
 

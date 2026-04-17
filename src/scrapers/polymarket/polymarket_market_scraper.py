@@ -33,6 +33,7 @@ from sqlalchemy import text
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
+from src.arbitrage.team_normalizer import extract_teams_from_slug
 from src.db.client import get_engine
 from src.scrapers.kalshi.kalshi_market_scraper import build_player_cache, link_player
 from src.scrapers.polymarket.polymarket_client import PolymarketClient
@@ -175,11 +176,19 @@ def _parse_event_markets(event: dict, category: str, sport: str | None) -> list[
                     record["stat_type"] = stat_type
                     record["line"] = line
             elif market_type in ("moneyline", "spread", "total", "nrfi", "season_future"):
-                game_info = parse_game_market(question)
-                if game_info:
-                    record["team1"] = game_info.get("team1")
-                    record["team2"] = game_info.get("team2")
-                    record["line"] = game_info.get("line")
+                # 1. Try structured slug first (most reliable)
+                slug_result = extract_teams_from_slug(event_slug)
+                if slug_result:
+                    _, t1, t2, _ = slug_result
+                    record["team1"] = t1
+                    record["team2"] = t2
+                else:
+                    # 2. Fall back to question-text parsing
+                    game_info = parse_game_market(question)
+                    if game_info:
+                        record["team1"] = game_info.get("team1")
+                        record["team2"] = game_info.get("team2")
+                        record["line"] = game_info.get("line")
 
         parsed.append(record)
 

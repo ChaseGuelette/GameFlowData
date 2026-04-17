@@ -88,6 +88,8 @@ class ArbScanner:
         target_date: date,
         sport: str = "nba",
         dry_run: bool = False,
+        include_game: bool = True,
+        include_non_sports: bool = False,
     ) -> ScanResult:
         """Run a full arbitrage scan for the given date and sport.
 
@@ -95,6 +97,8 @@ class ArbScanner:
             target_date: Date to scan.
             sport: Sport to scan ('nba' or 'mlb').
             dry_run: Skip DB writes if True.
+            include_game: Also match game-level markets (moneyline, NRFI, etc.).
+            include_non_sports: Also match non-sports binary markets.
 
         Returns:
             ScanResult with all detected opportunities.
@@ -108,12 +112,39 @@ class ArbScanner:
         logger.info(f"Scanning {sport.upper()} arbs for {target_date}...")
         matcher = MarketMatcher(engine=self.engine)
 
-        kalshi_matched = []
+        all_matched = []
+
+        # Player prop matching (always on)
         try:
-            kalshi_matched = matcher.match_kalshi_markets(target_date, sport)
+            prop_matched = matcher.match_kalshi_markets(target_date, sport)
+            all_matched.extend(prop_matched)
         except Exception as e:
-            logger.error(f"Kalshi matching failed: {e}")
-            errors.append(f"kalshi_match: {e}")
+            logger.error(f"Kalshi prop matching failed: {e}")
+            errors.append(f"kalshi_prop_match: {e}")
+
+        # Game-level matching
+        if include_game:
+            try:
+                game_matched = matcher.match_game_markets(target_date, sport)
+                all_matched.extend(game_matched)
+                if game_matched:
+                    logger.info(f"Game-level matched: {len(game_matched)} pairs")
+            except Exception as e:
+                logger.warning(f"Game-level matching failed (non-fatal): {e}")
+                errors.append(f"game_match: {e}")
+
+        # Non-sports matching
+        if include_non_sports:
+            try:
+                ns_matched = matcher.match_non_sports_markets()
+                all_matched.extend(ns_matched)
+                if ns_matched:
+                    logger.info(f"Non-sports matched: {len(ns_matched)} pairs")
+            except Exception as e:
+                logger.warning(f"Non-sports matching failed (non-fatal): {e}")
+                errors.append(f"non_sports_match: {e}")
+
+        kalshi_matched = all_matched  # for ScanResult.n_kalshi_matched
 
         # Step 2: Detect arbs from matched pairs
         pure_arbs: list[ArbOpportunity] = []
@@ -236,7 +267,7 @@ class ArbScanner:
             opp = ArbOpportunity(
                 sport=pair.sport,
                 arb_type="pure" if is_pure else "soft",
-                market_type="player_prop",
+                market_type=getattr(pair, "market_type", "player_prop"),
                 player_name=pair.player_name,
                 stat_type=pair.stat_type,
                 line=pair.line,
@@ -256,7 +287,13 @@ class ArbScanner:
                 price_discrepancy=discrepancy,
                 min_fillable=min_depth,
                 estimated_profit=est_profit,
-                extra={"direction": direction, "match_type": pair.match_type},
+                extra={
+                    "direction": direction,
+                    "match_type": pair.match_type,
+                    "team1": getattr(pair, "team1", None),
+                    "team2": getattr(pair, "team2", None),
+                    "description": getattr(pair, "description", None),
+                },
             )
             opps.append(opp)
 
@@ -283,12 +320,14 @@ class ArbScanner:
         stmt = text("""
             INSERT INTO arb_opportunities (
                 scan_time, sport, arb_type, market_type, player_name, stat_type, line,
+                team1, team2, description,
                 kalshi_ticker, kalshi_side, kalshi_price, kalshi_volume, kalshi_fee,
                 poly_condition_id, poly_side, poly_price, poly_liquidity, poly_fee,
                 combined_cost, gross_margin, net_margin,
                 price_discrepancy, min_fillable, estimated_profit, status
             ) VALUES (
                 :scan_time, :sport, :arb_type, :market_type, :player_name, :stat_type, :line,
+                :team1, :team2, :description,
                 :kalshi_ticker, :kalshi_side, :kalshi_price, :kalshi_volume, :kalshi_fee,
                 :poly_condition_id, :poly_side, :poly_price, :poly_liquidity, :poly_fee,
                 :combined_cost, :gross_margin, :net_margin,
@@ -307,6 +346,9 @@ class ArbScanner:
                     "player_name": opp.player_name,
                     "stat_type": opp.stat_type,
                     "line": opp.line,
+                    "team1": opp.extra.get("team1"),
+                    "team2": opp.extra.get("team2"),
+                    "description": opp.extra.get("description"),
                     "kalshi_ticker": opp.kalshi_ticker,
                     "kalshi_side": opp.kalshi_side,
                     "kalshi_price": opp.kalshi_price,

@@ -38,9 +38,11 @@ from sqlalchemy import text
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
+from src.arbitrage.team_normalizer import extract_teams_from_question, normalize_team
 from src.db.client import get_engine
 from src.scrapers.kalshi.kalshi_client import KalshiClient
 from src.scrapers.kalshi.kalshi_utils import (
+    KALSHI_GAME_SERIES,
     KALSHI_PROP_SERIES,
     kalshi_mid_to_prob,
 )
@@ -158,6 +160,110 @@ def parse_market(market: dict, series_ticker: str, stat_type: str) -> dict | Non
         "open_interest": open_interest,
         "close_time": market.get("close_time") or market.get("expected_expiration_time"),
         # Normalize Kalshi "active" status to "open" for consistency with edge calculator
+        "market_status": "open" if market.get("status") in ("active", "open") else market.get("status", "open"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Game-Level Market Parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_game_market_kalshi(
+    market: dict,
+    series_ticker: str,
+    market_type: str,
+    sport: str,
+) -> dict | None:
+    """Parse a Kalshi game-level market (moneyline, NRFI, total, future).
+
+    Extracts team names from the market title using team_normalizer.
+
+    Args:
+        market: Raw market dict from Kalshi API.
+        series_ticker: The series this market belongs to.
+        market_type: Market type ('moneyline', 'nrfi', 'total', 'season_future').
+        sport: Sport key ('mlb', 'nba').
+
+    Returns:
+        Parsed market dict with team1/team2 instead of player_name/stat_type,
+        or None if parsing fails or market is not active.
+    """
+    ticker = market.get("ticker", "")
+    title = market.get("title", "")
+
+    if not title:
+        return None
+
+    # Extract prices (same logic as parse_market)
+    yes_bid_dollars = float(market.get("yes_bid_dollars") or 0)
+    yes_ask_dollars = float(market.get("yes_ask_dollars") or 0)
+    last_price_dollars = float(market.get("last_price_dollars") or 0)
+
+    yes_bid_cents = round(yes_bid_dollars * 100)
+    yes_ask_cents = round(yes_ask_dollars * 100)
+    yes_price_cents = (
+        round(last_price_dollars * 100)
+        if last_price_dollars
+        else round((yes_bid_dollars + yes_ask_dollars) / 2 * 100)
+    )
+
+    try:
+        volume = int(float(market.get("volume_fp") or market.get("volume") or 0))
+    except (ValueError, TypeError):
+        volume = 0
+    try:
+        open_interest = int(float(market.get("open_interest_fp") or market.get("open_interest") or 0))
+    except (ValueError, TypeError):
+        open_interest = 0
+
+    # Try to extract teams from the title
+    team1 = None
+    team2 = None
+    line = None
+
+    if market_type == "season_future":
+        # For futures, team1 = the subject team (often in the title)
+        t = normalize_team(title.split(":")[0].strip(), sport=sport)
+        if t:
+            team1 = t
+    else:
+        # For game-level markets, extract two teams
+        result = extract_teams_from_question(title, sport)
+        if result:
+            team1, team2 = result
+        else:
+            # Fall back: try to extract canonical abbrs from ticker
+            # Ticker format often contains team codes: KXMLBNRFI-26APR16NYYSEA -> NYY, SEA
+            import re
+            ticker_upper = ticker.upper()
+            # Find a block of 6 uppercase letters after the date part
+            m = re.search(r"-\d{2}[A-Z]{3}\d{2}([A-Z]{3})([A-Z]{3})", ticker_upper)
+            if m:
+                t1 = normalize_team(m.group(1), sport=sport)
+                t2 = normalize_team(m.group(2), sport=sport)
+                if t1 and t2:
+                    team1, team2 = t1, t2
+
+    return {
+        "ticker": ticker,
+        "event_ticker": market.get("event_ticker", ""),
+        "series_ticker": series_ticker,
+        "market_type": market_type,
+        "sport": sport,
+        "market_title": title,
+        "team1": team1,
+        "team2": team2,
+        "line": line,
+        "player_name": None,
+        "stat_type": None,
+        "yes_price": yes_price_cents,
+        "no_price": 100 - yes_price_cents,
+        "yes_bid": yes_bid_cents,
+        "yes_ask": yes_ask_cents,
+        "volume": volume,
+        "open_interest": open_interest,
+        "close_time": market.get("close_time") or market.get("expected_expiration_time"),
         "market_status": "open" if market.get("status") in ("active", "open") else market.get("status", "open"),
     }
 
@@ -341,11 +447,13 @@ def store_markets(engine, parsed_markets: list[dict], snapshot_time: datetime) -
 
     stmt = text("""
         INSERT INTO kalshi_markets (
-            ticker, event_ticker, series_ticker, sport, player_name, stat_type, line,
+            ticker, event_ticker, series_ticker, sport, market_type,
+            player_name, stat_type, line, team1, team2,
             market_title, player_id, yes_price, no_price, yes_bid, yes_ask,
             bid_ask_spread, volume, open_interest, close_time, market_status, snapshot_time
         ) VALUES (
-            :ticker, :event_ticker, :series_ticker, :sport, :player_name, :stat_type, :line,
+            :ticker, :event_ticker, :series_ticker, :sport, :market_type,
+            :player_name, :stat_type, :line, :team1, :team2,
             :market_title, :player_id, :yes_price, :no_price, :yes_bid, :yes_ask,
             :bid_ask_spread, :volume, :open_interest, :close_time, :market_status, :snapshot_time
         )
@@ -359,7 +467,10 @@ def store_markets(engine, parsed_markets: list[dict], snapshot_time: datetime) -
             volume = EXCLUDED.volume,
             open_interest = EXCLUDED.open_interest,
             market_status = EXCLUDED.market_status,
-            player_id = EXCLUDED.player_id
+            player_id = EXCLUDED.player_id,
+            team1 = EXCLUDED.team1,
+            team2 = EXCLUDED.team2,
+            market_type = EXCLUDED.market_type
     """)
 
     count = 0
@@ -371,9 +482,12 @@ def store_markets(engine, parsed_markets: list[dict], snapshot_time: datetime) -
                 "event_ticker": m.get("event_ticker", ""),
                 "series_ticker": m.get("series_ticker", ""),
                 "sport": m.get("sport", ""),
-                "player_name": m["player_name"],
-                "stat_type": m["stat_type"],
-                "line": m["line"],
+                "market_type": m.get("market_type", "player_prop"),
+                "player_name": m.get("player_name"),
+                "stat_type": m.get("stat_type"),
+                "line": m.get("line"),
+                "team1": m.get("team1"),
+                "team2": m.get("team2"),
                 "market_title": m.get("market_title", ""),
                 "player_id": m.get("player_id"),
                 "yes_price": m.get("yes_price", 0),
@@ -420,8 +534,16 @@ def scrape_and_store(
     stats = {"raw": 0, "parsed": 0, "linked": 0, "stored": 0}
 
     prop_series = KALSHI_PROP_SERIES.get(sport, {})
-    if not prop_series:
-        logger.error(f"No prop series configured for sport: {sport}")
+
+    # Game-level series for this sport (may be empty if not yet discovered)
+    game_series = {
+        ticker: info
+        for ticker, info in KALSHI_GAME_SERIES.items()
+        if info.get("sport") == sport
+    }
+
+    if not prop_series and not game_series:
+        logger.error(f"No prop or game series configured for sport: {sport}")
         return stats
 
     # Step 1: Discover markets from all stat series
@@ -437,7 +559,8 @@ def scrape_and_store(
             logger.warning("No Kalshi credentials -- use --mock for testing")
             return stats
 
-        for i, series_ticker in enumerate(prop_series):
+        all_series_to_fetch = list(prop_series.keys()) + list(game_series.keys())
+        for i, series_ticker in enumerate(all_series_to_fetch):
             if i > 0:
                 time.sleep(1.0)  # pause between series to avoid rate limiting
             raw = client.list_all_markets(series_ticker=series_ticker)
@@ -448,20 +571,31 @@ def scrape_and_store(
     total_raw = sum(len(ms) for ms in all_raw_markets.values())
     stats["raw"] = total_raw
 
-    # Step 2: Parse markets
+    # Step 2: Parse markets (player props + game-level)
     parsed_markets = []
     for series_ticker, markets in all_raw_markets.items():
-        stat_type = prop_series.get(series_ticker)
-        if not stat_type:
-            continue
-        for market in markets:
-            # Skip non-active markets
-            if market.get("status") not in ("active", "open"):
-                continue
-            parsed = parse_market(market, series_ticker, stat_type)
-            if parsed:
-                parsed["sport"] = sport
-                parsed_markets.append(parsed)
+        if series_ticker in prop_series:
+            # Player prop series
+            stat_type = prop_series[series_ticker]
+            for market in markets:
+                if market.get("status") not in ("active", "open"):
+                    continue
+                parsed = parse_market(market, series_ticker, stat_type)
+                if parsed:
+                    parsed["sport"] = sport
+                    parsed["market_type"] = "player_prop"
+                    parsed_markets.append(parsed)
+
+        elif series_ticker in game_series:
+            # Game-level series
+            info = game_series[series_ticker]
+            mtype = info.get("market_type", "moneyline")
+            for market in markets:
+                if market.get("status") not in ("active", "open"):
+                    continue
+                parsed = parse_game_market_kalshi(market, series_ticker, mtype, sport)
+                if parsed:
+                    parsed_markets.append(parsed)
 
     stats["parsed"] = len(parsed_markets)
     logger.info(f"Parsed {len(parsed_markets)}/{total_raw} markets")

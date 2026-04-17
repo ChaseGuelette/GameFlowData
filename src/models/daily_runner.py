@@ -1,6 +1,7 @@
 # production/daily_runner.py
 
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
@@ -15,10 +16,15 @@ from src.models.monte_carlo import derive_combo_samples
 
 logger = logging.getLogger(__name__)
 
-# Optimal BL config from backtest sweep (61.5% hit rate, 7.72% ROI)
-DEFAULT_BL_TAU = 0.5
-DEFAULT_BL_Z_MAX = 1.0
-DEFAULT_BL_EDGE_THRESHOLD = 0.09
+# BL config switches based on NBA_PLAYOFF_MODE env var
+# Regular season: tau=0.5, z_max=1.0, mw=0.5, edge=0.09  (61.5% hit, 7.72% ROI)
+# Playoffs:       tau=0.9, z_max=0.25, mw=0.8, edge=0.12  (63.6% hit, +19.3% ROI, Sharpe 2.33)
+_PLAYOFF_MODE = os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes")
+
+DEFAULT_BL_TAU = 0.9 if _PLAYOFF_MODE else 0.5
+DEFAULT_BL_Z_MAX = 0.25 if _PLAYOFF_MODE else 1.0
+DEFAULT_BL_MAX_WEIGHT = 0.8 if _PLAYOFF_MODE else 0.5
+DEFAULT_BL_EDGE_THRESHOLD = 0.12 if _PLAYOFF_MODE else 0.09
 
 # Q50 vs L5 sanity check: reject under recs where Q50 is 30%+ below player L5 avg
 MAX_Q50_DIVERGENCE = 0.30
@@ -913,9 +919,9 @@ class DailyPredictionRunner:
     ) -> pd.DataFrame:
         """Compute Black-Litterman blended probabilities and mark recommended picks.
 
-        Uses the optimal BL config from backtest sweeps (tau=0.5, z_max=1.0)
-        to blend model probabilities with market priors. Predictions with
-        BL edge >= 9% are marked as recommended ("Model Picks").
+        Uses the optimal BL config from backtest sweeps. Config is selected
+        based on NBA_PLAYOFF_MODE env var (regular season: tau=0.5/z_max=1.0/edge=9%;
+        playoffs: tau=0.9/z_max=0.25/mw=0.8/edge=12%).
 
         Args:
             predictions_df: DataFrame with raw model predictions and edges.
@@ -939,7 +945,7 @@ class DailyPredictionRunner:
             return predictions_df
 
         # Initialize BL blender with optimal config
-        bl_config = BLConfig(tau=DEFAULT_BL_TAU, z_max=DEFAULT_BL_Z_MAX)
+        bl_config = BLConfig(tau=DEFAULT_BL_TAU, z_max=DEFAULT_BL_Z_MAX, max_weight=DEFAULT_BL_MAX_WEIGHT)
         blender = BlackLittermanBlender(config=bl_config)
 
         bl_computed = 0

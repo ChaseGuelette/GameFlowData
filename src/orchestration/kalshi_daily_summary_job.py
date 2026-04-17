@@ -174,8 +174,19 @@ def _get_overflow_stats(engine, game_date) -> dict:
                     SELECT
                         COUNT(*) FILTER (WHERE status IN ('overflow_won', 'overflow_lost'))
                             AS overflow_bets,
+                        COUNT(*) FILTER (WHERE status = 'overflow_won')
+                            AS overflow_won,
+                        COUNT(*) FILTER (WHERE status = 'overflow_lost')
+                            AS overflow_lost,
                         COALESCE(SUM(pnl) FILTER (WHERE status IN ('overflow_won', 'overflow_lost')), 0)
-                            AS overflow_pnl
+                            AS overflow_pnl,
+                        COALESCE(SUM(
+                            CASE
+                                WHEN status IN ('overflow_won', 'overflow_lost')
+                                THEN contracts * (CASE WHEN side = 'no' THEN (100 - price::int) ELSE price::int END)::float / 100.0
+                                ELSE 0
+                            END
+                        ), 0) AS overflow_cost
                     FROM kalshi_paper_bets
                     WHERE game_date = :game_date
                       AND status LIKE 'overflow%'
@@ -183,10 +194,16 @@ def _get_overflow_stats(engine, game_date) -> dict:
                 {"game_date": game_date},
             ).fetchone()
         if row:
-            return {"overflow_bets": int(row[0] or 0), "overflow_pnl": float(row[1] or 0)}
+            return {
+                "overflow_bets": int(row[0] or 0),
+                "overflow_won":  int(row[1] or 0),
+                "overflow_lost": int(row[2] or 0),
+                "overflow_pnl":  float(row[3] or 0),
+                "overflow_cost": float(row[4] or 0),
+            }
     except Exception as e:
         logger.warning(f"Failed to query overflow stats: {e}")
-    return {"overflow_bets": 0, "overflow_pnl": 0.0}
+    return {"overflow_bets": 0, "overflow_won": 0, "overflow_lost": 0, "overflow_pnl": 0.0, "overflow_cost": 0.0}
 
 
 def _send_pnl_summary(resolution_result: dict, log_data: dict, dry_run: bool = False) -> None:
