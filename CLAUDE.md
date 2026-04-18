@@ -44,12 +44,51 @@ These rules must NEVER be violated:
 ## Assets
 The [[Assets]] folder contains images, videos, PDFs, and other media. When working on any task, check Assets/ for related materials. You can analyze images, read PDFs, and process any file dropped there.
 
+## Model Routing & Escalation
+
+Default session model: **Sonnet**. Use cheaper models for mechanical work, escalate to Opus for hard reasoning.
+
+### Escalation Rules — When to Spawn an Opus Subagent
+When running as Sonnet, ALWAYS use Task tool with `model: "opus"` for:
+- **"Why" questions** about model performance, ROI degradation, or calibration drift
+- **Debugging that spans 3+ files** or involves subtle cross-system interactions
+- **Architecture or design decisions** — choosing approaches, evaluating trade-offs
+- **Calibration interpretation** (not data gathering — the interpretation step)
+- **Novel problem-solving** where you're uncertain about the right approach
+- **Planning multi-step implementations** that touch 5+ files
+
+For everything else (file reading, SQL, small edits, clear-spec implementation, status checks), handle directly.
+
+### Code Implementation via OpenCode + GLM
+For significant code writing (new features, multi-file changes with a clear spec):
+1. Write a clear, detailed spec describing what to implement (files, functions, behavior)
+2. Call OpenCode via Bash:
+   ```bash
+   opencode run --model openrouter/z-ai/glm-5.1 -f <target-file> "<spec>" --format json
+   ```
+   Or for headless server mode (more reliable for file edits):
+   ```bash
+   opencode run --attach http://localhost:4096 --model openrouter/z-ai/glm-5.1 "<spec>"
+   ```
+3. Review the diff (`git diff`) and fix any issues — either directly or send back to OpenCode
+4. GLM 5.1 is 5x cheaper than Sonnet on output tokens. Use GLM 4.7 ($0.39/$1.75) for simpler tasks.
+
+Do NOT use this for small edits (< 20 lines) — edit directly instead.
+Do NOT use this for tasks requiring deep understanding of the codebase — Sonnet/Opus should handle those.
+
+### Subagent Model Assignment
+- **Haiku**: File search (explorer), SQL queries (sql-runner), status checks
+- **Sonnet**: Code review, brain file I/O (resume/wrap-up), calibration data gathering
+- **Opus**: Architecture decisions, complex debugging, calibration interpretation
+
 ## Agent Personas
 Available specialized agents in .claude/agents/:
 - [[builder]] - Implements features, ships code, makes technical decisions
 - [[strategist]] - Product thinking, monetization, growth, go-to-market
 - [[analyst]] - Model performance, calibration, backtesting, data analysis
 - [[ops]] - Infrastructure, monitoring, pipeline health, incident response
+- [[explorer]] - Haiku-powered codebase search and file reading
+- [[sql-runner]] - Haiku-powered database queries
 
 ## Commands
 - /init-braintree - Initialize a new brain

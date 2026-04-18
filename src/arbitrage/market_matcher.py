@@ -509,6 +509,28 @@ class MarketMatcher:
             q = re.sub(r"\s+", " ", q)
             return q
 
+        # Keyword pre-filter: only compare Poly markets that contain at least one
+        # term associated with our Kalshi non-sports series. Reduces 27k+ → ~few hundred
+        # before the expensive O(n×m) SequenceMatcher pass.
+        _NON_SPORTS_KEYWORDS = {
+            # Economics / macro
+            "gdp", "gross domestic", "cpi", "inflation", "consumer price",
+            "federal funds", "fomc", "rate cut", "rate hike", "interest rate",
+            "fed rate", "fed funds",
+            # Crypto
+            "bitcoin", "btc", "ethereum", "eth", "dogecoin", "doge",
+            "ripple", "xrp", "crypto",
+        }
+        poly_filtered = [
+            row for row in poly_rows
+            if any(kw in (row.get("question") or "").lower() for kw in _NON_SPORTS_KEYWORDS)
+        ]
+        if len(poly_filtered) < len(poly_rows):
+            logger.info(
+                f"Keyword pre-filter: {len(poly_rows)} → {len(poly_filtered)} Poly markets"
+            )
+        poly_rows = poly_filtered
+
         # Normalize Kalshi questions
         kalshi_norm = [(row, _norm_q(row.get("market_title") or "")) for row in kalshi_rows]
 

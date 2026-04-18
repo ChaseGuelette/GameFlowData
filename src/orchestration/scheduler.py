@@ -7,21 +7,29 @@ All times are in America/New_York (ET). DST transitions are handled
 automatically by APScheduler + pytz.
 
 Schedule (ET):
-    11:00 AM - daily_stats_job
-    11:30 AM - daily_stats_retry (if 11 AM failed)
+    9:00 AM  - daily_stats_job
+    9:00 AM  - mlb_roster_scraper_job
+    9:00 AM  - nonsports_polymarket_scrape (2hr timeout)
+    9:30 AM  - daily_stats_retry (if 9 AM failed)
 
-    11 AM - 11 PM ET every 5 min:
+    9 AM - 11 PM ET every 5 min:
         :00,:05,...,:55  - lines_job --live --props-only  (silent)
         :02,:07,...,:57  - edge_refresh_job               (silent)
 
+    9 AM - 11 PM ET every 10 min:
+        kalshi_refresh (NBA + MLB + non-sports)
+
+    10:00 AM - mlb_daily_stats_job
+    10:00 AM - kalshi_daily_summary_job
+    10:30 AM - mlb_daily_stats_retry
     12:00 PM - lines_job --live (full)
     12:15 PM - inference_job (full MC)
-    12:30 PM - kalshi_daily_summary_job
 
     4:00 PM  - lines_job --live --parallel (full)
     4:15 PM  - inference_job (full MC)
+    5:00 PM  - nonsports_polymarket_scrape (2nd run)
 
-    "silent" = Discord alerts only on failure (~156 runs/day each).
+    "silent" = Discord alerts only on failure.
 
 Usage:
     python src/orchestration/scheduler.py              # Start scheduler loop
@@ -644,20 +652,20 @@ def main():
 
     ET = "America/New_York"
 
-    # 11:00 AM ET - Daily stats (moved from 9 AM so last night's games are in DB)
+    # 9:00 AM ET - Daily stats
     scheduler.add_job(
         run_daily_stats,
-        CronTrigger(hour=11, minute=0, timezone=ET),
+        CronTrigger(hour=9, minute=0, timezone=ET),
         id="daily_stats",
-        name="Daily Stats (11 AM ET)",
+        name="Daily Stats (9 AM ET)",
     )
 
-    # 11:30 AM ET - Retry daily stats if 11 AM run failed
+    # 9:30 AM ET - Retry daily stats if 9 AM run failed
     scheduler.add_job(
         run_daily_stats_retry,
-        CronTrigger(hour=11, minute=30, timezone=ET),
+        CronTrigger(hour=9, minute=30, timezone=ET),
         id="daily_stats_retry",
-        name="Daily Stats Retry (11:30 AM ET)",
+        name="Daily Stats Retry (9:30 AM ET)",
     )
 
     # --- First window: noon full scrape + inference ---
@@ -678,20 +686,20 @@ def main():
         name="Inference (12:15 PM ET)",
     )
 
-    # --- Every 5 min props-only + edge refresh: 11 AM - 11 PM ET ---
+    # --- Every 5 min props-only + edge refresh: 9 AM - 11 PM ET ---
 
     scheduler.add_job(
         run_lines_props_only_silent,
-        CronTrigger(hour='11-23', minute='*/5', timezone=ET),
+        CronTrigger(hour='9-23', minute='*/5', timezone=ET),
         id="props_every_5",
-        name="Props Only (every 5 min, 11AM-11PM ET)",
+        name="Props Only (every 5 min, 9AM-11PM ET)",
     )
 
     scheduler.add_job(
         run_edge_refresh_silent,
-        CronTrigger(hour='11-23', minute='2,7,12,17,22,27,32,37,42,47,52,57', timezone=ET),
+        CronTrigger(hour='9-23', minute='2,7,12,17,22,27,32,37,42,47,52,57', timezone=ET),
         id="edge_refresh_every_5",
-        name="Edge Refresh (every 5 min, 11AM-11PM ET)",
+        name="Edge Refresh (every 5 min, 9AM-11PM ET)",
     )
 
     # --- Second window: 4 PM full scrape + inference ---
@@ -728,12 +736,12 @@ def main():
     # MLB Jobs
     # ==============================================================
 
-    # 9:30 AM ET - MLB active roster (IL tracking, availability)
+    # 9:00 AM ET - MLB active roster (IL tracking, availability)
     scheduler.add_job(
         run_mlb_roster_scraper,
-        CronTrigger(hour=9, minute=30, timezone=ET),
+        CronTrigger(hour=9, minute=0, timezone=ET),
         id="mlb_roster_scraper",
-        name="MLB Active Roster (9:30 AM ET)",
+        name="MLB Active Roster (9 AM ET)",
     )
 
     # 10:00 AM ET - MLB daily stats (results from last night)
@@ -820,49 +828,40 @@ def main():
     # Kalshi Prediction Markets
     # ==============================================================
 
-    # 12:30 PM ET - Kalshi daily summary: resolve pending bets + P&L/analysis to Discord
-    # Runs after NBA daily stats (11 AM) + first Kalshi refresh resolves remaining bets (~11:10 AM)
-    # so yesterday's daily log always exists and shows accurate data.
+    # 10:00 AM ET - Kalshi daily summary: resolve pending bets + P&L/analysis to Discord
+    # Runs after NBA daily stats (9 AM) + first Kalshi refresh (~9:10 AM) so bets are resolved
+    # and yesterday's daily log shows accurate data.
     scheduler.add_job(
         run_kalshi_daily_summary,
-        CronTrigger(hour=12, minute=30, timezone=ET),
+        CronTrigger(hour=10, minute=0, timezone=ET),
         id="kalshi_daily_summary",
-        name="Kalshi Daily Summary (12:30 PM ET)",
+        name="Kalshi Daily Summary (10 AM ET)",
     )
 
-    # ONE-TIME: Apr 15 2026 noon ET — test new embed format after deploy
-    # Remove after confirmed working.
-    scheduler.add_job(
-        run_kalshi_daily_summary,
-        DateTrigger(run_date="2026-04-15 12:00:00", timezone=ET),
-        id="kalshi_daily_summary_test_apr15",
-        name="Kalshi Daily Summary TEST (Apr 15 noon ET)",
-    )
-
-    # Every 10 min, 11 AM - 11 PM ET — scrape markets + compute edges
+    # Every 10 min, 9 AM - 11 PM ET — scrape markets + compute edges
     # Job exits gracefully if KALSHI_API_KEY is not set
     scheduler.add_job(
         run_kalshi_refresh,
-        CronTrigger(hour='11-23', minute='*/10', timezone=ET),
+        CronTrigger(hour='9-23', minute='*/10', timezone=ET),
         id="kalshi_refresh_nba",
-        name="Kalshi NBA Refresh (every 10 min, 11AM-11PM ET)",
+        name="Kalshi NBA Refresh (every 10 min, 9AM-11PM ET)",
     )
 
     scheduler.add_job(
         run_kalshi_refresh_mlb,
-        CronTrigger(hour='11-23', minute='*/10', timezone=ET),
+        CronTrigger(hour='9-23', minute='*/10', timezone=ET),
         id="kalshi_refresh_mlb",
-        name="Kalshi MLB Refresh (every 10 min, 11AM-11PM ET)",
+        name="Kalshi MLB Refresh (every 10 min, 9AM-11PM ET)",
     )
 
-    # Every 10 min, 11 AM - 11 PM ET — scrape non-sports (economics/crypto) markets
+    # Every 10 min, 9 AM - 11 PM ET — scrape non-sports (economics/crypto) markets
     # Stores with sport=NULL so non-sports arb scan can match vs Polymarket.
     # Exits gracefully if KALSHI_API_KEY is not set.
     scheduler.add_job(
         run_kalshi_nonsports_refresh,
-        CronTrigger(hour='11-23', minute='*/10', timezone=ET),
+        CronTrigger(hour='9-23', minute='*/10', timezone=ET),
         id="kalshi_nonsports_refresh",
-        name="Kalshi Non-Sports Refresh (every 10 min, 11AM-11PM ET)",
+        name="Kalshi Non-Sports Refresh (every 10 min, 9AM-11PM ET)",
     )
 
     # ==============================================================
@@ -888,14 +887,14 @@ def main():
         name="Non-Sports Polymarket Scrape (9AM + 5PM ET, 2hr timeout)",
     )
 
-    # Non-sports arb SCAN: every 30 min, 10 AM - 11 PM ET.
+    # Non-sports arb SCAN: every 30 min, 9 AM - 11 PM ET.
     # Fast (<2 min) — uses existing polymarket_markets data, no re-scrape.
     # Matches Kalshi non-sports (politics, crypto, economics) vs Polymarket.
     scheduler.add_job(
         run_arb_scan_all_categories,
-        CronTrigger(hour='10-23', minute='0,30', timezone=ET),
+        CronTrigger(hour='9-23', minute='0,30', timezone=ET),
         id="arb_scan_all_categories",
-        name="Arb Scan Non-Sports (every 30 min, 10AM-11PM ET, scan-only)",
+        name="Arb Scan Non-Sports (every 30 min, 9AM-11PM ET, scan-only)",
     )
 
     # Log scheduled jobs
