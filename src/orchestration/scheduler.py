@@ -52,7 +52,6 @@ from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
 
 # Configure logging
 logging.basicConfig(

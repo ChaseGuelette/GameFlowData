@@ -62,16 +62,18 @@ For everything else (file reading, SQL, small edits, clear-spec implementation, 
 ### Code Implementation via OpenCode + GLM
 For significant code writing (new features, multi-file changes with a clear spec):
 1. Write a clear, detailed spec describing what to implement (files, functions, behavior)
-2. Call OpenCode via Bash:
+2. Ensure `OPENROUTER_API_KEY` is set (loaded from `.env` in project root)
+3. Call OpenCode via Bash:
    ```bash
-   opencode run --model openrouter/z-ai/glm-5.1 -f <target-file> "<spec>" --format json
+   export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run -m openrouter/z-ai/glm-5.1 "<spec>"
    ```
+   Attach files for context with `-f`: `opencode run -m openrouter/z-ai/glm-5.1 -f src/foo.py "Add error handling to the fetch function"`
    Or for headless server mode (more reliable for file edits):
    ```bash
-   opencode run --attach http://localhost:4096 --model openrouter/z-ai/glm-5.1 "<spec>"
+   opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 "<spec>"
    ```
-3. Review the diff (`git diff`) and fix any issues — either directly or send back to OpenCode
-4. GLM 5.1 is 5x cheaper than Sonnet on output tokens. Use GLM 4.7 ($0.39/$1.75) for simpler tasks.
+4. Review the diff (`git diff`) and fix any issues — either directly or send back to OpenCode
+5. Model tiers: GLM 5.1 (best, $0.95/$3.15), GLM 4.7 ($0.39/$1.75 — simpler tasks), GLM 4.5 Air (FREE — trivial tasks)
 
 Do NOT use this for small edits (< 20 lines) — edit directly instead.
 Do NOT use this for tasks requiring deep understanding of the codebase — Sonnet/Opus should handle those.
