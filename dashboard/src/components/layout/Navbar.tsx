@@ -110,6 +110,11 @@ export function Navbar() {
                   Bot
                 </Link>
               )}
+              {isAdmin && (
+                <Link href="/arb-scanner" className={navLinkClasses('/arb-scanner')}>
+                  Arb
+                </Link>
+              )}
             </div>
           </div>
 
@@ -189,6 +194,11 @@ export function Navbar() {
           {isAdmin && (
             <Link href="/bot-tracker" className={mobileNavLinkClasses('/bot-tracker')}>
               Bot
+            </Link>
+          )}
+          {isAdmin && (
+            <Link href="/arb-scanner" className={mobileNavLinkClasses('/arb-scanner')}>
+              Arb
             </Link>
           )}
 

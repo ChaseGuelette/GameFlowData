@@ -228,7 +228,8 @@ def load_bets(engine, sport=None, date_start=None, date_end=None) -> pd.DataFram
 
     query = text(f"""
         SELECT id, game_date, sport, player_name, stat_type, side,
-               price, contracts, fee_adjusted_edge, pnl, status, placed_at
+               price, contracts, fee_adjusted_edge, pnl, status, placed_at,
+               close_time
         FROM kalshi_paper_bets
         WHERE {" AND ".join(filters)}
         ORDER BY game_date, placed_at
@@ -425,6 +426,52 @@ def section_cross_sectional(df: pd.DataFrame):
     else:
         n_neg = sum(1 for _, _, _, p in results if not p)
         print(f"  ✗  {n_neg}/{len(stats)} stat types NEGATIVE — cross-sectional consistency broken")
+    sep()
+
+
+def section_near_close_check(df: pd.DataFrame):
+    """Flag bets placed within 30 minutes of market close (possible in-play contamination)."""
+    print("\n=== NEAR-CLOSE CHECK ===")
+    has_close = df["close_time"].notna()
+    if not has_close.any():
+        print("  (no close_time data — column not yet populated)")
+        sep()
+        return
+
+    sub = df[has_close].copy()
+    sub["placed_at"] = pd.to_datetime(sub["placed_at"], utc=True)
+    sub["close_time"] = pd.to_datetime(sub["close_time"], utc=True)
+    sub["minutes_before_close"] = (sub["close_time"] - sub["placed_at"]).dt.total_seconds() / 60
+
+    flagged = sub[sub["minutes_before_close"] < 30]
+    n_flagged = len(flagged)
+    n_total = len(df)
+
+    if n_flagged == 0:
+        print("  ✓  No near-close bets detected")
+        sep()
+        return
+
+    print(f"  ⚠  {n_flagged} bets placed within 30 min of close — possible in-play contamination")
+    print(f"     ({n_flagged / n_total:.1%} of {n_total} total bets)")
+
+    # Breakdown by sport
+    if "sport" in flagged.columns:
+        by_sport = flagged.groupby("sport").size()
+        for sport, cnt in by_sport.items():
+            print(f"     {sport}: {cnt}")
+
+    # Breakdown by stat
+    by_stat = flagged.groupby("stat_type").size().sort_values(ascending=False)
+    print("  Stat breakdown:")
+    for stat, cnt in by_stat.items():
+        print(f"     {stat}: {cnt}")
+
+    # Win rate comparison
+    flagged_won = flagged["is_won"].mean() if len(flagged) > 0 else 0.0
+    clean = sub[sub["minutes_before_close"] >= 30]
+    clean_won = clean["is_won"].mean() if len(clean) > 0 else 0.0
+    print(f"  Win rate — flagged: {flagged_won:.1%}, clean: {clean_won:.1%}")
     sep()
 
 
@@ -743,6 +790,7 @@ def run_analysis(df: pd.DataFrame, engine, args):
 
     section_by_stat(df)
     section_cross_sectional(df)
+    section_near_close_check(df)
     section_by_edge_bucket(df)
     section_by_sport(df)
     section_overflow_impact(df)

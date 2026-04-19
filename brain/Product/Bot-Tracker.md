@@ -12,7 +12,7 @@ Admin-only dashboard page showing all Kalshi bot trading activity. Built in Sess
 - **Summary KPIs**: Total P&L, Win Rate, Trades (with pending count), Balance
 - **Tab Toggle**: Switch between Live Orders and Paper Bets
 - **Date Range Presets**: Today / 7d / 30d / All
-- **Orders Table**: Sortable (player, stat, edge, P&L, status), filterable by stat type + status. **Session 27**: Added "Value" column (live: `total_cost`, paper: `contracts × entryPrice / 100`) and Kalshi market link icon (external link to kalshi.com game page, URL built from ticker).
+- **Orders Table**: Sortable (player, stat, edge, P&L, status), filterable by stat type + status. **Session 27**: Added "Value" column (live: `total_cost`, paper: `contracts × entryPrice / 100`) and Kalshi market link icon (external link to kalshi.com game page, URL built from ticker). **Session 34**: Added "Placed" (bet placement timestamp) and "Game Start" (market close_time) columns; colSpan updated 13→15; `formatTime()` helper added to `BotOrdersTable.tsx`.
 - **Daily P&L Log**: Date, trades, won, lost, daily P&L, cumulative P&L, ROI
 
 ## Data Sources

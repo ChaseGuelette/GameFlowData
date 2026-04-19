@@ -40,6 +40,10 @@ These rules must NEVER be violated:
 5. **Empirical CDF for probabilities** — always `(samples > line).mean()`, never Gaussian CDF
 6. **Python backend uses `postgres` role** (bypasses RLS). Dashboard uses `authenticated` role.
 7. **Model's Q10 "miscalibration" IS the edge** — correcting it removes profitability
+8. **NEVER call Supabase MCP directly in main context** — delegate to sql-runner subagent (see Context Protection Rules)
+9. **NEVER use Explore agents for SQL** — Explore is file-only (Read/Grep/Glob). Use sql-runner for DB queries.
+10. **Keep Explore agents narrow** — max_turns: 10, focused prompts, 5-12 tool calls max
+11. **After plan approval, hand off to GLM via OpenCode** — do NOT read target files or write code yourself. Pass the plan as the spec to `opencode run --attach` immediately.
 
 ## Assets
 The [[Assets]] folder contains images, videos, PDFs, and other media. When working on any task, check Assets/ for related materials. You can analyze images, read PDFs, and process any file dropped there.
@@ -59,29 +63,55 @@ When running as Sonnet, ALWAYS use Task tool with `model: "opus"` for:
 
 For everything else (file reading, SQL, small edits, clear-spec implementation, status checks), handle directly.
 
-### Code Implementation via OpenCode + GLM
-For significant code writing (new features, multi-file changes with a clear spec):
-1. Write a clear, detailed spec describing what to implement (files, functions, behavior)
-2. Ensure `OPENROUTER_API_KEY` is set (loaded from `.env` in project root)
-3. Call OpenCode via Bash:
-   ```bash
-   export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run -m openrouter/z-ai/glm-5.1 "<spec>"
-   ```
-   Attach files for context with `-f`: `opencode run -m openrouter/z-ai/glm-5.1 -f src/foo.py "Add error handling to the fetch function"`
-   Or for headless server mode (more reliable for file edits):
-   ```bash
-   opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 "<spec>"
-   ```
-4. Review the diff (`git diff`) and fix any issues — either directly or send back to OpenCode
-5. Model tiers: GLM 5.1 (best, $0.95/$3.15), GLM 4.7 ($0.39/$1.75 — simpler tasks), GLM 4.5 Air (FREE — trivial tasks)
+### Code Implementation via OpenCode + GLM (MANDATORY for plan-mode output)
+A headless OpenCode server runs at `http://localhost:4096` (started from the project root).
 
-Do NOT use this for small edits (< 20 lines) — edit directly instead.
-Do NOT use this for tasks requiring deep understanding of the codebase — Sonnet/Opus should handle those.
+**RULE: When a plan is approved, IMMEDIATELY hand off implementation to GLM via OpenCode.** Do NOT read the target files yourself. Do NOT write code yourself. The plan IS the spec — pass it directly to GLM. Your only job after planning is: (1) call OpenCode, (2) review the diff, (3) fix issues.
+
+**This applies when ALL of these are true:**
+- A plan or spec exists with clear file paths, function names, and behavior
+- The change touches code (not config, not markdown, not brain files)
+- The change is more than ~20 lines
+
+**Workflow:**
+1. Write the spec to a temp file, then pass it to OpenCode. **ALWAYS use `run_in_background: true`** on the Bash tool — GLM calls can exceed the 2-minute timeout.
+   ```bash
+   # For short specs (< 5 lines): inline as argument
+   export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 "short spec here"
+
+   # For long specs (> 5 lines): write to file first, then reference it
+   # Step A: Use the Write tool to create /tmp/glm_spec.md with the full plan
+   # Step B: Run OpenCode with the file attached for context
+   export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 -f /tmp/glm_spec.md -f src/target_file.py "Implement the spec in the attached glm_spec.md file. The other attached files are existing code for context."
+   ```
+   **Use relative paths** in specs (not absolute) — the server runs from the project root.
+   The `-f` flag attaches files for GLM to read as context (existing source files AND the spec file).
+2. Check the background task output with `TaskOutput`. Then **review GLM's work**: run `git diff` and compare against the plan in your context. Check for:
+   - Missing steps from the plan
+   - Wrong imports or function signatures
+   - Logic that doesn't match the spec
+   - Project conventions violated (e.g., connection patterns, RLS, etc.)
+3. Fix small issues directly (Edit tool). For larger problems, send corrections back to OpenCode with a targeted prompt.
+4. Run tests/linting if applicable.
+
+**Model tiers:** GLM 5.1 (best, $0.95/$3.15), GLM 4.7 ($0.39/$1.75 — simpler tasks), GLM 4.5 Air (FREE — trivial tasks)
+
+**If the server is not running**, start it: `cd /c/Users/Chase/Projects/GameFlowData && export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode serve --port 4096`
+
+**Do NOT use OpenCode for:** small edits (< 20 lines), config changes, brain/markdown updates, or tasks requiring deep cross-system reasoning.
 
 ### Subagent Model Assignment
 - **Haiku**: File search (explorer), SQL queries (sql-runner), status checks
 - **Sonnet**: Code review, brain file I/O (resume/wrap-up), calibration data gathering
 - **Opus**: Architecture decisions, complex debugging, calibration interpretation
+
+### Context Protection Rules
+- **NEVER call Supabase MCP tools directly in the main context.** Always delegate SQL to a `sql-runner` subagent (Task tool, `model: "haiku"`). SQL results can be thousands of tokens — they must stay in the subagent. The main context only receives the subagent's summary.
+- **NEVER call Supabase MCP tools from Explore agents.** Explore agents are for file search only (Read, Grep, Glob). If exploration requires SQL, spawn a separate sql-runner subagent in parallel.
+- **Keep Explore agent prompts narrow and bounded.** Bad: "explore the arb paper trader infrastructure". Good: "find the entry point for arb paper trading in src/arbitrage/ and list its public functions". Set `max_turns: 10` on Explore agents to prevent runaway exploration. A focused Explore should use 5-12 tool calls, not 25+.
+- **Prefer Grep/Glob directly over Explore agents** for simple searches (finding a file, locating a function, checking imports). Only use Explore for multi-step investigation where you don't know what you're looking for.
+- **Brain-first exploration.** When investigating a system, start from the BrainTree (`brain/` folder) for orientation before diving into source code. `brain/Pipeline/Component-Docs.md` indexes 40+ module docs via wikilinks. Read the relevant brain doc first to understand architecture, then go to source files for current implementation details. Pattern: Explore 1 reads brain docs for "what should exist", Explore 2 reads source for "what actually exists" — run in parallel.
+- **After plan approval, hand off to GLM via OpenCode immediately.** Do NOT re-read files that were already explored during planning. Do NOT write code yourself. Pass the plan as the spec to `opencode run --attach`, attaching the target files with `-f`.
 
 ## Agent Personas
 Available specialized agents in .claude/agents/:

@@ -14,7 +14,8 @@ Matching modes:
     - Additional key for totals: + line
 
   Non-sports markets:
-    - Fuzzy question-text similarity (SequenceMatcher >= 0.80)
+    - Per-series category-aware grouping + structured field extraction (price, direction, period)
+    - Falls back to SequenceMatcher >= 0.80 when extraction fails on either side
 """
 
 import logging
@@ -24,14 +25,19 @@ from datetime import date, timedelta
 from difflib import SequenceMatcher
 
 from sqlalchemy import text
+from src.arbitrage.non_sports_extractor import (
+    extract_kalshi,
+    extract_poly,
+    match_score as structured_match_score,
+)
 
 logger = logging.getLogger(__name__)
 
 # Maximum line difference to consider a "near match"
 NEAR_LINE_TOLERANCE = 0.5
 
-# Non-sports fuzzy match threshold
-NON_SPORTS_SIMILARITY_THRESHOLD = 0.80
+# SequenceMatcher fallback threshold when structured extraction fails on either side
+NON_SPORTS_FALLBACK_THRESHOLD = 0.80
 
 # Month abbreviation map for Kalshi ticker date parsing
 _KALSHI_MONTH_MAP = {
@@ -473,122 +479,125 @@ class MarketMatcher:
         self,
         categories: list[str] | None = None,
     ) -> list["MatchedMarket"]:
-        """Match Kalshi ↔ Polymarket on non-sports binary markets via question similarity.
+        """Match Kalshi ↔ Polymarket on non-sports binary markets via structured field extraction.
 
-        Uses SequenceMatcher with normalized question text.
-        Threshold: NON_SPORTS_SIMILARITY_THRESHOLD (0.80).
+        Extracts (price, direction, period) from both sides and matches deterministically.
+        Falls back to SequenceMatcher >= NON_SPORTS_FALLBACK_THRESHOLD (0.80) when extraction
+        fails on either side.
+        Each Kalshi series is matched only against the corresponding Polymarket categories.
 
         Args:
-            categories: Optional list of Polymarket categories to include
-                        (e.g., ['politics', 'crypto', 'economics']). None = all non-sports.
+            categories: Unused — retained for API compatibility.
+                        Category filtering is now done per-series via KALSHI_SERIES_POLY_CONFIG.
 
         Returns:
             List of MatchedMarket instances.
         """
+        from src.scrapers.kalshi.kalshi_utils import KALSHI_SERIES_POLY_CONFIG
+
         kalshi_rows = self._load_kalshi_non_sports()
         if not kalshi_rows:
             logger.info("No Kalshi non-sports markets found")
             return []
 
-        poly_rows = self._load_poly_non_sports(categories)
-        if not poly_rows:
-            logger.info("No Poly non-sports markets found")
-            return []
-
-        logger.info(
-            f"Matching {len(kalshi_rows)} Kalshi non-sports × {len(poly_rows)} Poly non-sports"
-        )
-
-        def _norm_q(q: str) -> str:
-            """Normalize question for comparison."""
-            import re
-            import unicodedata
-            q = unicodedata.normalize("NFKD", q).encode("ASCII", "ignore").decode("utf-8")
-            q = q.lower().strip()
-            q = re.sub(r"[^\w\s]", " ", q)
-            q = re.sub(r"\s+", " ", q)
-            return q
-
-        # Keyword pre-filter: only compare Poly markets that contain at least one
-        # term associated with our Kalshi non-sports series. Reduces 27k+ → ~few hundred
-        # before the expensive O(n×m) SequenceMatcher pass.
-        _NON_SPORTS_KEYWORDS = {
-            # Economics / macro
-            "gdp", "gross domestic", "cpi", "inflation", "consumer price",
-            "federal funds", "fomc", "rate cut", "rate hike", "interest rate",
-            "fed rate", "fed funds",
-            # Crypto
-            "bitcoin", "btc", "ethereum", "eth", "dogecoin", "doge",
-            "ripple", "xrp", "crypto",
-        }
-        poly_filtered = [
-            row for row in poly_rows
-            if any(kw in (row.get("question") or "").lower() for kw in _NON_SPORTS_KEYWORDS)
-        ]
-        if len(poly_filtered) < len(poly_rows):
-            logger.info(
-                f"Keyword pre-filter: {len(poly_rows)} → {len(poly_filtered)} Poly markets"
-            )
-        poly_rows = poly_filtered
-
-        # Normalize Kalshi questions
-        kalshi_norm = [(row, _norm_q(row.get("market_title") or "")) for row in kalshi_rows]
+        # Group Kalshi markets by their series prefix (KXGDP, KXBTC, etc.)
+        series_groups: dict[str, list] = {}
+        for row in kalshi_rows:
+            ticker = row.get("ticker", "")
+            series = ticker.split("-")[0]  # e.g. "KXBTC-24APR26-B95000" → "KXBTC"
+            series_groups.setdefault(series, []).append(row)
 
         matched: list[MatchedMarket] = []
         seen_poly: set[str] = set()
 
-        for poly in poly_rows:
-            cid = poly.get("condition_id", "")
-            if cid in seen_poly:
+        for series, k_rows in series_groups.items():
+            cfg = KALSHI_SERIES_POLY_CONFIG.get(series)
+            if cfg is None:
+                logger.debug(f"[{series}] No Poly config — skipping")
                 continue
 
-            poly_q_norm = _norm_q(poly.get("question") or "")
-            if not poly_q_norm:
+            poly_categories = cfg["poly_categories"]
+            poly_keywords = cfg["poly_keywords"]
+
+            # Load Polymarket markets scoped to this series's categories
+            poly_rows = self._load_poly_non_sports(categories=poly_categories)
+            if not poly_rows:
+                logger.info(f"[{series}] No Poly markets for categories {poly_categories}")
                 continue
 
-            best_score = 0.0
-            best_kalshi = None
+            # Apply series-specific keyword filter
+            poly_filtered = [
+                row for row in poly_rows
+                if any(kw in (row.get("question") or "").lower() for kw in poly_keywords)
+            ]
+            if not poly_filtered:
+                logger.info(f"[{series}] 0 Poly markets after keyword filter — skipping")
+                continue
 
-            for k_row, k_norm in kalshi_norm:
-                if not k_norm:
+            logger.info(f"[{series}] {len(k_rows)} Kalshi × {len(poly_filtered)} Poly")
+
+            # Pre-extract Kalshi fields and normalize questions for this series
+            k_data = [
+                (r, _norm_q(r.get("market_title") or ""),
+                 extract_kalshi(series, r.get("ticker", ""), r.get("market_title") or ""))
+                for r in k_rows
+            ]
+
+            for poly in poly_filtered:
+                cid = poly.get("condition_id", "")
+                if cid in seen_poly:
                     continue
-                score = SequenceMatcher(None, poly_q_norm, k_norm).ratio()
-                if score > best_score:
-                    best_score = score
-                    best_kalshi = k_row
+                poly_q_norm = _norm_q(poly.get("question") or "")
+                if not poly_q_norm:
+                    continue
 
-            if best_kalshi is None or best_score < NON_SPORTS_SIMILARITY_THRESHOLD:
-                continue
+                p_fields = extract_poly(series, poly.get("question") or "")
 
-            seen_poly.add(cid)
-            desc = f"[{poly.get('category', 'other').upper()}] {poly.get('question', '')[:60]}"
+                best_score, best_k = 0.0, None
+                for k_row, k_n, k_fields in k_data:
+                    if not k_n:
+                        continue
+                    if k_fields is not None and p_fields is not None:
+                        score = structured_match_score(k_fields, p_fields)
+                    else:
+                        # Extraction failed on one side — strict fuzzy fallback
+                        sm = SequenceMatcher(None, poly_q_norm, k_n).ratio()
+                        score = sm if sm >= NON_SPORTS_FALLBACK_THRESHOLD else 0.0
+                    if score > best_score:
+                        best_score, best_k = score, k_row
 
-            matched.append(MatchedMarket(
-                kalshi_ticker=best_kalshi.get("ticker", ""),
-                kalshi_yes_price=float(best_kalshi.get("yes_price") or 0),
-                kalshi_no_price=float(best_kalshi.get("no_price") or 0),
-                kalshi_volume=int(best_kalshi.get("volume") or 0),
-                kalshi_yes_bid=float(best_kalshi.get("yes_bid") or 0),
-                kalshi_yes_ask=float(best_kalshi.get("yes_ask") or 0),
-                poly_condition_id=cid,
-                poly_yes_price=float(poly.get("yes_price") or 0),
-                poly_no_price=float(poly.get("no_price") or 0),
-                poly_liquidity=float(poly.get("liquidity") or 0),
-                poly_yes_bid=_opt_float(poly.get("yes_bid")),
-                poly_yes_ask=_opt_float(poly.get("yes_ask")),
-                player_id=None,
-                player_name="",
-                stat_type="",
-                line=0.0,
-                sport="",
-                match_type="text_similarity",
-                match_confidence=best_score,
-                market_type=poly.get("market_type") or "binary",
-                team1=None,
-                team2=None,
-                game_date=None,
-                description=desc,
-            ))
+                if best_k is None or best_score == 0.0:
+                    continue
+
+                seen_poly.add(cid)
+                desc = f"[{series}] {poly.get('question', '')[:60]}"
+
+                matched.append(MatchedMarket(
+                    kalshi_ticker=best_k.get("ticker", ""),
+                    kalshi_yes_price=float(best_k.get("yes_price") or 0),
+                    kalshi_no_price=float(best_k.get("no_price") or 0),
+                    kalshi_volume=int(best_k.get("volume") or 0),
+                    kalshi_yes_bid=float(best_k.get("yes_bid") or 0),
+                    kalshi_yes_ask=float(best_k.get("yes_ask") or 0),
+                    poly_condition_id=cid,
+                    poly_yes_price=float(poly.get("yes_price") or 0),
+                    poly_no_price=float(poly.get("no_price") or 0),
+                    poly_liquidity=float(poly.get("liquidity") or 0),
+                    poly_yes_bid=_opt_float(poly.get("yes_bid")),
+                    poly_yes_ask=_opt_float(poly.get("yes_ask")),
+                    player_id=None,
+                    player_name="",
+                    stat_type="",
+                    line=0.0,
+                    sport="",
+                    match_type="text_similarity",
+                    match_confidence=best_score,
+                    market_type=poly.get("market_type") or "binary",
+                    team1=None,
+                    team2=None,
+                    game_date=None,
+                    description=desc,
+                ))
 
         logger.info(f"Found {len(matched)} Kalshi↔Poly non-sports matched pairs")
         return matched
@@ -707,6 +716,16 @@ class MarketMatcher:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _norm_q(q: str) -> str:
+    """Normalize a market question for text similarity comparison."""
+    import unicodedata
+    q = unicodedata.normalize("NFKD", q).encode("ASCII", "ignore").decode("utf-8")
+    q = q.lower().strip()
+    q = re.sub(r"[^\w\s]", " ", q)
+    q = re.sub(r"\s+", " ", q)
+    return q
 
 
 def _norm(name: str) -> str:

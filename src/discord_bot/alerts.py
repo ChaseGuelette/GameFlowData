@@ -849,6 +849,8 @@ def _build_kalshi_alert_embed(
         })
         return embed
 
+    # Filter out extreme prices (same threshold as paper trader min_price=5)
+    markets = [m for m in markets if 5 <= (m.get("yes_price") or 0) <= 95]
     # Take top 5 by edge
     top = sorted(markets, key=lambda m: m.get("maker_fee_adjusted_edge", 0) or 0, reverse=True)[:5]
 

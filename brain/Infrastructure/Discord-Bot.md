@@ -14,6 +14,11 @@ REST API alerts are working (no bot process needed). Slash commands require a ru
 | `#mlb-performance` (or `#performance`) | After MLB bet resolution | MLB P&L summary (Session 15). Channel: `DISCORD_MLB_CHANNEL_PERFORMANCE` → fallback `DISCORD_CHANNEL_PERFORMANCE` |
 | `#kalshi` (or `#predictions`) | After Kalshi refresh | Top 5 Kalshi edges (violet embed, fee-adjusted >=5%) |
 
+## Kalshi Alert Price Filter (Session 34)
+- `src/discord_bot/alerts.py` now filters Kalshi markets before selecting top-5 by edge
+- Filter: `yes_price < 5 or yes_price > 95` — removes in-play/near-settled 1¢ markets that have trivial edge but no real opportunity
+- Applied before the top-5 sort so stale in-play markets never appear in Discord alerts
+
 ## Slash Commands (Require Running Bot)
 | Command | Purpose |
 |---------|---------|

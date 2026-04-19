@@ -35,6 +35,11 @@ function formatPnl(dollars: number | null): string {
   return `${sign}$${Math.abs(dollars).toFixed(2)}`
 }
 
+function formatTime(isoString: string | null | undefined): string {
+  if (!isoString) return '—'
+  return new Date(isoString).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+}
+
 function getKalshiUrl(ticker: string | null | undefined, sport: string): string | null {
   if (!ticker) return null
   const parts = ticker.split('-')
@@ -193,6 +198,8 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
           <thead className="text-xs text-slate-400 bg-slate-900/50">
             <tr>
               <th className="px-3 py-2">Date</th>
+              <th className="px-3 py-2">Placed</th>
+              <th className="px-3 py-2">Game Start</th>
               <th className="px-3 py-2">Sport</th>
               <th
                 className="px-3 py-2 cursor-pointer hover:text-slate-200"
@@ -235,7 +242,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
           <tbody className="divide-y divide-slate-700/50">
             {sortedOrders.length === 0 ? (
               <tr>
-                <td colSpan={13} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={15} className="px-3 py-8 text-center text-slate-500">
                   No orders found
                 </td>
               </tr>
@@ -263,6 +270,12 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                   <tr key={order.id} className={`hover:bg-slate-700/30 ${isOverflow ? 'opacity-40' : ''}`}>
                     <td className="px-3 py-2 text-slate-300 whitespace-nowrap">
                       {order.game_date}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">
+                      {formatTime(order.placed_at)}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">
+                      {tab === 'paper' ? formatTime((order as KalshiPaperBet).close_time) : '—'}
                     </td>
                     <td className="px-3 py-2">
                       <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${

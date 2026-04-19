@@ -161,6 +161,48 @@ KALSHI_NON_SPORTS_SERIES: dict[str, dict[str, str]] = {
     "KXXRP":          {"category": "crypto", "description": "XRP/Ripple price range"},
 }
 
+# Per-series Polymarket matching config for non-sports arb.
+# poly_categories: Polymarket category values to query
+# poly_keywords: series-specific keyword pre-filter (applied after category filter)
+KALSHI_SERIES_POLY_CONFIG: dict[str, dict] = {
+    "KXGDP": {
+        "poly_categories": ["economics", "politics"],
+        "poly_keywords": ["gdp", "gross domestic", "q1", "q2", "q3", "q4", "quarterly", "growth"],
+    },
+    "KXFED": {
+        "poly_categories": ["economics", "politics"],
+        "poly_keywords": ["fomc", "federal reserve", "fed", "rate cut", "rate hike", "bps", "basis point"],
+    },
+    "KXCPI": {
+        "poly_categories": ["economics", "politics"],
+        "poly_keywords": ["cpi", "inflation", "consumer price", "core"],
+    },
+    "KXBTC": {
+        "poly_categories": ["crypto"],
+        "poly_keywords": ["bitcoin", "btc"],
+    },
+    "KXBTCD": {
+        "poly_categories": ["crypto"],
+        "poly_keywords": ["bitcoin", "btc", "close", "daily"],
+    },
+    "KXETH": {
+        "poly_categories": ["crypto"],
+        "poly_keywords": ["ethereum", "ether"],
+    },
+    "KXETHD": {
+        "poly_categories": ["crypto"],
+        "poly_keywords": ["ethereum", "ether", "close", "daily"],
+    },
+    "KXDOGE": {
+        "poly_categories": ["crypto"],
+        "poly_keywords": ["dogecoin", "doge"],
+    },
+    "KXXRP": {
+        "poly_categories": ["crypto"],
+        "poly_keywords": ["ripple", "xrp"],
+    },
+}
+
 # ---------------------------------------------------------------------------
 # Probability Conversion
 # ---------------------------------------------------------------------------

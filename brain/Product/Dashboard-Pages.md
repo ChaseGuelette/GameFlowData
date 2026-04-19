@@ -44,6 +44,7 @@
 | `/subscribe` | Subscription page (currently redirects to /dashboard) |
 | `/prediction-markets` | Kalshi prediction markets — edge overlay, sortable/filterable table, detail modal with fee breakdown, orderbook, countdown |
 | `/track-record` | Track record & diagnostics — My Bets / Paper Trading / Combined source toggle, KPI banner, bankroll chart, monthly summary grid (expandable to daily drilldown + per-bet list), stat breakdown, model metrics (edge accuracy, streaks). CSV import modal (drag-and-drop, 10-row preview, batched upsert) + manual bet entry form. Calls `rebuild_user_daily_log` RPC after any change. |
+| `/arb-scanner` | Admin-only Polymarket-Kalshi arb scanner — 4 summary cards (Total P&L, Win Rate, Active Bets, Detected 24h), sortable paper bets table (Kalshi+Poly price display, status badges), daily P&L log tab (green row tint on profitable days), date range filter. Gated by `useAdmin()` hook. Data from `arb_paper_bets` + `arb_paper_trading_daily_log` (authenticated_read RLS applied Session 33). **Session 33** (Phase 9.6). |
 
 ## Analysis Modal
 Click any PropCard to open:

@@ -198,7 +198,8 @@ class KalshiPaperTrader:
                 raw_edge, taker_fee_adjusted_edge,
                 volume, bid_ask_spread, market_status,
                 bl_model_prob, bl_edge, bl_confidence,
-                sportsbook_consensus_line, line_vs_sportsbook, market_title
+                sportsbook_consensus_line, line_vs_sportsbook, market_title,
+                close_time
             FROM kalshi_markets
             WHERE sport = :sport
               AND snapshot_time::date = :target_date
@@ -336,6 +337,7 @@ class KalshiPaperTrader:
                 "line_vs_sportsbook": float(row["line_vs_sportsbook"]) if pd.notna(row.get("line_vs_sportsbook")) else None,
                 "market_title": str(row["market_title"]) if pd.notna(row.get("market_title")) else None,
                 "volume": int(row["volume"]) if pd.notna(row.get("volume")) else None,
+                "close_time": row["close_time"] if pd.notna(row.get("close_time")) else None,
             }
 
         # Enrich candidates with prediction context (quantiles, features)
@@ -462,6 +464,7 @@ class KalshiPaperTrader:
                 "edge": round(cand["raw_edge"], 4),
                 "fee_adjusted_edge": round(cand["fee_adjusted_edge"], 4),
                 "bet_reasoning": bet_reasoning,
+                "close_time": cand.get("close_time"),
             }
 
             remaining = max(0.0, effective_cap - running_exposure)
@@ -538,13 +541,15 @@ class KalshiPaperTrader:
                 game_date, ticker, sport, player_id, player_name,
                 stat_type, line, side, price, contracts,
                 is_maker, expected_fee, model_prob, kalshi_implied,
-                edge, fee_adjusted_edge, status, fill_price, bet_reasoning
+                edge, fee_adjusted_edge, status, fill_price, bet_reasoning,
+                close_time
             ) VALUES (
                 :game_date, :ticker, :sport, :player_id, :player_name,
                 :stat_type, :line, :side, :price, :contracts,
                 :is_maker, :expected_fee, :model_prob, :kalshi_implied,
                 :edge, :fee_adjusted_edge, 'pending', :price,
-                CAST(:bet_reasoning AS jsonb)
+                CAST(:bet_reasoning AS jsonb),
+                :close_time
             )
             ON CONFLICT (game_date, ticker, side)
             DO UPDATE SET
@@ -1055,13 +1060,15 @@ class KalshiPaperTrader:
                 game_date, ticker, sport, player_id, player_name,
                 stat_type, line, side, price, contracts,
                 is_maker, expected_fee, model_prob, kalshi_implied,
-                edge, fee_adjusted_edge, status, fill_price, bet_reasoning
+                edge, fee_adjusted_edge, status, fill_price, bet_reasoning,
+                close_time
             ) VALUES (
                 :game_date, :ticker, :sport, :player_id, :player_name,
                 :stat_type, :line, :side, :price, :contracts,
                 :is_maker, :expected_fee, :model_prob, :kalshi_implied,
                 :edge, :fee_adjusted_edge, 'overflow', :price,
-                CAST(:bet_reasoning AS jsonb)
+                CAST(:bet_reasoning AS jsonb),
+                :close_time
             )
             ON CONFLICT (game_date, ticker, side) DO NOTHING
         """)

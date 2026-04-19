@@ -52,6 +52,7 @@ export interface KalshiPaperBet {
   placed_at: string | null
   resolved_at: string | null
   created_at: string | null
+  close_time: string | null
 }
 
 export interface KalshiDailyLog {
