@@ -322,10 +322,22 @@ class MLBBatterFeatureStore:
                 COALESCE(fg.hard_pct, 0) AS batter_hard_pct_szn,
                 COALESCE(fg.babip, 0) AS batter_babip_szn,
 
-                -- Park factors
-                COALESCE(pf.hits_factor, 1.0) AS park_hits_factor,
-                COALESCE(pf.hr_factor, 1.0) AS park_hr_factor,
-                COALESCE(pf.runs_factor, 1.0) AS park_runs_factor,
+                -- Park factors (handedness-stratified)
+                CASE
+                    WHEN bp.bats = 'L' THEN COALESCE(pf.hits_factor_l, pf.hits_factor, 1.0)
+                    WHEN bp.bats = 'R' THEN COALESCE(pf.hits_factor_r, pf.hits_factor, 1.0)
+                    ELSE COALESCE(pf.hits_factor, 1.0)
+                END AS park_hits_factor,
+                CASE
+                    WHEN bp.bats = 'L' THEN COALESCE(pf.hr_factor_l, pf.hr_factor, 1.0)
+                    WHEN bp.bats = 'R' THEN COALESCE(pf.hr_factor_r, pf.hr_factor, 1.0)
+                    ELSE COALESCE(pf.hr_factor, 1.0)
+                END AS park_hr_factor,
+                CASE
+                    WHEN bp.bats = 'L' THEN COALESCE(pf.runs_factor_l, pf.runs_factor, 1.0)
+                    WHEN bp.bats = 'R' THEN COALESCE(pf.runs_factor_r, pf.runs_factor, 1.0)
+                    ELSE COALESCE(pf.runs_factor, 1.0)
+                END AS park_runs_factor,
 
                 -- Game total line
                 COALESCE(lines.game_total, 0) AS line_total,
@@ -382,6 +394,9 @@ class MLBBatterFeatureStore:
             LEFT JOIN mlb_park_factors pf
                 ON pf.venue_id = gs.venue_id
                AND pf.season = gs.season
+
+            -- Batter handedness (for L/R park factor selection)
+            LEFT JOIN mlb_players bp ON bp.player_id = bgs.player_id
 
             -- Game total line
             LEFT JOIN LATERAL (
@@ -475,8 +490,9 @@ class MLBBatterFeatureStore:
         # 3. FanGraphs season stats
         features.update(self._get_batter_fangraphs_stats(player_id, season))
 
-        # 4. Park factors
-        park = self._get_park_factors(venue_id, season)
+        # 4. Park factors (handedness-stratified)
+        bats, opp_throws = self._get_batter_handedness(player_id, opp_pitcher_id)
+        park = self._get_park_factors(venue_id, season, bats=bats, opp_throws=opp_throws)
         features["park_hits_factor"] = park["hits_factor"]
         features["park_hr_factor"] = park["hr_factor"]
         features["park_runs_factor"] = park["runs_factor"]
@@ -622,10 +638,22 @@ class MLBBatterFeatureStore:
                 COALESCE(fg.hard_pct, 0) AS batter_hard_pct_szn,
                 COALESCE(fg.babip, 0) AS batter_babip_szn,
 
-                -- Park factors
-                COALESCE(pf.hits_factor, 1.0) AS park_hits_factor,
-                COALESCE(pf.hr_factor, 1.0) AS park_hr_factor,
-                COALESCE(pf.runs_factor, 1.0) AS park_runs_factor,
+                -- Park factors (handedness-stratified; uses alias p.bats from mlb_players join)
+                CASE
+                    WHEN p.bats = 'L' THEN COALESCE(pf.hits_factor_l, pf.hits_factor, 1.0)
+                    WHEN p.bats = 'R' THEN COALESCE(pf.hits_factor_r, pf.hits_factor, 1.0)
+                    ELSE COALESCE(pf.hits_factor, 1.0)
+                END AS park_hits_factor,
+                CASE
+                    WHEN p.bats = 'L' THEN COALESCE(pf.hr_factor_l, pf.hr_factor, 1.0)
+                    WHEN p.bats = 'R' THEN COALESCE(pf.hr_factor_r, pf.hr_factor, 1.0)
+                    ELSE COALESCE(pf.hr_factor, 1.0)
+                END AS park_hr_factor,
+                CASE
+                    WHEN p.bats = 'L' THEN COALESCE(pf.runs_factor_l, pf.runs_factor, 1.0)
+                    WHEN p.bats = 'R' THEN COALESCE(pf.runs_factor_r, pf.runs_factor, 1.0)
+                    ELSE COALESCE(pf.runs_factor, 1.0)
+                END AS park_runs_factor,
 
                 -- Game lines
                 COALESCE(lines.game_total, 0) AS line_total,
@@ -872,22 +900,80 @@ class MLBBatterFeatureStore:
             "batter_babip_szn": float(row.babip or 0),
         }
 
-    def _get_park_factors(self, venue_id: int, season: int) -> dict:
-        """Fetch park factors for venue."""
+    def _get_park_factors(
+        self,
+        venue_id: int,
+        season: int,
+        bats: str | None = None,
+        opp_throws: str | None = None,
+    ) -> dict:
+        """Fetch park factors for venue, optionally stratified by batter handedness.
+
+        bats: 'L', 'R', or 'S' (switch hitter)
+        opp_throws: 'L' or 'R' (used to resolve switch hitters — S vs RHP bats L, S vs LHP bats R)
+        Falls back to aggregate factor when hand is unknown or L/R columns are NULL.
+        """
+        if bats == "L" or (bats == "S" and opp_throws == "R"):
+            hand = "L"
+        elif bats == "R" or (bats == "S" and opp_throws == "L"):
+            hand = "R"
+        else:
+            hand = None
+
         query = text("""
-            SELECT hits_factor, hr_factor, runs_factor
+            SELECT hits_factor, hr_factor, runs_factor,
+                   hits_factor_l, hr_factor_l, runs_factor_l,
+                   hits_factor_r, hr_factor_r, runs_factor_r
             FROM mlb_park_factors
             WHERE venue_id = :venue_id AND season = :season
         """)
         with self.engine.connect() as conn:
             row = conn.execute(query, {"venue_id": venue_id, "season": season}).fetchone()
+
         if row is None:
             return {"hits_factor": 1.0, "hr_factor": 1.0, "runs_factor": 1.0}
+
+        if hand == "L":
+            return {
+                "hits_factor": float(row.hits_factor_l or row.hits_factor or 1.0),
+                "hr_factor": float(row.hr_factor_l or row.hr_factor or 1.0),
+                "runs_factor": float(row.runs_factor_l or row.runs_factor or 1.0),
+            }
+        elif hand == "R":
+            return {
+                "hits_factor": float(row.hits_factor_r or row.hits_factor or 1.0),
+                "hr_factor": float(row.hr_factor_r or row.hr_factor or 1.0),
+                "runs_factor": float(row.runs_factor_r or row.runs_factor or 1.0),
+            }
         return {
             "hits_factor": float(row.hits_factor or 1.0),
             "hr_factor": float(row.hr_factor or 1.0),
             "runs_factor": float(row.runs_factor or 1.0),
         }
+
+    def _get_batter_handedness(
+        self, player_id: int, opp_pitcher_id: int | None
+    ) -> tuple[str | None, str | None]:
+        """Fetch batter bats and opposing pitcher throws for park factor resolution."""
+        if opp_pitcher_id:
+            query = text("""
+                SELECT bp.bats, opp.throws
+                FROM mlb_players bp, mlb_players opp
+                WHERE bp.player_id = :batter_id AND opp.player_id = :pitcher_id
+            """)
+            with self.engine.connect() as conn:
+                row = conn.execute(
+                    query, {"batter_id": player_id, "pitcher_id": opp_pitcher_id}
+                ).fetchone()
+            if row:
+                return row.bats, row.throws
+        else:
+            query = text("SELECT bats FROM mlb_players WHERE player_id = :player_id")
+            with self.engine.connect() as conn:
+                row = conn.execute(query, {"player_id": player_id}).fetchone()
+            if row:
+                return row.bats, None
+        return None, None
 
     def _get_game_total(self, game_id: int) -> float:
         """Fetch game total line."""

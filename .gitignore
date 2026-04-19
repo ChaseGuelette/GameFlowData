@@ -86,4 +86,8 @@ backtest_results/
 
 #kalshi generated files
 KalshiBot.txt
-graphify-out/GRAPH_REPORT.md
+# Graphify output
+graphify-out/
+src/graphify-out/
+**/GRAPH_REPORT.md
+**/"GRAPH REPORT.md"

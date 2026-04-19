@@ -687,70 +687,111 @@ def scrape_non_sports_and_store(dry_run: bool = False) -> dict:
 
     parsed_markets: list[dict] = []
 
-    for series_ticker, info in KALSHI_NON_SPORTS_SERIES.items():
+    # Pre-discover series for category_scrape entries (one list_all_events call covers all)
+    category_series_map: dict[str, list[str]] = {}
+    category_scrape_entries = {
+        k: v for k, v in KALSHI_NON_SPORTS_SERIES.items()
+        if v.get("mode") == "category_scrape"
+    }
+    if category_scrape_entries:
+        logger.info("Discovering open series for category_scrape entries...")
+        all_events = client.list_all_events(status="open")
+        events_by_kalshi_cat: dict[str, set[str]] = {}
+        for event in all_events:
+            cat = event.get("category", "")
+            sticker = event.get("series_ticker", "")
+            if cat and sticker:
+                events_by_kalshi_cat.setdefault(cat, set()).add(sticker)
+        for config_key, info in category_scrape_entries.items():
+            kalshi_cat = info["kalshi_category"]
+            found = sorted(events_by_kalshi_cat.get(kalshi_cat, set()))
+            category_series_map[config_key] = found
+            logger.info(f"  {config_key}: {len(found)} open series in '{kalshi_cat}'")
+
+    def _parse_and_append_market(market: dict, config_key: str, category: str) -> bool:
+        """Parse a single raw Kalshi market and append to parsed_markets. Returns True if appended."""
+        if market.get("status") not in ("active", "open"):
+            return False
+
+        ticker = market.get("ticker", "")
+        title = market.get("title", "")
+        if not ticker or not title:
+            return False
+
+        yes_bid_dollars = float(market.get("yes_bid_dollars") or 0)
+        yes_ask_dollars = float(market.get("yes_ask_dollars") or 0)
+        last_price_dollars = float(market.get("last_price_dollars") or 0)
+
+        yes_bid_cents = round(yes_bid_dollars * 100)
+        yes_ask_cents = round(yes_ask_dollars * 100)
+        yes_price_cents = (
+            round(last_price_dollars * 100)
+            if last_price_dollars
+            else round((yes_bid_dollars + yes_ask_dollars) / 2 * 100)
+        )
+        if yes_price_cents <= 0 and yes_bid_cents <= 0:
+            return False  # No price data — skip
+
+        try:
+            volume = int(float(market.get("volume_fp") or market.get("volume") or 0))
+        except (ValueError, TypeError):
+            volume = 0
+
+        parsed_markets.append({
+            "ticker": ticker,
+            "event_ticker": market.get("event_ticker", ""),
+            "series_ticker": config_key,   # stored as config key for category-scrape entries
+            "sport": None,               # NULL = non-sports
+            "market_type": "binary",
+            "category": category,
+            "player_name": None,
+            "stat_type": None,
+            "line": None,
+            "team1": None,
+            "team2": None,
+            "market_title": title,
+            "player_id": None,
+            "yes_price": yes_price_cents,
+            "no_price": 100 - yes_price_cents,
+            "yes_bid": yes_bid_cents,
+            "yes_ask": yes_ask_cents,
+            "volume": volume,
+            "open_interest": 0,
+            "close_time": market.get("close_time") or market.get("expected_expiration_time"),
+            "market_status": "open",
+        })
+        return True
+
+    for config_key, info in KALSHI_NON_SPORTS_SERIES.items():
+        mode = info.get("mode", "static")
         category = info.get("category", "other")
-        desc = info.get("description", series_ticker)
+        desc = info.get("description", config_key)
 
-        time.sleep(0.5)  # gentle pacing between series
-        raw = client.list_all_markets(series_ticker=series_ticker)
-        series_count = 0
-
-        for market in raw:
-            if market.get("status") not in ("active", "open"):
+        if mode == "category_scrape":
+            series_list = category_series_map.get(config_key, [])
+            if not series_list:
+                logger.info(f"{config_key}: no open series — skipping")
                 continue
+            series_count = 0
+            for series in series_list:
+                time.sleep(0.1)  # lighter pacing for many short-lived series
+                raw = client.list_all_markets(series_ticker=series)
+                for market in raw:
+                    if _parse_and_append_market(market, config_key, category):
+                        series_count += 1
+            stats["by_series"][config_key] = series_count
+            logger.info(f"{config_key}: {series_count} markets from {len(series_list)} series")
 
-            ticker = market.get("ticker", "")
-            title = market.get("title", "")
-            if not ticker or not title:
-                continue
-
-            yes_bid_dollars = float(market.get("yes_bid_dollars") or 0)
-            yes_ask_dollars = float(market.get("yes_ask_dollars") or 0)
-            last_price_dollars = float(market.get("last_price_dollars") or 0)
-
-            yes_bid_cents = round(yes_bid_dollars * 100)
-            yes_ask_cents = round(yes_ask_dollars * 100)
-            yes_price_cents = (
-                round(last_price_dollars * 100)
-                if last_price_dollars
-                else round((yes_bid_dollars + yes_ask_dollars) / 2 * 100)
-            )
-            if yes_price_cents <= 0 and yes_bid_cents <= 0:
-                continue  # No price data — skip
-
-            try:
-                volume = int(float(market.get("volume_fp") or market.get("volume") or 0))
-            except (ValueError, TypeError):
-                volume = 0
-
-            parsed_markets.append({
-                "ticker": ticker,
-                "event_ticker": market.get("event_ticker", ""),
-                "series_ticker": series_ticker,
-                "sport": None,               # NULL = non-sports
-                "market_type": "binary",
-                "category": category,
-                "player_name": None,
-                "stat_type": None,
-                "line": None,
-                "team1": None,
-                "team2": None,
-                "market_title": title,
-                "player_id": None,
-                "yes_price": yes_price_cents,
-                "no_price": 100 - yes_price_cents,
-                "yes_bid": yes_bid_cents,
-                "yes_ask": yes_ask_cents,
-                "volume": volume,
-                "open_interest": 0,
-                "close_time": market.get("close_time") or market.get("expected_expiration_time"),
-                "market_status": "open",
-            })
-            series_count += 1
-
-        if series_count:
-            logger.info(f"  {series_ticker} ({desc}): {series_count} markets")
-        stats["by_series"][series_ticker] = series_count
+        else:  # mode == "static" — existing behavior
+            time.sleep(0.5)  # gentle pacing between series
+            raw = client.list_all_markets(series_ticker=config_key)
+            series_count = 0
+            for market in raw:
+                if _parse_and_append_market(market, config_key, category):
+                    series_count += 1
+            if series_count:
+                logger.info(f"  {config_key} ({desc}): {series_count} markets")
+            stats["by_series"][config_key] = series_count
 
     stats["raw"] = sum(len(client.list_all_markets(s)) for s in [])  # already counted above
     stats["parsed"] = len(parsed_markets)

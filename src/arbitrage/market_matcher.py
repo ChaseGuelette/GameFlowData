@@ -507,7 +507,7 @@ class MarketMatcher:
         series_groups: dict[str, list] = {}
         for row in kalshi_rows:
             ticker = row.get("ticker", "")
-            series = ticker.split("-")[0]  # e.g. "KXBTC-24APR26-B95000" → "KXBTC"
+            series = row.get("series_ticker") or ticker.split("-")[0]
             series_groups.setdefault(series, []).append(row)
 
         matched: list[MatchedMarket] = []
@@ -563,9 +563,10 @@ class MarketMatcher:
                     if k_fields is not None and p_fields is not None:
                         score = structured_match_score(k_fields, p_fields)
                     else:
-                        # Extraction failed on one side — strict fuzzy fallback
+                        # Extraction failed on one side — fuzzy fallback (threshold per config)
+                        fallback_threshold = cfg.get("fallback_threshold", NON_SPORTS_FALLBACK_THRESHOLD)
                         sm = SequenceMatcher(None, poly_q_norm, k_n).ratio()
-                        score = sm if sm >= NON_SPORTS_FALLBACK_THRESHOLD else 0.0
+                        score = sm if sm >= fallback_threshold else 0.0
                     if score > best_score:
                         best_score, best_k = score, k_row
 
@@ -665,7 +666,7 @@ class MarketMatcher:
         """
         query = text("""
             SELECT DISTINCT ON (ticker)
-                ticker, market_title, market_type,
+                ticker, series_ticker, market_title, market_type,
                 yes_price, no_price, yes_bid, yes_ask, volume
             FROM kalshi_markets
             WHERE (sport IS NULL OR sport = '')

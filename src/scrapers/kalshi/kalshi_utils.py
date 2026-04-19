@@ -153,6 +153,26 @@ KALSHI_NON_SPORTS_SERIES: dict[str, dict[str, str]] = {
     "KXCPI":          {"category": "economics", "description": "Consumer Price Index (inflation)"},
 
     # -----------------------------------------------------------------------
+    # Dynamic category-scrape entries.
+    # The scraper calls list_all_events(status='open') to discover series in the
+    # given Kalshi category at runtime. Markets are stored with
+    # series_ticker = config key ("_CAT_ELECTIONS") so the matcher can group
+    # all election/politics markets under one KALSHI_SERIES_POLY_CONFIG entry.
+    # -----------------------------------------------------------------------
+    "_CAT_ELECTIONS": {
+        "mode": "category_scrape",
+        "kalshi_category": "Elections",
+        "category": "elections",
+        "description": "US elections — governor, senate, house seats, congressional control",
+    },
+    "_CAT_POLITICS": {
+        "mode": "category_scrape",
+        "kalshi_category": "Politics",
+        "category": "politics",
+        "description": "Political events — policy, legislation, administration actions",
+    },
+
+    # -----------------------------------------------------------------------
     # INTENTIONALLY EXCLUDED — DO NOT RE-ADD
     # -----------------------------------------------------------------------
     # Kalshi crypto series (KXBTC, KXBTCD, KXETH, KXETHD, KXDOGE, KXXRP) are
@@ -185,6 +205,26 @@ KALSHI_SERIES_POLY_CONFIG: dict[str, dict] = {
     "KXCPI": {
         "poly_categories": ["economics", "politics"],
         "poly_keywords": ["cpi", "inflation", "consumer price", "core"],
+    },
+    # Category-level configs for dynamically discovered election/politics series.
+    # fallback_threshold=0.65 (vs 0.80 default) because election question wording
+    # differs more between platforms than structured macro questions.
+    # poly_keywords reduce 3,645 Poly politics markets to a manageable subset per pass.
+    "_CAT_ELECTIONS": {
+        "poly_categories": ["politics"],
+        "poly_keywords": [
+            "republican", "democrat", "win", "house", "senate", "governor",
+            "party", "election", "seat", "majority", "control", "candidate",
+        ],
+        "fallback_threshold": 0.65,
+    },
+    "_CAT_POLITICS": {
+        "poly_categories": ["politics"],
+        "poly_keywords": [
+            "trump", "congress", "law", "act", "pass", "president",
+            "administration", "policy", "bill", "executive", "white house",
+        ],
+        "fallback_threshold": 0.65,
     },
     # NOTE: Crypto series (KXBTC, KXBTCD, KXETH, KXETHD, KXDOGE, KXXRP) are range-bracket
     # markets ("Bitcoin price range on Apr 19, 2026?") with no direction word in the title.
