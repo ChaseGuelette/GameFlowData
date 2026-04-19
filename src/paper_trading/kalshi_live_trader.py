@@ -193,14 +193,19 @@ class KalshiLiveTrader:
             )
             return False, "Cannot check balance — API error"
 
+        # Use total portfolio value (cash + open positions), not just cash.
+        # Using cash alone would false-trigger after placing many open positions.
         balance_cents = balance_data.get("balance", 0)
-        balance_dollars = balance_cents / 100.0
+        portfolio_cents = balance_data.get("portfolio_value", 0)
+        total_dollars = (balance_cents + portfolio_cents) / 100.0
+        balance_dollars = balance_cents / 100.0  # kept for logging / select_trades bankroll
         starting = float(config.get("starting_bankroll", self.starting_bankroll))
         min_balance = starting * (1 - self.drawdown_limit)
 
-        if balance_dollars < min_balance:
+        if total_dollars < min_balance:
             reason = (
-                f"Drawdown limit reached: balance ${balance_dollars:.2f} "
+                f"Drawdown limit reached: portfolio ${total_dollars:.2f} "
+                f"(cash ${balance_dollars:.2f} + positions ${portfolio_cents/100:.2f}) "
                 f"< ${min_balance:.2f} ({self.drawdown_limit:.0%} of ${starting:.0f})"
             )
             self._set_halted(reason)
