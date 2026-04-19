@@ -590,14 +590,28 @@ class KalshiLiveTrader:
                 )
                 continue
 
-            # Place market order
-            order_result = self.client.create_order(
-                ticker=trade["ticker"],
-                action="buy",
-                side=trade["side"],
-                order_type="market",
-                count=trade["contracts"],
-            )
+            # Place market order with a 3-cent sweep buffer so the taker order
+            # fills immediately (Kalshi "market" orders require a price field).
+            sweep_buffer = 3
+            yes_px = trade["yes_price"]
+            if trade["side"] == "yes":
+                order_result = self.client.create_order(
+                    ticker=trade["ticker"],
+                    action="buy",
+                    side="yes",
+                    order_type="market",
+                    count=trade["contracts"],
+                    yes_price=min(yes_px + sweep_buffer, 99),
+                )
+            else:
+                order_result = self.client.create_order(
+                    ticker=trade["ticker"],
+                    action="buy",
+                    side="no",
+                    order_type="market",
+                    count=trade["contracts"],
+                    no_price=min(100 - yes_px + sweep_buffer, 99),
+                )
 
             if order_result is None:
                 logger.error(f"Order failed for {trade['ticker']} — no API response")

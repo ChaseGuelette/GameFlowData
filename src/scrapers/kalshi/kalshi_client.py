@@ -317,6 +317,7 @@ class KalshiClient:
         order_type: str = "market",
         count: int = 1,
         yes_price: int | None = None,
+        no_price: int | None = None,
     ) -> dict | None:
         """Place an order on a market.
 
@@ -345,6 +346,8 @@ class KalshiClient:
         }
         if yes_price is not None:
             body["yes_price"] = yes_price
+        if no_price is not None:
+            body["no_price"] = no_price
 
         result = self._request_with_body("POST", "/portfolio/orders", body=body)
         if result:
