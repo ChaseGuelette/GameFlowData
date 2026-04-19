@@ -74,17 +74,22 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 - The change is more than ~20 lines
 
 **Workflow:**
-1. Write the spec to a temp file, then pass it to OpenCode. **ALWAYS use `run_in_background: true`** on the Bash tool — GLM calls can exceed the 2-minute timeout.
+1. Write the spec to a file, then pass it to OpenCode. **ALWAYS use `run_in_background: true`** on the Bash tool — GLM calls can exceed the 2-minute timeout.
    ```bash
-   # For short specs (< 5 lines): inline as argument
+   # CRITICAL: Prompt MUST come BEFORE -f flags. OpenCode's -f is a greedy array
+   # that swallows subsequent positional args as filenames. Wrong order = "File not found" error.
+
+   # For short specs (< 5 lines): inline as the prompt argument
    export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 "short spec here"
 
-   # For long specs (> 5 lines): write to file first, then reference it
-   # Step A: Use the Write tool to create /tmp/glm_spec.md with the full plan
-   # Step B: Run OpenCode with the file attached for context
-   export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 -f /tmp/glm_spec.md -f src/target_file.py "Implement the spec in the attached glm_spec.md file. The other attached files are existing code for context."
+   # For long specs (> 5 lines): write to file first, then attach with -f
+   # Step A: Use the Write tool to create .claude/glm_spec.md with the full plan
+   # Step B: Run OpenCode — PROMPT FIRST, then -f flags
+   export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 "Implement the spec in the attached glm_spec.md file. The other attached files are existing code for context." -f .claude/glm_spec.md -f src/target_file.py
    ```
+   **ARGUMENT ORDER**: `"prompt text" -f file1 -f file2` — NEVER `-f file1 "prompt"` (prompt gets eaten as a filename).
    **Use relative paths** in specs (not absolute) — the server runs from the project root.
+   **Use `.claude/glm_spec.md`** for spec files (not `/tmp/` — doesn't exist on Windows).
    The `-f` flag attaches files for GLM to read as context (existing source files AND the spec file).
 2. Check the background task output with `TaskOutput`. Then **review GLM's work**: run `git diff` and compare against the plan in your context. Check for:
    - Missing steps from the plan
@@ -99,8 +104,8 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 **If the server is not running**, start it: `cd /c/Users/Chase/Projects/GameFlowData && export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode serve --port 4096`
 
 **Known failure modes (fall back to direct edit if any occur):**
-- "File not found: <prompt text>" — OpenCode is treating the prompt as a filename. Happens with `-f` flag + long prompts. Try putting the prompt BEFORE the `-f` flags, or skip `-f` entirely.
-- `/tmp/` writes fail — Windows may not have `/tmp/`. Use the project directory instead (e.g., `.claude/glm_spec.md`).
+- "File not found: <prompt text>" — Prompt is AFTER `-f` flags. Fix: put prompt BEFORE all `-f` flags (`"prompt" -f file`, not `-f file "prompt"`).
+- `/tmp/` writes fail — Windows doesn't have `/tmp/`. Use `.claude/glm_spec.md` instead.
 - Bash tool returns "Error: Exit code 1" repeatedly — Bash may be non-functional in the session. Fall back to direct Edit.
 - Concurrent OpenCode calls can collide — send one at a time.
 
@@ -117,7 +122,7 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 - **Keep Explore agent prompts narrow and bounded.** Bad: "explore the arb paper trader infrastructure". Good: "find the entry point for arb paper trading in src/arbitrage/ and list its public functions". Set `max_turns: 10` on Explore agents to prevent runaway exploration. A focused Explore should use 5-12 tool calls, not 25+.
 - **Prefer Grep/Glob directly over Explore agents** for simple searches (finding a file, locating a function, checking imports). Only use Explore for multi-step investigation where you don't know what you're looking for.
 - **Brain-first exploration.** When investigating a system, start from the BrainTree (`brain/` folder) for orientation before diving into source code. `brain/Pipeline/Component-Docs.md` indexes 40+ module docs via wikilinks. Read the relevant brain doc first to understand architecture, then go to source files for current implementation details. Pattern: Explore 1 reads brain docs for "what should exist", Explore 2 reads source for "what actually exists" — run in parallel.
-- **After plan approval, try GLM via OpenCode first.** Write spec to a file, attach with `-f`, run backgrounded. If OpenCode fails, fall back to direct implementation — don't waste tool calls retrying.
+- **After plan approval, try GLM via OpenCode first.** Write spec to `.claude/glm_spec.md`, run with `"prompt" -f .claude/glm_spec.md` (prompt BEFORE -f), backgrounded. If OpenCode fails, fall back to direct implementation — don't waste tool calls retrying.
 
 ## Agent Personas
 Available specialized agents in .claude/agents/:

@@ -85,6 +85,10 @@ BATTER_BASE_FEATURES: list[str] = [
     "is_same_hand", "batter_avg_h_vs_hand_l20", "batter_avg_ops_vs_hand_l20",
     # Game context
     "is_home", "line_total",
+    # Weather (mlb_game_weather)
+    "air_density_idx",
+    "wind_out_mph",
+    "has_precip",
     # Derived (Python post-SQL)
     "batter_h_l5_l10_ratio",
 ]
@@ -339,6 +343,11 @@ class MLBBatterFeatureStore:
                     ELSE COALESCE(pf.runs_factor, 1.0)
                 END AS park_runs_factor,
 
+                -- Weather features
+                COALESCE(gw.air_density_idx, 1.0) AS air_density_idx,
+                COALESCE(gw.wind_out_mph, 0.0) AS wind_out_mph,
+                COALESCE(gw.has_precip::int, 0) AS has_precip,
+
                 -- Game total line
                 COALESCE(lines.game_total, 0) AS line_total,
 
@@ -397,6 +406,9 @@ class MLBBatterFeatureStore:
 
             -- Batter handedness (for L/R park factor selection)
             LEFT JOIN mlb_players bp ON bp.player_id = bgs.player_id
+
+            -- Game weather
+            LEFT JOIN mlb_game_weather gw ON gw.game_pk = bgs.game_id
 
             -- Game total line
             LEFT JOIN LATERAL (
@@ -496,6 +508,9 @@ class MLBBatterFeatureStore:
         features["park_hits_factor"] = park["hits_factor"]
         features["park_hr_factor"] = park["hr_factor"]
         features["park_runs_factor"] = park["runs_factor"]
+
+        # 4b. Weather features
+        features.update(self._get_game_weather(game_id))
 
         # 5. Game context
         features["is_home"] = 1 if is_home else 0
@@ -655,6 +670,11 @@ class MLBBatterFeatureStore:
                     ELSE COALESCE(pf.runs_factor, 1.0)
                 END AS park_runs_factor,
 
+                -- Weather features
+                COALESCE(gw.air_density_idx, 1.0) AS air_density_idx,
+                COALESCE(gw.wind_out_mph, 0.0) AS wind_out_mph,
+                COALESCE(gw.has_precip::int, 0) AS has_precip,
+
                 -- Game lines
                 COALESCE(lines.game_total, 0) AS line_total,
 
@@ -707,6 +727,9 @@ class MLBBatterFeatureStore:
             LEFT JOIN mlb_park_factors pf
                 ON pf.venue_id = gs.venue_id
                AND pf.season = gs.season
+
+            -- Game weather
+            LEFT JOIN mlb_game_weather gw ON gw.game_pk = bgs.game_id
 
             LEFT JOIN LATERAL (
                 SELECT MAX(CASE WHEN market_key = 'totals'
@@ -974,6 +997,23 @@ class MLBBatterFeatureStore:
             if row:
                 return row.bats, None
         return None, None
+
+    def _get_game_weather(self, game_id: int) -> dict:
+        """Fetch weather features for a game. Returns neutral defaults if not yet loaded."""
+        query = text("""
+            SELECT air_density_idx, wind_out_mph, has_precip
+            FROM mlb_game_weather
+            WHERE game_pk = :game_id
+        """)
+        with self.engine.connect() as conn:
+            row = conn.execute(query, {"game_id": game_id}).fetchone()
+        if row is None:
+            return {"air_density_idx": 1.0, "wind_out_mph": 0.0, "has_precip": 0}
+        return {
+            "air_density_idx": float(row.air_density_idx or 1.0),
+            "wind_out_mph": float(row.wind_out_mph or 0.0),
+            "has_precip": int(bool(row.has_precip)),
+        }
 
     def _get_game_total(self, game_id: int) -> float:
         """Fetch game total line."""

@@ -560,6 +560,11 @@ def run_mlb_roster_scraper():
     run_job("mlb_roster_scraper_job.py")
 
 
+def run_mlb_weather_forecast():
+    """Fetch weather forecast for today's MLB games (before inference window)."""
+    run_job("mlb_weather_scraper_job.py", silent_on_success=True)
+
+
 def run_mlb_inference():
     """Run MLB inference with paper betting, checking if MLB daily stats succeeded first.
 
@@ -784,6 +789,14 @@ def main():
     )
 
     # --- MLB early window: 11 AM inference ---
+
+    # 10:40 AM ET - MLB weather forecast (after daily stats retry, before props + inference)
+    scheduler.add_job(
+        run_mlb_weather_forecast,
+        CronTrigger(hour=10, minute=40, timezone=ET),
+        id="mlb_weather_forecast",
+        name="MLB Weather Forecast (10:40 AM ET)",
+    )
 
     # 10:45 AM ET - Early MLB props scrape (feed 11:00 AM inference)
     scheduler.add_job(
