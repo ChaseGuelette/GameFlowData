@@ -341,10 +341,11 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
 
         if result.returncode == 0:
             logger.info(f"Job completed successfully: {script_name}")
-            # Always surface the final summary lines so Railway logs show outcomes
-            # even when silent_on_success=True suppresses Discord alerts.
-            if stdout:
-                for line in stdout.splitlines()[-10:]:
+            # Surface final summary lines from both stdout and stderr so Railway
+            # logs show outcomes even when silent_on_success=True suppresses Discord.
+            combined = (stderr + "\n" + stdout).strip()
+            if combined:
+                for line in combined.splitlines()[-20:]:
                     if line.strip():
                         logger.info(f"  [out] {line.strip()}")
             success = True
