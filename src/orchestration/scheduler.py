@@ -345,7 +345,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
             # logs show outcomes even when silent_on_success=True suppresses Discord.
             combined = (stderr + "\n" + stdout).strip()
             if combined:
-                for line in combined.splitlines()[-20:]:
+                for line in combined.splitlines()[-50:]:
                     if line.strip():
                         logger.info(f"  [out] {line.strip()}")
             success = True
