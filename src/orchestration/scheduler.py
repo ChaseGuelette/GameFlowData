@@ -22,8 +22,14 @@ Schedule (ET):
     10:00 AM - mlb_daily_stats_job
     10:00 AM - kalshi_daily_summary_job
     10:30 AM - mlb_daily_stats_retry
+    10:45 AM - mlb_lines_job --live --props-only (early MLB props)
+    10:50 AM - mlb_lineup_scraper_job (early MLB lineups)
+    11:00 AM - mlb_inference_job (early MLB pass)
+    11:00 AM - lines_job --live --props-only (pre-NBA inference)
+    11:15 AM - inference_job (early NBA pass)
     12:00 PM - lines_job --live (full)
     12:15 PM - inference_job (full MC)
+    12:15 PM - mlb_inference_job (noon MLB pass)
 
     4:00 PM  - lines_job --live --parallel (full)
     4:15 PM  - inference_job (full MC)
@@ -667,6 +673,24 @@ def main():
         name="Daily Stats Retry (9:30 AM ET)",
     )
 
+    # --- Early window: 11 AM NBA inference ---
+
+    # 11:00 AM ET - Early props scrape (feed 11:15 AM NBA inference)
+    scheduler.add_job(
+        run_lines_props_only,
+        CronTrigger(hour=11, minute=0, timezone=ET),
+        id="lines_props_11am",
+        name="Lines Props Only (11 AM ET, pre-inference)",
+    )
+
+    # 11:15 AM ET - Early NBA inference
+    scheduler.add_job(
+        run_inference,
+        CronTrigger(hour=11, minute=15, timezone=ET),
+        id="inference_11am",
+        name="Inference (11:15 AM ET)",
+    )
+
     # --- First window: noon full scrape + inference ---
 
     # 12:00 PM ET - Full lines scrape (live)
@@ -759,12 +783,46 @@ def main():
         name="MLB Daily Stats Retry (10:30 AM ET)",
     )
 
+    # --- MLB early window: 11 AM inference ---
+
+    # 10:45 AM ET - Early MLB props scrape (feed 11:00 AM inference)
+    scheduler.add_job(
+        run_mlb_lines_props_only,
+        CronTrigger(hour=10, minute=45, timezone=ET),
+        id="mlb_lines_props_1045am",
+        name="MLB Props Only (10:45 AM ET, pre-inference)",
+    )
+
+    # 10:50 AM ET - Early MLB lineup scrape (best-available lineups)
+    scheduler.add_job(
+        run_mlb_lineup_scraper,
+        CronTrigger(hour=10, minute=50, timezone=ET),
+        id="mlb_lineup_scraper_1050am",
+        name="MLB Lineup Scraper (10:50 AM ET)",
+    )
+
+    # 11:00 AM ET - Early MLB inference (pre-lineup-confirmation pass)
+    scheduler.add_job(
+        run_mlb_inference,
+        CronTrigger(hour=11, minute=0, timezone=ET),
+        id="mlb_inference_11am",
+        name="MLB Inference (11:00 AM ET)",
+    )
+
     # 12:00 PM ET - MLB full lines scrape (game lines + props + linker)
     scheduler.add_job(
         run_mlb_lines_full,
         CronTrigger(hour=12, minute=0, timezone=ET),
         id="mlb_lines_full_noon",
         name="MLB Full Lines (12 PM ET)",
+    )
+
+    # 12:15 PM ET - MLB noon inference (some lineups now confirmed)
+    scheduler.add_job(
+        run_mlb_inference,
+        CronTrigger(hour=12, minute=15, timezone=ET),
+        id="mlb_inference_noon",
+        name="MLB Inference (12:15 PM ET)",
     )
 
     # 1:00 PM ET - MLB props-only refresh before afternoon games

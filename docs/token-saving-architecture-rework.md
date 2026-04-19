@@ -185,10 +185,16 @@ Compare to: Sonnet $3/$15, Opus $5/$25
 - Wrap-up process is supposed to keep brain docs current but misses these big docs
 - The `docs/` folder (80+ files from old context system) overlaps with brain docs — no decision on consolidation
 
-### 2. No production test of full GLM loop
-- No Sonnet session has successfully completed the full cycle: plan → write spec to file → background OpenCode call → TaskOutput check → review diff → fix
-- The one attempt we observed failed at the OpenCode call step (escaping issues, then wasted tool calls re-reading --help)
-- The fixes are documented in CLAUDE.md but untested in a real session
+### 2. GLM handoff is PREFERRED, not mandatory
+- Multiple production failures observed:
+  - "File not found" error: OpenCode treats the prompt text as a filename when `-f` flags are present
+  - `/tmp/` path doesn't exist on Windows — spec file writes fail
+  - Bash tool goes non-functional in some sessions (all calls return exit code 1)
+  - Concurrent OpenCode calls can collide
+- **Decision**: GLM handoff is attempt-first with fallback to direct Edit. Not enforced via hook.
+- A PreToolUse hook was built and tested (`block-code-edits.sh`) but removed — too many OpenCode reliability issues to force it
+- CLAUDE.md updated: "MANDATORY" → "PREFERRED — fallback to direct edit"
+- Invariant 11 updated: "TRY GLM first, fall back if it fails"
 
 ### 3. ~30 user-level skills still loading
 - agentdb-*, flow-nexus-*, v3-*, pair-programming, etc. from cached npm packages

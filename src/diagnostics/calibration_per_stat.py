@@ -367,6 +367,7 @@ def format_report(
     lines.append(sep)
     lines.append("PER-STAT CALIBRATION DIAGNOSTIC REPORT")
     lines.append(sep)
+    lines.append("DATA SCOPE: All predictions x all game actuals (unfiltered -- not bet-selected)")
     lines.append(f"Data source: {data_source} | {len(df):,} predictions")
 
     # Date range

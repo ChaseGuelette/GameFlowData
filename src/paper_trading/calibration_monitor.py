@@ -11,7 +11,9 @@ Usage (standalone):
     python -m src.paper_trading.calibration_monitor
 """
 
+import json
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -23,6 +25,28 @@ import pandas as pd
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 logger = logging.getLogger(__name__)
+
+
+def get_model_activation_date() -> date | None:
+    """Return the activation date of the current production model.
+
+    Reads NBA_PLAYOFF_MODE env var to pick production_playoffs or production
+    subdir, then parses the timestamp from run_config.json.
+    Returns None on any error (graceful failure disables date capping).
+    """
+    try:
+        playoff_mode = os.environ.get("NBA_PLAYOFF_MODE", "").lower() in ("1", "true", "yes")
+        subdir = "production_playoffs" if playoff_mode else "production"
+        config_path = (
+            Path(__file__).resolve().parents[2]
+            / "src" / "models" / "artifacts" / subdir / "run_config.json"
+        )
+        with open(config_path) as f:
+            config = json.load(f)
+        return date.fromisoformat(config["timestamp"][:10])
+    except Exception:
+        return None
+
 
 QUANTILES = [0.10, 0.25, 0.50, 0.75, 0.90]
 QUANTILE_COLS = {q: f"pred_q{int(q * 100)}" for q in QUANTILES}
@@ -59,6 +83,9 @@ class CalibrationMetrics:
     # Edge accuracy: [{bucket, expected_win_rate, actual_win_rate, n, gap}]
     edge_accuracy: list[dict] = field(default_factory=list)
     edge_alerts: list[str] = field(default_factory=list)
+
+    # Model context label (e.g. "playoff model, active since 2026-04-15")
+    model_context: str = ""
 
     @property
     def all_alerts(self) -> list[str]:
@@ -312,7 +339,7 @@ def _compute_edge_accuracy(df: pd.DataFrame) -> tuple[list[dict], list[str]]:
     return results, alerts
 
 
-def compute_calibration_drift(lookback_days: int = 14) -> CalibrationMetrics | None:
+def compute_calibration_drift(lookback_days: int = 7) -> CalibrationMetrics | None:
     """Compute all calibration drift metrics from resolved paper bets.
 
     Returns CalibrationMetrics, or None if insufficient data (< 20 bets).
@@ -320,6 +347,17 @@ def compute_calibration_drift(lookback_days: int = 14) -> CalibrationMetrics | N
     logger.info(f"Computing calibration drift (lookback={lookback_days} days)")
 
     df = _load_resolved_bets(lookback_days)
+
+    # Cap window to active model's activation date to avoid stale prior-model data
+    activation = get_model_activation_date()
+    if activation is not None:
+        df = df[pd.to_datetime(df["game_date"]).dt.date >= activation]
+        if len(df) < MIN_RESOLVED_BETS:
+            logger.info(
+                f"Model active since {activation}, {len(df)} resolved bets — "
+                f"skipping calibration (need >= {MIN_RESOLVED_BETS})"
+            )
+            return None
 
     if len(df) < MIN_RESOLVED_BETS:
         logger.info(
@@ -329,6 +367,12 @@ def compute_calibration_drift(lookback_days: int = 14) -> CalibrationMetrics | N
         return None
 
     metrics = CalibrationMetrics(n_bets=len(df))
+
+    # Model context label
+    if activation is not None:
+        playoff_mode = os.environ.get("NBA_PLAYOFF_MODE", "").lower() in ("1", "true", "yes")
+        model_name = "playoff model" if playoff_mode else "regular model"
+        metrics.model_context = f"{model_name}, active since {activation}"
 
     # Date range
     if "game_date" in df.columns and not df["game_date"].isna().all():

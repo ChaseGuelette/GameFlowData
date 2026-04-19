@@ -111,7 +111,7 @@ BATTER_RUNS_FEATURES: list[str] = BATTER_BASE_FEATURES + [
 # no sportsbook prop line exists (Kalshi-only), so prop_line_batter_hrr will be 0
 # during training — the model learns to ignore it and uses rolling avg features instead.
 BATTER_HRR_FEATURES: list[str] = BATTER_BASE_FEATURES + [
-    "park_hits_factor", "park_runs_factor", "prop_line_batter_hrr",
+    "park_hits_factor", "park_hr_factor", "park_runs_factor", "prop_line_batter_hrr",
 ]
 
 BATTER_FEATURE_MAP: dict[str, list[str]] = {

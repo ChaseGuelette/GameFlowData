@@ -146,25 +146,34 @@ KALSHI_GAME_SERIES: dict[str, dict[str, str]] = {
 KALSHI_NON_SPORTS_SERIES: dict[str, dict[str, str]] = {
     # -----------------------------------------------------------------------
     # Economics / Macro
+    # Proper binary threshold markets — structurally compatible with Polymarket.
     # -----------------------------------------------------------------------
     "KXGDP":          {"category": "economics", "description": "US Real GDP growth"},
     "KXFED":          {"category": "economics", "description": "Federal funds rate / FOMC decisions"},
     "KXCPI":          {"category": "economics", "description": "Consumer Price Index (inflation)"},
+
     # -----------------------------------------------------------------------
-    # Crypto / Digital Assets
+    # INTENTIONALLY EXCLUDED — DO NOT RE-ADD
     # -----------------------------------------------------------------------
-    "KXBTC":          {"category": "crypto", "description": "Bitcoin price range"},
-    "KXBTCD":         {"category": "crypto", "description": "Bitcoin daily close price"},
-    "KXETH":          {"category": "crypto", "description": "Ethereum price range"},
-    "KXETHD":         {"category": "crypto", "description": "Ethereum daily close price"},
-    "KXDOGE":         {"category": "crypto", "description": "Dogecoin price range"},
-    "KXXRP":          {"category": "crypto", "description": "XRP/Ripple price range"},
+    # Kalshi crypto series (KXBTC, KXBTCD, KXETH, KXETHD, KXDOGE, KXXRP) are
+    # RANGE BRACKET markets, NOT binary threshold markets.
+    #
+    # Their titles are all "Bitcoin price range on Apr 19, 2026?" — no direction
+    # word (above/below), no dollar amount in the title. The price is encoded in
+    # the ticker suffix (KXBTC-26APR1909-B75050 = "is BTC in range $75,050-$75,150
+    # at 9am?"). These are structurally incompatible with Polymarket's binary
+    # threshold markets ("Will BTC be above $80,000?") and produce ZERO matches.
+    #
+    # Scraping them wastes ~90 seconds per arb scan and ~100k rows of DB storage.
+    # Verified Apr 19 2026: 0/1034 crypto Kalshi markets extracted successfully.
+    # -----------------------------------------------------------------------
 }
 
 # Per-series Polymarket matching config for non-sports arb.
 # poly_categories: Polymarket category values to query
 # poly_keywords: series-specific keyword pre-filter (applied after category filter)
 KALSHI_SERIES_POLY_CONFIG: dict[str, dict] = {
+    # Macro series — proper binary threshold markets, structurally compatible with Poly.
     "KXGDP": {
         "poly_categories": ["economics", "politics"],
         "poly_keywords": ["gdp", "gross domestic", "q1", "q2", "q3", "q4", "quarterly", "growth"],
@@ -177,30 +186,10 @@ KALSHI_SERIES_POLY_CONFIG: dict[str, dict] = {
         "poly_categories": ["economics", "politics"],
         "poly_keywords": ["cpi", "inflation", "consumer price", "core"],
     },
-    "KXBTC": {
-        "poly_categories": ["crypto"],
-        "poly_keywords": ["bitcoin", "btc"],
-    },
-    "KXBTCD": {
-        "poly_categories": ["crypto"],
-        "poly_keywords": ["bitcoin", "btc", "close", "daily"],
-    },
-    "KXETH": {
-        "poly_categories": ["crypto"],
-        "poly_keywords": ["ethereum", "ether"],
-    },
-    "KXETHD": {
-        "poly_categories": ["crypto"],
-        "poly_keywords": ["ethereum", "ether", "close", "daily"],
-    },
-    "KXDOGE": {
-        "poly_categories": ["crypto"],
-        "poly_keywords": ["dogecoin", "doge"],
-    },
-    "KXXRP": {
-        "poly_categories": ["crypto"],
-        "poly_keywords": ["ripple", "xrp"],
-    },
+    # NOTE: Crypto series (KXBTC, KXBTCD, KXETH, KXETHD, KXDOGE, KXXRP) are range-bracket
+    # markets ("Bitcoin price range on Apr 19, 2026?") with no direction word in the title.
+    # They are structurally incompatible with Poly's binary threshold markets and produce
+    # 0 matches. Excluded to avoid ~90 seconds of wasted compute per scan.
 }
 
 # ---------------------------------------------------------------------------

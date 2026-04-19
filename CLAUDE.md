@@ -43,7 +43,7 @@ These rules must NEVER be violated:
 8. **NEVER call Supabase MCP directly in main context** — delegate to sql-runner subagent (see Context Protection Rules)
 9. **NEVER use Explore agents for SQL** — Explore is file-only (Read/Grep/Glob). Use sql-runner for DB queries.
 10. **Keep Explore agents narrow** — max_turns: 10, focused prompts, 5-12 tool calls max
-11. **After plan approval, hand off to GLM via OpenCode** — do NOT read target files or write code yourself. Pass the plan as the spec to `opencode run --attach` immediately.
+11. **After plan approval, TRY GLM via OpenCode first** — attempt `opencode run --attach` with the spec. If OpenCode fails (server down, escaping issues, timeout), fall back to implementing directly.
 
 ## Assets
 The [[Assets]] folder contains images, videos, PDFs, and other media. When working on any task, check Assets/ for related materials. You can analyze images, read PDFs, and process any file dropped there.
@@ -63,10 +63,10 @@ When running as Sonnet, ALWAYS use Task tool with `model: "opus"` for:
 
 For everything else (file reading, SQL, small edits, clear-spec implementation, status checks), handle directly.
 
-### Code Implementation via OpenCode + GLM (MANDATORY for plan-mode output)
+### Code Implementation via OpenCode + GLM (PREFERRED — fallback to direct edit)
 A headless OpenCode server runs at `http://localhost:4096` (started from the project root).
 
-**RULE: When a plan is approved, IMMEDIATELY hand off implementation to GLM via OpenCode.** Do NOT read the target files yourself. Do NOT write code yourself. The plan IS the spec — pass it directly to GLM. Your only job after planning is: (1) call OpenCode, (2) review the diff, (3) fix issues.
+**RULE: When a plan is approved, ATTEMPT to hand off implementation to GLM via OpenCode.** If OpenCode fails (server down, escaping issues, timeout, file-not-found errors), fall back to implementing directly. Do not retry OpenCode more than once — if it fails, just do the work yourself.
 
 **This applies when ALL of these are true:**
 - A plan or spec exists with clear file paths, function names, and behavior
@@ -98,6 +98,12 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 
 **If the server is not running**, start it: `cd /c/Users/Chase/Projects/GameFlowData && export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode serve --port 4096`
 
+**Known failure modes (fall back to direct edit if any occur):**
+- "File not found: <prompt text>" — OpenCode is treating the prompt as a filename. Happens with `-f` flag + long prompts. Try putting the prompt BEFORE the `-f` flags, or skip `-f` entirely.
+- `/tmp/` writes fail — Windows may not have `/tmp/`. Use the project directory instead (e.g., `.claude/glm_spec.md`).
+- Bash tool returns "Error: Exit code 1" repeatedly — Bash may be non-functional in the session. Fall back to direct Edit.
+- Concurrent OpenCode calls can collide — send one at a time.
+
 **Do NOT use OpenCode for:** small edits (< 20 lines), config changes, brain/markdown updates, or tasks requiring deep cross-system reasoning.
 
 ### Subagent Model Assignment
@@ -111,7 +117,7 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 - **Keep Explore agent prompts narrow and bounded.** Bad: "explore the arb paper trader infrastructure". Good: "find the entry point for arb paper trading in src/arbitrage/ and list its public functions". Set `max_turns: 10` on Explore agents to prevent runaway exploration. A focused Explore should use 5-12 tool calls, not 25+.
 - **Prefer Grep/Glob directly over Explore agents** for simple searches (finding a file, locating a function, checking imports). Only use Explore for multi-step investigation where you don't know what you're looking for.
 - **Brain-first exploration.** When investigating a system, start from the BrainTree (`brain/` folder) for orientation before diving into source code. `brain/Pipeline/Component-Docs.md` indexes 40+ module docs via wikilinks. Read the relevant brain doc first to understand architecture, then go to source files for current implementation details. Pattern: Explore 1 reads brain docs for "what should exist", Explore 2 reads source for "what actually exists" — run in parallel.
-- **After plan approval, hand off to GLM via OpenCode immediately.** Do NOT re-read files that were already explored during planning. Do NOT write code yourself. Pass the plan as the spec to `opencode run --attach`, attaching the target files with `-f`.
+- **After plan approval, try GLM via OpenCode first.** Write spec to a file, attach with `-f`, run backgrounded. If OpenCode fails, fall back to direct implementation — don't waste tool calls retrying.
 
 ## Agent Personas
 Available specialized agents in .claude/agents/:

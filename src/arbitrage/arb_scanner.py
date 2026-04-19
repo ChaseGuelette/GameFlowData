@@ -27,6 +27,8 @@ MIN_KALSHI_VOLUME = 20          # Minimum Kalshi volume for consideration
 MIN_POLY_LIQUIDITY = 100.0      # Minimum Polymarket liquidity (USD)
 MIN_KALSHI_BID = 3              # Min bid on the Kalshi side we want to buy (cents).
                                 # YES bid < 3c or NO bid < 3c means no real market exists.
+MIN_POLY_PRICE = 5              # Minimum Poly YES or NO price (cents). Prices below this
+                                # indicate a stale/effectively-resolved market (not a real arb).
 
 
 @dataclass
@@ -259,6 +261,11 @@ class ArbScanner:
         if pair.kalshi_volume < MIN_KALSHI_VOLUME:
             return []
         if pair.poly_liquidity < MIN_POLY_LIQUIDITY:
+            return []
+
+        # Price sanity — skip stale/effectively-resolved Poly markets (e.g. 0c or 3c).
+        # Liquidity can be non-zero even when a market has already priced in resolution.
+        if p_yes < MIN_POLY_PRICE or p_no < MIN_POLY_PRICE:
             return []
 
         # Direction A: Buy Kalshi YES + Buy Poly NO

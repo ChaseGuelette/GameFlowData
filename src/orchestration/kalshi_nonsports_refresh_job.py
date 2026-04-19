@@ -1,9 +1,15 @@
 """
 Kalshi Non-Sports Refresh Job
 ==============================
-Scrapes non-sports Kalshi markets (economics, crypto) and stores them
+Scrapes non-sports Kalshi markets (economics/macro) and stores them
 with sport=NULL so the non-sports arb scanner can match them against
 Polymarket equivalents.
+
+Currently scrapes: KXGDP, KXFED, KXCPI (macro threshold markets only).
+
+Crypto series (KXBTC, KXBTCD, KXETH, KXETHD, KXDOGE, KXXRP) are excluded.
+They are range-bracket markets incompatible with Polymarket's binary structure.
+See KALSHI_NON_SPORTS_SERIES in kalshi_utils.py for full explanation.
 
 No edge computation or paper trading — just scrape + store.
 

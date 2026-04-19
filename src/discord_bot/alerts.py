@@ -650,13 +650,15 @@ def _build_calibration_embed(metrics) -> dict:
         color = 0xE74C3C  # Red
         title = "Calibration Check — Significant Drift"
 
+    model_note = f" | {metrics.model_context}" if getattr(metrics, "model_context", "") else ""
     embed = {
         "title": title,
+        "description": "Bet-selection calibration — evaluates placed bets only, not the full prediction distribution.",
         "color": color,
         "timestamp": datetime.utcnow().isoformat(),
         "fields": [],
         "footer": {
-            "text": f"Paper Trading | {metrics.n_bets} bets ({metrics.date_range[0]} to {metrics.date_range[1]})",
+            "text": f"Paper Trading | {metrics.n_bets} bets ({metrics.date_range[0]} to {metrics.date_range[1]}){model_note}",
         },
     }
 
