@@ -40,4 +40,5 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-032]] - Stripe subscription integration complete: DB migration, 5 new files (webhook/checkout/portal routes, stripe lib, admin client), 6 modified files (subscribe/account/pricing pages, types, subscription lib, middleware), paywall toggle (`SUBSCRIPTION_REQUIRED`), Stripe v22 dahlia API breaking changes documented
 - [[handoff-033]] - Session 033
 - [[handoff-034]] - Session 34
+- [[handoff-035]] - Session 035
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

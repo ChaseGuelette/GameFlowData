@@ -25,9 +25,12 @@ from datetime import date, timedelta
 from difflib import SequenceMatcher
 
 from sqlalchemy import text
+
 from src.arbitrage.non_sports_extractor import (
     extract_kalshi,
     extract_poly,
+)
+from src.arbitrage.non_sports_extractor import (
     match_score as structured_match_score,
 )
 

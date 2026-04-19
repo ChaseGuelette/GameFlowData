@@ -17,8 +17,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Regex helpers
@@ -108,7 +106,7 @@ def _norm(text: str) -> str:
     return re.sub(r'\s+', ' ', text.lower().strip())
 
 
-def _parse_price_usd(text: str) -> Optional[float]:
+def _parse_price_usd(text: str) -> float | None:
     """$95k → 95000.0, $1.5M → 1500000.0, $95,000 → 95000.0"""
     for m in _PRICE_USD_RE.finditer(text):
         raw = m.group(1).replace(',', '')
@@ -125,7 +123,7 @@ def _parse_price_usd(text: str) -> Optional[float]:
     return None
 
 
-def _parse_pct(text: str) -> Optional[float]:
+def _parse_pct(text: str) -> float | None:
     """Extract first percentage. '4.50%' → 4.5"""
     m = _PCT_RE.search(text)
     if m:
@@ -136,7 +134,7 @@ def _parse_pct(text: str) -> Optional[float]:
     return None
 
 
-def _parse_month_year(text: str) -> Optional[tuple[int, int]]:
+def _parse_month_year(text: str) -> tuple[int, int] | None:
     """'March 2026' → (3, 2026)"""
     m = _MONTH_YEAR_RE.search(text)
     if m:
@@ -149,7 +147,7 @@ def _parse_month_year(text: str) -> Optional[tuple[int, int]]:
     return None
 
 
-def _parse_quarter_year(text: str) -> Optional[tuple[int, int]]:
+def _parse_quarter_year(text: str) -> tuple[int, int] | None:
     """'Q1 2026' or 'first quarter 2026' → (1, 2026)"""
     m = _QUARTER_RE.search(text)
     if m:
@@ -168,7 +166,7 @@ def _parse_quarter_year(text: str) -> Optional[tuple[int, int]]:
     return None
 
 
-def _parse_date_from_ticker(ticker: str) -> Optional[date]:
+def _parse_date_from_ticker(ticker: str) -> date | None:
     """KXBTC-24APR26-B95000 → 2026-04-24"""
     m = _TICKER_DATE_RE.search(ticker.upper())
     if m:
@@ -183,7 +181,7 @@ def _parse_date_from_ticker(ticker: str) -> Optional[date]:
     return None
 
 
-def _parse_price_from_ticker(ticker: str) -> Optional[float]:
+def _parse_price_from_ticker(ticker: str) -> float | None:
     """Extract numeric price from Kalshi ticker suffix.
     B95000 → 95000.0, 4P50 → 4.5 (P is decimal point for sub-$1 values)
     """
@@ -199,7 +197,7 @@ def _parse_price_from_ticker(ticker: str) -> Optional[float]:
         return None
 
 
-def _parse_date_from_text(text: str) -> Optional[date]:
+def _parse_date_from_text(text: str) -> date | None:
     """'April 24, 2026' or '24 April 2026' → date(2026, 4, 24)"""
     m = _DATE_TEXT_MDY_RE.search(text)
     if m:
@@ -220,7 +218,7 @@ def _parse_date_from_text(text: str) -> Optional[date]:
     return None
 
 
-def _parse_direction(text: str) -> Optional[str]:
+def _parse_direction(text: str) -> str | None:
     """Detect ABOVE/BELOW from question text."""
     has_above = bool(_ABOVE_RE.search(text))
     has_below = bool(_BELOW_RE.search(text))
@@ -238,19 +236,19 @@ def _parse_direction(text: str) -> Optional[str]:
 @dataclass
 class MarketFields:
     series: str
-    price: Optional[float] = None     # USD (crypto) or pct (macro)
-    direction: Optional[str] = None   # 'ABOVE' | 'BELOW'
-    date: Optional[date] = None       # crypto: specific settlement date
-    month: Optional[int] = None       # macro: FOMC/CPI month (1-12)
-    year: Optional[int] = None        # macro: year
-    quarter: Optional[int] = None     # GDP: Q1-Q4
+    price: float | None = None     # USD (crypto) or pct (macro)
+    direction: str | None = None   # 'ABOVE' | 'BELOW'
+    date: date | None = None       # crypto: specific settlement date
+    month: int | None = None       # macro: FOMC/CPI month (1-12)
+    year: int | None = None        # macro: year
+    quarter: int | None = None     # GDP: Q1-Q4
 
 
 # ---------------------------------------------------------------------------
 # Extraction functions
 # ---------------------------------------------------------------------------
 
-def extract_kalshi(series: str, ticker: str, title: str) -> Optional[MarketFields]:
+def extract_kalshi(series: str, ticker: str, title: str) -> MarketFields | None:
     """Extract structured fields from a Kalshi non-sports market.
 
     Returns None if price or direction cannot be extracted (triggers fallback).
@@ -291,7 +289,7 @@ def extract_kalshi(series: str, ticker: str, title: str) -> Optional[MarketField
     return None
 
 
-def extract_poly(series: str, question: str) -> Optional[MarketFields]:
+def extract_poly(series: str, question: str) -> MarketFields | None:
     """Extract structured fields from a Polymarket question string.
 
     The question should be raw (not pre-normalised) — this function normalises it.
@@ -338,7 +336,7 @@ def extract_poly(series: str, question: str) -> Optional[MarketFields]:
 PRICE_TOLERANCE = 0.005  # 0.5% relative — $95,000 matches $95,475 but not $90,000
 
 
-def _periods_match(k: MarketFields, p: MarketFields) -> Optional[bool]:
+def _periods_match(k: MarketFields, p: MarketFields) -> bool | None:
     """Returns True if periods match, False if they conflict, None if unknown on one side."""
     series = k.series
 

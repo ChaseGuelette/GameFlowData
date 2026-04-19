@@ -25,3 +25,12 @@ Data ingestion, linking, processing, and orchestration. The pipeline runs daily 
 - Scheduler: `run_kalshi_nonsports_refresh()` runs every 10 min, 11AM-11PM ET (same cadence as NBA/MLB Kalshi refresh)
 - 1,044 non-sports Kalshi markets in DB; arb scanner reads them via `_load_kalshi_non_sports()` (filters `sport IS NULL OR sport = ''`)
 - Non-sports arb matching: 0 matches currently — question wording too different between Kalshi and Polymarket at SequenceMatcher threshold 0.80. Infrastructure correct; matching threshold is future work.
+
+## Non-Sports Structured Field Extraction (Session 35 — In Progress)
+- `src/arbitrage/non_sports_extractor.py` [NEW, ~260 lines] — deterministic (price, direction, period) extraction from Kalshi ticker + question text and Polymarket question text. Replaces SequenceMatcher 0.55 fuzzy approach that produced 2,447 false-positive matches.
+- Key insight: Kalshi ticker encodes price deterministically (e.g., `B95000` → $95,000) — far more reliable than parsing question text.
+- Match scoring: 1.0 when price+direction+period all confirmed; 0.85 when period unknown. Fallback to SequenceMatcher >= 0.80 when extraction fails on either side.
+- `PRICE_TOLERANCE = 0.5%` relative — handles float rounding without crossing price levels.
+- `src/arbitrage/market_matcher.py` — `match_non_sports_markets()` loop replaced to call extractor; constant renamed.
+- `src/scrapers/kalshi/kalshi_utils.py` — "eth" keyword changed to "ether" to prevent false matches on words like "method", "health", "whether".
+- **Dry-run still needed**: `python src/orchestration/arb_scan_job.py --include-non-sports --dry-run`. Expected: match count drops from 2,447 to ~10-100.
