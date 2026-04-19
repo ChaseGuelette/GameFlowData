@@ -41,4 +41,5 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-033]] - Session 033
 - [[handoff-034]] - Session 34
 - [[handoff-035]] - Session 035
+- [[handoff-036]] - Elections + Politics non-sports arb expansion: 200 → 6,439 markets, candidate disambiguation, 144 matched pairs
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

@@ -34,6 +34,11 @@ MINUTES_FEATURES = [
     "games_in_last_7_days",
     # B3: Short-window trend
     "player_avg_min_l3",
+    # Minutes trend ratios (role-change signal)
+    "player_min_l3_l5_ratio",
+    "player_min_l3_l15_ratio",
+    # Season average minutes (baseline anchor)
+    "player_avg_min_szn",
     # B4: Minutes stability
     "player_min_std_l5",
     "player_min_floor_l5",
@@ -87,6 +92,9 @@ RATE_FEATURES_PTS = [
     "opp_out_min_sum",
     # B4: Starter signal
     "player_starter_prob",
+    # Minutes trend ratios (role-change signal)
+    "player_min_l3_l5_ratio",
+    "player_min_l3_l15_ratio",
     # B5: Position-matched injury opportunity
     "team_out_same_pos_count",
     "team_out_same_pos_min_sum",
@@ -123,6 +131,9 @@ RATE_FEATURES_REB = [
     "opp_out_min_sum",
     # B4: Starter signal
     "player_starter_prob",
+    # Minutes trend ratios (role-change signal)
+    "player_min_l3_l5_ratio",
+    "player_min_l3_l15_ratio",
     # B5: Position-matched injury opportunity
     "team_out_same_pos_count",
     "team_out_same_pos_min_sum",
@@ -159,6 +170,9 @@ RATE_FEATURES_AST = [
     "opp_out_min_sum",
     # B4: Starter signal
     "player_starter_prob",
+    # Minutes trend ratios (role-change signal)
+    "player_min_l3_l5_ratio",
+    "player_min_l3_l15_ratio",
     # B5: Position-matched injury opportunity
     "team_out_same_pos_count",
     "team_out_same_pos_min_sum",
@@ -187,6 +201,9 @@ RATE_FEATURES_THREES = [
     "player_avg_fg3m_l3",
     "player_fg3m_l3_l15_ratio",  # Actually L3/L5 — name kept for model artifact compat (ISS-017)
     "player_std_fg3m_l5",
+    # Minutes trend ratios (role-change signal)
+    "player_min_l3_l5_ratio",
+    "player_min_l3_l15_ratio",
     # Injury context
     "team_out_count",
     "team_out_min_sum",
@@ -399,6 +416,17 @@ class FeatureStore:
                      THEN COALESCE(p_avg.avg_fg3m_l3, 0) / p_avg.avg_fg3m_l5
                      ELSE 1.0 END as player_fg3m_l3_l15_ratio,
 
+                -- Minutes trend ratios (role-change signal)
+                CASE WHEN COALESCE(p_avg.avg_min_l5, 0) > 0
+                     THEN COALESCE(p_avg.avg_min_l3, 0) / p_avg.avg_min_l5
+                     ELSE 1.0 END as player_min_l3_l5_ratio,
+                CASE WHEN COALESCE(p_avg.avg_min_l15, 0) > 0
+                     THEN COALESCE(p_avg.avg_min_l3, 0) / p_avg.avg_min_l15
+                     ELSE 1.0 END as player_min_l3_l15_ratio,
+
+                -- Season average minutes (baseline anchor)
+                COALESCE(p_avg.avg_min_szn, 0) as player_avg_min_szn,
+
                 -- B3/B4: L5 standard deviations
                 COALESCE(p_avg.std_min_l5, 0) as player_min_std_l5,
                 COALESCE(p_avg.std_pts_l5, 0) as player_std_pts_l5,
@@ -452,6 +480,7 @@ class FeatureStore:
                 SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
                        avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5,
                        avg_min_l3, avg_pts_l3, avg_reb_l3, avg_ast_l3, avg_fg3m_l3,
+                       avg_min_szn,
                        std_min_l5, std_pts_l5, std_reb_l5, std_ast_l5, std_fg3m_l5,
                        min_floor_l5, games_started_l5,
                        rest_days, games_last_7d
@@ -719,6 +748,15 @@ class FeatureStore:
                     CASE WHEN COALESCE(p_avg.avg_fg3m_l5, 0) > 0
                          THEN COALESCE(p_avg.avg_fg3m_l3, 0) / p_avg.avg_fg3m_l5
                          ELSE 1.0 END as player_fg3m_l3_l15_ratio,
+                    -- Minutes trend ratios (role-change signal)
+                    CASE WHEN COALESCE(p_avg.avg_min_l5, 0) > 0
+                         THEN COALESCE(p_avg.avg_min_l3, 0) / p_avg.avg_min_l5
+                         ELSE 1.0 END as player_min_l3_l5_ratio,
+                    CASE WHEN COALESCE(p_avg.avg_min_l15, 0) > 0
+                         THEN COALESCE(p_avg.avg_min_l3, 0) / p_avg.avg_min_l15
+                         ELSE 1.0 END as player_min_l3_l15_ratio,
+                    -- Season average minutes (baseline anchor)
+                    COALESCE(p_avg.avg_min_szn, 0) as player_avg_min_szn,
                     -- B3/B4: L5 standard deviations
                     COALESCE(p_avg.std_min_l5, 0) as player_min_std_l5,
                     COALESCE(p_avg.std_pts_l5, 0) as player_std_pts_l5,
@@ -762,6 +800,7 @@ class FeatureStore:
                     SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
                            avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5,
                            avg_min_l3, avg_pts_l3, avg_reb_l3, avg_ast_l3, avg_fg3m_l3,
+                           avg_min_szn,
                            std_min_l5, std_pts_l5, std_reb_l5, std_ast_l5, std_fg3m_l5,
                            min_floor_l5, games_started_l5,
                            rest_days, games_last_7d
@@ -1201,6 +1240,17 @@ class FeatureStore:
                      THEN COALESCE(p_avg.avg_fg3m_l3, 0) / p_avg.avg_fg3m_l5
                      ELSE 1.0 END as player_fg3m_l3_l15_ratio,
 
+                -- Minutes trend ratios (role-change signal)
+                CASE WHEN COALESCE(p_avg.avg_min_l5, 0) > 0
+                     THEN COALESCE(p_avg.avg_min_l3, 0) / p_avg.avg_min_l5
+                     ELSE 1.0 END as player_min_l3_l5_ratio,
+                CASE WHEN COALESCE(p_avg.avg_min_l15, 0) > 0
+                     THEN COALESCE(p_avg.avg_min_l3, 0) / p_avg.avg_min_l15
+                     ELSE 1.0 END as player_min_l3_l15_ratio,
+
+                -- Season average minutes (baseline anchor)
+                COALESCE(p_avg.avg_min_szn, 0) as player_avg_min_szn,
+
                 -- B3/B4: L5 standard deviations
                 COALESCE(p_avg.std_min_l5, 0) as player_min_std_l5,
                 COALESCE(p_avg.std_pts_l5, 0) as player_std_pts_l5,
@@ -1241,6 +1291,7 @@ class FeatureStore:
                 SELECT avg_min_l5, avg_min_l15, avg_pts_l5, avg_pts_l15,
                        avg_reb_l5, avg_ast_l5, avg_fg3m_l5, avg_fg3a_l5,
                        avg_min_l3, avg_pts_l3, avg_reb_l3, avg_ast_l3, avg_fg3m_l3,
+                       avg_min_szn,
                        std_min_l5, std_pts_l5, std_reb_l5, std_ast_l5, std_fg3m_l5,
                        min_floor_l5, games_started_l5,
                        rest_days, games_last_7d
@@ -1461,6 +1512,7 @@ class FeatureStore:
                 -- B3: L3 averages
                 pags.avg_min_l3, pags.avg_pts_l3, pags.avg_reb_l3,
                 pags.avg_ast_l3, pags.avg_fg3m_l3,
+                pags.avg_min_szn,
                 -- B3/B4: L5 standard deviations
                 pags.std_min_l5, pags.std_pts_l5, pags.std_reb_l5,
                 pags.std_ast_l5, pags.std_fg3m_l5,
@@ -1493,9 +1545,11 @@ class FeatureStore:
                 "player_avg_min_l3": 0, "player_avg_pts_l3": 0,
                 "player_avg_reb_l3": 0, "player_avg_ast_l3": 0,
                 "player_avg_fg3m_l3": 0,
+                "player_avg_min_szn": 0,
                 # B3: Momentum ratios (default = 1.0 = no trend)
                 "player_pts_l3_l15_ratio": 1.0, "player_reb_l3_l15_ratio": 1.0,
                 "player_ast_l3_l15_ratio": 1.0, "player_fg3m_l3_l15_ratio": 1.0,
+                "player_min_l3_l5_ratio": 1.0, "player_min_l3_l15_ratio": 1.0,
                 # B3/B4: L5 standard deviations
                 "player_min_std_l5": 0, "player_std_pts_l5": 0,
                 "player_std_reb_l5": 0, "player_std_ast_l5": 0,
@@ -1515,6 +1569,7 @@ class FeatureStore:
             "avg_reb_l5", "avg_ast_l5", "avg_fg3m_l5", "avg_fg3a_l5",
             "avg_usg_pct_l5", "avg_ts_pct_l15", "avg_reb_pct_l5", "avg_ast_pct_l5",
             "avg_min_l3", "avg_pts_l3", "avg_reb_l3", "avg_ast_l3", "avg_fg3m_l3",
+            "avg_min_szn",
         ]:
             stats[f"player_{k}"] = row.get(k) or 0
 
@@ -1548,6 +1603,13 @@ class FeatureStore:
         fg3m_l3 = row.get("avg_fg3m_l3") or 0
         fg3m_l5 = row.get("avg_fg3m_l5") or 0
         stats["player_fg3m_l3_l15_ratio"] = (fg3m_l3 / fg3m_l5) if fg3m_l5 > 0 else 1.0
+
+        # Minutes trend ratios (role-change signal)
+        min_l3 = row.get("avg_min_l3") or 0
+        min_l5 = row.get("avg_min_l5") or 0
+        min_l15 = row.get("avg_min_l15") or 0
+        stats["player_min_l3_l5_ratio"] = (min_l3 / min_l5) if min_l5 > 0 else 1.0
+        stats["player_min_l3_l15_ratio"] = (min_l3 / min_l15) if min_l15 > 0 else 1.0
 
         # B2: Rest/schedule (no player_ prefix)
         stored_rest = row.get("stored_rest_days")

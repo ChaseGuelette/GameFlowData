@@ -55,6 +55,16 @@ _KALSHI_DATE_RE = re.compile(r"(\d{2})([A-Z]{3})(\d{2})(\d{4})?")
 # Polymarket slug date: mlb-bal-cle-2026-04-19 → date 2026-04-19
 _POLY_SLUG_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})$")
 
+# Candidate name extractor: "Will [NAME] win ..." → captures NAME
+# Used to reject same-race/different-candidate false positives in election matching.
+_CANDIDATE_RE = re.compile(r"will\s+(.+?)\s+win\b", re.IGNORECASE)
+
+
+def _extract_candidate(question: str) -> str | None:
+    """Extract candidate name from 'Will [NAME] win ...' election questions."""
+    m = _CANDIDATE_RE.search(question)
+    return m.group(1).strip() if m else None
+
 
 def _extract_date_from_kalshi_ticker(ticker: str) -> date | None:
     """Extract game date from a Kalshi game ticker.
@@ -578,7 +588,24 @@ class MarketMatcher:
                         # Extraction failed on one side — fuzzy fallback (threshold per config)
                         fallback_threshold = cfg.get("fallback_threshold", NON_SPORTS_FALLBACK_THRESHOLD)
                         sm = SequenceMatcher(None, poly_q_norm, k_n).ratio()
-                        score = sm if sm >= fallback_threshold else 0.0
+                        if sm >= fallback_threshold:
+                            # Candidate disambiguation: reject "Will X win?" vs "Will Y win?"
+                            # when X and Y are clearly different people (same-race false positives).
+                            k_cand = _extract_candidate(k_row.get("market_title") or "")
+                            p_cand = _extract_candidate(poly.get("question") or "")
+                            if k_cand and p_cand:
+                                # Both sides name a candidate — require names to match.
+                                # Threshold 0.65 (not 0.5): Korean/Spanish names share too many
+                                # characters at 0.5, causing false positives (Chong Won-o ≈ Kang Hoon-sik).
+                                name_sim = SequenceMatcher(None, k_cand.lower(), p_cand.lower()).ratio()
+                                score = sm if name_sim >= 0.65 else 0.0
+                            elif k_cand or p_cand:
+                                # One side is "Will X win?", other has different structure → reject
+                                score = 0.0
+                            else:
+                                score = sm
+                        else:
+                            score = 0.0
                     if score > best_score:
                         best_score, best_k = score, k_row
 

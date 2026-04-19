@@ -193,46 +193,49 @@ Most Economics series beyond the core 3 are range brackets or too niche for Poly
 
 ---
 
-## 8. Next Expansion: Elections + Politics (Recommended)
+## 8. Elections + Politics Expansion — IMPLEMENTED Apr 19 2026
 
-### Why Elections First
+### Approach: Dynamic Category-Scrape Mode
+Instead of hardcoding 970+ series, `list_all_events(status="open")` discovers all open series at scrape time, grouped by Kalshi category. Markets stored with `series_ticker = config_key` (`"_CAT_ELECTIONS"` or `"_CAT_POLITICS"`) so the matcher groups them under one config entry.
 
-- **648 Kalshi election series** (US House, Senate, Governor races, state-level)
-- **3,645 Poly politics markets** — largest liquid non-sports Poly category
-- Both platforms use binary yes/no event format ("Will X win Y?")
-- Poly sample confirms high liquidity: NY-11 ($13,608), GA-02 ($14,202), 2028 VP markets ($1.4M)
+### Results
+- **Scraper**: 649 elections series + 332 politics series = **6,239 new markets** (vs ~200 macro)
+- **Arb scan runtime**: ~2 min (was 30+ min before volume/liquidity filters)
+- **Matched pairs after disambiguation**: 144 (down from 364 raw)
 
-### Matching Approach
+### Volume/Liquidity Filter Decisions
+Poly politics is extremely top-heavy — `liq > 1000` still returns 3,544 markets; only `liq > 50,000` reduces to 283.
 
-Structured extraction won't work (no numeric threshold to extract). Must use SequenceMatcher fallback.
+| Config | min_kalshi_volume | min_poly_liquidity | Kalshi | Poly |
+|--------|------------------|--------------------|--------|------|
+| `_CAT_ELECTIONS` | 5,000 | 50,000 | ~1,131 | ~276 |
+| `_CAT_POLITICS` | 500 | 5,000 | ~1,252 | ~662 |
 
-**Challenge**: Wording differs between platforms.
-- Kalshi: `"Which party will win the U.S. House?"` (event-level)
-- Poly: `"Will Republicans control the House after 2026?"` (question-level)
+### Candidate Disambiguation Logic
+Korean and Spanish-romanized names share enough characters to score ≥ 0.50 (e.g. "Chong Won-o" vs "Kang Hoon-sik" = 0.50). Three-layer check in fuzzy fallback:
+1. Both questions have "Will X win?" → require name similarity ≥ **0.65**
+2. One side has "Will X win?", other doesn't → structural mismatch → reject
+3. Neither has candidate → proceed with fuzzy score
 
-SequenceMatcher score on these ≈ 0.55 — below our current `NON_SPORTS_FALLBACK_THRESHOLD = 0.80`.
+### Known Remaining False Positives
+1. **Same-race, different placement**: "Roberto finish 2nd" vs "Roberto Chiabra finish 2nd" — same "Roberto" in same race, different specific candidates. Fix: extend check to handle "finish Nth" patterns.
+2. **Different verb, same person**: "Rubio receive pardon" vs "Rubio announce presidential run" — passes candidate check. Fix: action verb extraction.
+3. **GDP country mismatch**: Structured extractor scores US GDP vs Mexico/Eurozone GDP as 1.0 (ignores country). Fix: add country field to `non_sports_extractor.py`.
 
-**Options**:
-1. **Lower threshold to 0.65** for elections/politics series only (per-series threshold in config)
-2. **Entity extraction matching** — extract (candidate_name / party, office, state/district) from both sides and match on structured fields (better precision, more build work)
-3. **Manual seed mapping** — maintain a small JSON file mapping Kalshi series → Poly condition IDs for the most liquid markets
+---
 
-Recommendation: Start with option 1 (per-series threshold of 0.65) as a quick win. Add entity extraction if false-match rate is too high.
+## 9. Next Expansion: Finance, Entertainment, SCOTUS
 
-### Implementation Plan
+From the full Kalshi universe audit (Section 7), remaining high-value matchable categories:
 
-1. Add election series to `KALSHI_NON_SPORTS_SERIES` in `kalshi_utils.py`:
-   - Category groups: `CONTROLH`, `CONTROLS` (House/Senate control)
-   - `GOVPARTYXX` (governors by state, ~50 series)
-   - `SENPARTYXX` (Senate seats by state)
-   - `HOUSEPARTYXX` (House seats by district)
-   - Key politics series from the Politics category (322 series — cherry-pick binary events)
-2. Add to `KALSHI_SERIES_POLY_CONFIG`:
-   ```python
-   "CONTROLH": {"poly_categories": ["politics"], "poly_keywords": ["house", "republican", "democrat", "congress"], "fallback_threshold": 0.65},
-   "CONTROLS": {"poly_categories": ["politics"], "poly_keywords": ["senate", "republican", "democrat", "congress"], "fallback_threshold": 0.65},
-   ```
-3. Update `match_non_sports_markets()` in `market_matcher.py` to read `fallback_threshold` from config
-4. Test with a dry run — check false-match rate before enabling Discord alerts
+| Category | Kalshi Series | Poly Markets | Priority |
+|----------|--------------|--------------|----------|
+| Finance/Markets | ~52 | economics/other | **High** — S&P 500, Nasdaq, VIX binary thresholds |
+| Entertainment | 333 | culture (348) | Medium — Oscars, Emmys, box office |
+| SCOTUS/Law | ~20 | politics/other | Medium — binary case outcomes |
+| Science/Tech | ~60 | other | Medium — AI milestones, SpaceX |
+| Companies | ~82 | other | Low — CEO exits, acquisitions |
+
+**Implementation**: Same `mode: "category_scrape"` pattern. Add `_CAT_FINANCE`, `_CAT_ENTERTAINMENT`, `_CAT_SCOTUS` entries to `KALSHI_NON_SPORTS_SERIES` and `KALSHI_SERIES_POLY_CONFIG`.
 
 **Status**: Not yet implemented. Scoped Apr 19 2026.

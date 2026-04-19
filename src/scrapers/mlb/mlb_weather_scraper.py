@@ -1,7 +1,7 @@
 """
 MLB Weather Scraper
 ====================
-Fetches weather data for MLB games from OpenWeatherMap API.
+Fetches weather data for MLB games from Open-Meteo (free, no API key required).
 
 Computes derived features:
   - air_density_idx: normalized air density (1.0 = 68°F, 50% RH, sea level)
@@ -17,10 +17,9 @@ Usage:
 import argparse
 import logging
 import math
-import os
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -41,7 +40,7 @@ logger = logging.getLogger("MLBWeatherScraper")
 # Venue lookup tables (all 30 MLB parks)
 # ---------------------------------------------------------------------------
 
-# (lat, lng) for OpenWeatherMap calls
+# (lat, lng) for Open-Meteo calls
 PARK_LAT_LNG: dict[int, tuple[float, float]] = {
     15:   (33.4453, -112.0667),  # Chase Field (ARI)
     2:    (42.3467, -71.0972),   # Fenway Park (BOS)
@@ -78,7 +77,7 @@ PARK_LAT_LNG: dict[int, tuple[float, float]] = {
 # Compass bearing from home plate toward center field (degrees, 0=N, 90=E)
 # Used to compute tailwind component toward outfield
 PARK_OF_BEARING: dict[int, int] = {
-    15:   0,    # Chase Field — NNE
+    15:   0,    # Chase Field — N
     2:    35,   # Fenway Park — NNE
     4705: 355,  # American Family Field — N
     17:   45,   # Wrigley Field — NE
@@ -181,31 +180,70 @@ def compute_wind_out_mph(wind_speed_mph: float, wind_dir_deg: int, venue_id: int
 
 
 # ---------------------------------------------------------------------------
-# Weather fetching
+# Open-Meteo weather fetching (free, no API key required)
 # ---------------------------------------------------------------------------
 
-OWM_TIMEMACHINE = "https://api.openweathermap.org/data/3.0/onecall/timemachine"
-OWM_FORECAST = "https://api.openweathermap.org/data/2.5/forecast"
+OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
+OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
+
+# Open-Meteo hourly variable names (same for both archive and forecast endpoints)
+HOURLY_VARS = (
+    "temperature_2m,relative_humidity_2m,precipitation,"
+    "wind_speed_10m,wind_direction_10m,surface_pressure"
+)
 
 
-def _parse_owm_data(data: dict) -> dict:
-    """Extract weather fields from an OWM API response dict."""
-    # Handle both onecall/timemachine (data[0]) and forecast (list[0]) formats
-    current = data.get("current") or (data.get("data") or [{}])[0]
-    temp_f = float(current.get("temp", 70))
-    humidity = float(current.get("humidity", 50))
-    pressure = float(current.get("pressure", 1013.25))
-    wind_speed = float(current.get("wind_speed", 0))
-    wind_deg = int(current.get("wind_deg", 0))
-    weather_list = current.get("weather", [])
-    condition = weather_list[0].get("description", "") if weather_list else ""
-    precip_mains = {w.get("main", "").lower() for w in weather_list}
-    has_precip = bool(precip_mains & {"rain", "snow", "thunderstorm", "drizzle"})
+def _parse_open_meteo_response(data: dict, target_dt: datetime) -> dict | None:
+    """Extract the weather closest to target_dt from an Open-Meteo hourly response.
+
+    Open-Meteo returns hourly arrays in UTC. target_dt should be UTC.
+    """
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    if not times:
+        return None
+
+    # Find index of closest time to target_dt (naive datetime, UTC)
+    target_naive = target_dt.replace(tzinfo=None) if target_dt.tzinfo else target_dt
+    best_idx = 0
+    best_diff = float("inf")
+    for i, t_str in enumerate(times):
+        try:
+            t_dt = datetime.strptime(t_str, "%Y-%m-%dT%H:%M")
+            diff = abs((t_dt - target_naive).total_seconds())
+            if diff < best_diff:
+                best_diff = diff
+                best_idx = i
+        except ValueError:
+            continue
+    idx = best_idx
+
+    def _get(key: str, default: float) -> float:
+        arr = hourly.get(key, [])
+        val = arr[idx] if arr and idx < len(arr) else None
+        return float(val) if val is not None else default
+
+    temp_c = _get("temperature_2m", 20.0)
+    humidity = _get("relative_humidity_2m", 50.0)
+    precip_mm = _get("precipitation", 0.0)
+    wind_kmh = _get("wind_speed_10m", 0.0)
+    wind_deg = int(_get("wind_direction_10m", 0))
+    pressure = _get("surface_pressure", 1013.25)
+
+    # Convert units
+    temp_f = temp_c * 9 / 5 + 32
+    wind_mph = wind_kmh * 0.621371
+    has_precip = precip_mm > 0.1  # >0.1 mm threshold
+
+    condition = f"{temp_f:.0f}°F, {wind_mph:.0f} mph wind"
+    if has_precip:
+        condition += f", precip {precip_mm:.1f}mm"
+
     return {
         "temp_f": round(temp_f, 1),
         "humidity_pct": round(humidity, 1),
         "pressure_hpa": round(pressure, 2),
-        "wind_speed_mph": round(wind_speed, 1),
+        "wind_speed_mph": round(wind_mph, 1),
         "wind_dir_deg": wind_deg,
         "has_precip": has_precip,
         "condition": condition,
@@ -216,10 +254,10 @@ def fetch_weather_for_game(
     game_pk: int,
     game_dt: datetime,
     venue_id: int,
-    api_key: str,
 ) -> dict | None:
-    """Fetch and compute weather for a single game.
+    """Fetch and compute weather for a single game via Open-Meteo (no API key needed).
 
+    Uses the archive endpoint for past games and the forecast endpoint for future games.
     Returns a dict ready for upsert into mlb_game_weather, or None on failure.
     """
     if venue_id in DOME_VENUE_IDS:
@@ -230,17 +268,44 @@ def fetch_weather_for_game(
         logger.warning("No lat/lng for venue_id=%d (game_pk=%d), skipping", venue_id, game_pk)
         return None
 
-    unix_ts = int(game_dt.timestamp())
+    game_date_str = game_dt.strftime("%Y-%m-%d")
+    now_utc = datetime.utcnow()
+    is_historical = game_dt.replace(tzinfo=None) < now_utc - timedelta(hours=6)
+
+    if is_historical:
+        url = OPEN_METEO_ARCHIVE
+        params = {
+            "latitude": lat,
+            "longitude": lng,
+            "start_date": game_date_str,
+            "end_date": game_date_str,
+            "hourly": HOURLY_VARS,
+            "wind_speed_unit": "kmh",
+            "timezone": "UTC",
+        }
+    else:
+        url = OPEN_METEO_FORECAST
+        params = {
+            "latitude": lat,
+            "longitude": lng,
+            "start_date": game_date_str,
+            "end_date": (game_dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "hourly": HOURLY_VARS,
+            "wind_speed_unit": "kmh",
+            "timezone": "UTC",
+            "forecast_days": 3,
+        }
+
     try:
-        resp = requests.get(
-            OWM_TIMEMACHINE,
-            params={"lat": lat, "lon": lng, "dt": unix_ts, "appid": api_key, "units": "imperial"},
-            timeout=15,
-        )
+        resp = requests.get(url, params=params, timeout=30)
         resp.raise_for_status()
-        raw = _parse_owm_data(resp.json())
+        raw = _parse_open_meteo_response(resp.json(), game_dt)
     except Exception as e:
-        logger.warning("OWM request failed game_pk=%d venue=%d: %s", game_pk, venue_id, e)
+        logger.warning("Open-Meteo request failed game_pk=%d venue=%d: %s", game_pk, venue_id, e)
+        return None
+
+    if raw is None:
+        logger.warning("No hourly data returned for game_pk=%d venue=%d", game_pk, venue_id)
         return None
 
     air_density = compute_air_density_idx(raw["temp_f"], raw["humidity_pct"], raw["pressure_hpa"])
@@ -303,56 +368,157 @@ def upsert_weather(engine, records: list[dict]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Backfill
+# Backfill — batched by venue × season (120 API calls for 4-year full backfill)
 # ---------------------------------------------------------------------------
 
 
-def backfill_weather(engine, api_key: str, start_date: str, end_date: str, delay_s: float = 1.1):
+def _fetch_open_meteo_range(lat: float, lng: float, start_date: str, end_date: str) -> dict | None:
+    """Fetch a range of hourly weather data from Open-Meteo archive.
+
+    Returns the raw JSON response (hourly arrays), or None on failure.
+    One call covers an entire season — caller extracts individual game hours.
+    """
+    try:
+        resp = requests.get(
+            OPEN_METEO_ARCHIVE,
+            params={
+                "latitude": lat,
+                "longitude": lng,
+                "start_date": start_date,
+                "end_date": end_date,
+                "hourly": HOURLY_VARS,
+                "wind_speed_unit": "kmh",
+                "timezone": "UTC",
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.warning("Open-Meteo range fetch failed (%s to %s lat=%.3f): %s", start_date, end_date, lat, e)
+        return None
+
+
+def backfill_weather(engine, start_date: str, end_date: str, delay_s: float = 0.5):
     """Backfill weather for completed games between start_date and end_date.
 
-    Skips games that already have weather data. Processes in date order.
+    Strategy: batch by venue × month to use ~1 API call per venue-month instead of
+    1 call per game. For a full 2022–2025 backfill (~9,700 games) this uses
+    ~120–150 API calls instead of ~9,700 — well within Open-Meteo's free tier.
+
+    Skips games that already have weather data.
     """
     query = text("""
         SELECT gs.game_id          AS game_pk,
                gs.game_date,
                gs.venue_id,
-               gs.game_datetime
+               gs.game_time_utc
         FROM mlb_game_schedule gs
         LEFT JOIN mlb_game_weather gw ON gw.game_pk = gs.game_id
         WHERE gs.game_date BETWEEN :start AND :end
           AND gs.game_type = 'R'
           AND gw.game_pk IS NULL
-        ORDER BY gs.game_date
+        ORDER BY gs.venue_id, gs.game_date
     """)
     with engine.connect() as conn:
         rows = conn.execute(query, {"start": start_date, "end": end_date}).fetchall()
 
     logger.info("Backfill: %d games need weather data", len(rows))
+    if not rows:
+        return
 
-    batch: list[dict] = []
-    for i, row in enumerate(rows):
-        game_dt = row.game_datetime
-        if game_dt is None:
-            # Default to 7 PM local time if no datetime stored
-            game_dt = datetime(row.game_date.year, row.game_date.month, row.game_date.day, 19, 0, 0)
-        elif not isinstance(game_dt, datetime):
-            game_dt = datetime(game_dt.year, game_dt.month, game_dt.day, 19, 0, 0)
+    # Group games by venue_id → then process in monthly chunks per venue
+    from collections import defaultdict
+    by_venue: dict[int, list] = defaultdict(list)
+    for row in rows:
+        by_venue[row.venue_id or 0].append(row)
 
-        record = fetch_weather_for_game(row.game_pk, game_dt, row.venue_id or 0, api_key)
-        if record:
-            batch.append(record)
+    total_saved = 0
+    for venue_id, venue_rows in by_venue.items():
+        # Dome venues: no API call needed
+        if venue_id in DOME_VENUE_IDS:
+            dome_records = []
+            for row in venue_rows:
+                gd = row.game_date
+                game_dt = datetime(gd.year, gd.month, gd.day, 19, 0, 0)
+                dome_records.append(
+                    {"game_pk": row.game_pk, "game_date": gd, "venue_id": venue_id, **DOME_NEUTRAL}
+                )
+            total_saved += upsert_weather(engine, dome_records)
+            logger.info("  Venue %d (dome): saved %d records", venue_id, len(dome_records))
+            continue
 
-        if len(batch) >= 50:
-            saved = upsert_weather(engine, batch)
-            logger.info("  Saved %d records (processed %d/%d)", saved, i + 1, len(rows))
-            batch = []
+        lat, lng = PARK_LAT_LNG.get(venue_id, (None, None))
+        if lat is None:
+            logger.warning("  No lat/lng for venue_id=%d, skipping %d games", venue_id, len(venue_rows))
+            continue
 
-        time.sleep(delay_s)
+        # Group this venue's games by year-month for chunked fetching
+        by_month: dict[str, list] = defaultdict(list)
+        for row in venue_rows:
+            key = row.game_date.strftime("%Y-%m")
+            by_month[key].append(row)
 
-    if batch:
-        upsert_weather(engine, batch)
+        for month_key, month_rows in sorted(by_month.items()):
+            # Fetch the entire month in one API call
+            year, mon = int(month_key[:4]), int(month_key[5:])
+            # Last day of month
+            if mon == 12:
+                last_day = date(year + 1, 1, 1) - timedelta(days=1)
+            else:
+                last_day = date(year, mon + 1, 1) - timedelta(days=1)
 
-    logger.info("Backfill complete.")
+            month_start = f"{month_key}-01"
+            month_end = last_day.strftime("%Y-%m-%d")
+
+            logger.info(
+                "  Venue %d: fetching %s → %s (%d games)",
+                venue_id, month_start, month_end, len(month_rows),
+            )
+            hourly_data = _fetch_open_meteo_range(lat, lng, month_start, month_end)
+            if hourly_data is None:
+                logger.warning("    Skipping month %s for venue %d", month_key, venue_id)
+                time.sleep(delay_s)
+                continue
+
+            records = []
+            for row in month_rows:
+                game_dt = row.game_time_utc
+                if game_dt is None:
+                    gd = row.game_date
+                    game_dt = datetime(gd.year, gd.month, gd.day, 19, 0, 0)
+                elif not isinstance(game_dt, datetime):
+                    game_dt = datetime(game_dt.year, game_dt.month, game_dt.day, 19, 0, 0)
+
+                raw = _parse_open_meteo_response(hourly_data, game_dt)
+                if raw is None:
+                    continue
+
+                air_density = compute_air_density_idx(raw["temp_f"], raw["humidity_pct"], raw["pressure_hpa"])
+                wind_out = compute_wind_out_mph(raw["wind_speed_mph"], raw["wind_dir_deg"], venue_id)
+
+                records.append({
+                    "game_pk": row.game_pk,
+                    "game_date": game_dt.date(),
+                    "venue_id": venue_id,
+                    "temp_f": raw["temp_f"],
+                    "humidity_pct": raw["humidity_pct"],
+                    "pressure_hpa": raw["pressure_hpa"],
+                    "air_density_idx": air_density,
+                    "wind_speed_mph": raw["wind_speed_mph"],
+                    "wind_dir_deg": raw["wind_dir_deg"],
+                    "wind_out_mph": wind_out,
+                    "has_precip": raw["has_precip"],
+                    "is_dome": False,
+                    "condition": raw["condition"],
+                })
+
+            saved = upsert_weather(engine, records)
+            total_saved += saved
+            logger.info("    Saved %d records", saved)
+            time.sleep(delay_s)
+
+    logger.info("Backfill complete: %d total records saved.", total_saved)
 
 
 # ---------------------------------------------------------------------------
@@ -360,18 +526,18 @@ def backfill_weather(engine, api_key: str, start_date: str, end_date: str, delay
 # ---------------------------------------------------------------------------
 
 
-def fetch_today_forecast(engine, api_key: str) -> int:
+def fetch_today_forecast(engine) -> int:
     """Fetch forecast weather for today's scheduled games and upsert."""
     today = date.today().isoformat()
     query = text("""
         SELECT gs.game_id  AS game_pk,
                gs.game_date,
                gs.venue_id,
-               gs.game_datetime
+               gs.game_time_utc
         FROM mlb_game_schedule gs
         WHERE gs.game_date = :today
           AND gs.game_type = 'R'
-        ORDER BY gs.game_datetime NULLS LAST
+        ORDER BY gs.game_time_utc NULLS LAST
     """)
     with engine.connect() as conn:
         rows = conn.execute(query, {"today": today}).fetchall()
@@ -379,17 +545,17 @@ def fetch_today_forecast(engine, api_key: str) -> int:
     logger.info("Forecast: %d games scheduled for %s", len(rows), today)
     records: list[dict] = []
     for row in rows:
-        game_dt = row.game_datetime
+        game_dt = row.game_time_utc
         if game_dt is None:
             t = date.today()
             game_dt = datetime(t.year, t.month, t.day, 19, 0, 0)
         elif not isinstance(game_dt, datetime):
             game_dt = datetime(game_dt.year, game_dt.month, game_dt.day, 19, 0, 0)
 
-        record = fetch_weather_for_game(row.game_pk, game_dt, row.venue_id or 0, api_key)
+        record = fetch_weather_for_game(row.game_pk, game_dt, row.venue_id or 0)
         if record:
             records.append(record)
-        time.sleep(0.5)
+        time.sleep(0.15)
 
     saved = upsert_weather(engine, records)
     logger.info("Saved weather for %d games", saved)
@@ -401,16 +567,8 @@ def fetch_today_forecast(engine, api_key: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def get_api_key() -> str:
-    """Get OpenWeatherMap API key from environment."""
-    key = os.environ.get("OPENWEATHERMAP_API_KEY", "")
-    if not key:
-        raise RuntimeError("OPENWEATHERMAP_API_KEY not set in environment")
-    return key
-
-
 def main():
-    parser = argparse.ArgumentParser(description="MLB Weather Scraper")
+    parser = argparse.ArgumentParser(description="MLB Weather Scraper (Open-Meteo, no key needed)")
     parser.add_argument("--backfill", action="store_true", help="Backfill historical weather")
     parser.add_argument("--today", action="store_true", help="Fetch today's forecast")
     parser.add_argument("--start", default="2022-04-01", help="Backfill start date (YYYY-MM-DD)")
@@ -420,12 +578,11 @@ def main():
     args = parser.parse_args()
 
     engine = get_engine()
-    api_key = get_api_key()
 
     if args.backfill:
-        backfill_weather(engine, api_key, args.start, args.end)
+        backfill_weather(engine, args.start, args.end)
     elif args.today:
-        fetch_today_forecast(engine, api_key)
+        fetch_today_forecast(engine)
     else:
         parser.print_help()
 

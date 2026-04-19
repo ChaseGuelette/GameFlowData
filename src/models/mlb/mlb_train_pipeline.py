@@ -419,7 +419,7 @@ class MLBTrainingOrchestrator:
         metadata = {
             "train_seasons": train_seasons,
             "cal_season": cal_season,
-            "cal_end_date": cal_end_date,
+            "cal_end_date": cal_end_date.isoformat() if hasattr(cal_end_date, "isoformat") else cal_end_date,
             "train_rows": len(train_df),
             "cal_rows": len(cal_df),
             "feature_count": len(PITCHER_K_FEATURES),

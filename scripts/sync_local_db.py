@@ -54,6 +54,7 @@ logger = logging.getLogger("sync_local_db")
 MLB_TABLES: dict[str, tuple[str | None, str]] = {
     "mlb_game_schedule":                    ("game_date", "full"),
     "mlb_park_factors":                     (None, "full"),
+    "mlb_game_weather":                     ("game_date", "incremental"),
     "mlb_players":                          (None, "full"),
     "mlb_player_season_advanced":           (None, "full"),
     "mlb_player_game_stats_batting":        ("game_date", "incremental"),

@@ -99,7 +99,7 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 3. Fix small issues directly (Edit tool). For larger problems, send corrections back to OpenCode with a targeted prompt.
 4. Run tests/linting if applicable.
 
-**Model tiers:** GLM 5.1 (best, $0.95/$3.15), GLM 4.7 ($0.39/$1.75 — simpler tasks), GLM 4.5 Air (FREE — trivial tasks)
+**Model tiers:** `z-ai/glm-5.1` (default — best quality, $0.95/$3.15), `z-ai/glm-4.5-air:free` (fallback — FREE, simpler tasks)
 
 **If the server is not running**, start it: `cd /c/Users/Chase/Projects/GameFlowData && export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode serve --port 4096`
 
