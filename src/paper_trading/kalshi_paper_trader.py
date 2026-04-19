@@ -167,11 +167,15 @@ class KalshiPaperTrader:
     # Select bets
     # ------------------------------------------------------------------
 
-    def select_bets(self, target_date: date, sport: str = "nba") -> list[dict[str, Any]]:
+    def select_bets(self, target_date: date, sport: str = "nba", prior_exposure: float = 0.0) -> list[dict[str, Any]]:
         """Select paper bets from kalshi_markets with sufficient taker-fee-adjusted edge.
 
         Mirrors live trader logic: taker fees, position accumulation awareness,
         same-day dedup, daily exposure cap.
+
+        MLB priority rule: to ensure MLB bets take precedence over NBA within the
+        shared daily exposure cap, call with sport="mlb" first, then pass the
+        resulting total cost as prior_exposure= when calling with sport="nba".
         """
         bankroll = self.get_bankroll()
 
@@ -242,7 +246,7 @@ class KalshiPaperTrader:
                 WHERE game_date = :d
                   AND status NOT IN ('cancelled', 'overflow', 'overflow_won', 'overflow_lost', 'overflow_cancelled')
             """), {"d": target_date}).scalar()
-            existing_exposure = float(result or 0)
+            existing_exposure = float(result or 0) + prior_exposure
 
         # First pass: find best-edge candidate per (player_id, stat_type)
         run_candidates: dict[tuple[int, str], dict] = {}

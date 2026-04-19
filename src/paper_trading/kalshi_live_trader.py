@@ -187,6 +187,10 @@ class KalshiLiveTrader:
         # 1. Drawdown breaker
         balance_data = self.client.get_balance()
         if balance_data is None:
+            logger.error(
+                "CIRCUIT BREAKER ABORT: get_balance() returned None — "
+                "portfolio API unreachable or API key lacks portfolio permissions."
+            )
             return False, "Cannot check balance — API error"
 
         balance_cents = balance_data.get("balance", 0)
@@ -302,17 +306,26 @@ class KalshiLiveTrader:
     # Trade selection
     # ------------------------------------------------------------------
 
-    def select_trades(self, target_date: date, sport: str = "nba") -> list[dict[str, Any]]:
+    def select_trades(self, target_date: date, sport: str = "nba", prior_exposure: float = 0.0) -> list[dict[str, Any]]:
         """Select trades from kalshi_markets with sufficient taker-fee-adjusted edge.
 
         Uses real API balance, checks existing positions, enforces all limits.
+
+        MLB priority rule: to ensure MLB trades take precedence over NBA within the
+        shared daily exposure cap, call with sport="mlb" first, then pass the
+        resulting total cost as prior_exposure= when calling with sport="nba".
         """
         # Get real balance from API
         balance_data = self.client.get_balance()
         if balance_data is None:
-            logger.error("Cannot get balance for trade selection")
+            logger.error(
+                "LIVE TRADE ABORT: get_balance() returned None — "
+                "Kalshi portfolio API unreachable or API key lacks portfolio permissions. "
+                "Check KALSHI_API_KEY scope and account status."
+            )
             return []
         bankroll = balance_data.get("balance", 0) / 100.0
+        logger.info(f"Kalshi balance: ${bankroll:.2f}")
 
         # Bankroll-proportional exposure cap
         daily_exposure_pct = _env_float("KALSHI_DAILY_EXPOSURE_PCT", 0.60)
@@ -375,7 +388,7 @@ class KalshiLiveTrader:
                 FROM kalshi_live_orders
                 WHERE game_date = :d AND status != 'cancelled'
             """), {"d": target_date}).scalar()
-        total_exposure = float(existing_exposure or 0)
+        total_exposure = float(existing_exposure or 0) + prior_exposure
 
         # First pass: find best-edge candidate per (player_id, stat_type)
         run_candidates: dict[tuple[int, str], dict] = {}

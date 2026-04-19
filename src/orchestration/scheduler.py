@@ -341,6 +341,12 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
 
         if result.returncode == 0:
             logger.info(f"Job completed successfully: {script_name}")
+            # Always surface the final summary lines so Railway logs show outcomes
+            # even when silent_on_success=True suppresses Discord alerts.
+            if stdout:
+                for line in stdout.splitlines()[-10:]:
+                    if line.strip():
+                        logger.info(f"  [out] {line.strip()}")
             success = True
             job_status = "success"
         else:
@@ -909,19 +915,21 @@ def main():
     )
 
     # Every 10 min, 9 AM - 11 PM ET — scrape markets + compute edges
+    # MLB runs first (minute=0,10,...) so its bets consume exposure cap before NBA.
+    # NBA runs 2 minutes later (minute=2,12,...) so it only takes remaining cap.
     # Job exits gracefully if KALSHI_API_KEY is not set
     scheduler.add_job(
-        run_kalshi_refresh,
-        CronTrigger(hour='9-23', minute='*/10', timezone=ET),
-        id="kalshi_refresh_nba",
-        name="Kalshi NBA Refresh (every 10 min, 9AM-11PM ET)",
+        run_kalshi_refresh_mlb,
+        CronTrigger(hour='9-23', minute='0,10,20,30,40,50', timezone=ET),
+        id="kalshi_refresh_mlb",
+        name="Kalshi MLB Refresh (every 10 min on :00, 9AM-11PM ET — MLB first for exposure priority)",
     )
 
     scheduler.add_job(
-        run_kalshi_refresh_mlb,
-        CronTrigger(hour='9-23', minute='*/10', timezone=ET),
-        id="kalshi_refresh_mlb",
-        name="Kalshi MLB Refresh (every 10 min, 9AM-11PM ET)",
+        run_kalshi_refresh,
+        CronTrigger(hour='9-23', minute='2,12,22,32,42,52', timezone=ET),
+        id="kalshi_refresh_nba",
+        name="Kalshi NBA Refresh (every 10 min on :02, 9AM-11PM ET — after MLB)",
     )
 
     # Every 10 min, 9 AM - 11 PM ET — scrape non-sports (economics/crypto) markets
