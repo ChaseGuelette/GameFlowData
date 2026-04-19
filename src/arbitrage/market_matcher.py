@@ -521,9 +521,21 @@ class MarketMatcher:
 
             poly_categories = cfg["poly_categories"]
             poly_keywords = cfg["poly_keywords"]
+            min_kalshi_volume = cfg.get("min_kalshi_volume", 0)
+            min_poly_liquidity = cfg.get("min_poly_liquidity", 0)
+
+            # Apply per-config Kalshi volume filter (keeps O(n×m) manageable for large categories)
+            if min_kalshi_volume > 0:
+                k_rows = [r for r in k_rows if (r.get("volume") or 0) >= min_kalshi_volume]
+            if not k_rows:
+                logger.info(f"[{series}] 0 Kalshi markets after volume filter — skipping")
+                continue
 
             # Load Polymarket markets scoped to this series's categories
-            poly_rows = self._load_poly_non_sports(categories=poly_categories)
+            poly_rows = self._load_poly_non_sports(
+                categories=poly_categories,
+                min_liquidity=min_poly_liquidity if min_poly_liquidity > 0 else None,
+            )
             if not poly_rows:
                 logger.info(f"[{series}] No Poly markets for categories {poly_categories}")
                 continue
@@ -678,14 +690,20 @@ class MarketMatcher:
             rows = conn.execute(query).fetchall()
         return [dict(row._mapping) for row in rows]
 
-    def _load_poly_non_sports(self, categories: list[str] | None = None) -> list[dict]:
+    def _load_poly_non_sports(
+        self,
+        categories: list[str] | None = None,
+        min_liquidity: int | None = None,
+    ) -> list[dict]:
         """Load Polymarket non-sports markets (most recent snapshot per market).
 
         No freshness filter — polymarket_markets is populated by a dedicated scrape job
         that runs 2x/day. The DISTINCT ON guarantees we get the latest snapshot for each
         market regardless of when it was scraped. Only markets with actual prices are returned.
-        Filters to markets with liquidity > 100 to reduce noise and O(n×m) matching cost.
+        Filters to markets with liquidity > min_liquidity (default 100) to reduce noise
+        and O(n×m) matching cost.
         """
+        liq = min_liquidity if min_liquidity is not None else 100
         if categories:
             query = text("""
                 SELECT DISTINCT ON (condition_id)
@@ -695,11 +713,11 @@ class MarketMatcher:
                 WHERE category = ANY(:categories)
                   AND market_status = 'open'
                   AND yes_price IS NOT NULL
-                  AND liquidity > 100
+                  AND liquidity > :liq
                 ORDER BY condition_id, snapshot_time DESC
             """)
             with self.engine.connect() as conn:
-                rows = conn.execute(query, {"categories": categories}).fetchall()
+                rows = conn.execute(query, {"categories": categories, "liq": liq}).fetchall()
         else:
             query = text("""
                 SELECT DISTINCT ON (condition_id)
@@ -709,11 +727,11 @@ class MarketMatcher:
                 WHERE category NOT IN ('sports')
                   AND market_status = 'open'
                   AND yes_price IS NOT NULL
-                  AND liquidity > 100
+                  AND liquidity > :liq
                 ORDER BY condition_id, snapshot_time DESC
             """)
             with self.engine.connect() as conn:
-                rows = conn.execute(query).fetchall()
+                rows = conn.execute(query, {"liq": liq}).fetchall()
         return [dict(row._mapping) for row in rows]
 
 

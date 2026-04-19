@@ -217,6 +217,14 @@ KALSHI_SERIES_POLY_CONFIG: dict[str, dict] = {
             "party", "election", "seat", "majority", "control", "candidate",
         ],
         "fallback_threshold": 0.65,
+        # Volume filters to keep O(n×m) manageable: ~4,800 Kalshi × ~3,400 Poly is too slow.
+        # min_kalshi_volume removes zero-volume/barely-traded state races.
+        # min_poly_liquidity raises the bar above the global 100 default.
+        # Poly politics is extremely liquid — liq>1000 still returns 3,544 markets.
+        # liq>50000 reduces to 283, giving ~320k comparisons (~30s). Only liquid enough
+        # to actually execute arb anyway.
+        "min_kalshi_volume": 5000,
+        "min_poly_liquidity": 50000,
     },
     "_CAT_POLITICS": {
         "poly_categories": ["politics"],
@@ -225,6 +233,8 @@ KALSHI_SERIES_POLY_CONFIG: dict[str, dict] = {
             "administration", "policy", "bill", "executive", "white house",
         ],
         "fallback_threshold": 0.65,
+        "min_kalshi_volume": 500,
+        "min_poly_liquidity": 5000,
     },
     # NOTE: Crypto series (KXBTC, KXBTCD, KXETH, KXETHD, KXDOGE, KXXRP) are range-bracket
     # markets ("Bitcoin price range on Apr 19, 2026?") with no direction word in the title.

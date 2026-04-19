@@ -177,11 +177,74 @@ def seed_park_factors(engine, seasons: list[int] | None = None):
     return inserted
 
 
+def backfill_handedness(engine, batch_size: int = 100):
+    """Fetch bats/throws from MLB Stats API for all players with NULL handedness.
+
+    Uses /api/v1/people?personIds=... — accepts up to ~500 IDs per call.
+    Typically ~22 API calls for 2,158 NULL players, runs in under a minute.
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT player_id FROM mlb_players WHERE bats IS NULL OR throws IS NULL")
+        ).fetchall()
+
+    player_ids = [r[0] for r in rows]
+    logger.info(f"Backfilling handedness for {len(player_ids)} players...")
+
+    updated = 0
+    for i in range(0, len(player_ids), batch_size):
+        batch = player_ids[i : i + batch_size]
+        ids_str = ",".join(str(pid) for pid in batch)
+
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/people",
+                params={"personIds": ids_str},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            people = resp.json().get("people", [])
+        except Exception as e:
+            logger.warning(f"  Batch {i // batch_size + 1} failed: {e}")
+            continue
+
+        with engine.begin() as conn:
+            for person in people:
+                pid = person.get("id")
+                bats = person.get("batSide", {}).get("code")
+                throws = person.get("pitchHand", {}).get("code")
+
+                if bats not in ("L", "R", "S"):
+                    bats = None
+                if throws not in ("L", "R"):
+                    throws = None
+
+                if bats is None and throws is None:
+                    continue
+
+                conn.execute(
+                    text("""
+                        UPDATE mlb_players
+                        SET bats   = COALESCE(:bats, bats),
+                            throws = COALESCE(:throws, throws)
+                        WHERE player_id = :pid
+                    """),
+                    {"pid": pid, "bats": bats, "throws": throws},
+                )
+                updated += 1
+
+        logger.info(f"  Processed batch {i // batch_size + 1}/{-(-len(player_ids) // batch_size)} ({updated} updated so far)")
+
+    logger.info(f"Handedness backfill complete: {updated} players updated.")
+    return updated
+
+
 def main():
     parser = argparse.ArgumentParser(description="MLB Reference Data Seeder")
     parser.add_argument("--teams-only", action="store_true", help="Only seed teams")
     parser.add_argument("--parks-only", action="store_true", help="Only seed park factors")
     parser.add_argument("--reseed-park-factors", action="store_true", help="Reseed park factors only (same as --parks-only)")
+    parser.add_argument("--backfill-handedness", action="store_true", help="Backfill bats/throws for all NULL players via MLB Stats API")
     parser.add_argument(
         "--seasons", nargs="+", type=int, default=[2022, 2023, 2024, 2025],
         help="Seasons for park factors (default: 2022-2025)",
@@ -193,6 +256,11 @@ def main():
     print("=" * 60)
     print("MLB REFERENCE DATA SEEDER")
     print("=" * 60)
+
+    if args.backfill_handedness:
+        backfill_handedness(engine)
+        print("Done.")
+        return
 
     parks_only = args.parks_only or args.reseed_park_factors
 

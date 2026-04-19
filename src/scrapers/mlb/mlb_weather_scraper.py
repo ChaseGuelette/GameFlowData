@@ -22,7 +22,6 @@ import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
 
 import requests
 from sqlalchemy import text
@@ -218,7 +217,7 @@ def fetch_weather_for_game(
     game_dt: datetime,
     venue_id: int,
     api_key: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch and compute weather for a single game.
 
     Returns a dict ready for upsert into mlb_game_weather, or None on failure.
