@@ -380,14 +380,17 @@ class KalshiLiveTrader:
             """), {"d": target_date}).fetchall()
             today_positions = {(int(row[0]), row[1]) for row in rows}
 
-        # Check today's existing exposure
+        # Check today's existing exposure FOR THIS SPORT ONLY.
+        # Each sport gets its own share of the daily cap — NBA blowing its cap
+        # does NOT consume MLB's allocation (and vice versa).
         total_exposure = 0.0
         with self.engine.connect() as conn:
             existing_exposure = conn.execute(text("""
                 SELECT COALESCE(SUM(total_cost), 0)
                 FROM kalshi_live_orders
                 WHERE game_date = :d AND status != 'cancelled'
-            """), {"d": target_date}).scalar()
+                  AND sport = :sport
+            """), {"d": target_date, "sport": sport}).scalar()
         total_exposure = float(existing_exposure or 0) + prior_exposure
 
         # First pass: find best-edge candidate per (player_id, stat_type)
