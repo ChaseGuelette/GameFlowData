@@ -89,7 +89,7 @@ def _sign_request(private_key, timestamp_ms: str, method: str, path: str) -> str
         message,
         padding.PSS(
             mgf=padding.MGF1(hashes.SHA256()),
-            salt_length=padding.PSS.MAX_LENGTH,
+            salt_length=padding.PSS.DIGEST_LENGTH,  # Kalshi requires DIGEST_LENGTH, not MAX_LENGTH
         ),
         hashes.SHA256(),
     )
