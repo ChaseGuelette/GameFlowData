@@ -1941,12 +1941,12 @@ Nodes (1): Calculate fee-adjusted edge for a Kalshi contract.      Edge = model_
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `set()` connect `Community 6` to `Community 0`, `Community 1`, `Community 2`, `Community 3`, `Community 4`, `Community 5`, `Community 7`, `Community 9`, `Community 11`, `Community 20`, `Community 24`, `Community 25`, `Community 28`?**
-  _High betweenness centrality (0.056) - this node is a cross-community bridge._
-- **Why does `FeatureStore` connect `Community 1` to `Community 0`, `Community 3`, `Community 4`, `Community 6`, `Community 7`, `Community 11`, `Community 19`, `Community 23`, `Community 25`?**
-  _High betweenness centrality (0.056) - this node is a cross-community bridge._
 - **Why does `get_engine()` connect `Community 7` to `Community 0`, `Community 1`, `Community 4`, `Community 5`, `Community 6`, `Community 8`, `Community 9`, `Community 11`, `Community 12`, `Community 13`, `Community 14`, `Community 15`, `Community 17`, `Community 19`, `Community 20`, `Community 21`, `Community 22`, `Community 23`, `Community 24`, `Community 25`, `Community 26`, `Community 29`, `Community 30`, `Community 31`?**
-  _High betweenness centrality (0.048) - this node is a cross-community bridge._
+  _High betweenness centrality (0.086) - this node is a cross-community bridge._
+- **Why does `set()` connect `Community 6` to `Community 0`, `Community 1`, `Community 2`, `Community 3`, `Community 4`, `Community 5`, `Community 7`, `Community 9`, `Community 11`, `Community 20`, `Community 24`, `Community 25`, `Community 28`?**
+  _High betweenness centrality (0.062) - this node is a cross-community bridge._
+- **Why does `exists()` connect `Community 4` to `Community 0`, `Community 1`, `Community 2`, `Community 3`, `Community 11`, `Community 14`, `Community 16`, `Community 20`, `Community 25`, `Community 26`, `Community 31`?**
+  _High betweenness centrality (0.054) - this node is a cross-community bridge._
 - **Are the 190 inferred relationships involving `BlackLittermanBlender` (e.g. with `BacktestResult` and `BacktestHarness`) actually correct?**
   _`BlackLittermanBlender` has 190 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 154 inferred relationships involving `StatConfigSet` (e.g. with `BacktestResult` and `BacktestHarness`) actually correct?**
