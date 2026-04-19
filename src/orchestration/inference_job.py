@@ -29,6 +29,7 @@ Examples:
 
 import argparse
 import logging
+import os
 import sys
 import time
 from datetime import date, datetime
@@ -240,7 +241,10 @@ def main():
         logger.info(f"Exported CSV: {output_file}")
 
         # Place paper bets on recommended predictions
-        if not args.dry_run and not args.skip_bets:
+        nba_trading_enabled = os.getenv("NBA_TRADING_ENABLED", "true").lower() not in ("false", "0", "no")
+        if not nba_trading_enabled:
+            logger.info("NBA_TRADING_ENABLED=false — skipping paper bet placement")
+        if not args.dry_run and not args.skip_bets and nba_trading_enabled:
             try:
                 from src.paper_trading.paper_trader import PaperTrader
 
