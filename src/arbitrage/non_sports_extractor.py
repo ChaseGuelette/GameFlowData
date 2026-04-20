@@ -229,6 +229,44 @@ def _parse_direction(text: str) -> str | None:
     return None  # ambiguous or neither
 
 
+_GDP_COUNTRY_RE = re.compile(
+    r'\b(united\s+states|u\.?s\.?\s+gdp|american|'
+    r'european\s+union|euro\s+zone|eurozone|eu\s+gdp|'
+    r'united\s+kingdom|u\.?k\.?\s+gdp|british|'
+    r'china|chinese|'
+    r'japan(?:ese)?|'
+    r'german(?:y)?)\b',
+    re.IGNORECASE,
+)
+_GDP_COUNTRY_MAP = {
+    'united states': 'US', 'american': 'US',
+    'european union': 'EU', 'euro zone': 'EU', 'eurozone': 'EU',
+    'united kingdom': 'UK', 'british': 'UK',
+    'china': 'CN', 'chinese': 'CN',
+    'japan': 'JP', 'japanese': 'JP',
+    'germany': 'DE', 'german': 'DE',
+}
+
+
+def _parse_gdp_country(text: str) -> str | None:
+    """Extract canonical country code from GDP market text."""
+    m = _GDP_COUNTRY_RE.search(text)
+    if not m:
+        return None
+    raw = re.sub(r'\s+', ' ', m.group(0).lower().strip())
+    # Strip " gdp" suffix if present for lookup
+    for suffix in (' gdp',):
+        if raw.endswith(suffix):
+            raw = raw[:-len(suffix)].strip()
+    # Strip leading "u.s. " or "u.k. " type prefixes — try full match first
+    country = _GDP_COUNTRY_MAP.get(raw)
+    if country:
+        return country
+    # Try normalising punctuation (u.s. → us)
+    cleaned = re.sub(r'\.', '', raw)
+    return _GDP_COUNTRY_MAP.get(cleaned)
+
+
 # ---------------------------------------------------------------------------
 # Structured fields dataclass
 # ---------------------------------------------------------------------------
@@ -242,6 +280,7 @@ class MarketFields:
     month: int | None = None       # macro: FOMC/CPI month (1-12)
     year: int | None = None        # macro: year
     quarter: int | None = None     # GDP: Q1-Q4
+    country: str | None = None     # GDP: canonical country code (US, CN, EU, ...)
 
 
 # ---------------------------------------------------------------------------
@@ -280,11 +319,12 @@ def extract_kalshi(series: str, ticker: str, title: str) -> MarketFields | None:
         price = _parse_pct(title_norm)
         direction = _parse_direction(title_norm)
         qy = _parse_quarter_year(title_norm)
+        country = _parse_gdp_country(title_norm)
         if price is None or direction is None:
             return None
         quarter, year = qy if qy else (None, None)
         return MarketFields(series=series_upper, price=price, direction=direction,
-                            quarter=quarter, year=year)
+                            quarter=quarter, year=year, country=country)
 
     return None
 
@@ -320,11 +360,12 @@ def extract_poly(series: str, question: str) -> MarketFields | None:
         price = _parse_pct(q_norm)
         direction = _parse_direction(q_norm)
         qy = _parse_quarter_year(q_norm)
+        country = _parse_gdp_country(q_norm)
         if price is None or direction is None:
             return None
         quarter, year = qy if qy else (None, None)
         return MarketFields(series=series_upper, price=price, direction=direction,
-                            quarter=quarter, year=year)
+                            quarter=quarter, year=year, country=country)
 
     return None
 
@@ -375,6 +416,10 @@ def match_score(k: MarketFields, p: MarketFields) -> float:
         return 0.0
     denom = max(k.price, p.price, 1.0)
     if abs(k.price - p.price) / denom > PRICE_TOLERANCE:
+        return 0.0
+
+    # 1.5. Country must match for GDP when both are known
+    if k.country and p.country and k.country != p.country:
         return 0.0
 
     # 2. Direction must match when both known

@@ -66,6 +66,32 @@ def _extract_candidate(question: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
+# Placement rank extractor: "Will X finish 1st?" vs "Will X finish 2nd?"
+# Only fires when "finish"/"place" keyword is present to avoid false positives on "1st quarter".
+_PLACEMENT_RE = re.compile(
+    r'(?:finish(?:ed|es)?|place[sd]?|ranked?)\s+'
+    r'(1st|first|2nd|second|3rd|third|4th|fourth)',
+    re.IGNORECASE,
+)
+_PLACE_MAP = {
+    '1st': 1, 'first': 1,
+    '2nd': 2, 'second': 2,
+    '3rd': 3, 'third': 3,
+    '4th': 4, 'fourth': 4,
+}
+
+
+def _extract_placement(text: str) -> int | None:
+    """Extract ordinal placement rank from race/competition questions.
+
+    Returns 1-4 if found, None otherwise.
+    """
+    m = _PLACEMENT_RE.search(text)
+    if not m:
+        return None
+    return _PLACE_MAP.get(m.group(1).lower())
+
+
 def _extract_date_from_kalshi_ticker(ticker: str) -> date | None:
     """Extract game date from a Kalshi game ticker.
 
@@ -605,6 +631,12 @@ class MarketMatcher:
                             else:
                                 score = sm
                         else:
+                            score = 0.0
+                    # Placement disambiguation: "finish 1st" vs "finish 2nd" are different markets
+                    if score > 0.0:
+                        k_place = _extract_placement(k_row.get("market_title") or "")
+                        p_place = _extract_placement(poly.get("question") or "")
+                        if k_place and p_place and k_place != p_place:
                             score = 0.0
                     if score > best_score:
                         best_score, best_k = score, k_row
