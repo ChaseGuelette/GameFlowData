@@ -7,13 +7,13 @@ import requests
 def fetch_data(url: str) -> dict[str, Any]:
     """
     Makes a GET request to the specified URL and returns JSON data.
-    
+
     Args:
         url: The URL to make the GET request to
-        
+
     Returns:
         Dictionary containing the JSON response data
-        
+
     Raises:
         requests.RequestException: If the request fails
         json.JSONDecodeError: If the response cannot be parsed as JSON
@@ -30,10 +30,10 @@ def fetch_data(url: str) -> dict[str, Any]:
 def process_data(data: dict[str, Any]) -> list[Any]:
     """
     Extracts all values from the dictionary where the key starts with "score_".
-    
+
     Args:
         data: Dictionary containing the data to process
-        
+
     Returns:
         List of values where keys start with "score_"
     """

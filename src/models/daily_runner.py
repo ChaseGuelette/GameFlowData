@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 
 # BL config switches based on NBA_PLAYOFF_MODE env var
 # Regular season: tau=0.5, z_max=1.0, mw=0.5, edge=0.09  (61.5% hit, 7.72% ROI)
-# Playoffs:       tau=0.9, z_max=0.25, mw=0.8, edge=0.12  (63.6% hit, +19.3% ROI, Sharpe 2.33)
+# Playoffs:       tau=0.9, z_max=1.0, mw=0.8, edge=0.15  (61.8% hit, +12.4% ROI raw, +16.7% filtered)
 _PLAYOFF_MODE = os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes")
 
 DEFAULT_BL_TAU = 0.9 if _PLAYOFF_MODE else 0.5
-DEFAULT_BL_Z_MAX = 0.25 if _PLAYOFF_MODE else 1.0
+DEFAULT_BL_Z_MAX = 1.0 if _PLAYOFF_MODE else 1.0
 DEFAULT_BL_MAX_WEIGHT = 0.8 if _PLAYOFF_MODE else 0.5
-DEFAULT_BL_EDGE_THRESHOLD = 0.12 if _PLAYOFF_MODE else 0.09
+DEFAULT_BL_EDGE_THRESHOLD = 0.15 if _PLAYOFF_MODE else 0.09
 
 # Q50 vs L5 sanity check: reject under recs where Q50 is 30%+ below player L5 avg
 MAX_Q50_DIVERGENCE = 0.30
@@ -990,13 +990,31 @@ class DailyPredictionRunner:
                 # Mark as recommended if max BL edge meets threshold
                 max_bl_edge = max(bl_over_edge, bl_under_edge)
                 if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
-                    # Sanity checks for under recommendations
+                    # Sanity checks for recommendations
                     skip = False
                     rec_direction = "under" if bl_under_edge > bl_over_edge else "over"
+                    stat = row["stat"]
+                    line = row.get("line")
+
+                    if rec_direction == "over":
+                        # Filter: reb over with line <= 2.5 (structural -12% ROI)
+                        if stat == "reb" and pd.notna(line) and line <= 2.5:
+                            logger.debug(
+                                f"FILTER [REB_OVER_LOW]: Skipping {row.get('player_name', '?')} "
+                                f"reb over {line} — low-line reb overs are structurally unprofitable"
+                            )
+                            skip = True
+                        # Filter: ast over (structural -22% ROI)
+                        if not skip and stat == "ast":
+                            logger.debug(
+                                f"FILTER [AST_OVER]: Skipping {row.get('player_name', '?')} "
+                                f"ast over {line} — ast overs are structurally unprofitable"
+                            )
+                            skip = True
+
                     if rec_direction == "under":
                         feat_l5 = row.get("feat_player_avg_stat_l5")
                         pred_q50 = row.get("pred_q50")
-                        line = row.get("line")
 
                         # Check 1: Q50 divergence
                         if pd.notna(feat_l5) and pd.notna(pred_q50) and feat_l5 > 0:
@@ -1004,7 +1022,7 @@ class DailyPredictionRunner:
                             if divergence > MAX_Q50_DIVERGENCE:
                                 logger.warning(
                                     f"SANITY CHECK [Q50]: Skipping {row.get('player_name', '?')} "
-                                    f"{row['stat']} under rec — Q50={pred_q50:.1f} is "
+                                    f"{stat} under rec — Q50={pred_q50:.1f} is "
                                     f"{divergence:.0%} below L5={feat_l5:.1f}"
                                 )
                                 skip = True
@@ -1014,7 +1032,7 @@ class DailyPredictionRunner:
                             if feat_l5 >= line * (1 + L5_ABOVE_LINE_MARGIN):
                                 logger.warning(
                                     f"SANITY CHECK [L5>LINE]: Skipping {row.get('player_name', '?')} "
-                                    f"{row['stat']} under rec — L5 avg={feat_l5:.1f} >= line={line:.1f}"
+                                    f"{stat} under rec — L5 avg={feat_l5:.1f} >= line={line:.1f}"
                                 )
                                 skip = True
                     if not skip:

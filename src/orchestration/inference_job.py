@@ -262,7 +262,6 @@ def main():
         # Send Discord alert
         if not args.dry_run and not args.skip_discord:
             try:
-                import os
                 if os.getenv("DISCORD_BOT_TOKEN"):
                     from src.discord_bot.alerts import send_predictions_alert_sync
 

@@ -66,13 +66,13 @@ logger = logging.getLogger("EdgeRefreshJob")
 
 # BL constants — must match daily_runner.py exactly
 # Regular season: tau=0.5, z_max=1.0, mw=0.5, edge=0.09
-# Playoffs:       tau=0.9, z_max=0.25, mw=0.8, edge=0.12
+# Playoffs:       tau=0.9, z_max=1.0, mw=0.8, edge=0.15
 _PLAYOFF_MODE = os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes")
 
 DEFAULT_BL_TAU = 0.9 if _PLAYOFF_MODE else 0.5
-DEFAULT_BL_Z_MAX = 0.25 if _PLAYOFF_MODE else 1.0
+DEFAULT_BL_Z_MAX = 1.0 if _PLAYOFF_MODE else 1.0
 DEFAULT_BL_MAX_WEIGHT = 0.8 if _PLAYOFF_MODE else 0.5
-DEFAULT_BL_EDGE_THRESHOLD = 0.12 if _PLAYOFF_MODE else 0.09
+DEFAULT_BL_EDGE_THRESHOLD = 0.15 if _PLAYOFF_MODE else 0.09
 
 # Sanity check thresholds (must match daily_runner.py)
 MAX_Q50_DIVERGENCE = 0.30
