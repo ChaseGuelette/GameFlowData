@@ -853,10 +853,10 @@ class MLBDailyPredictionRunner:
             if blender is None:
                 # No BL — use raw model probability (empirical CDF from samples)
                 line = row["line"]
-                raw_over = float((samples > line).mean())
-                raw_under = 1.0 - raw_over
-                predictions_df.at[idx, "bl_over_prob"] = raw_over
-                predictions_df.at[idx, "bl_under_prob"] = raw_under
+                posterior_over = float((samples > line).mean())
+                posterior_under = 1.0 - posterior_over
+                predictions_df.at[idx, "bl_over_prob"] = posterior_over
+                predictions_df.at[idx, "bl_under_prob"] = posterior_under
                 predictions_df.at[idx, "bl_confidence"] = 1.0
             else:
                 bl_result = blender.blend_prediction(
@@ -865,16 +865,18 @@ class MLBDailyPredictionRunner:
                     over_odds=row["over_odds"],
                     under_odds=row["under_odds"],
                 )
-                predictions_df.at[idx, "bl_over_prob"] = bl_result["posterior_over"]
-                predictions_df.at[idx, "bl_under_prob"] = bl_result["posterior_under"]
+                posterior_over = bl_result["posterior_over"]
+                posterior_under = bl_result["posterior_under"]
+                predictions_df.at[idx, "bl_over_prob"] = posterior_over
+                predictions_df.at[idx, "bl_under_prob"] = posterior_under
                 predictions_df.at[idx, "bl_confidence"] = bl_result["confidence"]
 
             implied_over = row.get("implied_over")
             implied_under = row.get("implied_under")
 
             if pd.notna(implied_over) and pd.notna(implied_under):
-                bl_over_edge = bl_result["posterior_over"] - implied_over
-                bl_under_edge = bl_result["posterior_under"] - implied_under
+                bl_over_edge = posterior_over - implied_over
+                bl_under_edge = posterior_under - implied_under
 
                 predictions_df.at[idx, "bl_over_edge"] = bl_over_edge
                 predictions_df.at[idx, "bl_under_edge"] = bl_under_edge
@@ -899,8 +901,23 @@ class MLBDailyPredictionRunner:
                         best_edge = -1  # No allowed direction has edge
 
                 if best_edge >= edge_threshold:
-                    predictions_df.at[idx, "is_recommended"] = True
-                    recommended_count += 1
+                    # Sanity check: player's L5 average is 0 but model recommends over
+                    # (catches cold players being recommended over low lines like 0.5)
+                    feat_l5 = row.get("feat_player_avg_stat_l5")
+                    if (
+                        best_dir == "over"
+                        and pd.notna(feat_l5)
+                        and feat_l5 == 0
+                        and pd.notna(row.get("line"))
+                        and row["line"] <= 0.5
+                    ):
+                        logger.debug(
+                            f"FILTER [MLB_COLD_OVER]: Skipping {row.get('player_name', '?')} "
+                            f"{stat} over {row['line']} — L5 avg is 0"
+                        )
+                    else:
+                        predictions_df.at[idx, "is_recommended"] = True
+                        recommended_count += 1
 
             bl_computed += 1
 
