@@ -86,7 +86,6 @@ JOB_NAMES = {
     "mlb_lines_job.py": "MLB Lines Scraper",
     "mlb_inference_job.py": "MLB Inference",
     "mlb_edge_refresh_job.py": "MLB Edge Refresh",
-    "mlb_edge_refresh_job.py": "MLB Edge Refresh",
     "kalshi_refresh_job.py": "Kalshi Refresh",
     "archive_old_props_job.py": "Archive Old Props",
     "kalshi_daily_summary_job.py": "Kalshi Daily Summary",
@@ -920,6 +919,22 @@ def main():
         CronTrigger(hour=18, minute=30, timezone=ET),
         id="mlb_inference_6pm",
         name="MLB Inference (6:30 PM ET)",
+    )
+
+    # 1:30 PM ET - MLB edge refresh (catches line moves before early games)
+    scheduler.add_job(
+        run_mlb_edge_refresh,
+        CronTrigger(hour=13, minute=30, timezone=ET),
+        id="mlb_edge_refresh_130pm",
+        name="MLB Edge Refresh (1:30 PM ET)",
+    )
+
+    # 4:30 PM ET - MLB edge refresh (catches line moves before evening games)
+    scheduler.add_job(
+        run_mlb_edge_refresh,
+        CronTrigger(hour=16, minute=30, timezone=ET),
+        id="mlb_edge_refresh_430pm",
+        name="MLB Edge Refresh (4:30 PM ET)",
     )
 
     # ==============================================================
