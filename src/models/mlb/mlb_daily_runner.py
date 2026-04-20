@@ -828,9 +828,10 @@ class MLBDailyPredictionRunner:
             return predictions_df
 
         # Build per-stat blenders from optimized configs
-        stat_blenders: dict[str, BlackLittermanBlender] = {}
+        # None in STAT_BL_CONFIGS = skip BL, use raw model probability
+        stat_blenders: dict[str, BlackLittermanBlender | None] = {}
         for stat_key, bl_cfg in STAT_BL_CONFIGS.items():
-            stat_blenders[stat_key] = BlackLittermanBlender(config=bl_cfg)
+            stat_blenders[stat_key] = BlackLittermanBlender(config=bl_cfg) if bl_cfg is not None else None
         default_blender = BlackLittermanBlender(config=DEFAULT_BL_CONFIG)
 
         bl_computed = 0
@@ -849,16 +850,24 @@ class MLBDailyPredictionRunner:
             stat = row["stat"]
             blender = stat_blenders.get(stat, default_blender)
 
-            bl_result = blender.blend_prediction(
-                samples=samples,
-                line=row["line"],
-                over_odds=row["over_odds"],
-                under_odds=row["under_odds"],
-            )
-
-            predictions_df.at[idx, "bl_over_prob"] = bl_result["posterior_over"]
-            predictions_df.at[idx, "bl_under_prob"] = bl_result["posterior_under"]
-            predictions_df.at[idx, "bl_confidence"] = bl_result["confidence"]
+            if blender is None:
+                # No BL — use raw model probability (empirical CDF from samples)
+                line = row["line"]
+                raw_over = float((samples > line).mean())
+                raw_under = 1.0 - raw_over
+                predictions_df.at[idx, "bl_over_prob"] = raw_over
+                predictions_df.at[idx, "bl_under_prob"] = raw_under
+                predictions_df.at[idx, "bl_confidence"] = 1.0
+            else:
+                bl_result = blender.blend_prediction(
+                    samples=samples,
+                    line=row["line"],
+                    over_odds=row["over_odds"],
+                    under_odds=row["under_odds"],
+                )
+                predictions_df.at[idx, "bl_over_prob"] = bl_result["posterior_over"]
+                predictions_df.at[idx, "bl_under_prob"] = bl_result["posterior_under"]
+                predictions_df.at[idx, "bl_confidence"] = bl_result["confidence"]
 
             implied_over = row.get("implied_over")
             implied_under = row.get("implied_under")

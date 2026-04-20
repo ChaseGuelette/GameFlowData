@@ -78,3 +78,4 @@
 - **Session 13** (Apr 17 2026): Kalshi non-sports scraping + arb scanner pipeline complete
 - **Session 033**: April 18, 2026 - Built arb scanner dashboard page (Step 9.6), completed Phase 9, marked batter_hrr + NBA checks complete
 - **Session 036**: April 19, 2026 - Elections + Politics non-sports arb expansion: 200 → 6,439 markets via dynamic category-scrape mode. Volume/liquidity filters for performance (scan 2 min vs 30+ min). Candidate disambiguation cuts false positives 364 → 144. Not yet deployed to Railway. Remaining: GDP country mismatch, same-race placement, Finance/Entertainment/SCOTUS categories.
+- **Session 037**: April 20, 2026 — NBA playoff model v2 deployed. Added 3 minutes trend ratio features (role-change signal). Retrained, backtested (510 configs). New BL config: tau=0.9, z_max=1.0, mw=0.8, edge=0.15. Structural bet filters: no reb over <=2.5, no ast over (+4.3% ROI lift). 277 bets, +16.7% filtered ROI, Sharpe 1.50. 3 files modified.

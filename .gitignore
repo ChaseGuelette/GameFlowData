@@ -58,6 +58,7 @@ tmpclaude*
 .swarm/
 tmpclaude-*
 .claude/flow_library/
+.claude/glm_spec_*.md
 # .claude
 #Gemini Files
 .gemini/

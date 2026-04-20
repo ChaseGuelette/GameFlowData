@@ -83,13 +83,17 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
    export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 "short spec here"
 
    # For long specs (> 5 lines): write to file first, then attach with -f
-   # Step A: Use the Write tool to create .claude/glm_spec.md with the full plan
-   # Step B: Run OpenCode — PROMPT FIRST, then -f flags
-   export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 "Implement the spec in the attached glm_spec.md file. The other attached files are existing code for context." -f .claude/glm_spec.md -f src/target_file.py
+   # Step A: Generate a unique spec filename: .claude/glm_spec_<timestamp>.md
+   #         Example: .claude/glm_spec_20260420_143052.md
+   #         Use: SPEC_FILE=".claude/glm_spec_$(date +%Y%m%d_%H%M%S).md"
+   # Step B: Use the Write tool to create the spec file with the full plan
+   # Step C: Run OpenCode — PROMPT FIRST, then -f flags
+   SPEC_FILE=".claude/glm_spec_$(date +%Y%m%d_%H%M%S).md"
+   export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d'"' -f2) && opencode run --attach http://localhost:4096 -m openrouter/z-ai/glm-5.1 "Implement the spec in the attached file. The other attached files are existing code for context." -f "$SPEC_FILE" -f src/target_file.py
    ```
    **ARGUMENT ORDER**: `"prompt text" -f file1 -f file2` — NEVER `-f file1 "prompt"` (prompt gets eaten as a filename).
    **Use relative paths** in specs (not absolute) — the server runs from the project root.
-   **Use `.claude/glm_spec.md`** for spec files (not `/tmp/` — doesn't exist on Windows).
+   **Spec filenames must be unique** — use `.claude/glm_spec_<YYYYMMDD_HHMMSS>.md` (not a fixed name). Multiple sessions can run concurrently.
    The `-f` flag attaches files for GLM to read as context (existing source files AND the spec file).
 2. Check the background task output with `TaskOutput`. Then **review GLM's work**: run `git diff` and compare against the plan in your context. Check for:
    - Missing steps from the plan
@@ -105,7 +109,7 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 
 **Known failure modes (fall back to direct edit if any occur):**
 - "File not found: <prompt text>" — Prompt is AFTER `-f` flags. Fix: put prompt BEFORE all `-f` flags (`"prompt" -f file`, not `-f file "prompt"`).
-- `/tmp/` writes fail — Windows doesn't have `/tmp/`. Use `.claude/glm_spec.md` instead.
+- `/tmp/` writes fail — Windows doesn't have `/tmp/`. Use `.claude/glm_spec_<timestamp>.md` instead.
 - Bash tool returns "Error: Exit code 1" repeatedly — Bash may be non-functional in the session. Fall back to direct Edit.
 - Concurrent OpenCode calls can collide — send one at a time.
 
@@ -126,7 +130,7 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
   - **Unknown scope** (don't know which files are relevant): Launch an Explore agent
   - When in plan mode: ALWAYS use Explore agents for investigation
 - **Brain-first exploration.** When investigating a system, start from the BrainTree (`brain/` folder) for orientation before diving into source code. `brain/Pipeline/Component-Docs.md` indexes 40+ module docs via wikilinks. Read the relevant brain doc first to understand architecture, then go to source files for current implementation details. Pattern: Explore 1 reads brain docs for "what should exist", Explore 2 reads source for "what actually exists" — run in parallel.
-- **After plan approval, try GLM via OpenCode first.** Write spec to `.claude/glm_spec.md`, run with `"prompt" -f .claude/glm_spec.md` (prompt BEFORE -f), backgrounded. If OpenCode fails, fall back to direct implementation — don't waste tool calls retrying.
+- **After plan approval, try GLM via OpenCode first.** Write spec to `.claude/glm_spec_<timestamp>.md` (unique per session), run with `"prompt" -f <spec_file>` (prompt BEFORE -f), backgrounded. If OpenCode fails, fall back to direct implementation — don't waste tool calls retrying.
 
 ## Agent Personas
 Available specialized agents in .claude/agents/:
