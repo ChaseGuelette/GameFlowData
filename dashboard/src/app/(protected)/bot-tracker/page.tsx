@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useBotSummary, useBotOrders, useBotDailyLogs } from '@/lib/hooks/useBotTracker'
+import { TradeApprovalPanel } from '@/components/bot-tracker/TradeApprovalPanel'
 import { CircuitBreakerCard } from '@/components/bot-tracker/CircuitBreakerCard'
 import { BotSummaryCards } from '@/components/bot-tracker/BotSummaryCards'
 import { BotOrdersTable } from '@/components/bot-tracker/BotOrdersTable'
@@ -29,6 +30,9 @@ export default function BotTrackerPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-slate-100">Bot Tracker</h1>
+
+      {/* Trade Approval Queue (shows only when trades pending) */}
+      {tab === 'live' && <TradeApprovalPanel />}
 
       {/* Circuit Breaker */}
       {summary && <CircuitBreakerCard config={summary.config} />}

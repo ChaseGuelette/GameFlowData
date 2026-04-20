@@ -48,6 +48,7 @@ def run(
     skip_discord: bool = False,
     skip_paper: bool = False,
     skip_live: bool = False,
+    resolve_only: bool = False,
 ) -> dict:
     """Run the full Kalshi refresh pipeline.
 
@@ -62,6 +63,22 @@ def run(
         Summary dict.
     """
     summary: dict = {"scrape": {}, "edges": {}, "paper_trading": {}, "live_trading": {}, "alerts_sent": False}
+
+    # Resolve-only mode: skip scrape/edges/paper/live, just resolve + reconcile
+    if resolve_only:
+        logger.info("Resolve-only mode: resolving/reconciling live orders only")
+        try:
+            from src.paper_trading.kalshi_live_trader import KalshiLiveTrader
+
+            resolver = KalshiLiveTrader(resolve_only=True)
+            resolver.reconcile_fills(target_date)
+            resolve_result = resolver.resolve_settled()
+            summary["live_resolution"] = resolve_result
+            logger.info(f"Resolve-only result: {resolve_result}")
+        except Exception as e:
+            logger.error(f"Resolve-only failed: {e}", exc_info=True)
+            summary["live_resolution"] = {"error": str(e)}
+        return summary
 
     # Step 1: Scrape markets
     logger.info("Step 1: Scraping Kalshi markets...")
@@ -127,11 +144,28 @@ def run(
     else:
         logger.info("Step 4: Skipping paper trading")
 
-    # Step 4.5: Live trading (gated by env var)
+    # Step 4.5a: ALWAYS resolve + reconcile pending live orders (even if trading disabled)
+    if not dry_run and not mock:
+        logger.info("Step 4.5a: Resolving/reconciling live orders...")
+        try:
+            from src.paper_trading.kalshi_live_trader import KalshiLiveTrader
+
+            resolver = KalshiLiveTrader(resolve_only=True)
+            resolver.reconcile_fills(target_date)
+            resolve_result = resolver.resolve_settled()
+            summary["live_resolution"] = resolve_result
+            logger.info(f"Live resolution: {resolve_result}")
+        except Exception as e:
+            logger.warning(f"Live resolution failed: {e}")
+            summary["live_resolution"] = {"error": str(e)}
+    else:
+        logger.info("Step 4.5a: Skipping live resolution (dry-run/mock)")
+
+    # Step 4.5b: Live trading — NEW trades only (gated by env var)
     if not skip_live and not dry_run and not mock:
         live_enabled = os.getenv("KALSHI_LIVE_TRADING_ENABLED", "false").lower() == "true"
         if live_enabled:
-            logger.info("Step 4.5: Live trading...")
+            logger.info("Step 4.5b: Live trading...")
             try:
                 from src.paper_trading.kalshi_live_trader import KalshiLiveTrader
 
@@ -143,20 +177,17 @@ def run(
                     logger.warning(f"Live trading halted: {reason}")
                     summary["live_trading"] = {"halted": True, "reason": reason}
                 else:
-                    # Resolve any settled positions first
-                    resolve_result = trader.resolve_settled()
-
-                    # Reconcile pending fills
-                    trader.reconcile_fills(target_date)
-
-                    # Select and execute new trades
+                    # Select trades and queue for approval
                     trades = trader.select_trades(target_date, sport=sport)
-                    results = trader.execute_trades(trades) if trades else []
-                    summary["live_trading"] = {
-                        "resolved": resolve_result.get("resolved", 0),
-                        "selected": len(trades),
-                        "executed": len(results),
-                    }
+                    if trades:
+                        proposed = trader.propose_trades(trades)
+                        _send_trade_approval_alert(trades, sport)
+                        summary["live_trading"] = {
+                            "selected": len(trades),
+                            "proposed": proposed,
+                        }
+                    else:
+                        summary["live_trading"] = {"selected": 0, "proposed": 0}
             except RuntimeError as e:
                 logger.warning(f"Live trading not available: {e}")
                 summary["live_trading"] = {"error": str(e)}
@@ -164,9 +195,9 @@ def run(
                 logger.error(f"Live trading failed: {e}", exc_info=True)
                 summary["live_trading"] = {"error": str(e)}
         else:
-            logger.info("Step 4.5: Live trading not enabled (KALSHI_LIVE_TRADING_ENABLED != true)")
+            logger.info("Step 4.5b: Live trading not enabled (KALSHI_LIVE_TRADING_ENABLED != true)")
     else:
-        logger.info("Step 4.5: Skipping live trading")
+        logger.info("Step 4.5b: Skipping live trading")
 
     # Step 5: Discord alerts
     if not skip_discord and not dry_run:
@@ -180,6 +211,36 @@ def run(
         logger.info("Step 5: Skipping Discord alerts")
 
     return summary
+
+
+def _send_trade_approval_alert(trades: list, sport: str) -> None:
+    """Send Discord notification that trades are pending approval."""
+    try:
+        from src.discord_bot.alerts import send_kalshi_trade_alert_sync
+
+        total_exposure = sum(t.get("expected_cost", 0) for t in trades)
+        edges = [t.get("fee_adjusted_edge", 0) for t in trades if t.get("fee_adjusted_edge")]
+        edge_range = f"{min(edges):.0%}-{max(edges):.0%}" if edges else "N/A"
+
+        send_kalshi_trade_alert_sync("approval_needed", {
+            "sport": sport.upper(),
+            "count": len(trades),
+            "total_exposure": total_exposure,
+            "edge_range": edge_range,
+            "trades": [
+                {
+                    "player_name": t.get("player_name", "Unknown"),
+                    "stat_type": t["stat_type"],
+                    "side": t["side"],
+                    "contracts": t["contracts"],
+                    "expected_cost": t["expected_cost"],
+                    "fee_adjusted_edge": t.get("fee_adjusted_edge", 0),
+                }
+                for t in trades[:10]  # Cap at 10 for Discord embed limits
+            ],
+        })
+    except Exception as e:
+        logger.warning(f"Failed to send trade approval alert: {e}")
 
 
 def _fetch_orderbooks(target_date: date, sport: str) -> int:
@@ -334,6 +395,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-discord", action="store_true", help="Skip Discord alerts")
     parser.add_argument("--skip-paper", action="store_true", help="Skip paper trading")
     parser.add_argument("--skip-live", action="store_true", help="Skip live trading")
+    parser.add_argument("--resolve-only", action="store_true", help="Only resolve/reconcile live orders, no new trades")
     parser.add_argument("--yes-bets", action="store_true", help="Allow YES bets (sets KALSHI_ALLOW_YES_BETS=true)")
     return parser.parse_args()
 
@@ -356,6 +418,7 @@ def main():
     logger.info(f"  Skip Discord: {args.skip_discord}")
     logger.info(f"  Skip Paper: {args.skip_paper}")
     logger.info(f"  Skip Live: {args.skip_live}")
+    logger.info(f"  Resolve Only: {args.resolve_only}")
     logger.info("=" * 60)
 
     # Check credentials early
@@ -372,6 +435,7 @@ def main():
         skip_discord=args.skip_discord,
         skip_paper=args.skip_paper,
         skip_live=args.skip_live,
+        resolve_only=args.resolve_only,
     )
 
     logger.info("=" * 60)
@@ -379,6 +443,7 @@ def main():
     logger.info(f"  Scrape: {summary.get('scrape', {})}")
     logger.info(f"  Edges: {summary.get('edges', {})}")
     logger.info(f"  Paper trading: {summary.get('paper_trading', {})}")
+    logger.info(f"  Live resolution: {summary.get('live_resolution', {})}")
     logger.info(f"  Live trading: {summary.get('live_trading', {})}")
     logger.info(f"  Alerts sent: {summary.get('alerts_sent', False)}")
     logger.info("=" * 60)

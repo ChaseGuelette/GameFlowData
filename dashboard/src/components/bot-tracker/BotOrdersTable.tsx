@@ -275,7 +275,9 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                       {formatTime(order.placed_at)}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">
-                      {tab === 'paper' ? formatTime((order as KalshiPaperBet).close_time) : '—'}
+                      {tab === 'paper'
+                        ? formatTime((order as KalshiPaperBet).close_time)
+                        : formatTime((order as KalshiLiveOrder).game_start_time)}
                     </td>
                     <td className="px-3 py-2">
                       <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${

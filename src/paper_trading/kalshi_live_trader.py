@@ -69,14 +69,15 @@ def _env_int(name: str, default: int) -> int:
 class KalshiLiveTrader:
     """Places real taker orders on Kalshi with circuit breaker protection."""
 
-    def __init__(self):
-        # Gate: must be explicitly enabled
-        enabled = os.getenv("KALSHI_LIVE_TRADING_ENABLED", "false").lower()
-        if enabled != "true":
-            raise RuntimeError(
-                "KALSHI_LIVE_TRADING_ENABLED is not 'true'. "
-                "Set KALSHI_LIVE_TRADING_ENABLED=true to enable live trading."
-            )
+    def __init__(self, resolve_only: bool = False):
+        # Gate: must be explicitly enabled (skipped for resolve-only mode)
+        if not resolve_only:
+            enabled = os.getenv("KALSHI_LIVE_TRADING_ENABLED", "false").lower()
+            if enabled != "true":
+                raise RuntimeError(
+                    "KALSHI_LIVE_TRADING_ENABLED is not 'true'. "
+                    "Set KALSHI_LIVE_TRADING_ENABLED=true to enable live trading."
+                )
 
         # Configuration
         self.starting_bankroll = _env_float("KALSHI_LIVE_STARTING_BANKROLL", 100.0)
@@ -320,6 +321,12 @@ class KalshiLiveTrader:
         shared daily exposure cap, call with sport="mlb" first, then pass the
         resulting total cost as prior_exposure= when calling with sport="nba".
         """
+        # Per-sport trading gate: refuse to trade a sport that's disabled
+        sport_gate_var = f"{sport.upper()}_TRADING_ENABLED"
+        if os.getenv(sport_gate_var, "true").lower() != "true":
+            logger.info(f"Live trading disabled for {sport} ({sport_gate_var}=false)")
+            return []
+
         # Get real balance from API
         balance_data = self.client.get_balance()
         if balance_data is None:
@@ -385,17 +392,16 @@ class KalshiLiveTrader:
             """), {"d": target_date}).fetchall()
             today_positions = {(int(row[0]), row[1]) for row in rows}
 
-        # Check today's existing exposure FOR THIS SPORT ONLY.
-        # Each sport gets its own share of the daily cap — NBA blowing its cap
-        # does NOT consume MLB's allocation (and vice versa).
+        # Shared cross-sport exposure cap: ALL sports share one daily pool.
+        # MLB fires first (minute :00) and gets full access. NBA fires at :02
+        # and sees what's left after MLB. prior_exposure can also be passed in.
         total_exposure = 0.0
         with self.engine.connect() as conn:
             existing_exposure = conn.execute(text("""
                 SELECT COALESCE(SUM(total_cost), 0)
                 FROM kalshi_live_orders
                 WHERE game_date = :d AND status != 'cancelled'
-                  AND sport = :sport
-            """), {"d": target_date, "sport": sport}).scalar()
+            """), {"d": target_date}).scalar()
         total_exposure = float(existing_exposure or 0) + prior_exposure
 
         # First pass: find best-edge candidate per (player_id, stat_type)
@@ -459,6 +465,15 @@ class KalshiLiveTrader:
             else:
                 continue
 
+            # Edge sanity cap: reject absurd edges that indicate model garbage
+            MAX_EDGE = _env_float("KALSHI_LIVE_MAX_EDGE", 0.40)
+            if edge > MAX_EDGE:
+                logger.warning(
+                    f"SUSPICIOUS EDGE {edge:.1%} on {row['ticker']} "
+                    f"({row['player_name']} {stat_type}) — skipping (max {MAX_EDGE:.1%})"
+                )
+                continue
+
             # Per-stat direction restriction (matches daily runner allowed_directions)
             if sport == "mlb":
                 from src.models.mlb.mlb_stat_config import MLB_STATS as _MLB_STATS
@@ -490,6 +505,9 @@ class KalshiLiveTrader:
             for t in _tiers
         )
         logger.info(f"BET POOL ({target_date} {_mode_str}): {_tier_str}")
+
+        # Lookup game start times for all tickers (best-effort, non-fatal)
+        game_start_times = self._lookup_game_start_times(target_date, sport)
 
         # Second pass: Kelly size and apply exposure/balance caps
         trades: list[dict[str, Any]] = []
@@ -557,6 +575,7 @@ class KalshiLiveTrader:
                 "kalshi_implied": round(cand["kalshi_implied"], 4),
                 "edge": round(cand["raw_edge"], 4),
                 "fee_adjusted_edge": round(cand["fee_adjusted_edge"], 4),
+                "game_start_time": game_start_times.get(ticker),
             })
 
         logger.info(
@@ -564,6 +583,27 @@ class KalshiLiveTrader:
             f"(exposure: ${total_exposure:.2f}/${effective_cap:.2f} cap)"
         )
         return trades
+
+    def _lookup_game_start_times(self, target_date: date, sport: str) -> dict[str, datetime | None]:
+        """Look up game start times from schedule tables, keyed by ticker."""
+        start_times: dict[str, datetime | None] = {}
+        try:
+            table = "nba_game_schedule" if sport == "nba" else "mlb_game_schedule"
+            with self.engine.connect() as conn:
+                rows = conn.execute(text(f"""
+                    SELECT km.ticker, gs.game_time
+                    FROM kalshi_markets km
+                    JOIN {table} gs ON gs.game_date = :d
+                    WHERE km.sport = :sport
+                      AND km.snapshot_time::date = :d
+                      AND gs.game_time IS NOT NULL
+                    GROUP BY km.ticker, gs.game_time
+                """), {"d": target_date, "sport": sport}).fetchall()
+                for row in rows:
+                    start_times[row[0]] = row[1]
+        except Exception as e:
+            logger.debug(f"Game start time lookup failed (non-fatal): {e}")
+        return start_times
 
     # ------------------------------------------------------------------
     # Trade execution
@@ -686,6 +726,147 @@ class KalshiLiveTrader:
         logger.info(f"Executed {len(results)}/{len(trades)} live trades")
         return results
 
+    # ------------------------------------------------------------------
+    # Trade queue (approval flow)
+    # ------------------------------------------------------------------
+
+    def propose_trades(self, trades: list[dict[str, Any]]) -> int:
+        """Write trades to kalshi_trade_queue for human approval instead of executing.
+
+        Returns:
+            Number of trades proposed.
+        """
+        if not trades:
+            return 0
+
+        with self.engine.begin() as conn:
+            for trade in trades:
+                conn.execute(text("""
+                    INSERT INTO kalshi_trade_queue (
+                        game_date, ticker, sport, player_id, player_name,
+                        stat_type, line, side, yes_price, contracts,
+                        expected_cost, expected_fee, model_prob, kalshi_implied,
+                        edge, fee_adjusted_edge, status, expires_at
+                    ) VALUES (
+                        :game_date, :ticker, :sport, :player_id, :player_name,
+                        :stat_type, :line, :side, :yes_price, :contracts,
+                        :expected_cost, :expected_fee, :model_prob, :kalshi_implied,
+                        :edge, :fee_adjusted_edge, 'pending_approval',
+                        now() + interval '30 minutes'
+                    )
+                """), {
+                    "game_date": trade["game_date"],
+                    "ticker": trade["ticker"],
+                    "sport": trade["sport"],
+                    "player_id": trade.get("player_id"),
+                    "player_name": trade.get("player_name"),
+                    "stat_type": trade["stat_type"],
+                    "line": trade["line"],
+                    "side": trade["side"],
+                    "yes_price": trade["yes_price"],
+                    "contracts": trade["contracts"],
+                    "expected_cost": trade["expected_cost"],
+                    "expected_fee": trade.get("expected_fee"),
+                    "model_prob": trade["model_prob"],
+                    "kalshi_implied": trade["kalshi_implied"],
+                    "edge": trade["edge"],
+                    "fee_adjusted_edge": trade["fee_adjusted_edge"],
+                })
+
+        logger.info(f"Proposed {len(trades)} trades to approval queue")
+        return len(trades)
+
+    def execute_approved_trades(self, trade_ids: list[int]) -> list[dict[str, Any]]:
+        """Execute trades from the queue that have been approved.
+
+        Reads trade details from kalshi_trade_queue, executes via Kalshi API,
+        and updates queue status.
+        """
+        if not trade_ids:
+            return []
+
+        # Fetch approved trades from queue
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT id, game_date, ticker, sport, player_id, player_name,
+                       stat_type, line, side, yes_price, contracts,
+                       expected_cost, expected_fee, model_prob, kalshi_implied,
+                       edge, fee_adjusted_edge, expires_at
+                FROM kalshi_trade_queue
+                WHERE id = ANY(:ids) AND status = 'approved'
+            """), {"ids": trade_ids}).fetchall()
+
+        if not rows:
+            logger.warning("No approved trades found in queue")
+            return []
+
+        # Convert to trade dicts for execute_trades()
+        trades = []
+        expired_ids = []
+        now = datetime.utcnow()
+
+        for row in rows:
+            row_dict = dict(row._mapping)
+            # Check expiry
+            if row_dict["expires_at"] and row_dict["expires_at"].replace(tzinfo=None) < now:
+                expired_ids.append(row_dict["id"])
+                continue
+
+            trades.append({
+                "game_date": row_dict["game_date"],
+                "ticker": row_dict["ticker"],
+                "sport": row_dict["sport"],
+                "player_id": row_dict["player_id"],
+                "player_name": row_dict["player_name"],
+                "stat_type": row_dict["stat_type"],
+                "line": float(row_dict["line"]),
+                "side": row_dict["side"],
+                "yes_price": row_dict["yes_price"],
+                "contracts": row_dict["contracts"],
+                "expected_cost": float(row_dict["expected_cost"]),
+                "expected_fee": float(row_dict["expected_fee"]) if row_dict["expected_fee"] else 0,
+                "model_prob": float(row_dict["model_prob"]) if row_dict["model_prob"] else 0,
+                "kalshi_implied": float(row_dict["kalshi_implied"]) if row_dict["kalshi_implied"] else 0,
+                "edge": float(row_dict["edge"]) if row_dict["edge"] else 0,
+                "fee_adjusted_edge": float(row_dict["fee_adjusted_edge"]) if row_dict["fee_adjusted_edge"] else 0,
+                "_queue_id": row_dict["id"],
+            })
+
+        # Mark expired trades
+        if expired_ids:
+            with self.engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE kalshi_trade_queue SET status = 'expired'
+                    WHERE id = ANY(:ids)
+                """), {"ids": expired_ids})
+            logger.warning(f"Expired {len(expired_ids)} trades from queue")
+
+        if not trades:
+            return []
+
+        # Execute via normal path
+        results = self.execute_trades(trades)
+
+        # Update queue status for executed trades
+        executed_tickers = {r["ticker"] for r in results}
+        with self.engine.begin() as conn:
+            for trade in trades:
+                queue_id = trade["_queue_id"]
+                if trade["ticker"] in executed_tickers:
+                    conn.execute(text("""
+                        UPDATE kalshi_trade_queue
+                        SET status = 'executed', executed_at = now()
+                        WHERE id = :id
+                    """), {"id": queue_id})
+                else:
+                    conn.execute(text("""
+                        UPDATE kalshi_trade_queue
+                        SET status = 'failed'
+                        WHERE id = :id
+                    """), {"id": queue_id})
+
+        return results
+
     def _record_order(
         self,
         trade: dict,
@@ -704,13 +885,13 @@ class KalshiLiveTrader:
                     stat_type, line, side, order_type, contracts,
                     kalshi_order_id, fill_price, fill_count, total_cost, fee_paid,
                     model_prob, kalshi_implied, edge, fee_adjusted_edge,
-                    status, filled_at
+                    status, filled_at, game_start_time
                 ) VALUES (
                     :game_date, :ticker, :sport, :player_id, :player_name,
                     :stat_type, :line, :side, 'market', :contracts,
                     :order_id, :fill_price, :fill_count, :total_cost, :fee_paid,
                     :model_prob, :kalshi_implied, :edge, :fee_adjusted_edge,
-                    :status, :filled_at
+                    :status, :filled_at, :game_start_time
                 )
             """), {
                 "game_date": trade["game_date"],
@@ -733,6 +914,7 @@ class KalshiLiveTrader:
                 "fee_adjusted_edge": trade["fee_adjusted_edge"],
                 "status": status,
                 "filled_at": datetime.utcnow() if status == "filled" else None,
+                "game_start_time": trade.get("game_start_time"),
             })
             conn.commit()
 

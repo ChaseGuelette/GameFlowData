@@ -120,7 +120,11 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 - **NEVER call Supabase MCP tools directly in the main context.** Always delegate SQL to a `sql-runner` subagent (Task tool, `model: "haiku"`). SQL results can be thousands of tokens — they must stay in the subagent. The main context only receives the subagent's summary.
 - **NEVER call Supabase MCP tools from Explore agents.** Explore agents are for file search only (Read, Grep, Glob). If exploration requires SQL, spawn a separate sql-runner subagent in parallel.
 - **Keep Explore agent prompts narrow and bounded.** Bad: "explore the arb paper trader infrastructure". Good: "find the entry point for arb paper trading in src/arbitrage/ and list its public functions". Set `max_turns: 10` on Explore agents to prevent runaway exploration. A focused Explore should use 5-12 tool calls, not 25+.
-- **Prefer Grep/Glob directly over Explore agents** for simple searches (finding a file, locating a function, checking imports). Only use Explore for multi-step investigation where you don't know what you're looking for.
+- **Explore agent threshold rules:**
+  - **1-2 searches**: Use Grep/Glob directly — no Explore agent needed
+  - **3+ searches OR reading 3+ files**: Launch an Explore agent
+  - **Unknown scope** (don't know which files are relevant): Launch an Explore agent
+  - When in plan mode: ALWAYS use Explore agents for investigation
 - **Brain-first exploration.** When investigating a system, start from the BrainTree (`brain/` folder) for orientation before diving into source code. `brain/Pipeline/Component-Docs.md` indexes 40+ module docs via wikilinks. Read the relevant brain doc first to understand architecture, then go to source files for current implementation details. Pattern: Explore 1 reads brain docs for "what should exist", Explore 2 reads source for "what actually exists" — run in parallel.
 - **After plan approval, try GLM via OpenCode first.** Write spec to `.claude/glm_spec.md`, run with `"prompt" -f .claude/glm_spec.md` (prompt BEFORE -f), backgrounded. If OpenCode fails, fall back to direct implementation — don't waste tool calls retrying.
 

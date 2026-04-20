@@ -25,6 +25,7 @@ export interface KalshiLiveOrder {
   placed_at: string | null
   filled_at: string | null
   resolved_at: string | null
+  game_start_time: string | null
 }
 
 export interface KalshiPaperBet {
@@ -105,6 +106,31 @@ export interface KalshiBotSummary {
   config: KalshiConfig
   live: KalshiTradingStats
   paper: KalshiTradingStats
+}
+
+export interface KalshiTradeQueueItem {
+  id: number
+  game_date: string
+  ticker: string
+  sport: string
+  player_id: number | null
+  player_name: string | null
+  stat_type: string
+  line: number
+  side: string
+  yes_price: number
+  contracts: number
+  expected_cost: number
+  expected_fee: number | null
+  model_prob: number | null
+  kalshi_implied: number | null
+  edge: number | null
+  fee_adjusted_edge: number | null
+  status: string
+  proposed_at: string
+  approved_at: string | null
+  executed_at: string | null
+  expires_at: string
 }
 
 export type DateRange = 'today' | '7d' | '30d' | 'all'

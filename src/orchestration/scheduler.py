@@ -603,6 +603,12 @@ def run_kalshi_refresh_mlb():
     run_job("kalshi_refresh_job.py", extra_args="--sport mlb", silent_on_success=True)
 
 
+def run_kalshi_live_resolution():
+    """Morning resolution of yesterday's live Kalshi bets."""
+    run_job("kalshi_refresh_job.py", extra_args="--resolve-only --sport nba", silent_on_success=False)
+    run_job("kalshi_refresh_job.py", extra_args="--resolve-only --sport mlb", silent_on_success=False)
+
+
 def run_kalshi_daily_summary():
     """Daily Kalshi paper trading summary: resolve bets, P&L + analysis to Discord."""
     run_job("kalshi_daily_summary_job.py")
@@ -904,6 +910,14 @@ def main():
     # ==============================================================
     # Kalshi Prediction Markets
     # ==============================================================
+
+    # 9:15 AM ET - Kalshi live bet resolution (resolve yesterday's bets after stats pull)
+    scheduler.add_job(
+        run_kalshi_live_resolution,
+        CronTrigger(hour=9, minute=15, timezone=ET),
+        id="kalshi_live_resolution",
+        name="Kalshi Live Resolution (9:15 AM ET daily)",
+    )
 
     # 10:00 AM ET - Kalshi daily summary: resolve pending bets + P&L/analysis to Discord
     # Runs after NBA daily stats (9 AM) + first Kalshi refresh (~9:10 AM) so bets are resolved
