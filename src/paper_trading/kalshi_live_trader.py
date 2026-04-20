@@ -32,6 +32,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
+from src.models.daily_runner import should_skip_recommendation
 from src.scrapers.kalshi.kalshi_client import KalshiClient
 from src.scrapers.kalshi.kalshi_utils import fee_adjusted_edge, kalshi_taker_fee
 
@@ -117,8 +118,8 @@ class KalshiLiveTrader:
             ).fetchone()
             if result is None:
                 conn.execute(text("""
-                    INSERT INTO kalshi_live_trading_config (id, starting_bankroll)
-                    VALUES (1, :bankroll)
+                    INSERT INTO kalshi_live_trading_config (id, starting_bankroll, hwm_dollars)
+                    VALUES (1, :bankroll, :bankroll)
                 """), {"bankroll": self.starting_bankroll})
                 conn.commit()
 
@@ -200,14 +201,32 @@ class KalshiLiveTrader:
         portfolio_cents = balance_data.get("portfolio_value", 0)
         total_dollars = (balance_cents + portfolio_cents) / 100.0
         balance_dollars = balance_cents / 100.0  # kept for logging / select_trades bankroll
-        starting = float(config.get("starting_bankroll", self.starting_bankroll))
-        min_balance = starting * (1 - self.drawdown_limit)
+
+        # High-water mark drawdown: ratchet up on new highs, halt if we fall
+        # too far from peak. Avoids the static-anchor problem where a bad day
+        # permanently anchors the drawdown check to the original starting balance.
+        hwm = float(config.get("hwm_dollars") or total_dollars)
+        if total_dollars > hwm:
+            hwm = total_dollars
+            with self.engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE kalshi_live_trading_config
+                    SET hwm_dollars = :hwm, last_updated = now()
+                    WHERE id = 1
+                """), {"hwm": hwm})
+            logger.info(f"New portfolio HWM: ${hwm:.2f}")
+
+        min_balance = hwm * (1 - self.drawdown_limit)
+        logger.info(
+            f"Drawdown check: portfolio ${total_dollars:.2f} vs HWM ${hwm:.2f} "
+            f"(floor ${min_balance:.2f} = {self.drawdown_limit:.0%} drawdown)"
+        )
 
         if total_dollars < min_balance:
             reason = (
                 f"Drawdown limit reached: portfolio ${total_dollars:.2f} "
                 f"(cash ${balance_dollars:.2f} + positions ${portfolio_cents/100:.2f}) "
-                f"< ${min_balance:.2f} ({self.drawdown_limit:.0%} of ${starting:.0f})"
+                f"< ${min_balance:.2f} ({self.drawdown_limit:.0%} from HWM ${hwm:.2f})"
             )
             self._set_halted(reason)
             self._send_circuit_breaker_alert(reason, balance_dollars, "All trading HALTED. Manual review required.")
@@ -463,6 +482,18 @@ class KalshiLiveTrader:
                 side = "no"
                 edge = no_edge
             else:
+                continue
+
+            # Structural filters — same rules as daily_runner / edge_refresh_job
+            direction = "over" if side == "yes" else "under"
+            line_val = float(row["line"]) if pd.notna(row.get("line")) else None
+            skip, reason = should_skip_recommendation(
+                stat=stat_type,
+                direction=direction,
+                line=line_val,
+            )
+            if skip:
+                logger.debug(f"SKIP {row['player_name']} {stat_type} {direction}: {reason}")
                 continue
 
             # Edge sanity cap: reject absurd edges that indicate model garbage

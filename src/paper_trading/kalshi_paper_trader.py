@@ -30,6 +30,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
+from src.models.daily_runner import should_skip_recommendation
 from src.paper_trading.mlb_paper_trader import MLB_STAT_RESOLUTION
 from src.scrapers.kalshi.kalshi_utils import fee_adjusted_edge, kalshi_taker_fee
 
@@ -316,6 +317,18 @@ class KalshiPaperTrader:
                 _direction = "over" if side == "yes" else "under"
                 if _direction not in _allowed:
                     continue
+
+            # Structural filters — same rules as daily_runner / edge_refresh_job
+            direction = "over" if side == "yes" else "under"
+            line_val = float(row["line"]) if pd.notna(row.get("line")) else None
+            skip, reason = should_skip_recommendation(
+                stat=stat_type,
+                direction=direction,
+                line=line_val,
+            )
+            if skip:
+                logger.debug(f"SKIP {row['player_name']} {stat_type} {direction}: {reason}")
+                continue
 
             # Same-run dedup: keep best edge per (player_id, stat_type)
             if pos_key in run_candidates and edge <= run_candidates[pos_key]["fee_adjusted_edge"]:
