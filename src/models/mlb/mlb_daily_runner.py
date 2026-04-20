@@ -27,6 +27,7 @@ import pandas as pd
 from sqlalchemy import bindparam, text
 
 from src.models.black_litterman import BlackLittermanBlender
+from src.models.daily_runner import should_skip_recommendation
 from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL_CONFIGS
 
 logger = logging.getLogger(__name__)
@@ -901,19 +902,32 @@ class MLBDailyPredictionRunner:
                         best_edge = -1  # No allowed direction has edge
 
                 if best_edge >= edge_threshold:
-                    # Sanity check: player's L5 average is 0 but model recommends over
-                    # (catches cold players being recommended over low lines like 0.5)
+                    line_val = float(row["line"]) if pd.notna(row.get("line")) else None
                     feat_l5 = row.get("feat_player_avg_stat_l5")
-                    if (
+
+                    # Shared structural filters (NBA filters are no-ops for MLB stats,
+                    # but future MLB filters added here will propagate automatically)
+                    skip, reason = should_skip_recommendation(
+                        stat=stat,
+                        direction=best_dir,
+                        line=line_val,
+                        feat_l5=float(feat_l5) if pd.notna(feat_l5) else None,
+                    )
+
+                    # MLB-specific: cold player over a low line
+                    if not skip and (
                         best_dir == "over"
                         and pd.notna(feat_l5)
                         and feat_l5 == 0
-                        and pd.notna(row.get("line"))
-                        and row["line"] <= 0.5
+                        and line_val is not None
+                        and line_val <= 0.5
                     ):
+                        skip = True
+                        reason = f"FILTER [MLB_COLD_OVER]: {stat} over {line_val} with L5=0"
+
+                    if skip:
                         logger.debug(
-                            f"FILTER [MLB_COLD_OVER]: Skipping {row.get('player_name', '?')} "
-                            f"{stat} over {row['line']} — L5 avg is 0"
+                            f"SKIP {row.get('player_name', '?')} {stat} {best_dir}: {reason}"
                         )
                     else:
                         predictions_df.at[idx, "is_recommended"] = True

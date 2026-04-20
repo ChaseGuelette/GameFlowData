@@ -1076,9 +1076,20 @@ class KalshiLiveTrader:
                 stat_type = order["stat_type"]
                 line = float(order["line"])
                 side = order["side"]
-                fill_price = int(order["fill_price"]) if pd.notna(order["fill_price"]) else 0
-                fill_count = int(order["fill_count"]) if pd.notna(order["fill_count"]) else 0
-                fee = float(order["fee_paid"]) if pd.notna(order["fee_paid"]) else 0
+
+                # Guard: null fill_price/fill_count means order was never properly
+                # reconciled. Defaulting to 0 produces garbage PnL — skip and warn.
+                if pd.isna(order["fill_price"]) or pd.isna(order["fill_count"]):
+                    logger.warning(
+                        f"SKIP RESOLUTION: order {int(order['id'])} ({order.get('ticker','?')}) "
+                        f"has null fill_price={order['fill_price']} or "
+                        f"fill_count={order['fill_count']} — run reconcile_fills() first"
+                    )
+                    continue
+
+                fill_price = int(order["fill_price"])
+                fill_count = int(order["fill_count"])
+                fee = float(order["fee_paid"]) if pd.notna(order["fee_paid"]) else 0.0
 
                 actual = actuals.get((player_id, stat_type)) if player_id else None
 
