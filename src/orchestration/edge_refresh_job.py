@@ -634,13 +634,31 @@ def recalculate_edges(
 
             max_bl_edge = max(bl_over_edge, bl_under_edge)
             if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
-                # Sanity checks for under recommendations (must match daily_runner.py)
+                # Sanity checks — must match daily_runner.py exactly
                 skip = False
                 rec_direction = "under" if bl_under_edge > bl_over_edge else "over"
-                if rec_direction == "under":
+                stat = row.get("stat")
+                line_val = row.get("line")
+
+                if rec_direction == "over":
+                    # Filter: reb over with line <= 2.5 (structural -12% ROI)
+                    if stat == "reb" and pd.notna(line_val) and line_val <= 2.5:
+                        logger.debug(
+                            f"FILTER [REB_OVER_LOW]: Skipping {row.get('player_name', '?')} "
+                            f"reb over {line_val} — low-line reb overs are structurally unprofitable"
+                        )
+                        skip = True
+                    # Filter: ast over (structural -22% ROI)
+                    if not skip and stat == "ast":
+                        logger.debug(
+                            f"FILTER [AST_OVER]: Skipping {row.get('player_name', '?')} "
+                            f"ast over {line_val} — ast overs are structurally unprofitable"
+                        )
+                        skip = True
+
+                if not skip and rec_direction == "under":
                     feat_l5 = row.get("feat_player_avg_stat_l5")
                     pred_q50 = row.get("pred_q50")
-                    line_val = row.get("line")
 
                     # Check 1: Q50 divergence
                     if pd.notna(feat_l5) and pd.notna(pred_q50) and feat_l5 > 0:
