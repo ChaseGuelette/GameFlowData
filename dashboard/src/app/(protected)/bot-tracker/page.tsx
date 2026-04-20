@@ -15,15 +15,17 @@ const DATE_RANGES: { label: string; value: DateRange }[] = [
   { label: '7d', value: '7d' },
   { label: '30d', value: '30d' },
   { label: 'All', value: 'all' },
+  { label: 'Date', value: 'custom' },
 ]
 
 export default function BotTrackerPage() {
   const [tab, setTab] = useState<BotTab>('live')
   const [dateRange, setDateRange] = useState<DateRange>('7d')
+  const [customDate, setCustomDate] = useState<string>('')
 
   const { data: summary, isLoading: summaryLoading } = useBotSummary()
-  const { data: orders = [], isLoading: ordersLoading } = useBotOrders(tab, dateRange)
-  const { data: dailyLogs = [], isLoading: logsLoading } = useBotDailyLogs(tab, dateRange)
+  const { data: orders = [], isLoading: ordersLoading } = useBotOrders(tab, dateRange, customDate || undefined)
+  const { data: dailyLogs = [], isLoading: logsLoading } = useBotDailyLogs(tab, dateRange, customDate || undefined)
 
   const stats = summary ? (tab === 'live' ? summary.live : summary.paper) : null
 
@@ -65,20 +67,34 @@ export default function BotTrackerPage() {
             </button>
           ))}
         </div>
-        <div className="flex bg-slate-900 rounded-lg p-0.5">
-          {DATE_RANGES.map((r) => (
-            <button
-              key={r.value}
-              onClick={() => setDateRange(r.value)}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                dateRange === r.value
-                  ? 'bg-slate-700 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {r.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex bg-slate-900 rounded-lg p-0.5">
+            {DATE_RANGES.map((r) => (
+              <button
+                key={r.value}
+                onClick={() => {
+                  setDateRange(r.value)
+                  if (r.value !== 'custom') setCustomDate('')
+                }}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                  dateRange === r.value
+                    ? 'bg-slate-700 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+          {dateRange === 'custom' && (
+            <input
+              type="date"
+              value={customDate}
+              max={new Date().toISOString().split('T')[0]}
+              onChange={(e) => setCustomDate(e.target.value)}
+              className="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300"
+            />
+          )}
         </div>
       </div>
 

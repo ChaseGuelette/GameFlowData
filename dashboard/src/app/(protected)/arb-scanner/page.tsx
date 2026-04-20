@@ -2,10 +2,11 @@
 
 import { useState } from 'react'
 import { useAdmin } from '@/lib/hooks/useAdmin'
-import { useArbSummary, useArbBets, useArbDailyLogs } from '@/lib/hooks/useArbScanner'
+import { useArbSummary, useArbBets, useArbDailyLogs, useMatchQueue } from '@/lib/hooks/useArbScanner'
 import { ArbSummaryCards } from '@/components/arb-scanner/ArbSummaryCards'
 import { ArbBetsTable } from '@/components/arb-scanner/ArbBetsTable'
 import { ArbDailyLogTable } from '@/components/arb-scanner/ArbDailyLogTable'
+import { MatchQueueTable } from '@/components/arb-scanner/MatchQueueTable'
 import type { ArbDateRange, ArbTab } from '@/types/arb-scanner'
 
 const DATE_RANGES: { label: string; value: ArbDateRange }[] = [
@@ -23,6 +24,7 @@ export default function ArbScannerPage() {
   const { data: summary, isLoading: summaryLoading } = useArbSummary()
   const { data: bets = [], isLoading: betsLoading } = useArbBets(dateRange)
   const { data: dailyLogs = [], isLoading: logsLoading } = useArbDailyLogs(dateRange)
+  const { links: queueLinks, loading: queueLoading, decide } = useMatchQueue()
 
   if (!isAdmin) {
     return (
@@ -53,7 +55,7 @@ export default function ArbScannerPage() {
       {/* Tab Toggle + Date Range */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex bg-slate-900 rounded-lg p-0.5">
-          {(['bets', 'daily-log'] as ArbTab[]).map((t) => (
+          {(['bets', 'daily-log', 'queue'] as ArbTab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -63,7 +65,16 @@ export default function ArbScannerPage() {
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              {t === 'bets' ? 'Paper Bets' : 'Daily Log'}
+              {t === 'bets' ? 'Paper Bets' : t === 'daily-log' ? 'Daily Log' : (
+                <span className="flex items-center gap-1.5">
+                  Queue
+                  {queueLinks.length > 0 && (
+                    <span className="text-xs bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded-full font-normal">
+                      {queueLinks.length}
+                    </span>
+                  )}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -87,8 +98,10 @@ export default function ArbScannerPage() {
       {/* Tab Content */}
       {tab === 'bets' ? (
         <ArbBetsTable bets={bets} loading={betsLoading} />
-      ) : (
+      ) : tab === 'daily-log' ? (
         <ArbDailyLogTable logs={dailyLogs} loading={logsLoading} />
+      ) : (
+        <MatchQueueTable links={queueLinks} loading={queueLoading} decide={decide} />
       )}
     </div>
   )

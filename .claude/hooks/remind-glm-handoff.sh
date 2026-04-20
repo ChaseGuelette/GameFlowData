@@ -1,8 +1,9 @@
 #!/bin/bash
+set +e  # Never fail — this is a non-blocking reminder hook
 # Non-blocking reminder (exit 0) — only fires for code files, not markdown/config/brain
 
 # Read tool input JSON from stdin into variable
-INPUT="$(cat)"
+INPUT="$(cat 2>/dev/null || true)"
 
 # Check if the input contains non-code file extensions — skip silently
 if echo "$INPUT" | grep -qE '\.md"|\.json"|\.yaml"|\.yml"|\.toml"|\.txt"|\.csv"|\.sh"|\.env"'; then

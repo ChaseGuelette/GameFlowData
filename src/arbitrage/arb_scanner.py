@@ -140,10 +140,16 @@ class ArbScanner:
         # Non-sports matching
         if include_non_sports:
             try:
-                ns_matched = matcher.match_non_sports_markets()
-                all_matched.extend(ns_matched)
-                if ns_matched:
-                    logger.info(f"Non-sports matched: {len(ns_matched)} pairs")
+                non_sports = matcher.match_non_sports_markets()
+                track_a = [m for m in non_sports if m.match_method in ('structured', 'verified')]
+                track_b = [m for m in non_sports if m.match_method == 'fuzzy']
+                all_matched.extend(track_a)
+                if track_b:
+                    self._store_pending_links(track_b)
+                logger.info(
+                    f"Non-sports: {len(track_a)} Track A (processing), "
+                    f"{len(track_b)} Track B (queued for review)"
+                )
             except Exception as e:
                 logger.warning(f"Non-sports matching failed (non-fatal): {e}")
                 errors.append(f"non_sports_match: {e}")
@@ -412,3 +418,38 @@ class ArbScanner:
                 })
                 count += 1
         return count
+
+    def _store_pending_links(self, matches: list) -> None:
+        """Write fuzzy non-sports matches to verified_market_links as pending.
+
+        ON CONFLICT DO NOTHING — existing pending/approved/rejected entries are preserved.
+        """
+        if not matches:
+            return
+        rows = [
+            {
+                "kalshi_ticker": m.kalshi_ticker,
+                "poly_condition_id": m.poly_condition_id,
+                "series": m.kalshi_ticker.split("-")[0],
+                "kalshi_title": m.kalshi_title or "",
+                "poly_question": m.poly_question or "",
+                "match_confidence": float(m.match_confidence),
+                "match_method": m.match_method,
+            }
+            for m in matches
+        ]
+        q = text("""
+            INSERT INTO verified_market_links
+              (kalshi_ticker, poly_condition_id, series, kalshi_title, poly_question,
+               match_confidence, match_method)
+            VALUES
+              (:kalshi_ticker, :poly_condition_id, :series, :kalshi_title, :poly_question,
+               :match_confidence, :match_method)
+            ON CONFLICT (kalshi_ticker, poly_condition_id) DO NOTHING
+        """)
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(q, rows)
+            logger.info(f"Queued {len(rows)} fuzzy matches for review → verified_market_links")
+        except Exception as e:
+            logger.warning(f"Failed to store pending links: {e}")

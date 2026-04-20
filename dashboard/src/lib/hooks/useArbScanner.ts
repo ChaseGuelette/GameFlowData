@@ -1,8 +1,9 @@
 'use client'
 
+import { useCallback, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
-import type { ArbPaperBet, ArbDailyLog, ArbSummary, ArbDateRange } from '@/types/arb-scanner'
+import type { ArbPaperBet, ArbDailyLog, ArbSummary, ArbDateRange, VerifiedMarketLink } from '@/types/arb-scanner'
 
 function getDateFilter(range: ArbDateRange): string | null {
   if (range === 'all') return null
@@ -92,4 +93,35 @@ export function useArbDailyLogs(range: ArbDateRange) {
     staleTime: 60 * 1000,
     refetchInterval: 60 * 1000,
   })
+}
+
+export function useMatchQueue() {
+  const supabase = createClient()
+  const [links, setLinks] = useState<VerifiedMarketLink[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const fetchLinks = useCallback(async () => {
+    const { data } = await supabase
+      .from('verified_market_links')
+      .select('*')
+      .eq('status', 'pending')
+      .gte('match_confidence', 0.70)
+      .order('match_confidence', { ascending: false })
+      .limit(200)
+    setLinks(data ?? [])
+    setLoading(false)
+  }, [supabase])
+
+  useEffect(() => { fetchLinks() }, [fetchLinks])
+
+  const decide = useCallback(async (id: number, action: 'approve' | 'reject') => {
+    await fetch('/api/arb/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, action }),
+    })
+    setLinks(prev => prev.filter(l => l.id !== id))
+  }, [])
+
+  return { links, loading, decide, refetch: fetchLinks }
 }

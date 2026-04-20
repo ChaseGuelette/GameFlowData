@@ -59,12 +59,18 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [statFilter, setStatFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [sportFilter, setSportFilter] = useState<string>('all')
   const [showOverflow, setShowOverflow] = useState<boolean>(false)
 
   const statTypes = useMemo(() => {
     const types = new Set(orders.map((o) => o.stat_type))
     return Array.from(types).sort()
   }, [orders])
+
+  const sports = useMemo(
+    () => Array.from(new Set(orders.map((o) => o.sport))).sort(),
+    [orders]
+  )
 
   const sortedOrders = useMemo(() => {
     let filtered = orders
@@ -76,6 +82,9 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
     }
     if (statusFilter !== 'all') {
       filtered = filtered.filter((o) => (o.status ?? 'pending') === statusFilter)
+    }
+    if (sportFilter !== 'all') {
+      filtered = filtered.filter((o) => o.sport === sportFilter)
     }
     return [...filtered].sort((a, b) => {
       let aVal: string | number | null = null
@@ -113,7 +122,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
       if (aVal > bVal) return sortDir === 'asc' ? 1 : -1
       return 0
     })
-  }, [orders, sortField, sortDir, statFilter, statusFilter, showOverflow])
+  }, [orders, sortField, sortDir, statFilter, statusFilter, sportFilter, showOverflow])
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -172,6 +181,16 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
               <option value="overflow_cancelled">Overflow Cancelled</option>
             </>
           )}
+        </select>
+        <select
+          value={sportFilter}
+          onChange={(e) => setSportFilter(e.target.value)}
+          className="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300"
+        >
+          <option value="all">All Sports</option>
+          {sports.map((s) => (
+            <option key={s} value={s}>{s.toUpperCase()}</option>
+          ))}
         </select>
         <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
           <input

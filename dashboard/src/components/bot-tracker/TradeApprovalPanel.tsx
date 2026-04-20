@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useTradeQueue, useTradeApproval } from '@/lib/hooks/useTradeQueue'
 import { KALSHI_STAT_LABELS } from '@/types/bot-tracker'
 import type { KalshiTradeQueueItem } from '@/types/bot-tracker'
@@ -82,6 +82,7 @@ export function TradeApprovalPanel() {
   const { data: trades = [], isLoading } = useTradeQueue()
   const { approve, reject, approveAll } = useTradeApproval()
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [sportFilter, setSportFilter] = useState<string>('all')
 
   // Reset selection when trades change
   useEffect(() => {
@@ -91,7 +92,17 @@ export function TradeApprovalPanel() {
   if (isLoading || trades.length === 0) return null
 
   const totalExposure = trades.reduce((sum, t) => sum + Number(t.expected_cost), 0)
-  const allSelected = selected.size === trades.length && trades.length > 0
+
+  const sports = useMemo(
+    () => Array.from(new Set(trades.map((t) => t.sport))).sort(),
+    [trades]
+  )
+
+  const filteredTrades = sportFilter === 'all'
+    ? trades
+    : trades.filter((t) => t.sport === sportFilter)
+
+  const allSelected = selected.size === filteredTrades.length && filteredTrades.length > 0
 
   const toggleOne = (id: number) => {
     setSelected((prev) => {
@@ -104,7 +115,7 @@ export function TradeApprovalPanel() {
 
   const toggleAll = () => {
     if (allSelected) setSelected(new Set())
-    else setSelected(new Set(trades.map((t) => t.id)))
+    else setSelected(new Set(filteredTrades.map((t) => t.id)))
   }
 
   const handleApprove = () => {
@@ -134,7 +145,19 @@ export function TradeApprovalPanel() {
             {' | '}Total exposure: ${totalExposure.toFixed(2)}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {sports.length > 1 && (
+            <select
+              value={sportFilter}
+              onChange={(e) => setSportFilter(e.target.value)}
+              className="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300"
+            >
+              <option value="all">All Sports</option>
+              {sports.map((s) => (
+                <option key={s} value={s}>{s.toUpperCase()}</option>
+              ))}
+            </select>
+          )}
           <button
             onClick={handleReject}
             disabled={selected.size === 0 || isPending}
@@ -177,7 +200,7 @@ export function TradeApprovalPanel() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50">
-            {trades.map((trade) => (
+            {filteredTrades.map((trade) => (
               <TradeRow
                 key={trade.id}
                 trade={trade}

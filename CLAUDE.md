@@ -44,6 +44,7 @@ These rules must NEVER be violated:
 9. **NEVER use Explore agents for SQL** — Explore is file-only (Read/Grep/Glob). Use sql-runner for DB queries.
 10. **Keep Explore agents narrow** — max_turns: 10, focused prompts, 5-12 tool calls max
 11. **After plan approval, TRY GLM via OpenCode first** — attempt `opencode run --attach` with the spec. If OpenCode fails (server down, escaping issues, timeout), fall back to implementing directly.
+12. **NEVER trust a sql-runner count without verification before destructive actions** — Haiku agents can hallucinate plausible row counts. Before any UPDATE/DELETE based on a subagent's "N rows found", spawn a second sql-runner with `SELECT COUNT(*)` to verify the number is non-zero and matches. If the counts disagree, the subagent fabricated results.
 
 ## Assets
 The [[Assets]] folder contains images, videos, PDFs, and other media. When working on any task, check Assets/ for related materials. You can analyze images, read PDFs, and process any file dropped there.

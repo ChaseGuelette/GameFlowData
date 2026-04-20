@@ -7,6 +7,7 @@ export interface UserPreferences {
   initialBankroll: number
   kellyFraction: number
   useCustomKelly: boolean
+  bankrollOverride: number | null
 }
 
 const DEFAULTS: UserPreferences = {
@@ -15,6 +16,7 @@ const DEFAULTS: UserPreferences = {
   initialBankroll: 1000,
   kellyFraction: 0.25,
   useCustomKelly: false,
+  bankrollOverride: null,
 }
 
 /**
@@ -31,6 +33,7 @@ export function useUserPreferences() {
       initialBankroll: parseFloat(localStorage.getItem('betting_initial_bankroll') || '') || 1000,
       kellyFraction: parseFloat(localStorage.getItem('betting_kelly_fraction') || '') || 0.25,
       useCustomKelly: localStorage.getItem('betting_use_custom_kelly') === 'true',
+      bankrollOverride: null,
     }
   })
   const [loading, setLoading] = useState(true)
@@ -50,7 +53,7 @@ export function useUserPreferences() {
 
       const { data, error } = await supabase
         .from('user_profiles')
-        .select('user_state, bankroll, initial_bankroll, kelly_fraction, use_custom_kelly')
+        .select('user_state, bankroll, initial_bankroll, kelly_fraction, use_custom_kelly, bankroll_override')
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -61,6 +64,7 @@ export function useUserPreferences() {
           initialBankroll: data.initial_bankroll != null ? Number(data.initial_bankroll) : prefs.initialBankroll,
           kellyFraction: data.kelly_fraction != null ? Number(data.kelly_fraction) : prefs.kellyFraction,
           useCustomKelly: data.use_custom_kelly ?? prefs.useCustomKelly,
+          bankrollOverride: data.bankroll_override != null ? Number(data.bankroll_override) : null,
         }
         setPrefs(dbPrefs)
         // Update localStorage to match DB (DB is source of truth once fetched)
@@ -69,6 +73,7 @@ export function useUserPreferences() {
         localStorage.setItem('betting_initial_bankroll', dbPrefs.initialBankroll.toString())
         localStorage.setItem('betting_kelly_fraction', dbPrefs.kellyFraction.toString())
         localStorage.setItem('betting_use_custom_kelly', dbPrefs.useCustomKelly.toString())
+        // bankrollOverride is not stored in localStorage — always from DB
       }
       if (!cancelled) setLoading(false)
     }
@@ -96,6 +101,7 @@ export function useUserPreferences() {
           initial_bankroll: newPrefs.initialBankroll,
           kelly_fraction: newPrefs.kellyFraction,
           use_custom_kelly: newPrefs.useCustomKelly,
+          bankroll_override: newPrefs.bankrollOverride,
         }, {
           onConflict: 'user_id',
         })
@@ -131,6 +137,7 @@ export function useUserPreferences() {
         case 'useCustomKelly':
           localStorage.setItem('betting_use_custom_kelly', (value as boolean).toString())
           break
+        // bankrollOverride is DB-only, no localStorage entry
       }
 
       // Debounced DB write
@@ -139,6 +146,16 @@ export function useUserPreferences() {
       return next
     })
   }, [writeToDB])
+
+  // Listen for bankrollUpdate events dispatched by syncEffectiveBankroll
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ bankroll: number }>
+      setPrefs(prev => ({ ...prev, bankroll: ce.detail.bankroll }))
+    }
+    window.addEventListener('bankrollUpdate', handler)
+    return () => window.removeEventListener('bankrollUpdate', handler)
+  }, [])
 
   return { prefs, updatePref, loading }
 }

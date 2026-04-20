@@ -133,7 +133,7 @@ export interface KalshiTradeQueueItem {
   expires_at: string
 }
 
-export type DateRange = 'today' | '7d' | '30d' | 'all'
+export type DateRange = 'today' | '7d' | '30d' | 'all' | 'custom'
 export type BotTab = 'live' | 'paper'
 
 export const KALSHI_STAT_LABELS: Record<string, string> = {

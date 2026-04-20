@@ -1,8 +1,10 @@
 # Kalshi Live Trading — Startup Playbook
 
-> **Status:** READY TO LAUNCH (pending 2-3 day NO-only paper validation)
-> **Decision date:** Apr 10, 2026
+> **Status:** POST-INCIDENT — Trade approval flow required. NBA trading disabled.
+> **Decision date:** Apr 10, 2026 (go-live), Apr 20, 2026 (post-mortem overhaul)
 > **Analysis script:** `python scripts/analyze_kalshi_paper_bets.py`
+>
+> **Apr 19 Incident**: First live day placed 21 NBA bets ($233) in 16 seconds using a broken model (17-46% edges). 8-fix overhaul deployed Apr 20. See [[handoff-016]].
 
 ---
 
@@ -65,16 +67,23 @@ Below $133, the 60% cap is always overridden by the $80 floor anyway. $300 is th
 # Gate
 KALSHI_LIVE_TRADING_ENABLED=true
 
+# Per-sport gates (added post-incident Apr 20)
+NBA_TRADING_ENABLED=false                 # Disabled until NBA model validated
+MLB_TRADING_ENABLED=true
+
 # Sizing
 KALSHI_LIVE_STARTING_BANKROLL=300
 KALSHI_LIVE_KELLY_FRACTION=0.125          # 1/8 Kelly — conservative
 KALSHI_LIVE_MIN_EDGE=0.15                 # 15% fee-adjusted edge minimum
 KALSHI_LIVE_MAX_CONTRACTS=50
 
-# Bankroll-proportional exposure
-KALSHI_DAILY_EXPOSURE_PCT=0.60            # 60% of bankroll per day
-KALSHI_MIN_DAILY_EXPOSURE=80.0            # hard floor
-KALSHI_MAX_DAILY_EXPOSURE=500.0           # hard ceiling (safety rail)
+# Shared cross-sport exposure (post-incident: hard $200 cap)
+KALSHI_DAILY_EXPOSURE_PCT=0.90            # 90% of bankroll
+KALSHI_MIN_DAILY_EXPOSURE=200             # floor = ceiling = $200
+KALSHI_MAX_DAILY_EXPOSURE=200             # hard cap shared across ALL sports
+
+# Edge sanity (added post-incident Apr 20)
+KALSHI_LIVE_MAX_EDGE=0.40                 # Reject edges > 40% as model garbage
 
 # Circuit breakers
 KALSHI_LIVE_DRAWDOWN_LIMIT=0.30           # halt at $210 balance
@@ -84,6 +93,15 @@ KALSHI_LIVE_CONSEC_LOSS_LIMIT=5           # pause after 5 straight losses
 # Mode (NO-only is default — can omit)
 KALSHI_ALLOW_YES_BETS=false
 ```
+
+### Post-incident additions (Apr 20, 2026)
+
+1. **Trade approval flow**: All trades go to `kalshi_trade_queue` for human approval on dashboard. Trades expire after 30 minutes.
+2. **Resolution decoupled**: `resolve_settled()` + `reconcile_fills()` run ALWAYS, even with `KALSHI_LIVE_TRADING_ENABLED=false`.
+3. **Morning resolution job**: 9:15 AM ET daily via `--resolve-only` flag.
+4. **Edge sanity cap**: Edges > `KALSHI_LIVE_MAX_EDGE` (40%) are rejected as model garbage.
+5. **Per-sport gates**: `NBA_TRADING_ENABLED=false` blocks NBA. `MLB_TRADING_ENABLED=true` allows MLB.
+6. **Shared exposure cap**: All sports share one $200/day pool. MLB fires first at :00, NBA at :02.
 
 ---
 

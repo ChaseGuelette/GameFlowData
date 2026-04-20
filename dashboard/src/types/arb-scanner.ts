@@ -49,4 +49,19 @@ export interface ArbSummary {
 }
 
 export type ArbDateRange = 'today' | '7d' | '30d' | 'all'
-export type ArbTab = 'bets' | 'daily-log'
+export type ArbTab = 'bets' | 'daily-log' | 'queue'
+
+export type VerifiedMarketLink = {
+  id: number
+  kalshi_ticker: string
+  poly_condition_id: string
+  series: string | null
+  kalshi_title: string | null
+  poly_question: string | null
+  match_confidence: number | null
+  match_method: string | null
+  status: 'pending' | 'approved' | 'rejected'
+  notes: string | null
+  created_at: string
+  reviewed_at: string | null
+}

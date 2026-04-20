@@ -175,6 +175,9 @@ class MatchedMarket:
     team2: str | None = None
     game_date: date | None = None
     description: str | None = None  # human-readable match context
+    match_method: str = 'unknown'       # 'structured' | 'fuzzy' | 'verified'
+    kalshi_title: str | None = None     # raw Kalshi market title (for queue display)
+    poly_question: str | None = None    # raw Poly question (for queue display)
 
 
 class MarketMatcher:
@@ -549,6 +552,8 @@ class MarketMatcher:
         matched: list[MatchedMarket] = []
         seen_poly: set[str] = set()
 
+        verified = self._build_verified_matches()
+
         for series, k_rows in series_groups.items():
             cfg = KALSHI_SERIES_POLY_CONFIG.get(series)
             if cfg is None:
@@ -604,14 +609,16 @@ class MarketMatcher:
 
                 p_fields = extract_poly(series, poly.get("question") or "")
 
-                best_score, best_k = 0.0, None
+                best_score, best_k, best_method = 0.0, None, 'unknown'
                 for k_row, k_n, k_fields in k_data:
                     if not k_n:
                         continue
                     if k_fields is not None and p_fields is not None:
                         score = structured_match_score(k_fields, p_fields)
+                        method = 'structured'
                     else:
                         # Extraction failed on one side — fuzzy fallback (threshold per config)
+                        method = 'fuzzy'
                         fallback_threshold = cfg.get("fallback_threshold", NON_SPORTS_FALLBACK_THRESHOLD)
                         sm = SequenceMatcher(None, poly_q_norm, k_n).ratio()
                         if sm >= fallback_threshold:
@@ -639,7 +646,7 @@ class MarketMatcher:
                         if k_place and p_place and k_place != p_place:
                             score = 0.0
                     if score > best_score:
-                        best_score, best_k = score, k_row
+                        best_score, best_k, best_method = score, k_row, method
 
                 if best_k is None or best_score == 0.0:
                     continue
@@ -672,9 +679,16 @@ class MarketMatcher:
                     team2=None,
                     game_date=None,
                     description=desc,
+                    match_method=best_method,
+                    kalshi_title=best_k.get("market_title") or "",
+                    poly_question=poly.get("question") or "",
                 ))
 
-        logger.info(f"Found {len(matched)} Kalshi↔Poly non-sports matched pairs")
+        matched.extend(verified)
+        logger.info(
+            f"Found {len(matched)} Kalshi↔Poly non-sports matched pairs "
+            f"({len(verified)} verified, {len(matched)-len(verified)} structured/fuzzy)"
+        )
         return matched
 
     # ------------------------------------------------------------------
@@ -792,6 +806,84 @@ class MarketMatcher:
             with self.engine.connect() as conn:
                 rows = conn.execute(query, {"liq": liq}).fetchall()
         return [dict(row._mapping) for row in rows]
+
+
+    # ------------------------------------------------------------------
+    # Verified Links Loaders
+    # ------------------------------------------------------------------
+
+    def _build_verified_matches(self) -> list["MatchedMarket"]:
+        """Build MatchedMarket objects for all approved verified_market_links with live prices."""
+        links = self._load_approved_links()
+        if not links:
+            return []
+
+        kalshi_tickers = [r['kalshi_ticker'] for r in links]
+        poly_cids      = [r['poly_condition_id'] for r in links]
+
+        kalshi_map = {r['ticker']: r for r in self._load_kalshi_by_tickers(kalshi_tickers)}
+        poly_map   = {r['condition_id']: r for r in self._load_poly_by_condition_ids(poly_cids)}
+
+        result = []
+        for link in links:
+            k = kalshi_map.get(link['kalshi_ticker'])
+            p = poly_map.get(link['poly_condition_id'])
+            if not k or not p:
+                continue   # market expired; skip silently
+            result.append(MatchedMarket(
+                kalshi_ticker=k['ticker'],
+                kalshi_yes_price=float(k.get('yes_price') or 0),
+                kalshi_no_price=float(k.get('no_price') or 0),
+                kalshi_volume=int(k.get('volume') or 0),
+                kalshi_yes_bid=float(k.get('yes_bid') or 0),
+                kalshi_yes_ask=float(k.get('yes_ask') or 0),
+                poly_condition_id=p['condition_id'],
+                poly_yes_price=float(p.get('yes_price') or 0),
+                poly_no_price=float(p.get('no_price') or 0),
+                poly_liquidity=float(p.get('liquidity') or 0),
+                poly_yes_bid=_opt_float(p.get('yes_bid')),
+                poly_yes_ask=_opt_float(p.get('yes_ask')),
+                player_id=None, player_name='', stat_type='', line=0.0, sport='',
+                match_type='text_similarity', match_confidence=1.0,
+                market_type=p.get('market_type') or 'binary',
+                description=f"[VERIFIED] {link.get('kalshi_title', '')[:60]}",
+                match_method='verified',
+                kalshi_title=link.get('kalshi_title') or '',
+                poly_question=link.get('poly_question') or '',
+            ))
+        return result
+
+    def _load_approved_links(self) -> list[dict]:
+        q = text("SELECT * FROM verified_market_links WHERE status = 'approved'")
+        with self.engine.connect() as conn:
+            return [dict(r._mapping) for r in conn.execute(q).fetchall()]
+
+    def _load_kalshi_by_tickers(self, tickers: list[str]) -> list[dict]:
+        q = text("""
+            SELECT DISTINCT ON (ticker)
+                ticker, market_title, market_type,
+                yes_price, no_price, yes_bid, yes_ask, volume
+            FROM kalshi_markets
+            WHERE ticker = ANY(:tickers)
+              AND market_status = 'open'
+              AND snapshot_time >= NOW() - INTERVAL '4 hours'
+            ORDER BY ticker, snapshot_time DESC
+        """)
+        with self.engine.connect() as conn:
+            return [dict(r._mapping) for r in conn.execute(q, {"tickers": tickers}).fetchall()]
+
+    def _load_poly_by_condition_ids(self, cids: list[str]) -> list[dict]:
+        q = text("""
+            SELECT DISTINCT ON (condition_id)
+                condition_id, question, market_type,
+                yes_price, no_price, yes_bid, yes_ask, liquidity
+            FROM polymarket_markets
+            WHERE condition_id = ANY(:cids)
+              AND market_status = 'open'
+            ORDER BY condition_id, snapshot_time DESC
+        """)
+        with self.engine.connect() as conn:
+            return [dict(r._mapping) for r in conn.execute(q, {"cids": cids}).fetchall()]
 
 
 # ---------------------------------------------------------------------------
