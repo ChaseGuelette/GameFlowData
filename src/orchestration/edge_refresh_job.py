@@ -39,6 +39,7 @@ from sqlalchemy import bindparam, create_engine, text  # noqa: E402
 
 from src.config.combo_config import MARKET_TO_STAT, STAT_TO_MARKET  # noqa: E402
 from src.models.black_litterman import BlackLittermanBlender, BLConfig  # noqa: E402
+from src.models.daily_runner import should_skip_recommendation  # noqa: E402
 from src.models.monte_carlo import derive_combo_samples  # noqa: E402
 from src.models.prediction_store import PredictionStore  # noqa: E402
 
@@ -634,53 +635,24 @@ def recalculate_edges(
 
             max_bl_edge = max(bl_over_edge, bl_under_edge)
             if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
-                # Sanity checks — must match daily_runner.py exactly
-                skip = False
                 rec_direction = "under" if bl_under_edge > bl_over_edge else "over"
                 stat = row.get("stat")
                 line_val = row.get("line")
+                feat_l5 = row.get("feat_player_avg_stat_l5")
+                pred_q50 = row.get("pred_q50")
 
-                if rec_direction == "over":
-                    # Filter: reb over with line <= 2.5 (structural -12% ROI)
-                    if stat == "reb" and pd.notna(line_val) and line_val <= 2.5:
-                        logger.debug(
-                            f"FILTER [REB_OVER_LOW]: Skipping {row.get('player_name', '?')} "
-                            f"reb over {line_val} — low-line reb overs are structurally unprofitable"
-                        )
-                        skip = True
-                    # Filter: ast over (structural -22% ROI)
-                    if not skip and stat == "ast":
-                        logger.debug(
-                            f"FILTER [AST_OVER]: Skipping {row.get('player_name', '?')} "
-                            f"ast over {line_val} — ast overs are structurally unprofitable"
-                        )
-                        skip = True
-
-                if not skip and rec_direction == "under":
-                    feat_l5 = row.get("feat_player_avg_stat_l5")
-                    pred_q50 = row.get("pred_q50")
-
-                    # Check 1: Q50 divergence
-                    if pd.notna(feat_l5) and pd.notna(pred_q50) and feat_l5 > 0:
-                        divergence = (feat_l5 - pred_q50) / feat_l5
-                        if divergence > MAX_Q50_DIVERGENCE:
-                            logger.warning(
-                                f"SANITY CHECK [Q50]: Skipping {row.get('player_name', '?')} "
-                                f"{row['stat']} under rec — Q50={pred_q50:.1f} is "
-                                f"{divergence:.0%} below L5={feat_l5:.1f}"
-                            )
-                            skip = True
-
-                    # Check 2: L5 above line
-                    if not skip and pd.notna(feat_l5) and feat_l5 > 0 and pd.notna(line_val) and line_val > 0:
-                        if feat_l5 >= line_val * (1 + L5_ABOVE_LINE_MARGIN):
-                            logger.warning(
-                                f"SANITY CHECK [L5>LINE]: Skipping {row.get('player_name', '?')} "
-                                f"{row['stat']} under rec — L5 avg={feat_l5:.1f} >= line={line_val:.1f}"
-                            )
-                            skip = True
-
-                if not skip:
+                skip, reason = should_skip_recommendation(
+                    stat=stat,
+                    direction=rec_direction,
+                    line=line_val if pd.notna(line_val) else None,
+                    feat_l5=feat_l5 if pd.notna(feat_l5) else None,
+                    pred_q50=pred_q50 if pd.notna(pred_q50) else None,
+                )
+                if skip:
+                    logger.debug(
+                        f"SKIP {row.get('player_name', '?')} {stat} {rec_direction}: {reason}"
+                    )
+                else:
                     df.at[idx, "is_recommended"] = True
                     recommended_count += 1
 
