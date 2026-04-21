@@ -15,7 +15,5 @@ if echo "$INPUT" | grep -qE '"(.*/(brain|\.claude|handoffs|memory)/)'; then
   exit 0
 fi
 
-# For code files (.py, .ts, .tsx, .js, etc.), print the nudge
-echo "REMINDER: If this is post-plan implementation (>20 lines of code), did you try GLM via OpenCode first?"
-echo "If OpenCode already failed once this session, proceed with direct edit."
+# For code files (.py, .ts, .tsx, .js, etc.) — exit silently (reminder is in CLAUDE.md)
 exit 0

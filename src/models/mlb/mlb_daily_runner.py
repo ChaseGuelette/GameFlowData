@@ -1052,6 +1052,8 @@ class MLBDailyPredictionRunner:
                     predictions_df.at[idx, "feat_opp_abbrev"] = abbrev
 
             # Stat-specific features from the feature store output
+            if player_id is None:
+                continue
             feats = features_lookup.get((player_id, game_id), {})
             if not feats:
                 continue
