@@ -3,13 +3,13 @@
 
 [phases.setup]
 nixPkgs = ["python311", "python311Packages.pip", "zlib", "stdenv.cc.cc.lib"]
-# Copy libz.so.1 from nix store to a stable path — nix store hash changes on every
-# rebuild so /root/.nix-profile/lib is unreliable at runtime.
+# Copy shared libs to /opt/lib — NOT /app/lib, because nixpacks runs
+# COPY . /app as the final build step, which wipes /app/lib.
 cmds = [
-    "mkdir -p /app/lib",
-    "bash -c 'find /nix/store -name libz.so.1 -type f | head -1 | xargs -I{} cp {} /app/lib/'",
-    "bash -c 'find /nix/store -name libstdc++.so.6 -type f | head -1 | xargs -I{} cp {} /app/lib/'",
-    "bash -c 'find /nix/store -name libgcc_s.so.1 -type f | head -1 | xargs -I{} cp {} /app/lib/'"
+    "mkdir -p /opt/lib",
+    "bash -c 'find /nix/store -name libz.so.1 -type f | head -1 | xargs -I{} cp {} /opt/lib/'",
+    "bash -c 'find /nix/store -name libstdc++.so.6 -type f | head -1 | xargs -I{} cp {} /opt/lib/'",
+    "bash -c 'find /nix/store -name libgcc_s.so.1 -type f | head -1 | xargs -I{} cp {} /opt/lib/'"
 ]
 
 [phases.install]
@@ -18,9 +18,9 @@ cmds = [
     "/app/venv/bin/python -m pip install -r requirements.txt"
 ]
 
-# /app/lib is baked into the image and stable across restarts
+# /opt/lib survives the COPY . /app step and is stable across restarts
 [variables]
-LD_LIBRARY_PATH = "/app/lib:/root/.nix-profile/lib"
+LD_LIBRARY_PATH = "/opt/lib:/root/.nix-profile/lib"
 
 [start]
 cmd = "/app/venv/bin/python src/orchestration/scheduler.py"
