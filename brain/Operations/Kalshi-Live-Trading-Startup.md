@@ -77,10 +77,10 @@ KALSHI_LIVE_KELLY_FRACTION=0.125          # 1/8 Kelly — conservative
 KALSHI_LIVE_MIN_EDGE=0.15                 # 15% fee-adjusted edge minimum
 KALSHI_LIVE_MAX_CONTRACTS=50
 
-# Shared cross-sport exposure (post-incident: hard $200 cap)
-KALSHI_DAILY_EXPOSURE_PCT=0.90            # 90% of bankroll
-KALSHI_MIN_DAILY_EXPOSURE=200             # floor = ceiling = $200
-KALSHI_MAX_DAILY_EXPOSURE=200             # hard cap shared across ALL sports
+# Dynamic exposure cap (API balance × 70%)
+KALSHI_DAILY_EXPOSURE_PCT=0.70            # 70% of live Kalshi balance
+KALSHI_MIN_DAILY_EXPOSURE=20              # floor (prevents trading on micro-balance)
+KALSHI_MAX_DAILY_EXPOSURE=1000            # safety ceiling
 
 # Edge sanity (added post-incident Apr 20)
 KALSHI_LIVE_MAX_EDGE=0.40                 # Reject edges > 40% as model garbage
@@ -109,7 +109,7 @@ KALSHI_ALLOW_YES_BETS=false
 
 | Breaker | Threshold | Action | Reset |
 |---------|-----------|--------|-------|
-| Drawdown | Balance < $300 × 0.70 = $210 | **Permanent halt** — sets `is_halted=true` in DB | Add `KALSHI_LIVE_FORCE_RESUME=true` to env, then remove |
+| Drawdown (HWM) | Portfolio < HWM × 0.70 | **Permanent halt** — sets `is_halted=true` in DB. HWM ratchets up on new portfolio highs, never down. | Add `KALSHI_LIVE_FORCE_RESUME=true` to env, then remove |
 | Daily loss | > $30 in one day | Pause until next calendar day (auto) | Automatic at midnight |
 | Consecutive losses | 5 in a row | Pause for review | Clears after next winning trade |
 

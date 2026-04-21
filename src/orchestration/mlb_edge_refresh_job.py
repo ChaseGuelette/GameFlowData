@@ -18,7 +18,6 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
@@ -228,15 +227,11 @@ def main():
                     feat_l5=float(feat_l5) if pd.notna(feat_l5) else None,
                 )
 
-                if not skip and (
-                    best_dir == "over"
-                    and pd.notna(feat_l5)
-                    and feat_l5 == 0
-                    and line_val is not None
-                    and line_val <= 0.5
-                ):
-                    skip = True
-                    reason = f"FILTER [MLB_COLD_OVER]: {stat} over {line_val} with L5=0"
+                if not skip and best_dir == "over" and line_val is not None and line_val <= 0.5:
+                    feat_l5_val = float(feat_l5) if pd.notna(feat_l5) else None
+                    if feat_l5_val is None or feat_l5_val <= 0.1:
+                        skip = True
+                        reason = f"FILTER [MLB_COLD_OVER]: {stat} over {line_val} with L5={feat_l5_val}"
 
                 if skip:
                     logger.debug(f"SKIP {row.get('player_name', '?')} {stat} {best_dir}: {reason}")
@@ -274,7 +269,7 @@ def main():
             logger.info("[DRY RUN] Skipping database upsert")
 
         # Step 7 — Log summary
-        by_stat = preds_df[preds_df["is_recommended"] == True].groupby("stat").size().to_dict()
+        by_stat = preds_df[preds_df["is_recommended"]].groupby("stat").size().to_dict()
         stat_summary = " ".join(f"{k}={v}" for k, v in sorted(by_stat.items()))
 
         elapsed = time.time() - start_time

@@ -32,6 +32,26 @@ from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL
 
 logger = logging.getLogger(__name__)
 
+# Stat → feature name mappings for _map_features_to_predictions
+_STAT_L5: dict[str, str] = {
+    "batter_rbis": "batter_avg_rbi_l5",
+    "batter_hits": "batter_avg_h_l5",
+    "batter_hrr":  "batter_avg_hrr_l5",
+    "pitcher_strikeouts": "pitcher_avg_k_l5",
+}
+_STAT_SZN: dict[str, str] = {
+    "batter_rbis": "batter_avg_rbi_szn",
+    "batter_hits": "batter_avg_h_szn",
+    "batter_hrr":  "batter_avg_hrr_szn",
+    "pitcher_strikeouts": "pitcher_avg_k_szn",
+}
+_STAT_PARK: dict[str, str | None] = {
+    "batter_rbis": "park_runs_factor",
+    "batter_hits": "park_hits_factor",
+    "batter_hrr":  "park_hr_factor",
+    "pitcher_strikeouts": None,
+}
+
 
 class MLBDailyPredictionRunner:
     """
@@ -91,6 +111,7 @@ class MLBDailyPredictionRunner:
 
         all_predictions = []
         all_samples: dict[tuple, np.ndarray] = {}
+        all_features: dict[tuple[int, int], dict] = {}
 
         # 2. Pitcher K predictions
         pitcher_stats = [s for s in stats if s.startswith("pitcher_")]
@@ -99,11 +120,12 @@ class MLBDailyPredictionRunner:
             logger.info(f"Found {len(pitchers)} probable starters")
 
             if pitchers:
-                pitcher_preds, pitcher_samples = self._run_pitcher_predictions(
+                pitcher_preds, pitcher_samples, pitcher_feats = self._run_pitcher_predictions(
                     pitchers, target_date, pitcher_stats
                 )
                 all_predictions.extend(pitcher_preds)
                 all_samples.update(pitcher_samples)
+                all_features.update(pitcher_feats)
 
         # 3. Batter predictions
         batter_stats = [s for s in stats if s.startswith("batter_")]
@@ -117,11 +139,12 @@ class MLBDailyPredictionRunner:
             logger.info(f"Found {len(batters)} active batters")
 
             if batters:
-                batter_preds, batter_samples = self._run_batter_predictions(
+                batter_preds, batter_samples, batter_feats = self._run_batter_predictions(
                     batters, target_date, batter_stats
                 )
                 all_predictions.extend(batter_preds)
                 all_samples.update(batter_samples)
+                all_features.update(batter_feats)
 
         if not all_predictions:
             logger.warning("No MLB predictions generated")
@@ -143,7 +166,7 @@ class MLBDailyPredictionRunner:
         predictions_df = self._compute_bl_recommendations(predictions_df, all_samples)
 
         # 7. Map feature values to predictions
-        predictions_df = self._map_features_to_predictions(predictions_df, games)
+        predictions_df = self._map_features_to_predictions(predictions_df, games, all_features)
 
         return predictions_df, all_samples
 
@@ -362,7 +385,7 @@ class MLBDailyPredictionRunner:
         pitchers: list[dict],
         target_date: date,
         stats: list[str],
-    ) -> tuple[list[dict], dict[tuple, np.ndarray]]:
+    ) -> tuple[list[dict], dict[tuple, np.ndarray], dict[tuple[int, int], dict]]:
         """Generate pitcher K predictions using MC predictor."""
         start_time = time.perf_counter()
         predictions = []
@@ -405,6 +428,11 @@ class MLBDailyPredictionRunner:
                 if features is not None:
                     pitcher_features.append((pitcher, features))
 
+        # Build features lookup keyed by (player_id, game_id)
+        features_lookup: dict[tuple[int, int], dict] = {
+            (p["player_id"], p["game_id"]): f for p, f in pitcher_features
+        }
+
         # Batch predict
         if pitcher_features and "pitcher_strikeouts" in stats:
             player_games = [
@@ -442,14 +470,14 @@ class MLBDailyPredictionRunner:
             f"({len(pitcher_features)} pitchers with features)"
         )
 
-        return predictions, samples_dict
+        return predictions, samples_dict, features_lookup
 
     def _run_batter_predictions(
         self,
         batters: list[dict],
         target_date: date,
         stats: list[str],
-    ) -> tuple[list[dict], dict[tuple, np.ndarray]]:
+    ) -> tuple[list[dict], dict[tuple, np.ndarray], dict[tuple[int, int], dict]]:
         """Generate batter predictions via NegBin/binary dispatch through suite."""
         start_time = time.perf_counter()
         predictions = []
@@ -461,13 +489,15 @@ class MLBDailyPredictionRunner:
         else:
             available_batter = []
 
+        features_lookup: dict[tuple[int, int], dict] = {}
+
         if not available_batter:
             logger.info("No batter models loaded — skipping batter predictions")
-            return predictions, samples_dict
+            return predictions, samples_dict, features_lookup
 
         if self.batter_feature_store is None:
             logger.warning("No batter feature store — skipping batter predictions")
-            return predictions, samples_dict
+            return predictions, samples_dict, features_lookup
 
         logger.info(
             "Building batter features for %d batters, stats=%s",
@@ -511,6 +541,10 @@ class MLBDailyPredictionRunner:
         logger.info(
             "Batter features built for %d/%d batters", len(batter_features), len(batters)
         )
+
+        # Build features lookup keyed by (player_id, game_id)
+        for batter, feats in batter_features:
+            features_lookup[(batter["player_id"], batter["game_id"])] = feats
 
         # Bulk-fetch all batter prop lines so each stat gets its correct line.
         # The base features were built with stat="hits", so only prop_line_batter_hits
@@ -587,7 +621,7 @@ class MLBDailyPredictionRunner:
             len(predictions), elapsed, len(batter_features), len(available_batter),
         )
 
-        return predictions, samples_dict
+        return predictions, samples_dict, features_lookup
 
     def _bulk_fetch_batter_prop_lines(
         self,
@@ -914,16 +948,12 @@ class MLBDailyPredictionRunner:
                         feat_l5=float(feat_l5) if pd.notna(feat_l5) else None,
                     )
 
-                    # MLB-specific: cold player over a low line
-                    if not skip and (
-                        best_dir == "over"
-                        and pd.notna(feat_l5)
-                        and feat_l5 == 0
-                        and line_val is not None
-                        and line_val <= 0.5
-                    ):
-                        skip = True
-                        reason = f"FILTER [MLB_COLD_OVER]: {stat} over {line_val} with L5=0"
+                    # MLB-specific: cold player over a low line (also catches NULL feat_l5)
+                    if not skip and best_dir == "over" and line_val is not None and line_val <= 0.5:
+                        feat_l5_val = float(feat_l5) if pd.notna(feat_l5) else None
+                        if feat_l5_val is None or feat_l5_val <= 0.1:
+                            skip = True
+                            reason = f"FILTER [MLB_COLD_OVER]: {stat} over {line_val} with L5={feat_l5_val}"
 
                     if skip:
                         logger.debug(
@@ -940,14 +970,36 @@ class MLBDailyPredictionRunner:
             f"{recommended_count} recommended (per-stat edge thresholds)"
         )
 
+        # Apply per-stat daily bet caps — keep highest-edge picks only
+        for stat_key, stat_cfg in MLB_STATS.items():
+            max_bets = stat_cfg.get("max_daily_bets")
+            if max_bets is None:
+                continue
+            stat_rec_mask = (predictions_df["stat"] == stat_key) & predictions_df["is_recommended"]
+            n_recs = int(stat_rec_mask.sum())
+            if n_recs <= max_bets:
+                continue
+            # Best edge for each recommended pick = max(over_edge, under_edge)
+            best_edges = predictions_df.loc[stat_rec_mask, ["bl_over_edge", "bl_under_edge"]].max(axis=1)
+            keep_idx = best_edges.nlargest(max_bets).index
+            drop_idx = best_edges.index.difference(keep_idx)
+            predictions_df.loc[drop_idx, "is_recommended"] = False
+            logger.info(
+                "MLB daily cap [%s]: kept %d / %d recs (cap=%d)",
+                stat_key, max_bets, n_recs, max_bets,
+            )
+
         return predictions_df
 
     def _map_features_to_predictions(
         self,
         predictions_df: pd.DataFrame,
         games: list[dict],
+        features_lookup: dict[tuple[int, int], dict] | None = None,
     ) -> pd.DataFrame:
         """Map feature values to predictions for dashboard insights."""
+        features_lookup = features_lookup or {}
+
         # Build opponent abbreviation lookup from games
         game_opp_abbrev: dict[tuple[int, int], str] = {}
         for g in games:
@@ -967,13 +1019,59 @@ class MLBDailyPredictionRunner:
             if col not in predictions_df.columns:
                 predictions_df[col] = None
 
-        # Populate opp_abbrev from games data
+        populated = 0
         for idx, row in predictions_df.iterrows():
+            player_id = row.get("player_id")
             game_id = int(row["game_id"])
             team_id = row.get("team_id")
+            stat = row.get("stat", "")
+
+            # opp_abbrev from games data
             if team_id:
                 abbrev = game_opp_abbrev.get((game_id, int(team_id)))
                 if abbrev:
                     predictions_df.at[idx, "feat_opp_abbrev"] = abbrev
 
+            # Stat-specific features from the feature store output
+            feats = features_lookup.get((player_id, game_id), {})
+            if not feats:
+                continue
+
+            # L5 average
+            l5_key = _STAT_L5.get(stat)
+            if l5_key:
+                val = feats.get(l5_key)
+                if val is not None:
+                    predictions_df.at[idx, "feat_player_avg_stat_l5"] = float(val)
+
+            # Season average
+            szn_key = _STAT_SZN.get(stat)
+            if szn_key:
+                val = feats.get(szn_key)
+                if val is not None:
+                    predictions_df.at[idx, "feat_player_avg_stat_szn"] = float(val)
+
+            # Park factor
+            park_key = _STAT_PARK.get(stat)
+            if park_key:
+                val = feats.get(park_key)
+                if val is not None:
+                    predictions_df.at[idx, "feat_park_factor"] = float(val)
+
+            # Rest days (batter or pitcher key)
+            rest = feats.get("batter_rest_days") or feats.get("pitcher_rest_days")
+            if rest is not None:
+                predictions_df.at[idx, "feat_days_rest"] = float(rest)
+
+            # Lineup position (batters only)
+            lineup = feats.get("lineup_position")
+            if lineup is not None:
+                predictions_df.at[idx, "feat_lineup_position"] = float(lineup)
+
+            populated += 1
+
+        logger.info(
+            "Feature mapping: populated feat_ columns for %d/%d predictions",
+            populated, len(predictions_df),
+        )
         return predictions_df

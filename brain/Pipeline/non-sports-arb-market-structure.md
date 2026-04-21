@@ -224,7 +224,25 @@ Korean and Spanish-romanized names share enough characters to score ≥ 0.50 (e.
 
 ---
 
-## 9. Next Expansion: Finance, Entertainment, SCOTUS
+## 9. Two-Track Architecture — IMPLEMENTED Apr 21 2026
+
+All non-sports matches are now tagged with `match_method` in `MatchedMarket`:
+- **`'structured'`** — both sides extracted cleanly via `non_sports_extractor.py` (KXGDP/KXFED/KXCPI)
+- **`'fuzzy'`** — SequenceMatcher fallback (elections, politics, any failed extraction)
+- **`'verified'`** — human-approved pairs loaded from `verified_market_links` table
+
+**Track A** (trustworthy, flows to `arb_opportunities`): `structured` + `verified`
+**Track B** (discovery queue): `fuzzy` → written to `verified_market_links` as `status='pending'`
+
+**Dashboard**: Queue tab on `/arb-scanner` page. Pending matches show Kalshi Title / Poly Question / confidence score, with Approve / Reject buttons. Approved matches become Track A on the next scan cycle.
+
+**Scheduler**: `--skip-paper` flag stays on the Railway non-sports job — Track A matches detect arbs but don't paper trade yet. Enable by removing `--skip-paper` once signal quality confirmed.
+
+**DB table**: `verified_market_links` — unique on `(kalshi_ticker, poly_condition_id)`. `ON CONFLICT DO NOTHING` preserves prior review decisions. `_build_verified_matches()` in `MarketMatcher` loads all `status='approved'` rows with live prices at scan time.
+
+---
+
+## 10. Next Expansion: Finance, Entertainment, SCOTUS
 
 From the full Kalshi universe audit (Section 7), remaining high-value matchable categories:
 

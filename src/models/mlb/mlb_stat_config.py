@@ -16,14 +16,15 @@ from src.models.black_litterman import BLConfig
 MLB_STATS: dict[str, dict] = {
     # Quantile regression stats (semi-continuous)
     # Pitcher K: both directions. Backtest #417: 174 bets, 63.2% win, +24.0% ROI, Sharpe 2.78
-    "pitcher_strikeouts": {"model_type": "quantile", "edge_threshold": 0.12},
+    "pitcher_strikeouts": {"model_type": "quantile", "edge_threshold": 0.12, "max_daily_bets": 10},
     "pitcher_outs": {"model_type": "quantile", "edge_threshold": 0.08},
     # Binomial stats (hits in at-bats — underdispersed)
     # Hits: both directions. Backtest #475: 361 bets, 63.2% win, +28.1% ROI, Sharpe 2.20
-    "batter_hits": {"model_type": "binomial", "edge_threshold": 0.10},
+    "batter_hits": {"model_type": "binomial", "edge_threshold": 0.10, "max_daily_bets": 15},
     # NegBin stats (discrete counts — overdispersed)
     # RBIs: both directions, no BL. Backtest #5: 241 bets, 64.7% win, +9.5% ROI, Sharpe 1.36
-    "batter_rbis": {"model_type": "negbin", "edge_threshold": 0.12},
+    # max_daily_bets=8: cap at 3x backtest avg (2.65/day) — volume anomaly guard
+    "batter_rbis": {"model_type": "negbin", "edge_threshold": 0.12, "max_daily_bets": 8},
     # Combined batter offensive contribution: hits + runs scored + RBIs
     # No HRR prop lines in sportsbook data — Kalshi KXMLBHRR only
     "batter_hrr": {"model_type": "negbin", "edge_threshold": 0.15},

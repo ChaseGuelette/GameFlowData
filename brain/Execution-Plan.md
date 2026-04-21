@@ -193,5 +193,23 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 | 9.4 | Cross-platform market matcher: non-sports | completed | 9.2 | Session 36: Elections + Politics expansion complete. Dynamic category-scrape mode: `_CAT_ELECTIONS` (649 series, ~4,769 markets) + `_CAT_POLITICS` (332 series, ~1,470 markets) discovered at runtime via `list_all_events`. Per-config `fallback_threshold=0.65`, `min_kalshi_volume` (5000 elections / 500 politics), `min_poly_liquidity` (50000 / 5000). Candidate name disambiguation in fuzzy fallback (name_sim ≥ 0.65, structural mismatch check). 144 matched pairs, scan in ~2 min. Diagnostic: `scripts/inspect_nonsports_matches.py`. **False positive fixes applied**: (1) GDP country mismatch — `_parse_gdp_country()` + `country` field in `MarketFields` + check in `match_score()`, (2) same-race placement — `_extract_placement()` + rank check in fuzzy fallback. Running on Railway. Next: add `_CAT_FINANCE` / `_CAT_ENTERTAINMENT` / `_CAT_SCOTUS`. |
 | 9.5 | Arb paper trader | completed | 9.3 | `arb_paper_bets` + `arb_paper_trading_daily_log` tables, `ArbPaperTrader` class, resolution via outcome. 70 bets placed, 8 resolved with profit. |
 | 9.6 | Arb dashboard page | completed | 9.3, 9.4 | `/arb-scanner` admin-only page: 4 summary cards (P&L, win rate, active bets, 24h detected), sortable paper bets table, daily P&L log tab, date range filter. Navbar "Arb" link added. RLS authenticated_read policies applied to both arb tables. |
+| 9.7 | Two-track non-sports arb system | completed | 9.4, 9.6 | Fuzzy matches (SequenceMatcher) no longer enter `arb_opportunities` directly. New `verified_market_links` table (DB migration applied). `MatchedMarket` extended with `match_method`/`kalshi_title`/`poly_question`. `arb_scanner.py` splits non-sports output: Track A (structured + verified) → arb detection; Track B (fuzzy) → `verified_market_links` queue. `_build_verified_matches()` loads approved links with live prices. Dashboard: Queue tab + `MatchQueueTable` component + `POST /api/arb/verify` approve/reject API. TypeScript clean. See [[handoff-018]]. |
 
 **Done when**: Scanner ingesting all Polymarket categories, matching on sports futures + NRFI + non-sports, paper trader tracking simulated P&L, results visible on dashboard.
+
+---
+
+## Phase 10: Manual Paper Trader
+
+**Goal**: Let users paper-trade against real sportsbook lines from the dashboard with one click — bets logged to history, auto-resolved when game results land, P&L tracked per bet and in aggregate.
+
+| Step | Task | Status | Dependencies | Details |
+|------|------|--------|--------------|---------|
+| 10.1 | DB migration — `is_paper_trade` column | not_started | None | `ALTER TABLE user_bets ADD COLUMN is_paper_trade boolean NOT NULL DEFAULT false`. No new table needed — reuses all existing schema. |
+| 10.2 | AnalysisModal — Paper Trade button | not_started | 10.1 | Add "Paper Trade" button alongside existing "Take Bet". Same `placeBetCustom()` flow with `is_paper_trade: true`. Stake auto-fills from Kelly recommendation (no manual entry). |
+| 10.3 | History tab — Real/Paper toggle + P&L column | not_started | 10.1 | "My Bets" tab gets `All | Real | Paper` filter toggle. Paper rows show `PAPER` badge. Add P&L column (computed from `result` + `stake` + `odds_at_bet`). |
+| 10.4 | Python resolver — `resolve_user_paper_bets.py` | not_started | 10.1 | New file `src/processing/resolve_user_paper_bets.py`. Finds paper bets where `result IS NULL` and `game_date <= today`. Joins `player_game_stats` on player_id + game_date, checks actual stat vs line + side → won/lost/push. Computes PnL from American odds. |
+| 10.5 | Wire resolver into scheduler | not_started | 10.4 | Add `resolve_user_paper_bets` call to daily stats job in `scheduler.py` (after stats scrape, ~9:30 AM ET). |
+| 10.6 | P&L summary card on History tab | not_started | 10.3 | When "Paper" filter active: show summary banner — Bets, Win Rate, Total P&L (simulated), ROI, Avg Edge. |
+
+**Done when**: User can click "Paper Trade" on any pick, see it in history with auto-resolved result and P&L, with aggregate stats visible at a glance.
