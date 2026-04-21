@@ -943,6 +943,14 @@ def main():
         name="MLB Edge Refresh (4:30 PM ET)",
     )
 
+    # TEMPORARY TEST JOB — remove after verifying inference fix — TODO DELETE
+    scheduler.add_job(
+        run_mlb_inference,
+        CronTrigger(hour=14, minute=5, timezone=ET),
+        id="mlb_inference_test",
+        name="MLB Inference TEST (2:05 PM ET)",
+    )
+
     # ==============================================================
     # Kalshi Prediction Markets
     # ==============================================================
