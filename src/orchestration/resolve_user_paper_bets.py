@@ -81,6 +81,7 @@ def compute_pnl(stake: float, odds: float, outcome: str) -> float:
 def resolve_paper_bets(dry_run: bool = False) -> dict:
     """Main resolution logic."""
     from sqlalchemy import text
+
     from src.db.client import get_engine
 
     engine = get_engine()

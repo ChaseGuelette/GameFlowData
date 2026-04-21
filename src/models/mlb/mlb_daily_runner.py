@@ -873,22 +873,32 @@ class MLBDailyPredictionRunner:
         recommended_count = 0
 
         for idx, row in predictions_df.iterrows():
-            if pd.isna(row.get("line")) or pd.isna(row.get("over_odds")) or pd.isna(row.get("under_odds")):
+            line_val = row.get("line")
+            over_val = row.get("over_odds")
+            under_val = row.get("under_odds")
+            if line_val is None or over_val is None or under_val is None:
+                continue
+            if bool(pd.isna(line_val)) or bool(pd.isna(over_val)) or bool(pd.isna(under_val)):
                 continue
 
-            key = (row["player_id"], int(row["game_id"]), row["stat"])
+            # Extract scalars explicitly — iterrows() returns broad types in Pyright
+            stat: str = str(row["stat"])
+            game_id_scalar: int = int(float(str(row["game_id"])))
+            player_id_scalar = row["player_id"]
+
+            key = (player_id_scalar, game_id_scalar, stat)
             samples = samples_dict.get(key)
 
             if samples is None or len(samples) == 0:
                 continue
 
-            stat = row["stat"]
             blender = stat_blenders.get(stat, default_blender)
+
+            line_raw = float(line_val)  # line_val already validated non-None/NaN above
 
             if blender is None:
                 # No BL — use raw model probability (empirical CDF from samples)
-                line = row["line"]
-                posterior_over = float((samples > line).mean())
+                posterior_over = float((samples > line_raw).mean())
                 posterior_under = 1.0 - posterior_over
                 predictions_df.at[idx, "bl_over_prob"] = posterior_over
                 predictions_df.at[idx, "bl_under_prob"] = posterior_under
@@ -896,9 +906,9 @@ class MLBDailyPredictionRunner:
             else:
                 bl_result = blender.blend_prediction(
                     samples=samples,
-                    line=row["line"],
-                    over_odds=row["over_odds"],
-                    under_odds=row["under_odds"],
+                    line=line_raw,
+                    over_odds=float(over_val),
+                    under_odds=float(under_val),
                 )
                 posterior_over = bl_result["posterior_over"]
                 posterior_under = bl_result["posterior_under"]
@@ -906,12 +916,16 @@ class MLBDailyPredictionRunner:
                 predictions_df.at[idx, "bl_under_prob"] = posterior_under
                 predictions_df.at[idx, "bl_confidence"] = bl_result["confidence"]
 
-            implied_over = row.get("implied_over")
-            implied_under = row.get("implied_under")
+            implied_over_raw = row.get("implied_over")
+            implied_under_raw = row.get("implied_under")
+            implied_over_valid = implied_over_raw is not None and bool(pd.notna(implied_over_raw))
+            implied_under_valid = implied_under_raw is not None and bool(pd.notna(implied_under_raw))
 
-            if pd.notna(implied_over) and pd.notna(implied_under):
-                bl_over_edge = posterior_over - implied_over
-                bl_under_edge = posterior_under - implied_under
+            if implied_over_valid and implied_under_valid:
+                implied_over_f = float(implied_over_raw)  # type: ignore[arg-type]
+                implied_under_f = float(implied_under_raw)  # type: ignore[arg-type]
+                bl_over_edge = posterior_over - implied_over_f
+                bl_under_edge = posterior_under - implied_under_f
 
                 predictions_df.at[idx, "bl_over_edge"] = bl_over_edge
                 predictions_df.at[idx, "bl_under_edge"] = bl_under_edge
@@ -936,29 +950,27 @@ class MLBDailyPredictionRunner:
                         best_edge = -1  # No allowed direction has edge
 
                 if best_edge >= edge_threshold:
-                    line_val = float(row["line"]) if pd.notna(row.get("line")) else None
-                    feat_l5 = row.get("feat_player_avg_stat_l5")
+                    feat_l5_raw = row.get("feat_player_avg_stat_l5")
+                    feat_l5: float | None = float(feat_l5_raw) if feat_l5_raw is not None and bool(pd.notna(feat_l5_raw)) else None  # type: ignore[arg-type]
 
                     # Shared structural filters (NBA filters are no-ops for MLB stats,
                     # but future MLB filters added here will propagate automatically)
                     skip, reason = should_skip_recommendation(
                         stat=stat,
                         direction=best_dir,
-                        line=line_val,
-                        feat_l5=float(feat_l5) if pd.notna(feat_l5) else None,
+                        line=line_raw,
+                        feat_l5=feat_l5,
                     )
 
                     # MLB-specific: cold player over a low line (also catches NULL feat_l5)
-                    if not skip and best_dir == "over" and line_val is not None and line_val <= 0.5:
-                        feat_l5_val = float(feat_l5) if pd.notna(feat_l5) else None
-                        if feat_l5_val is None or feat_l5_val <= 0.1:
+                    if not skip and best_dir == "over" and line_raw <= 0.5:
+                        if feat_l5 is None or feat_l5 <= 0.1:
                             skip = True
-                            reason = f"FILTER [MLB_COLD_OVER]: {stat} over {line_val} with L5={feat_l5_val}"
+                            reason = f"FILTER [MLB_COLD_OVER]: {stat} over {line_raw} with L5={feat_l5}"
 
                     if skip:
-                        logger.debug(
-                            f"SKIP {row.get('player_name', '?')} {stat} {best_dir}: {reason}"
-                        )
+                        player_name = str(row.get("player_name") or "?")
+                        logger.debug(f"SKIP {player_name} {stat} {best_dir}: {reason}")
                     else:
                         predictions_df.at[idx, "is_recommended"] = True
                         recommended_count += 1
@@ -1025,14 +1037,17 @@ class MLBDailyPredictionRunner:
 
         populated = 0
         for idx, row in predictions_df.iterrows():
-            player_id = row.get("player_id")
-            game_id = int(row["game_id"])
-            team_id = row.get("team_id")
-            stat = row.get("stat", "")
+            # Extract scalars explicitly — iterrows() returns broad types in Pyright
+            player_id_raw = row.get("player_id")
+            player_id: int | None = int(player_id_raw) if player_id_raw is not None else None  # type: ignore[arg-type]
+            game_id: int = int(float(str(row["game_id"])))
+            team_id_raw = row.get("team_id")
+            stat: str = str(row.get("stat") or "")
 
             # opp_abbrev from games data
-            if team_id:
-                abbrev = game_opp_abbrev.get((game_id, int(team_id)))
+            if team_id_raw is not None:
+                team_id_int = int(float(str(team_id_raw)))
+                abbrev = game_opp_abbrev.get((game_id, team_id_int))
                 if abbrev:
                     predictions_df.at[idx, "feat_opp_abbrev"] = abbrev
 
