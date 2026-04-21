@@ -167,6 +167,7 @@ export interface PaperBet {
   bet_context?: BetContext | null
   user_confidence?: number | null
   placed_at?: string | null
+  is_paper_trade?: boolean
 }
 
 export interface DailyPerformance {

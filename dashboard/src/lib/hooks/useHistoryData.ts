@@ -78,7 +78,7 @@ async function fetchMyBets(
 
   const { data, error } = await supabase
     .from('user_bets')
-    .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet, team_abbrev, opponent_abbrev, bet_context, user_confidence, placed_at')
+    .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet, team_abbrev, opponent_abbrev, bet_context, user_confidence, placed_at, is_paper_trade')
     .in('stat_type', statTypes)
     .gte('game_date', startDate)
     .lte('game_date', endDate)
@@ -106,6 +106,7 @@ async function fetchMyBets(
     bet_context: row.bet_context ?? null,
     user_confidence: row.user_confidence ?? null,
     placed_at: row.placed_at ?? null,
+    is_paper_trade: row.is_paper_trade ?? false,
   })) as PaperBet[]
 }
 

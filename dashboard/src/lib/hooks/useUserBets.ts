@@ -14,6 +14,7 @@ export interface PlaceBetCustomParams {
   edge: number
   betContext?: BetContext
   userConfidence?: number | null
+  isPaperTrade?: boolean
 }
 
 /**
@@ -25,7 +26,7 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { prediction, book, odds, line, stake, direction, modelProb, edge, betContext, userConfidence } = params
+  const { prediction, book, odds, line, stake, direction, modelProb, edge, betContext, userConfidence, isPaperTrade } = params
 
   const baseRow = {
     user_id: user.id,
@@ -41,6 +42,29 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
     model_prob: modelProb,
     edge,
     stake,
+  }
+
+  // Paper trades use insert (no conflict detection needed — both real + paper can coexist)
+  if (isPaperTrade) {
+    const { data, error } = await supabase
+      .from('user_bets')
+      .insert({
+        ...baseRow,
+        team_abbrev: prediction.team_abbrev ?? null,
+        opponent_abbrev: prediction.opponent_abbrev ?? null,
+        bet_context: betContext ?? null,
+        user_confidence: userConfidence ?? null,
+        is_paper_trade: true,
+        source: 'paper_trade',
+      })
+      .select('id')
+      .single()
+
+    if (error) {
+      console.error('Failed to place paper trade:', error)
+      return null
+    }
+    return data
   }
 
   // Try with all columns first, fall back progressively if migrations not applied

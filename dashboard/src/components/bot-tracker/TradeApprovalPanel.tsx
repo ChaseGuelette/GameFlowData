@@ -4,6 +4,9 @@ import { useState, useEffect, useMemo } from 'react'
 import { useTradeQueue, useTradeApproval } from '@/lib/hooks/useTradeQueue'
 import { KALSHI_STAT_LABELS } from '@/types/bot-tracker'
 import type { KalshiTradeQueueItem } from '@/types/bot-tracker'
+import { createClient } from '@/lib/supabase/client'
+import { AnalysisModal } from '@/components/analysis/AnalysisModal'
+import type { Prediction } from '@/types/predictions'
 
 function TimeRemaining({ expiresAt }: { expiresAt: string }) {
   const [remaining, setRemaining] = useState('')
@@ -36,10 +39,12 @@ function TradeRow({
   trade,
   selected,
   onToggle,
+  onAnalyze,
 }: {
   trade: KalshiTradeQueueItem
   selected: boolean
   onToggle: (id: number) => void
+  onAnalyze: (trade: KalshiTradeQueueItem) => void
 }) {
   return (
     <tr className="hover:bg-slate-700/30">
@@ -58,7 +63,14 @@ function TradeRow({
           {trade.sport.toUpperCase()}
         </span>
       </td>
-      <td className="px-3 py-2 text-slate-200 font-medium">{trade.player_name ?? '—'}</td>
+      <td className="px-3 py-2">
+        <button
+          onClick={() => onAnalyze(trade)}
+          className="text-slate-200 font-medium hover:text-blue-400 hover:underline transition-colors text-left"
+        >
+          {trade.player_name ?? '—'}
+        </button>
+      </td>
       <td className="px-3 py-2 text-slate-300">{KALSHI_STAT_LABELS[trade.stat_type] ?? trade.stat_type}</td>
       <td className="px-3 py-2 text-slate-300">{Number(trade.line)}</td>
       <td className="px-3 py-2">
@@ -74,6 +86,17 @@ function TradeRow({
       <td className="px-3 py-2">
         <TimeRemaining expiresAt={trade.expires_at} />
       </td>
+      <td className="px-3 py-2">
+        <a
+          href={`https://kalshi.com/markets/${trade.ticker.split('-')[0]}/${trade.ticker}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-slate-400 hover:text-blue-400 transition-colors"
+          title="View on Kalshi"
+        >
+          ↗
+        </a>
+      </td>
     </tr>
   )
 }
@@ -83,6 +106,37 @@ export function TradeApprovalPanel() {
   const { approve, reject, approveAll } = useTradeApproval()
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [sportFilter, setSportFilter] = useState<string>('all')
+  const [selectedPrediction, setSelectedPrediction] = useState<Prediction | null>(null)
+  const [predLoading, setPredLoading] = useState(false)
+
+  async function handleAnalyze(trade: KalshiTradeQueueItem) {
+    if (!trade.player_id) return
+    setPredLoading(true)
+    const supabase = createClient()
+    const table = trade.sport === 'mlb' ? 'mlb_daily_predictions' : 'daily_predictions'
+    const { data, error } = await supabase
+      .from(table)
+      .select('*')
+      .eq('prediction_date', trade.game_date)
+      .eq('player_id', trade.player_id)
+      .eq('stat', trade.stat_type)
+      .single()
+    setPredLoading(false)
+    if (error || !data) return
+    setSelectedPrediction({
+      ...data,
+      prop_line: data.line,
+      model_prob_over: data.over_prob,
+      model_prob_under: data.under_prob,
+      implied_prob_over: data.implied_over,
+      implied_prob_under: data.implied_under,
+      q10: data.pred_q10,
+      q25: data.pred_q25,
+      q50: data.pred_q50,
+      q75: data.pred_q75,
+      q90: data.pred_q90,
+    } as Prediction)
+  }
 
   // Prune stale selections — trades that disappeared (expired/approved) get dropped.
   // No useEffect needed; computed inline on each render.
@@ -199,6 +253,7 @@ export function TradeApprovalPanel() {
               <th className="px-3 py-2">Cost</th>
               <th className="px-3 py-2">Edge</th>
               <th className="px-3 py-2">Expires</th>
+              <th className="px-3 py-2">Link</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50">
@@ -208,6 +263,7 @@ export function TradeApprovalPanel() {
                 trade={trade}
                 selected={validSelected.has(trade.id)}
                 onToggle={toggleOne}
+                onAnalyze={handleAnalyze}
               />
             ))}
           </tbody>
@@ -229,6 +285,17 @@ export function TradeApprovalPanel() {
         <div className="px-4 py-2 bg-red-500/10 text-red-400 text-xs">
           Error: {(approve.error ?? reject.error ?? approveAll.error)?.message}
         </div>
+      )}
+      {predLoading && (
+        <div className="px-4 py-2 bg-slate-700/50 text-slate-400 text-xs">
+          Loading player analysis...
+        </div>
+      )}
+      {selectedPrediction && (
+        <AnalysisModal
+          prediction={selectedPrediction}
+          onClose={() => setSelectedPrediction(null)}
+        />
       )}
     </div>
   )

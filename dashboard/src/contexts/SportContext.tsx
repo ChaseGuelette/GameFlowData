@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useMemo, useEffect, type ReactNode } from 'react'
 import { type Sport, type SportConfig, getSportConfig } from '@/lib/sport-config'
 
 interface SportContextValue {
@@ -11,15 +11,15 @@ interface SportContextValue {
 
 const SportContext = createContext<SportContextValue | null>(null)
 
-function getInitialSport(): Sport {
-  if (typeof window === 'undefined') return 'nba'
-  const stored = localStorage.getItem('selectedSport')
-  if (stored === 'nba' || stored === 'mlb') return stored
-  return 'nba'
-}
-
 export function SportProvider({ children }: { children: ReactNode }) {
-  const [sport, setSportRaw] = useState<Sport>(getInitialSport)
+  // Always initialize to 'nba' so server and first client render match.
+  // After hydration, read localStorage and update if the user had a different sport saved.
+  const [sport, setSportRaw] = useState<Sport>('nba')
+
+  useEffect(() => {
+    const stored = localStorage.getItem('selectedSport')
+    if (stored === 'nba' || stored === 'mlb') setSportRaw(stored)
+  }, [])
 
   const setSport = useCallback((s: Sport) => {
     setSportRaw(s)

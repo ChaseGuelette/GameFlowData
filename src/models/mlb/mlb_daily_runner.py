@@ -980,7 +980,11 @@ class MLBDailyPredictionRunner:
             if n_recs <= max_bets:
                 continue
             # Best edge for each recommended pick = max(over_edge, under_edge)
-            best_edges = predictions_df.loc[stat_rec_mask, ["bl_over_edge", "bl_under_edge"]].max(axis=1)
+            best_edges = (
+                predictions_df.loc[stat_rec_mask, ["bl_over_edge", "bl_under_edge"]]
+                .apply(pd.to_numeric, errors="coerce")
+                .max(axis=1)
+            )
             keep_idx = best_edges.nlargest(max_bets).index
             drop_idx = best_edges.index.difference(keep_idx)
             predictions_df.loc[drop_idx, "is_recommended"] = False

@@ -73,6 +73,11 @@ export function BetCard({ bet, onRemove, onEdit }: BetCardProps) {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {bet.is_paper_trade && (
+            <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 border border-blue-700/50 font-medium">
+              PAPER
+            </span>
+          )}
           {/* Inline confidence stars on collapsed view */}
           {bet.user_confidence && !expanded && (
             <div className="flex gap-0.5">

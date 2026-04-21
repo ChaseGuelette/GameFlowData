@@ -38,6 +38,10 @@ from src.scrapers.kalshi.kalshi_utils import fee_adjusted_edge, kalshi_taker_fee
 
 logger = logging.getLogger(__name__)
 
+# When two lines for the same player+stat are within this edge gap,
+# prefer the line closest to the sportsbook consensus (more reliable signal).
+_LINE_TIEBREAK_THRESHOLD = 0.03  # 3 percentage points
+
 # Supported stat types per sport (skip markets without trained models)
 SUPPORTED_STATS: dict[str, set[str]] = {
     "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
@@ -513,14 +517,37 @@ class KalshiLiveTrader:
                 if _direction not in _allowed:
                     continue
 
+            # Sportsbook-proximity tiebreaker
+            sb_line = float(row["sportsbook_consensus_line"]) if pd.notna(row.get("sportsbook_consensus_line")) else None
+            kalshi_line = float(row["line"])
+            sb_dist = abs(kalshi_line - sb_line) if sb_line is not None else float("inf")
+
             # Same-run dedup: keep best edge per (player_id, stat_type)
-            if pos_key in run_candidates and edge <= run_candidates[pos_key]["fee_adjusted_edge"]:
-                continue
+            if pos_key in run_candidates:
+                existing = run_candidates[pos_key]
+                existing_edge = existing["fee_adjusted_edge"]
+                edge_gap = edge - existing_edge  # positive = new is better
+                if edge_gap > _LINE_TIEBREAK_THRESHOLD:
+                    pass  # new candidate clearly better — replace
+                elif edge_gap >= -_LINE_TIEBREAK_THRESHOLD:
+                    # Edges within threshold — prefer sportsbook-aligned line
+                    if sb_dist >= existing.get("sb_dist", float("inf")):
+                        continue  # existing is closer to sportsbook, keep it
+                    # else: new candidate is closer to sportsbook, replace
+                    logger.info(
+                        f"Line tiebreak: {row['player_name']} {stat_type} — "
+                        f"replacing {existing['line']} (edge={existing_edge:.3f}, sb_dist={existing.get('sb_dist', float('inf')):.1f}) "
+                        f"with {kalshi_line} (edge={edge:.3f}, sb_dist={sb_dist:.1f}) "
+                        f"[gap={edge_gap:.3f}]"
+                    )
+                else:
+                    continue  # existing candidate is clearly better
 
             run_candidates[pos_key] = {
                 "ticker": row["ticker"],
                 "player_name": row["player_name"],
-                "line": float(row["line"]),
+                "line": kalshi_line,
+                "sb_dist": sb_dist,
                 "side": side,
                 "yes_price": yes_price,
                 "model_prob": model_prob,

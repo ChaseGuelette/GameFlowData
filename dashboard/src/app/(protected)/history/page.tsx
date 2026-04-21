@@ -23,6 +23,7 @@ interface PaperBetWithRecommended extends PaperBet {
 
 type HistoryTab = 'my_bets' | 'model_history' | 'dfs_entries' | 'mlb_model'
 type DatePreset = '7d' | '30d' | '90d' | 'all' | 'lifetime'
+type PaperTradeFilter = 'all' | 'real' | 'paper'
 
 function getDefaultStartDate(): string {
   const d = new Date()
@@ -55,6 +56,7 @@ export default function HistoryPage() {
   const [myBetsFilter, setMyBetsFilter] = useState<StatusFilter>('all')
   const [directionFilter, setDirectionFilter] = useState<DirectionFilterValue>('both')
   const [myBetsDirectionFilter, setMyBetsDirectionFilter] = useState<DirectionFilterValue>('both')
+  const [paperTradeFilter, setPaperTradeFilter] = useState<PaperTradeFilter>('all')
 
   // React Query hooks — all fetch with pagination built in
   const modelHistory = useModelHistory(startDate, endDate)
@@ -116,10 +118,17 @@ export default function HistoryPage() {
     ? directionFilteredBets.filter(b => b.status !== 'pending' && b.status !== 'cancelled')
     : directionFilteredBets.filter(b => b.status === filter)
 
+  // Apply paper trade filter to my bets (before direction + status filters)
+  const paperFilteredMyBets = paperTradeFilter === 'real'
+    ? myBets.filter(b => !b.is_paper_trade)
+    : paperTradeFilter === 'paper'
+      ? myBets.filter(b => b.is_paper_trade)
+      : myBets
+
   // Apply direction filter to my bets (before status filter)
   const directionFilteredMyBets = myBetsDirectionFilter === 'both'
-    ? myBets
-    : myBets.filter(b => b.bet_direction === myBetsDirectionFilter)
+    ? paperFilteredMyBets
+    : paperFilteredMyBets.filter(b => b.bet_direction === myBetsDirectionFilter)
 
   // Filter my bets by status (show pending in "All" view)
   const filteredMyBets = myBetsFilter === 'all'
@@ -262,11 +271,31 @@ export default function HistoryPage() {
           ) : (
             <DirectionFilter activeDirection={directionFilter} onDirectionChange={setDirectionFilter} />
           )}
-          {activeTab === 'my_bets' ? (
-            <HistoryFilters activeFilter={myBetsFilter} onFilterChange={setMyBetsFilter} />
-          ) : (
-            <HistoryFilters activeFilter={filter} onFilterChange={setFilter} />
-          )}
+          <div className="flex items-center gap-2">
+            {activeTab === 'my_bets' && (
+              <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-lg border border-slate-700">
+                {(['all', 'real', 'paper'] as PaperTradeFilter[]).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => setPaperTradeFilter(f)}
+                    className={cn(
+                      'px-2.5 py-1 rounded text-xs font-medium transition-colors',
+                      paperTradeFilter === f
+                        ? f === 'paper' ? 'bg-blue-700 text-white' : 'bg-slate-600 text-slate-100'
+                        : 'text-slate-400 hover:text-slate-200'
+                    )}
+                  >
+                    {f === 'all' ? 'All' : f === 'real' ? 'Real' : 'Paper'}
+                  </button>
+                ))}
+              </div>
+            )}
+            {activeTab === 'my_bets' ? (
+              <HistoryFilters activeFilter={myBetsFilter} onFilterChange={setMyBetsFilter} />
+            ) : (
+              <HistoryFilters activeFilter={filter} onFilterChange={setFilter} />
+            )}
+          </div>
         </div>
       </div>
 

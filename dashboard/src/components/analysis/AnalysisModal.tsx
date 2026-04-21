@@ -26,6 +26,7 @@ export interface TakeBetData {
   direction: 'over' | 'under'
   betContext?: BetContext
   userConfidence?: number | null
+  isPaperTrade?: boolean
 }
 
 interface AnalysisModalProps {
@@ -115,6 +116,9 @@ const KELLY_OPTIONS = [
 
 export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalProps) {
   const { config } = useSport()
+  const isMlbStat = (prediction.stat as string).startsWith('batter_') ||
+                    (prediction.stat as string).startsWith('pitcher_')
+  const effectiveSport = isMlbStat ? 'mlb' : config.sport
   const [history, setHistory] = useState<PlayerGameStats[]>([])
   const [mlbHistoryValues, setMlbHistoryValues] = useState<number[]>([])
   const [mlbRawRows, setMlbRawRows] = useState<Record<string, unknown>[]>([])
@@ -167,7 +171,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
     async function fetchHistory() {
       const supabase = createClient()
 
-      if (config.sport === 'mlb') {
+      if (effectiveSport === 'mlb') {
         const mlbStat = MLB_STAT_HISTORY[prediction.stat]
         if (!mlbStat) { setLoading(false); return }
 
@@ -221,7 +225,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
       }
 
       // Pick the right props table for the sport
-      const propsTable = config.sport === 'mlb' ? 'mlb_raw_player_props' : 'raw_player_props_combined'
+      const propsTable = effectiveSport === 'mlb' ? 'mlb_raw_player_props' : 'raw_player_props_combined'
 
       // Get bookmaker lines for this player/stat/game
       let query = supabase
@@ -234,7 +238,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         .order('bookmaker')
 
       // MLB props may have unlinked rows — filter to linked only
-      if (config.sport === 'mlb') {
+      if (effectiveSport === 'mlb') {
         query = query.not('player_id', 'is', null)
       }
 
@@ -321,7 +325,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   const statColumn = STAT_COLUMN_MAP[prediction.stat] ?? null
   const comboComponents = COMBO_COMPONENTS[prediction.stat]
   const statLabel = STAT_LABELS[prediction.stat]
-  const isPitcherStat = config.sport === 'mlb' && prediction.stat.startsWith('pitcher_')
+  const isPitcherStat = effectiveSport === 'mlb' && prediction.stat.startsWith('pitcher_')
   const mlbStatCol = MLB_STAT_HISTORY[prediction.stat]?.column
   // Binary model: quantiles are all 0/1 (Bernoulli output), show probability instead of bars
   const isBinaryDistribution = prediction.q10 === 0 && prediction.q25 === 0 &&
@@ -329,7 +333,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
 
   // Calculate L5 average for the relevant stat (sum components for combos)
   const l5Avg = history.length > 0
-    ? config.sport === 'mlb' && mlbHistoryValues.length > 0
+    ? effectiveSport === 'mlb' && mlbHistoryValues.length > 0
       ? mlbHistoryValues.reduce((s, v) => s + v, 0) / mlbHistoryValues.length
       : comboComponents
         ? history.reduce((sum, g) =>
@@ -371,6 +375,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   // Take Bet state
   const [customStake, setCustomStake] = useState<string>('')
   const [betPlaced, setBetPlaced] = useState(false)
+  const [paperBetSet, setPaperBetSet] = useState(false)
   const [userConfidence, setUserConfidence] = useState<number | null>(null)
 
   // Selected line index for bet sizing (defaults to best edge = index 0)
@@ -410,9 +415,10 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
     }
   }, [sizingData.recommendedBet, betPlaced])
 
-  // Reset betPlaced and confidence when prediction changes
+  // Reset betPlaced, paperBetSet and confidence when prediction changes
   useEffect(() => {
     setBetPlaced(false)
+    setPaperBetSet(false)
     setUserConfidence(null)
   }, [prediction.id])
 
@@ -487,7 +493,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                 stat={statColumn}
                 line={prediction.prop_line}
                 values={
-                  config.sport === 'mlb' && mlbHistoryValues.length > 0
+                  effectiveSport === 'mlb' && mlbHistoryValues.length > 0
                     ? mlbHistoryValues
                     : comboComponents
                       ? history.map(g => comboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0))
@@ -500,7 +506,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                   <thead>
                     <tr className="text-slate-400 border-b border-slate-700">
                       <th className="text-left py-2 px-1.5 sm:px-2">Date</th>
-                      {config.sport === 'mlb' ? (
+                      {effectiveSport === 'mlb' ? (
                         isPitcherStat ? (
                           <th className="text-center py-2 px-1.5 sm:px-2">K</th>
                         ) : (
@@ -528,7 +534,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                   </thead>
                   <tbody>
                     {history.map((game, i) => {
-                      if (config.sport === 'mlb') {
+                      if (effectiveSport === 'mlb') {
                         const rawRow = mlbRawRows[i] || {}
                         return (
                           <tr key={i} className="border-b border-slate-700/50">
@@ -960,6 +966,56 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                 }`}
               >
                 {betPlaced ? 'Bet Taken!' : 'Take Bet'}
+              </button>
+              <button
+                onClick={() => {
+                  const paperStake = sizingData.recommendedBet > 0
+                    ? Math.round(sizingData.recommendedBet * 100) / 100
+                    : 10
+
+                  const l5Games = history.length > 0
+                    ? history.map(g => ({
+                        date: g.game_date,
+                        value: comboComponents
+                          ? comboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0)
+                          : statColumn ? (Number(g[statColumn]) || 0) : 0,
+                      }))
+                    : null
+
+                  const betContext = buildBetContext(prediction, {
+                    l5Avg: l5Avg,
+                    l5Games: l5Games,
+                    kelly: sizingData.kellyPct > 0 ? {
+                      fraction: kellyFraction,
+                      recommended_stake: sizingData.recommendedBet,
+                      bankroll_pct: sizingData.kellyPct,
+                    } : null,
+                    sportsbookLines: bookmakerLines.length > 0 ? bookmakerLines : null,
+                    source: 'analysis_modal',
+                  })
+
+                  onTakeBet(prediction, {
+                    book: selectedLine.bookmaker,
+                    odds: selectedLine.relevantOdds,
+                    line: selectedLine.line,
+                    stake: paperStake,
+                    modelProb: selectedLine.modelProb,
+                    edge: selectedLine.lineEdge,
+                    direction: isOverBet ? 'over' : 'under',
+                    betContext,
+                    userConfidence,
+                    isPaperTrade: true,
+                  })
+                  setPaperBetSet(true)
+                }}
+                disabled={paperBetSet}
+                className={`py-2 px-4 rounded-md font-medium text-sm transition-colors ${
+                  paperBetSet
+                    ? 'bg-blue-800 text-blue-300 cursor-default'
+                    : 'bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 hover:border-blue-500'
+                }`}
+              >
+                {paperBetSet ? 'Paper Set!' : 'Paper Trade'}
               </button>
             </div>
           )}

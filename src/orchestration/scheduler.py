@@ -91,6 +91,7 @@ JOB_NAMES = {
     "kalshi_daily_summary_job.py": "Kalshi Daily Summary",
     "arb_scan_job.py": "Arb Scanner",
     "kalshi_nonsports_refresh_job.py": "Kalshi Non-Sports Refresh",
+    "resolve_user_paper_bets.py": "User Paper Bet Resolution",
 }
 
 # In-memory job status tracking for dependency checks.
@@ -650,6 +651,11 @@ def run_nonsports_scrape():
     run_job("arb_scan_job.py", extra_args="--mode all --scrape-only", silent_on_success=False, timeout=7200)
 
 
+def run_user_paper_bet_resolution():
+    """Resolve pending user paper bets against actual game stats."""
+    run_job("resolve_user_paper_bets.py")
+
+
 def main():
     import argparse
 
@@ -695,6 +701,14 @@ def main():
         CronTrigger(hour=9, minute=30, timezone=ET),
         id="daily_stats_retry",
         name="Daily Stats Retry (9:30 AM ET)",
+    )
+
+    # 9:30 AM ET - Resolve pending user paper bets against actual game stats
+    scheduler.add_job(
+        run_user_paper_bet_resolution,
+        CronTrigger(hour=9, minute=30, timezone=ET),
+        id="user_paper_bet_resolution",
+        name="User Paper Bet Resolution (9:30 AM ET)",
     )
 
     # --- Early window: 11 AM NBA inference ---
