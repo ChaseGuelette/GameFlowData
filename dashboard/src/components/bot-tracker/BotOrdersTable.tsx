@@ -273,11 +273,9 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                 const rawPrice = isLive
                   ? (order as KalshiLiveOrder).fill_price
                   : (order as KalshiPaperBet).price
-                const entryPrice = isLive
-                  ? rawPrice
-                  : rawPrice != null
-                    ? order.side === 'yes' ? rawPrice : 100 - rawPrice
-                    : null
+                const entryPrice = rawPrice != null
+                  ? (order.side === 'yes' ? rawPrice : 100 - rawPrice)
+                  : null
                 const value = isLive
                   ? (order as KalshiLiveOrder).total_cost
                   : entryPrice != null

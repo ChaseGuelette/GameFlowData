@@ -84,10 +84,13 @@ export function TradeApprovalPanel() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [sportFilter, setSportFilter] = useState<string>('all')
 
-  // Reset selection when trades change
-  useEffect(() => {
-    setSelected(new Set())
-  }, [trades])
+  // Prune stale selections — trades that disappeared (expired/approved) get dropped.
+  // No useEffect needed; computed inline on each render.
+  const tradeIdSet = useMemo(() => new Set(trades.map(t => t.id)), [trades])
+  const validSelected = useMemo(
+    () => new Set([...selected].filter(id => tradeIdSet.has(id))),
+    [selected, tradeIdSet]
+  )
 
   if (isLoading || trades.length === 0) return null
 
@@ -102,7 +105,7 @@ export function TradeApprovalPanel() {
     ? trades
     : trades.filter((t) => t.sport === sportFilter)
 
-  const allSelected = selected.size === filteredTrades.length && filteredTrades.length > 0
+  const allSelected = validSelected.size === filteredTrades.length && filteredTrades.length > 0
 
   const toggleOne = (id: number) => {
     setSelected((prev) => {
@@ -119,15 +122,15 @@ export function TradeApprovalPanel() {
   }
 
   const handleApprove = () => {
-    if (selected.size === trades.length) {
+    if (validSelected.size === trades.length) {
       approveAll.mutate()
     } else {
-      approve.mutate(Array.from(selected))
+      approve.mutate(Array.from(validSelected))
     }
   }
 
   const handleReject = () => {
-    reject.mutate(Array.from(selected))
+    reject.mutate(Array.from(validSelected))
   }
 
   const isPending = approve.isPending || reject.isPending || approveAll.isPending
@@ -160,17 +163,17 @@ export function TradeApprovalPanel() {
           )}
           <button
             onClick={handleReject}
-            disabled={selected.size === 0 || isPending}
+            disabled={validSelected.size === 0 || isPending}
             className="px-3 py-1.5 text-xs font-medium rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            Reject ({selected.size})
+            Reject ({validSelected.size})
           </button>
           <button
             onClick={handleApprove}
-            disabled={selected.size === 0 || isPending}
+            disabled={validSelected.size === 0 || isPending}
             className="px-3 py-1.5 text-xs font-medium rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            {selected.size === trades.length ? 'Approve All' : `Approve (${selected.size})`}
+            {validSelected.size === trades.length ? 'Approve All' : `Approve (${validSelected.size})`}
           </button>
         </div>
       </div>
@@ -204,7 +207,7 @@ export function TradeApprovalPanel() {
               <TradeRow
                 key={trade.id}
                 trade={trade}
-                selected={selected.has(trade.id)}
+                selected={validSelected.has(trade.id)}
                 onToggle={toggleOne}
               />
             ))}

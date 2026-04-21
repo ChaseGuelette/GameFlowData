@@ -113,6 +113,7 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 - `/tmp/` writes fail — Windows doesn't have `/tmp/`. Use `.claude/glm_spec_<timestamp>.md` instead.
 - Bash tool returns "Error: Exit code 1" repeatedly — Bash may be non-functional in the session. Fall back to direct Edit.
 - Concurrent OpenCode calls can collide — send one at a time.
+- **Exit code 1 ≠ GLM failed** — OpenCode transport can return exit code 1 even when GLM successfully wrote all files. Before falling back, check whether the target output file(s) exist and have content. If GLM wrote them, skip the fallback to avoid duplicate work. Only fall back if the files are missing or empty.
 
 **Do NOT use OpenCode for:** small edits (< 20 lines), config changes, brain/markdown updates, or tasks requiring deep cross-system reasoning.
 
