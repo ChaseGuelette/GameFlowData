@@ -91,19 +91,18 @@ export function TradeApprovalPanel() {
     () => new Set([...selected].filter(id => tradeIdSet.has(id))),
     [selected, tradeIdSet]
   )
-
-  if (isLoading || trades.length === 0) return null
-
-  const totalExposure = trades.reduce((sum, t) => sum + Number(t.expected_cost), 0)
-
   const sports = useMemo(
     () => Array.from(new Set(trades.map((t) => t.sport))).sort(),
     [trades]
   )
+  const filteredTrades = useMemo(
+    () => sportFilter === 'all' ? trades : trades.filter((t) => t.sport === sportFilter),
+    [trades, sportFilter]
+  )
 
-  const filteredTrades = sportFilter === 'all'
-    ? trades
-    : trades.filter((t) => t.sport === sportFilter)
+  if (isLoading || trades.length === 0) return null
+
+  const totalExposure = trades.reduce((sum, t) => sum + Number(t.expected_cost), 0)
 
   const allSelected = validSelected.size === filteredTrades.length && filteredTrades.length > 0
 
