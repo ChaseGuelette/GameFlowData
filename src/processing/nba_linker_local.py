@@ -1040,17 +1040,18 @@ def _resolve_fuzzy_names(
     return result
 
 
-def link_incremental(batch_size: int = 50000, limit: int | None = None):
+def link_incremental(batch_size: int = 50000, limit: int | None = None, days: int = 30):
     """
     Lightweight incremental linker for daily use.
 
     - No CSV download of entire tables
-    - Queries only unlinked records
-    - Updates directly via batched SQL
+    - Queries only unlinked records within the past `days` days
+    - Updates directly via batched SQL using keyset pagination (no OFFSET)
 
     Args:
         batch_size: Number of records to process per batch
         limit: Optional limit on total records to process (for testing)
+        days: Only process records with commence_time within this many days (default 30)
     """
     engine = get_engine()
 
@@ -1157,19 +1158,21 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
     print(f"  Upcoming games from NBA API: {upcoming_count}")
     print(f"  Built game lookup with {len(props_game_lookup)} unique matchups")
 
-    # 2. Count unlinked records
-    print("\n[2/4] Counting unlinked records...")
+    # 2. Count unlinked records (scoped to recent window)
+    print(f"\n[2/4] Counting unlinked records (last {days} days)...")
 
     with engine.connect() as conn:
         count_result = conn.execute(text("""
-            SELECT COUNT(*) FROM raw_player_props_combined WHERE player_id IS NULL
-        """))
+            SELECT COUNT(*) FROM raw_player_props_combined
+            WHERE player_id IS NULL
+              AND commence_time >= NOW() - CAST(:days || ' days' AS INTERVAL)
+        """), {"days": days})
         total_unlinked = count_result.scalar()
 
-    print(f"  Total unlinked: {total_unlinked:,}")
+    print(f"  Unlinked (last {days}d): {total_unlinked:,}")
 
     if total_unlinked == 0:
-        print("\n[OK] No unlinked records - nothing to do!")
+        print("\n[OK] No unlinked records in window - nothing to do!")
         return
 
     if limit:
@@ -1178,25 +1181,33 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
     else:
         total_to_process = total_unlinked
 
-    # 3. Process in batches
+    # 3. Process in batches using keyset pagination (avoids O(n²) OFFSET scans)
     print(f"\n[3/4] Processing {total_to_process:,} records in batches of {batch_size:,}...")
 
     total_game_matched = 0
     total_player_matched = 0
-    offset = 0
+    total_processed = 0
+    last_staging_id = 0  # keyset cursor
 
-    while offset < total_to_process:
-        current_batch_size = min(batch_size, total_to_process - offset)
+    while True:
+        if limit and total_processed >= total_to_process:
+            break
 
-        # Fetch batch of unlinked records
+        current_batch_size = batch_size
+        if limit:
+            current_batch_size = min(batch_size, total_to_process - total_processed)
+
+        # Fetch batch using keyset pagination — no OFFSET, O(1) per batch
         with engine.connect() as conn:
-            batch_df = pd.read_sql(f"""
+            batch_df = pd.read_sql(text("""
                 SELECT staging_id, api_player_name, home_team, away_team, commence_time
                 FROM raw_player_props_combined
                 WHERE player_id IS NULL
+                  AND commence_time >= NOW() - CAST(:days || ' days' AS INTERVAL)
+                  AND staging_id > :last_id
                 ORDER BY staging_id
-                LIMIT {current_batch_size} OFFSET {offset}
-            """, conn)
+                LIMIT :batch_size
+            """), conn, params={"days": days, "last_id": last_staging_id, "batch_size": current_batch_size})
 
         if batch_df.empty:
             break
@@ -1299,9 +1310,11 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
                 total_player_matched += result.rowcount
                 conn.execute(text("DROP TABLE temp_player_updates"))
 
-        offset += current_batch_size
-        pct = (offset / total_to_process) * 100
-        print(f"  Processed {offset:,}/{total_to_process:,} ({pct:.1f}%) - Games: {total_game_matched:,}, Players: {total_player_matched:,}")
+        # Advance keyset cursor
+        last_staging_id = int(batch_df["staging_id"].max())
+        total_processed += len(batch_df)
+        pct = min((total_processed / total_unlinked) * 100, 100.0)
+        print(f"  Processed {total_processed:,}/{total_unlinked:,} ({pct:.1f}%) - Games: {total_game_matched:,}, Players: {total_player_matched:,}")
 
     # Save fuzzy cache to disk
     _save_fuzzy_cache(fuzzy_cache, current_player_count)
@@ -1310,17 +1323,19 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
     # 4. Summary
     print("\n[4/4] Summary")
     print("=" * 60)
-    print(f"  Total records processed: {total_to_process:,}")
+    print(f"  Total records processed: {total_processed:,}")
     print(f"  Games matched: {total_game_matched:,}")
     print(f"  Players matched: {total_player_matched:,}")
 
-    # Check remaining unlinked (player_id)
+    # Check remaining unlinked (player_id) — scoped to same window
     with engine.connect() as conn:
         remaining = conn.execute(text("""
-            SELECT COUNT(*) FROM raw_player_props_combined WHERE player_id IS NULL
-        """)).scalar()
+            SELECT COUNT(*) FROM raw_player_props_combined
+            WHERE player_id IS NULL
+              AND commence_time >= NOW() - CAST(:days || ' days' AS INTERVAL)
+        """), {"days": days}).scalar()
 
-    print(f"  Remaining unlinked (no player_id): {remaining:,}")
+    print(f"  Remaining unlinked in window (no player_id): {remaining:,}")
 
     # 5. Link game_id for records that have player_id but missing game_id
     #    (props scraper sets player_id from odds API, but game_id needs NBA game ID mapping)
@@ -1328,19 +1343,21 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None):
         missing_game_id = conn.execute(text("""
             SELECT COUNT(*) FROM raw_player_props_combined
             WHERE player_id IS NOT NULL AND game_id IS NULL
-        """)).scalar()
+              AND commence_time >= NOW() - CAST(:days || ' days' AS INTERVAL)
+        """), {"days": days}).scalar()
 
     if missing_game_id > 0:
         print(f"\n[5/5] Linking game_id for {missing_game_id:,} records (have player_id, missing game_id)...")
         game_id_matched = 0
 
         with engine.connect() as conn:
-            batch_df = pd.read_sql("""
+            batch_df = pd.read_sql(text("""
                 SELECT DISTINCT staging_id, home_team, away_team, commence_time
                 FROM raw_player_props_combined
                 WHERE player_id IS NOT NULL AND game_id IS NULL
+                  AND commence_time >= NOW() - CAST(:days || ' days' AS INTERVAL)
                 ORDER BY staging_id
-            """, conn)
+            """), conn, params={"days": days})
 
         if not batch_df.empty:
             batch_df["commence_time"] = pd.to_datetime(batch_df["commence_time"], utc=True)
@@ -1408,6 +1425,12 @@ def main():
         default=None,
         help="Limit total records to process (for testing)"
     )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Only process records with commence_time within this many days (default: 30)"
+    )
 
     args = parser.parse_args()
 
@@ -1424,7 +1447,7 @@ def main():
         process_local()
         upload_results()
     elif args.command == "incremental":
-        link_incremental(batch_size=args.batch_size, limit=args.limit)
+        link_incremental(batch_size=args.batch_size, limit=args.limit, days=args.days)
 
 
 if __name__ == "__main__":

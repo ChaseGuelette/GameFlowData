@@ -96,14 +96,35 @@ def main():
         # Step 3 — Fetch fresh prop lines
         logger.info("Fetching fresh prop lines...")
         fresh_query = text("""
-            SELECT DISTINCT ON (player_id, market_key)
-                player_id, market_key as stat, line, over_odds, under_odds, bookmaker
-            FROM raw_player_props_combined
-            WHERE sport = 'mlb'
-              AND game_date = :target_date
-              AND over_odds IS NOT NULL
-              AND under_odds IS NOT NULL
-            ORDER BY player_id, market_key, scraped_at DESC
+            WITH ranked_lines AS (
+                SELECT
+                    player_id,
+                    bookmaker,
+                    market_key,
+                    line,
+                    outcome_label,
+                    odds_american,
+                    snapshot_time,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY player_id, market_key, bookmaker, line, outcome_label
+                        ORDER BY snapshot_time DESC
+                    ) AS rn
+                FROM mlb_raw_player_props
+                WHERE game_date = :target_date
+                  AND player_id IS NOT NULL
+            )
+            SELECT
+                player_id,
+                market_key AS stat,
+                line,
+                bookmaker,
+                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
+                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds
+            FROM ranked_lines
+            WHERE rn = 1
+            GROUP BY player_id, market_key, line, bookmaker
+            HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
+               AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
         """)
 
         with engine.connect() as conn:

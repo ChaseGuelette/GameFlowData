@@ -415,6 +415,19 @@ class KalshiLiveTrader:
             """), {"d": target_date}).fetchall()
             today_positions = {(int(row[0]), row[1]) for row in rows}
 
+        # Skip player+stat combos already sitting in the approval queue
+        with self.engine.connect() as conn:
+            queued_rows = conn.execute(text("""
+                SELECT player_id, stat_type FROM kalshi_trade_queue
+                WHERE game_date = :d AND sport = :sport
+                  AND status = 'pending_approval'
+                  AND expires_at > now()
+                  AND player_id IS NOT NULL
+            """), {"d": target_date, "sport": sport}).fetchall()
+        queued_player_stats: set[tuple[int, str]] = {(int(r[0]), r[1]) for r in queued_rows}
+        if queued_player_stats:
+            logger.info(f"Skipping {len(queued_player_stats)} player+stat combos already pending approval")
+
         # Shared cross-sport exposure cap: ALL sports share one daily pool.
         # MLB fires first (minute :00) and gets full access. NBA fires at :02
         # and sees what's left after MLB. prior_exposure can also be passed in.
@@ -447,6 +460,10 @@ class KalshiLiveTrader:
 
             # Skip if already traded today
             if pos_key in today_positions:
+                continue
+
+            # Skip if already sitting in approval queue
+            if pos_key in queued_player_stats:
                 continue
 
             volume = int(row["volume"] or 0)
@@ -833,6 +850,35 @@ class KalshiLiveTrader:
 
         logger.info(f"Proposed {len(trades)} trades to approval queue")
         return len(trades)
+
+    def renew_expired_queue_trades(self, target_date: date, sport: str) -> int:
+        """Extend the expiry of pending trades the user hasn't acted on yet.
+
+        When a 30-minute approval window expires without the user approving or
+        rejecting, this resets expires_at so the trades stay visible on the
+        dashboard without a gap — as long as their Kalshi market is still open.
+
+        Returns the number of trades renewed (0 = nothing to carry forward).
+        """
+        with self.engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE kalshi_trade_queue q
+                SET expires_at = now() + interval '30 minutes'
+                WHERE q.game_date = :d
+                  AND q.sport = :sport
+                  AND q.status = 'pending_approval'
+                  AND q.expires_at BETWEEN now() - interval '60 minutes' AND now()
+                  AND EXISTS (
+                      SELECT 1 FROM kalshi_markets m
+                      WHERE m.ticker = q.ticker
+                        AND m.market_status = 'open'
+                        AND m.snapshot_time >= now() - interval '15 minutes'
+                  )
+            """), {"d": target_date, "sport": sport})
+            count = result.rowcount
+        if count > 0:
+            logger.info(f"Renewed {count} expired pending trades for {sport.upper()} (markets still open)")
+        return count
 
     def execute_approved_trades(self, trade_ids: list[int]) -> list[dict[str, Any]]:
         """Execute trades from the queue that have been approved.

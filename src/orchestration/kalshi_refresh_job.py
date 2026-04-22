@@ -177,7 +177,11 @@ def run(
                     logger.warning(f"Live trading halted: {reason}")
                     summary["live_trading"] = {"halted": True, "reason": reason}
                 else:
-                    # Select trades and queue for approval
+                    # Carry forward any trades that expired without action
+                    # (silently extends their timer if markets are still open)
+                    renewed = trader.renew_expired_queue_trades(target_date, sport=sport)
+
+                    # Select NEW trades (skips player+stat combos already pending)
                     trades = trader.select_trades(target_date, sport=sport)
                     if trades:
                         proposed = trader.propose_trades(trades)
@@ -185,9 +189,10 @@ def run(
                         summary["live_trading"] = {
                             "selected": len(trades),
                             "proposed": proposed,
+                            "renewed": renewed,
                         }
                     else:
-                        summary["live_trading"] = {"selected": 0, "proposed": 0}
+                        summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": renewed}
             except RuntimeError as e:
                 logger.warning(f"Live trading not available: {e}")
                 summary["live_trading"] = {"error": str(e)}

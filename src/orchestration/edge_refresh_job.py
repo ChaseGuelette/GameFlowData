@@ -220,7 +220,10 @@ def detect_stale_predictions(
                 f"(drift={row['drift']:.1f})"
             )
 
-    return list(stale[["player_id", "game_id", "stat"]].itertuples(index=False, name=None))
+    return [
+        (int(row[0]), str(row[1]), str(row[2]))
+        for row in stale[["player_id", "game_id", "stat"]].itertuples(index=False, name=None)
+    ]
 
 
 def _get_cached_pipeline_and_predictor():
