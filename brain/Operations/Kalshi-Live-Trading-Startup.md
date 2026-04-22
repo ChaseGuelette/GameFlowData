@@ -52,14 +52,14 @@ Complete in order before enabling `KALSHI_LIVE_TRADING_ENABLED=true`:
 
 ### Recommended starting bankroll: $300
 
-| Bankroll | Daily cap (60%) | vs. $80 floor | Daily loss limit | Drawdown halt at |
+| Bankroll | Daily cap (70%) | vs. $20 floor | Daily loss limit | Drawdown halt at |
 |----------|----------------|----------------|-----------------|------------------|
-| $100 | $60 | **below floor** → always $80 | $10 | $70 |
-| $200 | $120 | above floor | $20 | $140 |
-| **$300** | **$180** | **comfortable headroom** | **$30** | **$210** |
-| $500 | $300 | aggressive for first run | $50 | $350 |
+| $100 | $70 | above floor | $10 | $70 |
+| $200 | $140 | above floor | $20 | $140 |
+| **$300** | **$210** | **comfortable headroom** | **$30** | **$210** |
+| $500 | $350 | moderate | $50 | $350 |
 
-Below $133, the 60% cap is always overridden by the $80 floor anyway. $300 is the sweet spot for meaningful volume without over-exposing on an unproven live execution.
+**Dynamic exposure**: `bankroll * 0.70` (`KALSHI_DAILY_EXPOSURE_PCT=0.70`). Bot queries live Kalshi balance via API. Min=$20, Max=$1000 — percentage is the driver. All sports share one pool. MLB fires at :00, NBA at :02.
 
 ### Railway environment variables
 
@@ -72,7 +72,7 @@ NBA_TRADING_ENABLED=false                 # Disabled until NBA model validated
 MLB_TRADING_ENABLED=true
 
 # Sizing
-KALSHI_LIVE_STARTING_BANKROLL=300
+KALSHI_LIVE_STARTING_BANKROLL=300          # Superseded by HWM-based dynamic system (hwm_dollars on kalshi_live_trading_config). Bot queries live Kalshi balance via API.
 KALSHI_LIVE_KELLY_FRACTION=0.125          # 1/8 Kelly — conservative
 KALSHI_LIVE_MIN_EDGE=0.15                 # 15% fee-adjusted edge minimum
 KALSHI_LIVE_MAX_CONTRACTS=50
@@ -101,7 +101,7 @@ KALSHI_ALLOW_YES_BETS=false
 3. **Morning resolution job**: 9:15 AM ET daily via `--resolve-only` flag.
 4. **Edge sanity cap**: Edges > `KALSHI_LIVE_MAX_EDGE` (40%) are rejected as model garbage.
 5. **Per-sport gates**: `NBA_TRADING_ENABLED=false` blocks NBA. `MLB_TRADING_ENABLED=true` allows MLB.
-6. **Shared exposure cap**: All sports share one $200/day pool. MLB fires first at :00, NBA at :02.
+6. **Dynamic shared exposure cap**: `bankroll * 0.70` (`KALSHI_DAILY_EXPOSURE_PCT=0.70`). Min=$20, Max=$1000. All sports share one pool. MLB fires first at :00, NBA at :02.
 
 ---
 

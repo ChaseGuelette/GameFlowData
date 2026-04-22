@@ -38,9 +38,9 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-030]] - Backtesting 55x speedup docs, MLB sweep fast path, playoff model deployed (tau=0.9/z_max=0.25/mw=0.8/edge=0.12, +19.3% ROI OOS), NBA_PLAYOFF_MODE=true on Railway
 - [[handoff-031]] - Kalshi game-level arb pipeline activated: KALSHI_GAME_SERIES populated (27 series via /events API), 4 bugs fixed, MIN_KALSHI_BID=3c filter, 29 clean pure arbs from 203 matched pairs
 - [[handoff-032]] - Stripe subscription integration complete: DB migration, 5 new files (webhook/checkout/portal routes, stripe lib, admin client), 6 modified files (subscribe/account/pricing pages, types, subscription lib, middleware), paywall toggle (`SUBSCRIPTION_REQUIRED`), Stripe v22 dahlia API breaking changes documented
-- [[handoff-033]] - Session 033
-- [[handoff-034]] - Session 34
-- [[handoff-035]] - Session 035
+- [[handoff-033]] - Arb Scanner dashboard page (Step 9.6), Phase 9 complete, batter_hrr + NBA checks marked done
+- [[handoff-034]] - Kalshi in-play contamination guards: close_time column, price filter, near-close detection, Bot Tracker Placed/Game Start columns
+- [[handoff-035]] - Non-sports arb: deterministic structured field extractor replacing SequenceMatcher 0.55, "eth"→"ether" keyword fix
 - [[handoff-036]] - Elections + Politics non-sports arb expansion: 200 → 6,439 markets, candidate disambiguation, 144 matched pairs
 - [[handoff-037]] - Bankroll manager overhaul (per-sportsbook balances + override), bot tracker fill-price fix, Railway libz.so.1 fix, Manual Paper Trader scoped (Phase 10)
 - [[handoff-038]] - MLB feature pipeline fix: feat_* columns now populated (L5 avg, rest days, park factor), MLB_COLD_OVER filter strengthened, per-stat daily bet caps added

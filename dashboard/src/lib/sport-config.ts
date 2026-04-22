@@ -127,7 +127,7 @@ export const NBA_CONFIG: SportConfig = {
     askChat: true,
     injuries: true,
     scoreboard: true,
-    predictionMarkets: true,
+    predictionMarkets: false,
   },
   columns: {
     q10: 'q10',
@@ -196,9 +196,9 @@ export const MLB_CONFIG: SportConfig = {
   modelPicksTau: null,    // BL applied server-side per stat; null disables global client-side blending
   // From src/models/mlb/mlb_stat_config.py — STAT_BL_CONFIGS + MLB_STATS
   perStatConfig: {
-    pitcher_strikeouts: { edge: 0.08, tau: 0.90, z_max: 0.25, max_weight: 0.80 },
-    batter_hits:        { edge: 0.08, tau: 0.75, z_max: 1.00, max_weight: 0.80 },
-    batter_rbis:        { edge: 0.08, tau: 0.90, z_max: 0.50, max_weight: 0.65 },
+    pitcher_strikeouts: { edge: 0.12, tau: 0.75, z_max: 0.25, max_weight: 0.80 },
+    batter_hits:        { edge: 0.10, tau: 0.90, z_max: 0.25, max_weight: 0.50 },
+    batter_rbis:        { edge: 0.12, tau: 0.00, z_max: 0.00, max_weight: 0.00 },  // No BL — raw model
   },
   getHeadshotUrl: (playerId: number) =>
     `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${playerId}/headshot/67/current`,

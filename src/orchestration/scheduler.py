@@ -551,12 +551,12 @@ def run_mlb_daily_stats_retry():
 
 def run_mlb_lines_full():
     """Run MLB full lines scrape (game lines + props + linker)."""
-    run_job("mlb_lines_job.py", extra_args="--live --parallel")
+    run_job("mlb_lines_job.py", extra_args="--live --parallel --extended")
 
 
 def run_mlb_lines_props_only():
     """Run MLB props-only scrape (props + linker, silent on success)."""
-    run_job("mlb_lines_job.py", extra_args="--live --props-only", silent_on_success=True)
+    run_job("mlb_lines_job.py", extra_args="--live --props-only --extended", silent_on_success=True)
 
 
 def run_mlb_lineup_scraper():
