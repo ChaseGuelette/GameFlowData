@@ -13,8 +13,8 @@
 - Context: `dashboard/src/contexts/SportContext.tsx` — `useSport()` hook, localStorage persistence
 - Sport toggle pill in Navbar (NBA/MLB), nav links conditionally shown per feature flags
 - MLB feature flags: DFS=false, **Stats Vault=true (Session 27)**, **AskChat=true (Session 35)**, Injuries=false, Prediction Markets=false
-- NBA: Prediction Markets enabled (`predictionMarkets: true`), MLB: disabled until Kalshi MLB data available
-- MLB stat types: pitcher_strikeouts, batter_hits, batter_total_bases, batter_home_runs, batter_rbis, batter_runs_scored
+- NBA: Prediction Markets page removed (route deleted, `predictionMarkets: false`). Backend Kalshi infra remains.
+- MLB stat types: pitcher_strikeouts, batter_hits, batter_rbis, batter_hrr
 - MLB tables: `mlb_daily_predictions`, `mlb_paper_bets`, `mlb_paper_trading_daily_log`
 
 ## Public Routes (`(public)/`)
@@ -38,12 +38,11 @@
 | `/dashboard` | Main predictions — PropCards, FilterTabs, date selector, model picks toggle, live scoreboard. **Session 35**: Collapsed 10+ filter controls to 4 (FilterTabs + All Bets/Model Picks toggle + Date selector + ⚙ Filters popover + Build Slate button). Removed Edge/BL tau selectors; hardcoded 0.03 edge threshold. `FilterPopover` contains State, Books, Game Status, Direction. DFS-only predictions filtered out at query level. |
 | `/dfs` | DFS Edge Finder — 3 modes, 6 stats, platform filters, slip type selector |
 | `/history` | My Bets + Model History — status/direction filters, date range, per-stat win rates. **Session 34**: Edit (pencil icon) + two-step confirm delete on ALL bet statuses (not just pending). EditBetModal pre-fills all fields; saves via UPDATE + calls `rebuild_user_daily_log`. **Session 39 (Phase 10)**: `All | Real | Paper` toggle added to My Bets header. Paper bets show blue PAPER badge in `BetCard`. |
-| `/performance` | My Bets + Props + DFS tabs — bankroll chart, stat breakdown, KPI cards |
+| `/performance` | 4 tabs: **My Bets** + **Props** + **DFS** + **Record** — bankroll chart, stat breakdown, KPI cards. Record tab (formerly `/track-record`) has MonthlyGrid, ModelMetrics, CsvUpload, ManualBetForm, DailyBreakdown. Source toggle (My Bets / Paper / Combined), edge accuracy buckets, streaks. CSV import (drag-and-drop, preview, batched upsert). Calls `rebuild_user_daily_log` RPC after changes. |
 | `/stats` | Data Vault — NBA: player/team/defense/play-type heatmap tables, percentile coloring. MLB (Session 27): `MLBStatsPage` component with Batters/Pitchers tabs, Box/Rates/Consistency categories, L3/L5/L10/L20/SZN window support. Requires migration 023 in Supabase. |
 | `/account` | Profile + bankroll settings + community card |
 | `/subscribe` | Subscription page (currently redirects to /dashboard) |
-| `/prediction-markets` | Kalshi prediction markets — edge overlay, sortable/filterable table, detail modal with fee breakdown, orderbook, countdown |
-| `/track-record` | Track record & diagnostics — My Bets / Paper Trading / Combined source toggle, KPI banner, bankroll chart, monthly summary grid (expandable to daily drilldown + per-bet list), stat breakdown, model metrics (edge accuracy, streaks). CSV import modal (drag-and-drop, 10-row preview, batched upsert) + manual bet entry form. Calls `rebuild_user_daily_log` RPC after any change. |
+| ~~`/prediction-markets`~~ | **Removed** — Kalshi backend infra still exists but standalone UI page deleted. Edge data accessible via bot-tracker. |
 | `/arb-scanner` | Admin-only Polymarket-Kalshi arb scanner — 4 summary cards (Total P&L, Win Rate, Active Bets, Detected 24h), sortable paper bets table (Kalshi+Poly price display, status badges), daily P&L log tab (green row tint on profitable days), date range filter. Gated by `useAdmin()` hook. Data from `arb_paper_bets` + `arb_paper_trading_daily_log` (authenticated_read RLS applied Session 33). **Session 33** (Phase 9.6). |
 
 ## Analysis Modal

@@ -2,19 +2,20 @@
 
 > Part of [[Models]]
 
-## Status: 3 Production Models — TB, Runs, HR Dropped
+## Status: 4 Production Models — TB, Runs, HR Dropped
 
-3 MLB models promoted to production with per-stat optimal Black-Litterman configs. `batter_total_bases`, `batter_runs_scored`, and `batter_home_runs` all dropped after backtest sweeps showed no viable edge.
+4 MLB models promoted to production with per-stat optimal Black-Litterman configs (updated Apr 20, 2026 after weather + L/R park factor feature sprint). `batter_total_bases`, `batter_runs_scored`, and `batter_home_runs` all dropped after backtest sweeps showed no viable edge.
 
 ### Promoted Models (Production)
 
 | Model | Type | BL Config | Edge Threshold | Backtest ROI | Notes |
 |-------|------|-----------|----------------|-------------|-------|
-| `pitcher_strikeouts` | Quantile | tau=0.9, z_max=0.25, mw=0.8 | 5% | +8.0% (645 bets, 58% win) | High volume, consistent |
-| `batter_hits` | Binomial | tau=0.75, z_max=1.0, mw=0.8 | 8% | +33.2% (282 bets, 56% win) | Strongest ROI per bet |
-| `batter_rbis` | NegBin | tau=0.9, z_max=0.25, mw=0.8 | 12% | +44.2% (137 bets, 62% win) | Highest ROI, most selective |
+| `pitcher_strikeouts` | Quantile | tau=0.75, z_max=0.25, mw=0.8 | 12% | +24.0% (174 bets, 63.2% win, Sharpe 2.78) | Both directions |
+| `batter_hits` | Binomial | tau=0.9, z_max=0.25, mw=0.5 | 10% | +28.1% (361 bets, 63.2% win, Sharpe 2.20) | Both directions |
+| `batter_rbis` | NegBin | **No BL** (raw model) | 12% | +9.5% (241 bets, 64.7% win, Sharpe 1.36) | Raw model beats blended |
+| `batter_hrr` | NegBin | tau=0.9, z_max=0.25, mw=0.65 | 15% | — (no sportsbook prop lines) | Kalshi KXMLBHRR only |
 
-**Combined Backtest (Jul 1 - Sep 28, 2025)**: 1,064 bets, 57.8% hit rate, **+21.25% ROI**, $1.2M profit, 1.19 Sharpe, 20.5% max DD.
+**Combined Backtest (Apr 20 configs, early season 2025)**: 776 bets, ~63% hit rate, weighted ~+21% ROI.
 
 ### Dropped Models
 
@@ -30,9 +31,10 @@ Unlike NBA (single global BL config), MLB uses **per-stat optimal configs** from
 
 ```python
 STAT_BL_CONFIGS = {
-    "pitcher_strikeouts": BLConfig(tau=0.9, z_max=0.25, max_weight=0.80),
-    "batter_hits":        BLConfig(tau=0.75, z_max=1.0, max_weight=0.80),
-    "batter_rbis":        BLConfig(tau=0.9, z_max=0.25, max_weight=0.80),
+    "pitcher_strikeouts": BLConfig(tau=0.75, z_max=0.25, max_weight=0.80),
+    "batter_hits":        BLConfig(tau=0.9, z_max=0.25, max_weight=0.50),
+    "batter_rbis":        None,  # No BL — raw model outperforms blended in early season
+    "batter_hrr":         BLConfig(tau=0.9, z_max=0.25, max_weight=0.65),
 }
 ```
 
@@ -70,6 +72,7 @@ The daily runner, paper trader, and backtest sweep all read from this config. Th
 | `pitcher_strikeouts` | Quantile | Semi-continuous, well-suited to quantile regression |
 | `batter_hits` | **Binomial** | Underdispersed (var=0.77 < mean=0.82). Hits = successes in n at-bats |
 | `batter_rbis` | NegBin | Overdispersed count data |
+| `batter_hrr` | NegBin | Combined H+R+RBI count. No sportsbook prop lines — Kalshi KXMLBHRR ticker only |
 
 ### Binomial Model Architecture (Session 4)
 Hits data is **underdispersed** (variance < mean, ratio=0.93). NegBin assumes overdispersion and failed: constant alpha, -5.1% calibration gap at 0.5 line. Solution: Binomial(n, p) model.
@@ -81,22 +84,22 @@ Hits data is **underdispersed** (variance < mean, ratio=0.93). NegBin assumes ov
 - **Feature selection**: Poisson proxy + binomial NLL scorer (dedicated `select_features_binomial_nll()`)
 - **Hyperparameter tuning**: Optuna with binomial NLL objective (`BinomialHyperparameterTuner`)
 
-### Backtest Results
+### Backtest Results (Apr 20, 2026 — post weather+L/R sprint)
 
-**Combined (Jul 1 - Sep 28, 2025)** — per-stat optimal BL configs:
+**Current configs (early season 2025 data)** — direction restrictions removed:
+| Stat | Config | ROI | Bets | Hit Rate | Sharpe |
+|------|--------|-----|------|----------|--------|
+| pitcher_strikeouts | tau=0.75, z_max=0.25, mw=0.8, edge=0.12 | +24.0% | 174 | 63.2% | 2.78 |
+| batter_hits | tau=0.9, z_max=0.25, mw=0.5, edge=0.10 | +28.1% | 361 | 63.2% | 2.20 |
+| batter_rbis | No BL, edge=0.12 | +9.5% | 241 | 64.7% | 1.36 |
+
+**Previous configs (Jul 1 - Sep 28, 2025)** — pre-weather features, historical reference:
 | Stat | ROI | Bets | Hit Rate |
 |------|-----|------|----------|
 | pitcher_strikeouts | +8.0% | 645 | 58% |
 | batter_hits | +33.2% | 282 | 56% |
 | batter_rbis | +44.2% | 137 | 62% |
 | **TOTAL** | **+21.25%** | **1,064** | **57.8%** |
-
-**Individual sweeps (Sep 1-28, 2025)**:
-| Stat | Best Config | ROI | Bets | Hit Rate |
-|------|-------------|-----|------|----------|
-| pitcher_strikeouts | tau=0.9 z_max=0.25 mw=0.8 edge=0.05 | +10.88% | 220 | 60.9% |
-| batter_hits | tau=0.75 z_max=1.0 mw=0.8 edge=0.08 | +36.63% | 78 | 60.3% |
-| batter_rbis | tau=0.9 z_max=0.25 mw=0.8 edge=0.12 | +112.54% | 16 | 81.2% |
 
 ### Paper Trader BL Config Fix (Session 25)
 
@@ -119,7 +122,7 @@ Hits data is **underdispersed** (variance < mean, ratio=0.93). NegBin assumes ov
 - No copula — single stat per model
 - Integer targets — strikeouts are whole numbers
 - **Per-stat BL configs** (vs NBA's single global config)
-- Higher, stat-specific edge thresholds (5-12% vs NBA's ~9%)
+- Higher, stat-specific edge thresholds (10-15% vs NBA's ~9%)
 
 ### Key Files
 | File | Purpose |

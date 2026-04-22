@@ -48,8 +48,8 @@
 | Reason | Apr 19 incident: 21 bets / $233 in 16s with 17–46% edges (broken inference, not model quality) |
 | Next action | Investigate inference bug → validate model → re-enable trading |
 
-### Apr 19 Incident — Root Cause (TBD)
-The 17-46% edge values were NOT from the v2 model (which produces sensible backtest edges). They were from v1 being invoked during a transition. Investigation needed before re-enabling `NBA_TRADING_ENABLED`.
+### Apr 19 Incident — Root Cause (RESOLVED)
+The 17-46% edge values were NOT from the v2 model (which produces sensible backtest edges). **Root cause**: v1 model artifacts were loaded during the transition to v2 — the old model was invoked instead of the new one, producing nonsensical edge values. The broken inference placed 21 bets ($233) in 16 seconds before the safety gate (`KALSHI_LIVE_TRADING_ENABLED`) was toggled off. Post-mortem: 8-fix overhaul deployed Apr 20 (trade approval queue, per-sport gates, edge sanity cap, HWM drawdown, dynamic exposure). Model quality itself was not the issue — v2 backtests are clean (+16.7% ROI, Sharpe 1.50). `NBA_TRADING_ENABLED` remains `false` pending manual re-enablement.
 
 ## Previous Calibration Check (Apr 3, 2026 — 11 days old at time)
 | Metric | Value |
