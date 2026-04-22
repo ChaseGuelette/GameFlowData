@@ -42,6 +42,7 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
     model_prob: modelProb,
     edge,
     stake,
+    is_paper_trade: false,
   }
 
   // Paper trades use insert (no conflict detection needed — both real + paper can coexist)
@@ -77,7 +78,7 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
       bet_context: betContext ?? null,
       user_confidence: userConfidence ?? null,
     }, {
-      onConflict: 'user_id,game_date,player_id,stat_type',
+      onConflict: 'user_id,game_date,player_name,stat_type,bet_direction,is_paper_trade',
     })
     .select('id')
     .single()
@@ -91,7 +92,7 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
         team_abbrev: prediction.team_abbrev ?? null,
         opponent_abbrev: prediction.opponent_abbrev ?? null,
       }, {
-        onConflict: 'user_id,game_date,player_id,stat_type',
+        onConflict: 'user_id,game_date,player_name,stat_type,bet_direction,is_paper_trade',
       })
       .select('id')
       .single()
@@ -101,7 +102,7 @@ export async function placeBetCustom(params: PlaceBetCustomParams): Promise<{ id
       const retry2 = await supabase
         .from('user_bets')
         .upsert(baseRow, {
-          onConflict: 'user_id,game_date,player_id,stat_type',
+          onConflict: 'user_id,game_date,player_name,stat_type,bet_direction,is_paper_trade',
         })
         .select('id')
         .single()
@@ -248,6 +249,7 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
             model_prob: modelProb ?? null,
             edge: edge ?? null,
             stake,
+            is_paper_trade: false,
         }
 
         let { data, error } = await supabase
@@ -259,7 +261,7 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
             bet_context: toggleContext,
             user_confidence: null,
           }, {
-            onConflict: 'user_id,game_date,player_id,stat_type',
+            onConflict: 'user_id,game_date,player_name,stat_type,bet_direction,is_paper_trade',
           })
           .select('id')
           .single()
@@ -273,7 +275,7 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
               team_abbrev: prediction.team_abbrev ?? null,
               opponent_abbrev: prediction.opponent_abbrev ?? null,
             }, {
-              onConflict: 'user_id,game_date,player_id,stat_type',
+              onConflict: 'user_id,game_date,player_name,stat_type,bet_direction,is_paper_trade',
             })
             .select('id')
             .single()
@@ -286,7 +288,7 @@ export function useUserBets(selectedDate: string, bankroll?: number, kellyFracti
           const retry2 = await supabase
             .from('user_bets')
             .upsert(toggleBaseRow, {
-              onConflict: 'user_id,game_date,player_id,stat_type',
+              onConflict: 'user_id,game_date,player_name,stat_type,bet_direction,is_paper_trade',
             })
             .select('id')
             .single()
