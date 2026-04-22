@@ -59,6 +59,15 @@ EDGE_GAP_THRESHOLD = 0.08  # flag if edge accuracy gap > 8pp (was 10pp)
 EDGE_MIN_SAMPLE = 10  # minimum bets in an edge bucket
 ECE_THRESHOLD = 0.03  # flag if ECE > 0.03 (was 0.05)
 
+# Sample size below which metrics are too noisy for reliable conclusions
+LOW_CONFIDENCE_THRESHOLD = 75
+
+# Relaxed thresholds for low-confidence windows (< 75 bets)
+LOW_CONF_QUANTILE_GAP = 0.08
+LOW_CONF_ECE = 0.08
+LOW_CONF_BIAS_REL = 10.0
+LOW_CONF_EDGE_GAP = 0.15
+
 
 @dataclass
 class CalibrationMetrics:
@@ -93,16 +102,25 @@ class CalibrationMetrics:
         return self.quantile_alerts + self.prob_alerts + self.edge_alerts
 
     @property
+    def low_confidence(self) -> bool:
+        """True when sample size is too small for reliable calibration."""
+        return self.n_bets < LOW_CONFIDENCE_THRESHOLD
+
+    @property
     def has_drift(self) -> bool:
         return len(self.all_alerts) > 0
 
     @property
     def severity(self) -> str:
-        """'healthy', 'warning', or 'critical' based on alert count."""
+        """'healthy', 'warning', or 'critical' based on alert count.
+
+        Caps at 'warning' when sample size is below LOW_CONFIDENCE_THRESHOLD
+        because small samples produce noisy metrics that look like drift.
+        """
         n = len(self.all_alerts)
         if n == 0:
             return "healthy"
-        elif n < 3:
+        elif n < 3 or self.low_confidence:
             return "warning"
         return "critical"
 
@@ -379,11 +397,28 @@ def compute_calibration_drift(lookback_days: int = 7) -> CalibrationMetrics | No
         dates = pd.to_datetime(df["game_date"])
         metrics.date_range = (str(dates.min().date()), str(dates.max().date()))
 
-    # Compute all metrics
-    metrics.quantile_coverage, metrics.quantile_alerts = _compute_quantile_coverage(df)
-    metrics.brier_score, metrics.ece, metrics.prob_alerts = _compute_prob_calibration(df)
-    metrics.bias_by_stat, metrics.bias_alerts = _compute_bias_by_stat(df)
-    metrics.edge_accuracy, metrics.edge_alerts = _compute_edge_accuracy(df)
+    # Use relaxed thresholds when sample size is too small for reliable conclusions
+    global QUANTILE_GAP_THRESHOLD, ECE_THRESHOLD, BIAS_REL_THRESHOLD, EDGE_GAP_THRESHOLD
+    _orig = (QUANTILE_GAP_THRESHOLD, ECE_THRESHOLD, BIAS_REL_THRESHOLD, EDGE_GAP_THRESHOLD)
+    if len(df) < LOW_CONFIDENCE_THRESHOLD:
+        logger.info(
+            f"Low confidence mode ({len(df)} < {LOW_CONFIDENCE_THRESHOLD} bets) "
+            f"— using relaxed thresholds"
+        )
+        QUANTILE_GAP_THRESHOLD = LOW_CONF_QUANTILE_GAP
+        ECE_THRESHOLD = LOW_CONF_ECE
+        BIAS_REL_THRESHOLD = LOW_CONF_BIAS_REL
+        EDGE_GAP_THRESHOLD = LOW_CONF_EDGE_GAP
+
+    try:
+        # Compute all metrics
+        metrics.quantile_coverage, metrics.quantile_alerts = _compute_quantile_coverage(df)
+        metrics.brier_score, metrics.ece, metrics.prob_alerts = _compute_prob_calibration(df)
+        metrics.bias_by_stat, metrics.bias_alerts = _compute_bias_by_stat(df)
+        metrics.edge_accuracy, metrics.edge_alerts = _compute_edge_accuracy(df)
+    finally:
+        # Restore default thresholds so subsequent calls aren't affected
+        QUANTILE_GAP_THRESHOLD, ECE_THRESHOLD, BIAS_REL_THRESHOLD, EDGE_GAP_THRESHOLD = _orig
 
     alert_count = len(metrics.all_alerts)
     logger.info(
@@ -408,7 +443,8 @@ if __name__ == "__main__":
         print("Insufficient data for calibration check.")
     else:
         print(f"\nCalibration Report ({result.n_bets} bets, {result.date_range[0]} to {result.date_range[1]})")
-        print(f"Severity: {result.severity}")
+        confidence_note = " (LOW CONFIDENCE — metrics may be noisy)" if result.low_confidence else ""
+        print(f"Severity: {result.severity}{confidence_note}")
         print(f"Brier: {result.brier_score:.3f} | ECE: {result.ece:.3f}")
 
         if result.quantile_coverage:

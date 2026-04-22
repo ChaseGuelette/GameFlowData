@@ -640,9 +640,14 @@ def _build_calibration_embed(metrics) -> dict:
         Discord embed dict
     """
     severity = metrics.severity
+    low_conf = getattr(metrics, "low_confidence", False)
+
     if severity == "healthy":
         color = 0x2ECC71  # Green
         title = "Calibration Check — Healthy"
+    elif severity == "warning" and low_conf:
+        color = 0xF39C12  # Amber
+        title = "Calibration Check — Early Signal (Low Sample)"
     elif severity == "warning":
         color = 0xF39C12  # Amber
         title = "Calibration Check — Drift Detected"
@@ -650,10 +655,18 @@ def _build_calibration_embed(metrics) -> dict:
         color = 0xE74C3C  # Red
         title = "Calibration Check — Significant Drift"
 
+    description = "Bet-selection calibration — evaluates placed bets only, not the full prediction distribution."
+    if low_conf:
+        n = metrics.n_bets
+        description += (
+            f"\n\n:warning: Low sample size ({n} bets) — metrics may be noisy. "
+            f"Need ~75+ bets for reliable calibration."
+        )
+
     model_note = f" | {metrics.model_context}" if getattr(metrics, "model_context", "") else ""
     embed = {
         "title": title,
-        "description": "Bet-selection calibration — evaluates placed bets only, not the full prediction distribution.",
+        "description": description,
         "color": color,
         "timestamp": datetime.utcnow().isoformat(),
         "fields": [],

@@ -44,4 +44,6 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-036]] - Elections + Politics non-sports arb expansion: 200 → 6,439 markets, candidate disambiguation, 144 matched pairs
 - [[handoff-037]] - Bankroll manager overhaul (per-sportsbook balances + override), bot tracker fill-price fix, Railway libz.so.1 fix, Manual Paper Trader scoped (Phase 10)
 - [[handoff-038]] - MLB feature pipeline fix: feat_* columns now populated (L5 avg, rest days, park factor), MLB_COLD_OVER filter strengthened, per-stat daily bet caps added
+- [[handoff-039]] - Phase 10 Manual Paper Trader shipped: is_paper_trade column, Paper Trade button, Real/Paper toggle, resolver + scheduler wiring, onConflict + isPaperTrade forwarding bug fixes
+- [[handoff-040]] - Calibration Discord alerts: sample-size awareness (LOW_CONFIDENCE_THRESHOLD=75, relaxed thresholds, severity cap, "Early Signal" title)
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

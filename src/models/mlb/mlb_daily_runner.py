@@ -32,6 +32,20 @@ from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL
 
 logger = logging.getLogger(__name__)
 
+# Bookmakers excluded from edge calculation.
+# novig: low-vig sharp book (user cannot bet there)
+# betonlineag: offshore book (user cannot bet there)
+# DFS platforms: use DFS-specific pricing, not real sportsbook odds
+_EXCLUDED_BOOKMAKERS: tuple[str, ...] = (
+    "novig",
+    "betonlineag",
+    "dabble_us_dfs",
+    "betr_us_dfs",
+    "pick6",
+    "prizepicks",
+    "underdog",
+)
+
 # Stat → feature name mappings for _map_features_to_predictions
 _STAT_L5: dict[str, str] = {
     "batter_rbis": "batter_avg_rbi_l5",
@@ -721,6 +735,7 @@ class MLBDailyPredictionRunner:
                 FROM mlb_raw_player_props
                 WHERE game_id IN :game_ids
                   AND market_key IN :markets
+                  AND bookmaker NOT IN :excluded_bookmakers
                   AND player_id IS NOT NULL
             )
             SELECT
@@ -739,11 +754,16 @@ class MLBDailyPredictionRunner:
         """).bindparams(
             bindparam("game_ids", expanding=True),
             bindparam("markets", expanding=True),
+            bindparam("excluded_bookmakers", expanding=True),
         )
 
         with self.engine.connect() as conn:
             all_lines = pd.read_sql(
-                query, conn, params={"game_ids": game_ids, "markets": markets}
+                query, conn, params={
+                    "game_ids": game_ids,
+                    "markets": markets,
+                    "excluded_bookmakers": list(_EXCLUDED_BOOKMAKERS),
+                }
             )
 
         elapsed = time.perf_counter() - start_time

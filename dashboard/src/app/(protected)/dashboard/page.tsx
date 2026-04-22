@@ -144,6 +144,7 @@ export default function DashboardPage() {
       edge: data.edge,
       betContext: data.betContext,
       userConfidence: data.userConfidence,
+      isPaperTrade: data.isPaperTrade,
     })
     if (result) {
       markBetTaken(prediction.player_id, prediction.stat, result.id)
@@ -480,7 +481,7 @@ export default function DashboardPage() {
                 : "Historical Props"
             }
           </h1>
-          <p className="text-slate-400">
+          <div className="text-slate-400">
             {formatDate(selectedDate)} • {sortedPredictions.length} {showModelPicks ? 'recommended' : 'picks'}
             {showModelPicks && (
               <span className="ml-2 inline-flex items-center gap-1.5 flex-wrap">
@@ -527,7 +528,7 @@ export default function DashboardPage() {
                 </span>
               </span>
             )}
-          </p>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {/* FilterTabs - always visible as primary nav */}

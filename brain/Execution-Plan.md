@@ -205,11 +205,11 @@ Phased roadmap for GameFlowData. The NBA system is live and profitable. Focus no
 
 | Step | Task | Status | Dependencies | Details |
 |------|------|--------|--------------|---------|
-| 10.1 | DB migration — `is_paper_trade` column | not_started | None | `ALTER TABLE user_bets ADD COLUMN is_paper_trade boolean NOT NULL DEFAULT false`. No new table needed — reuses all existing schema. |
-| 10.2 | AnalysisModal — Paper Trade button | not_started | 10.1 | Add "Paper Trade" button alongside existing "Take Bet". Same `placeBetCustom()` flow with `is_paper_trade: true`. Stake auto-fills from Kelly recommendation (no manual entry). |
-| 10.3 | History tab — Real/Paper toggle + P&L column | not_started | 10.1 | "My Bets" tab gets `All | Real | Paper` filter toggle. Paper rows show `PAPER` badge. Add P&L column (computed from `result` + `stake` + `odds_at_bet`). |
-| 10.4 | Python resolver — `resolve_user_paper_bets.py` | not_started | 10.1 | New file `src/processing/resolve_user_paper_bets.py`. Finds paper bets where `result IS NULL` and `game_date <= today`. Joins `player_game_stats` on player_id + game_date, checks actual stat vs line + side → won/lost/push. Computes PnL from American odds. |
-| 10.5 | Wire resolver into scheduler | not_started | 10.4 | Add `resolve_user_paper_bets` call to daily stats job in `scheduler.py` (after stats scrape, ~9:30 AM ET). |
+| 10.1 | DB migration — `is_paper_trade` column | completed | None | Migration 027 applied. `is_paper_trade boolean NOT NULL DEFAULT false` added to `user_bets`. New unique constraint on `(user_id, game_date, player_name, stat_type, bet_direction, is_paper_trade)` — allows real + paper bets to coexist for same player/stat. |
+| 10.2 | AnalysisModal — Paper Trade button | completed | 10.1 | "Paper Trade" button added alongside "Take Bet". Auto-stakes Kelly recommendation. Blue/slate styling, shows "Paper Set!". `isPaperTrade` forwarded through `TakeBetData` → `handleTakeBet` → `placeBetCustom`. Paper trades use `.insert()` not `.upsert()`. |
+| 10.3 | History tab — Real/Paper toggle + PAPER badge | completed | 10.1 | `All | Real | Paper` toggle added to My Bets header. `BetCard` shows blue PAPER badge when `is_paper_trade=true`. `fetchMyBets` selects `is_paper_trade`. `PaperBet` type updated. |
+| 10.4 | Python resolver — `resolve_user_paper_bets.py` | completed | 10.1 | `src/orchestration/resolve_user_paper_bets.py` — queries pending paper bets ≤ yesterday, joins actual stats from `player_game_stats`/`mlb_player_game_stats_batting`/`mlb_player_game_stats_pitching`, computes won/lost/push + PnL from American odds, batch-updates `user_bets`. Supports `--dry-run`. |
+| 10.5 | Wire resolver into scheduler | completed | 10.4 | `run_user_paper_bet_resolution()` added to `scheduler.py`. Runs at 9:30 AM ET. Added to `JOB_NAMES`. |
 | 10.6 | P&L summary card on History tab | not_started | 10.3 | When "Paper" filter active: show summary banner — Bets, Win Rate, Total P&L (simulated), ROI, Avg Edge. |
 
 **Done when**: User can click "Paper Trade" on any pick, see it in history with auto-resolved result and P&L, with aggregate stats visible at a glance.

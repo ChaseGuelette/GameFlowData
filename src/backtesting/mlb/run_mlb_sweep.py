@@ -64,6 +64,20 @@ STAT_TO_MARKET_KEY: dict[str, str] = {
 _MIN_PROB: float = 1e-6
 _MAX_PROB: float = 1.0 - 1e-6
 
+# Bookmakers excluded from edge calculation — mirrors mlb_daily_runner._EXCLUDED_BOOKMAKERS.
+# novig: low-vig sharp book (user cannot bet there)
+# betonlineag: offshore book (user cannot bet there)
+# DFS platforms: use DFS-specific pricing, not real sportsbook odds
+EXCLUDED_BOOKMAKERS: tuple[str, ...] = (
+    "novig",
+    "betonlineag",
+    "dabble_us_dfs",
+    "betr_us_dfs",
+    "pick6",
+    "prizepicks",
+    "underdog",
+)
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -172,7 +186,6 @@ def run_shared_phases(
     start_date: date,
     end_date: date,
     stats: list[str],
-    bookmakers: list[str],
 ) -> tuple[
     list[date],
     dict[date, list[DatePrediction]],
@@ -253,7 +266,7 @@ def run_shared_phases(
         try:
             preds, lines = _process_date_shared(
                 engine, pitcher_feature_store, batter_feature_store, suite,
-                game_date, stats, bookmakers, matchup_cache=matchup_cache,
+                game_date, stats, matchup_cache=matchup_cache,
             )
             if preds:
                 date_predictions[game_date] = preds
@@ -278,7 +291,6 @@ def _process_date_shared(
     suite: MLBModelSuite,
     game_date: date,
     stats: list[str],
-    bookmakers: list[str],
     matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None,
 ) -> tuple[list[DatePrediction], pd.DataFrame | None]:
     """Generate predictions + fetch lines for a single date."""
@@ -418,15 +430,20 @@ def _process_date_shared(
     # Fetch lines for all players on this date
     game_ids = [g["game_id"] for g in games]
     market_keys = [s for s in stats if s in STAT_ACTUALS]
-    lines_df = _fetch_lines_for_date(engine, game_ids, market_keys, bookmakers)
+    lines_df = _fetch_lines_for_date(engine, game_ids, market_keys)
 
     return predictions, lines_df
 
 
 def _fetch_lines_for_date(
-    engine, game_ids: list[int], market_keys: list[str], bookmakers: list[str],
+    engine, game_ids: list[int], market_keys: list[str],
 ) -> pd.DataFrame:
-    """Fetch all prop lines for a set of games."""
+    """Fetch all prop lines for a set of games, excluding invalid bookmakers.
+
+    Uses EXCLUDED_BOOKMAKERS to filter out books the user cannot bet at
+    (novig, betonlineag) and DFS platforms with non-sportsbook pricing.
+    Matches production logic in mlb_daily_runner._get_current_lines().
+    """
     if not game_ids or not market_keys:
         return pd.DataFrame()
 
@@ -437,15 +454,15 @@ def _fetch_lines_for_date(
     # Build parameterized query
     game_id_placeholders = ", ".join(f":gid_{i}" for i in range(len(game_ids)))
     market_placeholders = ", ".join(f":mk_{i}" for i in range(len(db_keys)))
-    book_placeholders = ", ".join(f":bk_{i}" for i in range(len(bookmakers)))
+    excl_placeholders = ", ".join(f":excl_{i}" for i in range(len(EXCLUDED_BOOKMAKERS)))
 
-    params = {}
+    params: dict = {}
     for i, gid in enumerate(game_ids):
         params[f"gid_{i}"] = gid
     for i, mk in enumerate(db_keys):
         params[f"mk_{i}"] = mk
-    for i, bk in enumerate(bookmakers):
-        params[f"bk_{i}"] = bk
+    for i, bk in enumerate(EXCLUDED_BOOKMAKERS):
+        params[f"excl_{i}"] = bk
 
     query = text(f"""
         WITH ranked AS (
@@ -456,7 +473,7 @@ def _fetch_lines_for_date(
             FROM mlb_raw_player_props
             WHERE game_id IN ({game_id_placeholders})
               AND market_key IN ({market_placeholders})
-              AND bookmaker IN ({book_placeholders})
+              AND bookmaker NOT IN ({excl_placeholders})
               AND player_id IS NOT NULL
             GROUP BY player_id, game_id, bookmaker, market_key, line
             HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
@@ -910,10 +927,10 @@ def run_combined_config(
 
     t0 = time.time()
 
-    # Build per-stat blenders
-    stat_blenders: dict[str, BlackLittermanBlender] = {}
+    # Build per-stat blenders (None means raw model, no BL)
+    stat_blenders: dict[str, BlackLittermanBlender | None] = {}
     for stat_key, bl_cfg in stat_bl_configs.items():
-        stat_blenders[stat_key] = BlackLittermanBlender(config=bl_cfg)
+        stat_blenders[stat_key] = BlackLittermanBlender(config=bl_cfg) if bl_cfg is not None else None
 
     # Build StatConfigSet for per-stat edge thresholds
     min_edge = min(stat_edge_thresholds.values()) if stat_edge_thresholds else 0.05
@@ -1232,13 +1249,6 @@ def main():
     parser.add_argument("--starting-bankroll", type=float, default=10000.0)
     parser.add_argument("--max-bet-pct", type=float, default=None)
     parser.add_argument("--flat-bet", type=float, default=None)
-    parser.add_argument(
-        "--bookmakers", nargs="+",
-        default=[
-            "draftkings", "fanduel", "betmgm", "betrivers", "bovada",
-            "williamhill_us", "betonlineag", "fanatics",
-        ],
-    )
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
@@ -1300,6 +1310,7 @@ def main():
     logger.info("=" * 60)
     t_shared = time.time()
 
+    logger.info(f"Excluding bookmakers: {list(EXCLUDED_BOOKMAKERS)}")
     game_dates, date_predictions, date_lines, date_actuals = run_shared_phases(
         engine=engine,
         pitcher_feature_store=pitcher_feature_store,
@@ -1308,7 +1319,6 @@ def main():
         start_date=start_date,
         end_date=end_date,
         stats=args.stats,
-        bookmakers=args.bookmakers,
     )
 
     phase01_time = time.time() - t_shared
@@ -1332,7 +1342,10 @@ def main():
             if stat_key in args.stats:
                 edge = MLB_STATS.get(stat_key, {}).get("edge_threshold", 0.08)
                 dirs = MLB_STATS.get(stat_key, {}).get("allowed_directions", ["over", "under"])
-                logger.info(f"  {stat_key}: tau={bl_cfg.tau}, z_max={bl_cfg.z_max}, mw={bl_cfg.max_weight}, edge={edge}, dirs={dirs}")
+                if bl_cfg is not None:
+                    logger.info(f"  {stat_key}: tau={bl_cfg.tau}, z_max={bl_cfg.z_max}, mw={bl_cfg.max_weight}, edge={edge}, dirs={dirs}")
+                else:
+                    logger.info(f"  {stat_key}: BL=None (raw model), edge={edge}, dirs={dirs}")
         logger.info("=" * 60)
 
         # Build per-stat BL configs and edge thresholds for requested stats

@@ -92,17 +92,9 @@ export function Navbar() {
               <Link href="/performance" className={navLinkClasses('/performance')}>
                 Performance
               </Link>
-              <Link href="/track-record" className={navLinkClasses('/track-record')}>
-                Track Record
-              </Link>
               {config.features.statsVault && (
                 <Link href="/stats" className={navLinkClasses('/stats')}>
                   Data Vault
-                </Link>
-              )}
-              {config.features.predictionMarkets && (
-                <Link href="/prediction-markets" className={navLinkClasses('/prediction-markets')}>
-                  Markets
                 </Link>
               )}
               {isAdmin && (
@@ -178,17 +170,9 @@ export function Navbar() {
           <Link href="/performance" className={mobileNavLinkClasses('/performance')}>
             Performance
           </Link>
-          <Link href="/track-record" className={mobileNavLinkClasses('/track-record')}>
-            Track Record
-          </Link>
           {config.features.statsVault && (
             <Link href="/stats" className={mobileNavLinkClasses('/stats')}>
               Data Vault
-            </Link>
-          )}
-          {config.features.predictionMarkets && (
-            <Link href="/prediction-markets" className={mobileNavLinkClasses('/prediction-markets')}>
-              Markets
             </Link>
           )}
           {isAdmin && (

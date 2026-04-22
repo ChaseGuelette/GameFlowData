@@ -58,6 +58,7 @@ def _get_env_float(name: str, default: float) -> float:
 
 DEFAULT_BANKROLL = _get_env_float("MLB_PAPER_TRADING_BANKROLL", 5000.0)
 DEFAULT_KELLY_FRACTION = _get_env_float("MLB_PAPER_TRADING_KELLY_FRACTION", 0.125)
+DEFAULT_MAX_BET_PCT = _get_env_float("MLB_PAPER_TRADING_MAX_BET_PCT", 0.03)  # 3% of bankroll cap per bet
 
 
 @dataclass
@@ -71,14 +72,14 @@ class MLBPaperTrader:
     """
 
     kelly_fraction: float = field(default_factory=lambda: DEFAULT_KELLY_FRACTION)
-    max_bet_pct: float | None = None
+    max_bet_pct: float = field(default_factory=lambda: DEFAULT_MAX_BET_PCT)
     starting_bankroll: float = field(default_factory=lambda: DEFAULT_BANKROLL)
 
     def __post_init__(self):
         self.engine = get_engine()
         logger.info(
             f"MLBPaperTrader initialized: bankroll=${self.starting_bankroll:,.0f}, "
-            f"kelly={self.kelly_fraction}"
+            f"kelly={self.kelly_fraction}, max_bet_pct={self.max_bet_pct:.1%}"
         )
 
     def _american_to_decimal(self, odds: float) -> float:
@@ -225,7 +226,17 @@ class MLBPaperTrader:
                 "kelly_fraction": self.kelly_fraction,
             })
 
-        logger.info(f"Selected {len(bets)} MLB bets for {game_date} (is_recommended=True)")
+        # Deduplicate by (player_id, stat_type) — keep highest-edge bet.
+        # Multiple bookmakers can each produce an is_recommended=True row for the
+        # same player in opposite directions. We only want one bet per player per stat.
+        seen: dict[tuple, dict] = {}
+        for bet in bets:
+            key = (bet["player_id"], bet["stat_type"])
+            if key not in seen or abs(bet["edge"]) > abs(seen[key]["edge"]):
+                seen[key] = bet
+        bets = list(seen.values())
+
+        logger.info(f"Selected {len(bets)} MLB bets for {game_date} (is_recommended=True, deduped by player+stat)")
         return bets
 
     def place_bets(self, bets: list[dict[str, Any]]) -> int:
@@ -243,9 +254,10 @@ class MLBPaperTrader:
                 :line, :bet_direction, :odds_at_bet, :implied_prob, :model_prob,
                 :edge, :stake, :kelly_fraction, 'pending'
             )
-            ON CONFLICT (game_date, player_id, stat_type, bet_direction)
+            ON CONFLICT (game_date, player_id, stat_type)
             DO UPDATE SET
                 prediction_id = EXCLUDED.prediction_id,
+                bet_direction = EXCLUDED.bet_direction,
                 line = EXCLUDED.line,
                 odds_at_bet = EXCLUDED.odds_at_bet,
                 implied_prob = EXCLUDED.implied_prob,

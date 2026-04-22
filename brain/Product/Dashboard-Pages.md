@@ -37,7 +37,7 @@
 |-------|---------|
 | `/dashboard` | Main predictions — PropCards, FilterTabs, date selector, model picks toggle, live scoreboard. **Session 35**: Collapsed 10+ filter controls to 4 (FilterTabs + All Bets/Model Picks toggle + Date selector + ⚙ Filters popover + Build Slate button). Removed Edge/BL tau selectors; hardcoded 0.03 edge threshold. `FilterPopover` contains State, Books, Game Status, Direction. DFS-only predictions filtered out at query level. |
 | `/dfs` | DFS Edge Finder — 3 modes, 6 stats, platform filters, slip type selector |
-| `/history` | My Bets + Model History — status/direction filters, date range, per-stat win rates. **Session 34**: Edit (pencil icon) + two-step confirm delete on ALL bet statuses (not just pending). EditBetModal pre-fills all fields; saves via UPDATE + calls `rebuild_user_daily_log`. |
+| `/history` | My Bets + Model History — status/direction filters, date range, per-stat win rates. **Session 34**: Edit (pencil icon) + two-step confirm delete on ALL bet statuses (not just pending). EditBetModal pre-fills all fields; saves via UPDATE + calls `rebuild_user_daily_log`. **Session 39 (Phase 10)**: `All | Real | Paper` toggle added to My Bets header. Paper bets show blue PAPER badge in `BetCard`. |
 | `/performance` | My Bets + Props + DFS tabs — bankroll chart, stat breakdown, KPI cards |
 | `/stats` | Data Vault — NBA: player/team/defense/play-type heatmap tables, percentile coloring. MLB (Session 27): `MLBStatsPage` component with Batters/Pitchers tabs, Box/Rates/Consistency categories, L3/L5/L10/L20/SZN window support. Requires migration 023 in Supabase. |
 | `/account` | Profile + bankroll settings + community card |
@@ -57,6 +57,7 @@ Click any PropCard to open:
 - Line shopping by state
 - Kelly sizing recommendation
 - "Take Bet" button with confidence stars (1-5)
+- **"Paper Trade" button** (Session 39 / Phase 10): alongside Take Bet, auto-stakes Kelly recommendation, no manual stake input, shows "Paper Set!" after click. Logs to `user_bets` with `is_paper_trade=true`. Resolved nightly by `resolve_user_paper_bets.py` (9:30 AM ET).
 
 ## Cross-Device Sync
 - `useUserBets` — optimistic UI + Supabase backend
