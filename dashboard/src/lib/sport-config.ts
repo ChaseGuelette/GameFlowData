@@ -181,13 +181,12 @@ export const MLB_CONFIG: SportConfig = {
   dailyLogTable: 'mlb_paper_trading_daily_log',
   predictionSamplesTable: 'mlb_daily_prediction_samples',
   statTypes: [
-    'pitcher_strikeouts', 'batter_hits', 'batter_rbis',
+    'pitcher_strikeouts', 'batter_hits',
   ],
   filterTabs: [
     { value: 'all', label: 'All Props' },
     { value: 'pitcher_strikeouts', label: 'Strikeouts' },
     { value: 'batter_hits', label: 'Hits' },
-    { value: 'batter_rbis', label: 'RBIs' },
   ],
   comboStats: new Set<StatType>(),
   teams: MLB_TEAMS,
@@ -198,7 +197,6 @@ export const MLB_CONFIG: SportConfig = {
   perStatConfig: {
     pitcher_strikeouts: { edge: 0.12, tau: 0.75, z_max: 0.25, max_weight: 0.80 },
     batter_hits:        { edge: 0.10, tau: 0.90, z_max: 0.25, max_weight: 0.50 },
-    batter_rbis:        { edge: 0.12, tau: 0.00, z_max: 0.00, max_weight: 0.00 },  // No BL — raw model
   },
   getHeadshotUrl: (playerId: number) =>
     `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${playerId}/headshot/67/current`,
