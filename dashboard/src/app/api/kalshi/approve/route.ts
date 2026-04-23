@@ -104,10 +104,13 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  // Mark as approved (the Python backend will pick these up)
+  // Mark as approved with a fresh 30-min expiry window so the execute-approved
+  // cron has time to place the order regardless of how close to the original
+  // expiry the human approved.
+  const refreshedExpiry = new Date(Date.now() + 30 * 60 * 1000).toISOString()
   const { error: approveError } = await admin
     .from('kalshi_trade_queue')
-    .update({ status: 'approved', approved_at: now })
+    .update({ status: 'approved', approved_at: now, expires_at: refreshedExpiry })
     .in('id', valid)
 
   if (approveError) {
