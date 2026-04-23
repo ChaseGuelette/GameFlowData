@@ -91,6 +91,7 @@ JOB_NAMES = {
     "kalshi_daily_summary_job.py": "Kalshi Daily Summary",
     "arb_scan_job.py": "Arb Scanner",
     "kalshi_nonsports_refresh_job.py": "Kalshi Non-Sports Refresh",
+    "kalshi_execute_approved_job.py": "Kalshi Execute Approved",
     "resolve_user_paper_bets.py": "User Paper Bet Resolution",
 }
 
@@ -630,6 +631,16 @@ def run_kalshi_nonsports_refresh():
     run_job("kalshi_nonsports_refresh_job.py", silent_on_success=True)
 
 
+def run_kalshi_execute_approved():
+    """Execute Kalshi trades that were approved on the dashboard.
+
+    Polls kalshi_trade_queue for status='approved' rows and places them via
+    the Kalshi API. Exits gracefully if KALSHI_LIVE_TRADING_ENABLED != true
+    or if there are no approved trades.
+    """
+    run_job("kalshi_execute_approved_job.py", silent_on_success=True)
+
+
 # ---- Arbitrage Scanner Jobs ----
 
 def run_arb_scan_mlb():
@@ -991,6 +1002,16 @@ def main():
         CronTrigger(hour='9-23', minute='*/10', timezone=ET),
         id="kalshi_nonsports_refresh",
         name="Kalshi Non-Sports Refresh (every 10 min, 9AM-11PM ET)",
+    )
+
+    # Every 2 min, 9 AM - 11 PM ET — execute dashboard-approved trades
+    # Picks up rows where kalshi_trade_queue.status='approved' and places them
+    # via the Kalshi API. Exits gracefully when nothing is approved.
+    scheduler.add_job(
+        run_kalshi_execute_approved,
+        CronTrigger(hour='9-23', minute='*/2', timezone=ET),
+        id="kalshi_execute_approved",
+        name="Kalshi Execute Approved (every 2 min, 9AM-11PM ET)",
     )
 
     # ==============================================================
