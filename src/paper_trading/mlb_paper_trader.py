@@ -156,7 +156,7 @@ class MLBPaperTrader:
             FROM mlb_daily_predictions
             WHERE prediction_date = :game_date
               AND is_recommended = true
-              AND stat IN ('pitcher_strikeouts', 'batter_hits', 'batter_rbis')
+              AND stat IN ('pitcher_strikeouts', 'batter_hits')
               AND line IS NOT NULL
               AND bl_over_edge IS NOT NULL
               AND bl_under_edge IS NOT NULL

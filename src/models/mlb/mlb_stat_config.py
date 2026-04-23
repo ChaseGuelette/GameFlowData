@@ -21,9 +21,6 @@ MLB_STATS: dict[str, dict] = {
     # Binomial stats (hits in at-bats — underdispersed)
     # Hits: both directions. Backtest #475: 361 bets, 63.2% win, +28.1% ROI, Sharpe 2.20
     "batter_hits": {"model_type": "binomial", "edge_threshold": 0.10},
-    # NegBin stats (discrete counts — overdispersed)
-    # RBIs: both directions, no BL. Backtest #5: 241 bets, 64.7% win, +9.5% ROI, Sharpe 1.36
-    "batter_rbis": {"model_type": "negbin", "edge_threshold": 0.12},
     # Combined batter offensive contribution: hits + runs scored + RBIs
     # No HRR prop lines in sportsbook data — Kalshi KXMLBHRR only
     "batter_hrr": {"model_type": "negbin", "edge_threshold": 0.15},
@@ -35,7 +32,6 @@ MLB_STATS: dict[str, dict] = {
 STAT_BL_CONFIGS: dict[str, BLConfig | None] = {
     "pitcher_strikeouts": BLConfig(tau=0.75, z_max=0.25, max_weight=0.80),
     "batter_hits": BLConfig(tau=0.9, z_max=0.25, max_weight=0.50),
-    "batter_rbis": None,  # No BL — raw model outperforms blended in early season
     "batter_hrr": BLConfig(tau=0.9, z_max=0.25, max_weight=0.65),
 }
 
