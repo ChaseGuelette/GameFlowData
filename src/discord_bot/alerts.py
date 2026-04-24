@@ -1101,6 +1101,45 @@ def _build_kalshi_trade_placed_embed(trade: dict, mode: str = "live") -> dict:
     }
 
 
+def _build_kalshi_order_filled_embed(data: dict) -> dict:
+    """Build Discord embed for a Kalshi order fill notification."""
+    return {
+        "title": "Kalshi Order Filled",
+        "color": 0x00AA00,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {"name": "Player", "value": str(data.get("player_name", "Unknown")), "inline": True},
+            {"name": "Stat", "value": str(data.get("stat_type", "")), "inline": True},
+            {"name": "Side", "value": str(data.get("side", "")), "inline": True},
+            {"name": "Fill Price", "value": str(data.get("fill_price", "?")), "inline": True},
+            {"name": "Contracts", "value": str(data.get("contracts", "?")), "inline": True},
+        ],
+        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+    }
+
+
+def _build_kalshi_live_daily_summary_embed(data: dict) -> dict:
+    """Build Discord embed for Kalshi live trading daily performance summary."""
+    wins = data.get("wins", 0)
+    losses = data.get("losses", 0)
+    daily_pnl = data.get("daily_pnl", 0)
+    win_rate = data.get("win_rate", 0)
+    total_pnl = data.get("total_pnl", 0)
+
+    return {
+        "title": "Kalshi Live Daily Performance",
+        "color": 0x00AA44 if daily_pnl >= 0 else 0xCC2200,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {"name": "Yesterday's Record", "value": f"{wins}W-{losses}L", "inline": True},
+            {"name": "Daily P&L", "value": f"${daily_pnl:+.2f}", "inline": True},
+            {"name": "Win Rate", "value": f"{win_rate:.1f}%", "inline": True},
+            {"name": "Total P&L", "value": f"${total_pnl:+.2f}", "inline": True},
+        ],
+        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+    }
+
+
 def _build_kalshi_trade_resolved_embed(trade: dict, mode: str = "live") -> dict:
     """Build Discord embed for a resolved Kalshi trade."""
     player = trade.get("player_name", "Unknown")
@@ -1262,6 +1301,8 @@ def send_kalshi_trade_alert_sync(
 
     if alert_type == "placed":
         embed = _build_kalshi_trade_placed_embed(data, mode=mode)
+    elif alert_type == "filled":
+        embed = _build_kalshi_order_filled_embed(data)
     elif alert_type == "resolved":
         embed = _build_kalshi_trade_resolved_embed(data, mode=mode)
     elif alert_type == "circuit_breaker":
@@ -1270,6 +1311,8 @@ def send_kalshi_trade_alert_sync(
         )
     elif alert_type == "approval_needed":
         embed = _build_kalshi_approval_embed(data)
+    elif alert_type == "daily_summary":
+        embed = _build_kalshi_live_daily_summary_embed(data)
     else:
         logger.error(f"Unknown Kalshi alert type: {alert_type}")
         return False

@@ -92,6 +92,7 @@ JOB_NAMES = {
     "arb_scan_job.py": "Arb Scanner",
     "kalshi_nonsports_refresh_job.py": "Kalshi Non-Sports Refresh",
     "kalshi_execute_approved_job.py": "Kalshi Execute Approved",
+    "kalshi_pending_fills_job.py": "Kalshi Pending Fills",
     "resolve_user_paper_bets.py": "User Paper Bet Resolution",
 }
 
@@ -641,6 +642,11 @@ def run_kalshi_execute_approved():
     run_job("kalshi_execute_approved_job.py", silent_on_success=True)
 
 
+def run_kalshi_pending_fills():
+    """Poll Kalshi API every 5 min to catch pending orders that have since filled."""
+    run_job("kalshi_pending_fills_job.py", silent_on_success=True)
+
+
 # ---- Arbitrage Scanner Jobs ----
 
 def run_arb_scan_mlb():
@@ -1012,6 +1018,15 @@ def main():
         CronTrigger(hour='9-23', minute='*/2', timezone=ET),
         id="kalshi_execute_approved",
         name="Kalshi Execute Approved (every 2 min, 9AM-11PM ET)",
+    )
+
+    # Every 5 min, 9 AM - 11 PM ET — poll Kalshi API for pending order fills
+    # Exits early (zero API calls) if no pending orders exist.
+    scheduler.add_job(
+        run_kalshi_pending_fills,
+        CronTrigger(hour='9-23', minute='*/5', timezone=ET),
+        id="kalshi_pending_fills",
+        name="Kalshi Pending Fills (every 5 min, 9AM-11PM ET)",
     )
 
     # ==============================================================

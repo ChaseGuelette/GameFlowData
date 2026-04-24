@@ -211,7 +211,7 @@ class KalshiPaperTrader:
                 close_time
             FROM kalshi_markets
             WHERE sport = :sport
-              AND snapshot_time::date = :target_date
+              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
               AND market_status = 'open'
               AND model_prob IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
@@ -332,6 +332,19 @@ class KalshiPaperTrader:
             )
             if skip:
                 logger.debug(f"SKIP {row['player_name']} {stat_type} {direction}: {reason}")
+                continue
+
+            # Star-batter filter: NO on 1+ hits with high yes_price means
+            # betting a likely star goes hitless.  Model tail P(0 hits) is
+            # miscalibrated for elite contact hitters (28.8% win rate vs
+            # 39.4% for non-stars in paper trading).  Threshold from data:
+            # stars avg yes_price 72+, non-stars 70-.
+            _STAR_YES_PRICE = int(os.environ.get("KALSHI_STAR_HITS_YES_PRICE", "72"))
+            if stat_type == "batter_hits" and side == "no" and line_val == 1.0 and yes_price >= _STAR_YES_PRICE:
+                logger.debug(
+                    f"SKIP star-hitter filter: {row['player_name']} batter_hits "
+                    f"NO@1+ yes_price={yes_price} >= {_STAR_YES_PRICE}"
+                )
                 continue
 
             # Sportsbook-alignment check

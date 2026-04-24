@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 # than this gap, allow the override.  Otherwise prefer the aligned line.
 _SPORTSBOOK_LINE_FALLBACK_GAP = 0.08  # 8 percentage points
 
+KALSHI_SWEEP_MAX_CENTS = _env_int("KALSHI_SWEEP_MAX_CENTS", 10)
+KALSHI_SWEEP_EDGE_RETENTION = _env_float("KALSHI_SWEEP_EDGE_RETENTION", 0.50)
+
 # Supported stat types per sport (skip markets without trained models)
 SUPPORTED_STATS: dict[str, set[str]] = {
     "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
@@ -301,6 +304,31 @@ class KalshiLiveTrader:
     # Kelly sizing (taker fees)
     # ------------------------------------------------------------------
 
+    def _get_best_available_price(self, ticker: str, side: str, target_cents: int) -> int | None:
+        try:
+            ob = self.client.get_orderbook(ticker, depth=10)
+            if ob is None:
+                return None
+
+            orderbook = ob.get("orderbook", {})
+
+            if side == "yes":
+                no_bids = orderbook.get("no", [])
+                for no_bid, qty in no_bids:
+                    yes_ask = 100 - no_bid
+                    if yes_ask >= target_cents and qty > 0:
+                        return yes_ask
+                return None
+            else:
+                yes_bids = orderbook.get("yes", [])
+                for yes_bid, qty in yes_bids:
+                    if yes_bid <= target_cents and qty > 0:
+                        return yes_bid
+                return None
+        except Exception as e:
+            logger.warning(f"Orderbook query failed for {ticker}: {e}")
+            return None
+
     def _kelly_contracts(
         self, model_prob: float, price_cents: int, side: str, bankroll: float,
     ) -> int:
@@ -392,7 +420,7 @@ class KalshiLiveTrader:
                 sportsbook_consensus_line, line_vs_sportsbook
             FROM kalshi_markets
             WHERE sport = :sport
-              AND snapshot_time::date = :target_date
+              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
               AND market_status = 'open'
               AND model_prob IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
@@ -516,6 +544,19 @@ class KalshiLiveTrader:
             )
             if skip:
                 logger.debug(f"SKIP {row['player_name']} {stat_type} {direction}: {reason}")
+                continue
+
+            # Star-batter filter: NO on 1+ hits with high yes_price means
+            # betting a likely star goes hitless.  Model tail P(0 hits) is
+            # miscalibrated for elite contact hitters (28.8% win rate vs
+            # 39.4% for non-stars in paper trading).  Threshold from data:
+            # stars avg yes_price 72+, non-stars 70-.
+            _STAR_YES_PRICE = int(os.environ.get("KALSHI_STAR_HITS_YES_PRICE", "72"))
+            if stat_type == "batter_hits" and side == "no" and line_val == 1.0 and yes_price >= _STAR_YES_PRICE:
+                logger.debug(
+                    f"SKIP star-hitter filter: {row['player_name']} batter_hits "
+                    f"NO@1+ yes_price={yes_price} >= {_STAR_YES_PRICE}"
+                )
                 continue
 
             # Edge sanity cap: reject absurd edges that indicate model garbage
@@ -685,7 +726,7 @@ class KalshiLiveTrader:
                     FROM kalshi_markets km
                     JOIN {table} gs ON gs.game_date = :d
                     WHERE km.sport = :sport
-                      AND km.snapshot_time::date = :d
+                      AND (km.snapshot_time AT TIME ZONE 'America/New_York')::date = :d
                       AND gs.game_time IS NOT NULL
                     GROUP BY km.ticker, gs.game_time
                 """), {"d": target_date, "sport": sport}).fetchall()
@@ -727,6 +768,50 @@ class KalshiLiveTrader:
                     f"(cost: ${trade['expected_cost']:.2f}) — skipping"
                 )
                 continue
+
+            # --- Orderbook sweep check ---
+            snapshot_price = trade["yes_price"]
+            actual_price = self._get_best_available_price(trade["ticker"], trade["side"], snapshot_price)
+            swept_from: int | None = None
+            swept_to: int | None = None
+            recalc_edge_val: float | None = None
+
+            if actual_price is not None and actual_price != snapshot_price:
+                price_delta = abs(actual_price - snapshot_price)
+
+                if price_delta > KALSHI_SWEEP_MAX_CENTS:
+                    logger.warning(
+                        f"SWEEP REJECTED [{trade['ticker']}]: price moved {price_delta}c "
+                        f"({snapshot_price}c -> {actual_price}c) exceeds max {KALSHI_SWEEP_MAX_CENTS}c — skipping"
+                    )
+                    continue
+
+                recalc_edge_val = fee_adjusted_edge(
+                    trade["model_prob"], actual_price,
+                    is_yes=(trade["side"] == "yes"), is_maker=False,
+                )
+                original_edge = trade["fee_adjusted_edge"]
+                edge_floor = original_edge * KALSHI_SWEEP_EDGE_RETENTION
+
+                if recalc_edge_val < edge_floor:
+                    logger.warning(
+                        f"SWEEP REJECTED [{trade['ticker']}]: edge at {actual_price}c = "
+                        f"{recalc_edge_val:.1%} below {KALSHI_SWEEP_EDGE_RETENTION:.0%} retention "
+                        f"floor {edge_floor:.1%} (original: {original_edge:.1%}) — skipping"
+                    )
+                    continue
+
+                logger.info(
+                    f"SWEEP ACCEPTED [{trade['ticker']}]: {snapshot_price}c -> {actual_price}c, "
+                    f"recalc edge {recalc_edge_val:.1%} (was {original_edge:.1%})"
+                )
+                swept_from = snapshot_price
+                swept_to = actual_price
+                trade = {**trade, "yes_price": actual_price, "fee_adjusted_edge": recalc_edge_val}
+
+            elif actual_price is None:
+                logger.warning(f"Orderbook unavailable for {trade['ticker']} — using snapshot+buffer fallback")
+            # --- End sweep check ---
 
             # Place market order with a 3-cent sweep buffer so the taker order
             # fills immediately (Kalshi "market" orders require a price field).
@@ -795,7 +880,10 @@ class KalshiLiveTrader:
             new_balance = (new_balance_data.get("balance", 0) / 100.0) if new_balance_data else balance - total_cost
 
             # Discord alert
-            self._send_trade_placed_alert(trade, fill_price, fill_count, total_cost, new_balance)
+            self._send_trade_placed_alert(
+                trade, fill_price, fill_count, total_cost, new_balance,
+                swept_from=swept_from, swept_to=swept_to, recalc_edge=recalc_edge_val,
+            )
 
             results.append({
                 "ticker": trade["ticker"],
@@ -1041,12 +1129,15 @@ class KalshiLiveTrader:
             conn.commit()
 
     def _send_trade_placed_alert(
-        self, trade: dict, fill_price: int | None, contracts: int, total_cost: float, balance: float,
+        self, trade: dict, fill_price: int | None, contracts: int,
+        total_cost: float, balance: float,
+        swept_from: int | None = None, swept_to: int | None = None,
+        recalc_edge: float | None = None,
     ) -> None:
         """Send Discord alert for a placed trade."""
         try:
             from src.discord_bot.alerts import send_kalshi_trade_alert_sync
-            send_kalshi_trade_alert_sync("placed", {
+            payload = {
                 "player_name": trade.get("player_name", "Unknown"),
                 "stat_type": trade["stat_type"],
                 "line": trade["line"],
@@ -1056,7 +1147,10 @@ class KalshiLiveTrader:
                 "total_cost": total_cost,
                 "fee_adjusted_edge": trade["fee_adjusted_edge"],
                 "balance_after": balance,
-            })
+            }
+            if swept_from is not None and swept_to is not None and swept_from != swept_to:
+                payload["swept"] = f"{swept_from}c -> {swept_to}c (edge: {recalc_edge:.1%})"
+            send_kalshi_trade_alert_sync("placed", payload)
         except Exception as e:
             logger.warning(f"Failed to send trade placed alert: {e}")
 
@@ -1064,14 +1158,26 @@ class KalshiLiveTrader:
     # Fill reconciliation
     # ------------------------------------------------------------------
 
-    def reconcile_fills(self, target_date: date) -> dict[str, Any]:
-        """Fetch fills from API and reconcile with our order records."""
+    def reconcile_fills(self, target_date: date | None = None) -> dict[str, Any]:
+        """Fetch fills from API and reconcile with our order records.
+
+        Args:
+            target_date: If provided, only reconcile pending orders for that date.
+                         If None, reconcile ALL pending orders regardless of game_date.
+        """
+        if target_date is not None:
+            where_clause = "WHERE game_date = :d AND status = 'pending'"
+            params: dict = {"d": target_date}
+        else:
+            where_clause = "WHERE status = 'pending'"
+            params = {}
+
         with self.engine.connect() as conn:
-            pending = conn.execute(text("""
+            pending = conn.execute(text(f"""
                 SELECT id, kalshi_order_id, ticker, side, contracts
                 FROM kalshi_live_orders
-                WHERE game_date = :d AND status = 'pending'
-            """), {"d": target_date}).fetchall()
+                {where_clause}
+            """), params).fetchall()
 
         if not pending:
             return {"reconciled": 0}
@@ -1120,7 +1226,7 @@ class KalshiLiveTrader:
                     conn.commit()
                 reconciled += 1
 
-        logger.info(f"Reconciled {reconciled} fills for {target_date}")
+        logger.info(f"Reconciled {reconciled} fills" + (f" for {target_date}" if target_date else ""))
         return {"reconciled": reconciled}
 
     # ------------------------------------------------------------------

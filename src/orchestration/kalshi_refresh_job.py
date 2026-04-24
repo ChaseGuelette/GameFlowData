@@ -71,7 +71,7 @@ def run(
             from src.paper_trading.kalshi_live_trader import KalshiLiveTrader
 
             resolver = KalshiLiveTrader(resolve_only=True)
-            resolver.reconcile_fills(target_date)
+            resolver.reconcile_fills()
             resolve_result = resolver.resolve_settled()
             summary["live_resolution"] = resolve_result
             logger.info(f"Resolve-only result: {resolve_result}")
@@ -272,7 +272,7 @@ def _fetch_orderbooks(target_date: date, sport: str) -> int:
     query = text("""
         SELECT DISTINCT ticker FROM kalshi_markets
         WHERE sport = :sport
-          AND snapshot_time::date = :target_date
+          AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
           AND market_status = 'open'
     """)
     with engine.connect() as conn:
@@ -293,13 +293,28 @@ def _fetch_orderbooks(target_date: date, sport: str) -> int:
         )
     """)
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import json
+
+    def _fetch_orderbook(ticker):
+        try:
+            return ticker, client.get_orderbook(ticker)
+        except Exception as e:
+            logger.warning(f"Orderbook fetch failed for {ticker}: {e}")
+            return ticker, None
+
+    orderbook_results = {}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(_fetch_orderbook, t): t for t in tickers}
+        for future in as_completed(futures):
+            ticker, result = future.result()
+            if result is None:
+                continue
+            orderbook_results[ticker] = result
+
     count = 0
     with engine.begin() as conn:
-        for ticker in tickers:
-            result = client.get_orderbook(ticker)
-            if not result:
-                continue
-
+        for ticker, result in orderbook_results.items():
             ob = result.get("orderbook", {})
             yes_bids = ob.get("yes", [])
             no_bids = ob.get("no", [])
@@ -314,7 +329,6 @@ def _fetch_orderbooks(target_date: date, sport: str) -> int:
             total_bid_depth = sum(level[1] for level in yes_bids) if yes_bids else 0
             total_ask_depth = sum(level[1] for level in no_bids) if no_bids else 0
 
-            import json
             conn.execute(insert_stmt, {
                 "ticker": ticker,
                 "snapshot_time": snapshot_time,
@@ -353,7 +367,7 @@ def _send_high_edge_alerts(target_date: date, sport: str, min_edge: float = 0.05
             maker_fee_adjusted_edge, close_time, model_prob, kalshi_implied
         FROM kalshi_markets
         WHERE sport = :sport
-          AND snapshot_time::date = :target_date
+          AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
           AND market_status = 'open'
           AND maker_fee_adjusted_edge IS NOT NULL
           AND maker_fee_adjusted_edge >= :min_edge

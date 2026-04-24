@@ -46,4 +46,7 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-038]] - MLB feature pipeline fix: feat_* columns now populated (L5 avg, rest days, park factor), MLB_COLD_OVER filter strengthened, per-stat daily bet caps added
 - [[handoff-039]] - Phase 10 Manual Paper Trader shipped: is_paper_trade column, Paper Trade button, Real/Paper toggle, resolver + scheduler wiring, onConflict + isPaperTrade forwarding bug fixes
 - [[handoff-040]] - Calibration Discord alerts: sample-size awareness (LOW_CONFIDENCE_THRESHOLD=75, relaxed thresholds, severity cap, "Early Signal" title)
+- [[handoff-041]] - Kalshi sportsbook line alignment, live trader SQL bug fix, star-hitter filter (yes_price >= 72), approval panel SB line display
+- [[handoff-042]] - Fixed broken Kalshi contract links (series from ticker prefix, all lowercase); added BetAnalysisModal to bot tracker (L5 history + bet metadata for historical bets)
+- [[handoff-043]] - Infrastructure bug-fix: MLB edge refresh CTE fix, Kalshi orderbook parallelization (16 min → 1 min), numpy.int64 psycopg2 adapter, systemic UTC/ET timezone fix (11 callsites across 6 files — root cause of Apr 22 failed trades)
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

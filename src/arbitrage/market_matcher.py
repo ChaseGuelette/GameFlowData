@@ -347,7 +347,7 @@ class MarketMatcher:
                 yes_bid, yes_ask, volume, player_id
             FROM kalshi_markets
             WHERE sport = :sport
-              AND snapshot_time::date = :target_date
+              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
               AND market_status = 'open'
               AND player_name IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
@@ -367,7 +367,7 @@ class MarketMatcher:
                     yes_bid, yes_ask, liquidity, player_id
                 FROM polymarket_markets
                 WHERE sport = :sport
-                  AND snapshot_time::date = :target_date
+                  AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
                   AND market_type = 'player_prop'
                   AND market_status = 'open'
                 ORDER BY condition_id, snapshot_time DESC
@@ -711,7 +711,7 @@ class MarketMatcher:
                 yes_price, no_price, yes_bid, yes_ask, volume, market_title
             FROM kalshi_markets
             WHERE sport = :sport
-              AND snapshot_time::date = :target_date
+              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
               AND market_status = 'open'
               AND market_type != 'player_prop'
             ORDER BY ticker, snapshot_time DESC
@@ -733,7 +733,7 @@ class MarketMatcher:
                     yes_price, no_price, yes_bid, yes_ask, liquidity, question
                 FROM polymarket_markets
                 WHERE sport = :sport
-                  AND snapshot_time::date = :target_date
+                  AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
                   AND market_type IN ('moneyline', 'nrfi', 'total', 'spread', 'season_future')
                   AND market_status = 'open'
                 ORDER BY condition_id, snapshot_time DESC

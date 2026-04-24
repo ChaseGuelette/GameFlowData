@@ -59,7 +59,7 @@ class KalshiEdgeCalculator:
                 volume, open_interest, close_time, market_status, snapshot_time
             FROM kalshi_markets
             WHERE sport = :sport
-              AND snapshot_time::date = :target_date
+              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
               AND market_status = 'open'
               AND line IS NOT NULL
             ORDER BY ticker, snapshot_time DESC

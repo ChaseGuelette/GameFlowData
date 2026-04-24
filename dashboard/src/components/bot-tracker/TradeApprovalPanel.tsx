@@ -98,7 +98,7 @@ function TradeRow({
       </td>
       <td className="px-3 py-2">
         <a
-          href={`https://kalshi.com/markets/${trade.ticker.split('-')[0]}/${trade.ticker}`}
+          href={`https://kalshi.com/markets/${trade.ticker.split('-')[0].toLowerCase()}/${trade.ticker.toLowerCase()}`}
           target="_blank"
           rel="noopener noreferrer"
           className="text-slate-400 hover:text-blue-400 transition-colors"

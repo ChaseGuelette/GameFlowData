@@ -21,6 +21,8 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import text
 
+from src.discord_bot.alerts import send_predictions_alert_sync
+
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
@@ -128,7 +130,8 @@ def main():
         """)
 
         with engine.connect() as conn:
-            fresh_df = pd.read_sql(fresh_query, conn, params={"target_date": target_date})
+            result = conn.execute(fresh_query.bindparams(target_date=target_date))
+            fresh_df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
         fresh_lines = {}
         for _, row in fresh_df.iterrows():
@@ -286,6 +289,13 @@ def main():
         if not args.dry_run:
             logger.info("Upserting updated predictions...")
             store.store_predictions(updated_df, target_date)
+
+            recommended = preds_df[preds_df["is_recommended"]]
+            if not recommended.empty:
+                try:
+                    send_predictions_alert_sync(recommended, target_date, sport="mlb")
+                except Exception as exc:
+                    logger.warning(f"Discord alert failed (non-fatal): {exc}")
         else:
             logger.info("[DRY RUN] Skipping database upsert")
 
