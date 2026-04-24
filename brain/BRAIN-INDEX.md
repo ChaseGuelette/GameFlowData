@@ -17,7 +17,6 @@
 - [[Templates]] - Reusable note structures
 
 ## Root Files
-- [[CLAUDE.md]] - Brain DNA and agent instructions
 - [[Execution-Plan]] - Phased build roadmap with task tracking
 - [[Assets]] - Images, videos, PDFs, and other media
 
@@ -26,9 +25,8 @@
 - [[strategist]] - Product thinking, monetization, growth, go-to-market
 - [[analyst]] - Model performance, calibration, backtesting, data analysis
 - [[ops]] - Infrastructure, monitoring, pipeline health, incident response
-
-## Templates
-- [[Templates]] - Reusable note structures
+- [[explorer]] - Lightweight codebase search agent
+- [[sql-runner]] - Database query agent
 
 ## Session Log
 - **Session 0**: Brain initialized. March 24, 2026
@@ -55,7 +53,7 @@
 - **Session 21**: April 03, 2026 at 4:49 PM — NBA calibration health check: +9.8% ROI (65 bets), HOLD. PTS UNDER flagged (36.4% win). Dashboard DFS bug fix: predictions from PrizePicks/Fliff no longer show up (shared DFS_BOOKMAKERS constant, query filter). 3 files modified, calibration log + MEMORY updated. Build clean.
 - **Session 22**: April 03, 2026 at 5:01 PM — Black-Litterman blending wired into Kalshi edge calculator + paper trader (tau=0.5, z_max=1.0). Fixed Railway Kalshi pipeline: `KALSHI_PRIVATE_KEY_B64` was incorrectly encoded (no PEM headers). 607/964 markets matched with BL edges. Paper trades flowing to Discord. 2 files modified, 1 migration applied, pushed to Railway.
 - **Session 24**: April 03, 2026 at 5:11 PM — MLB model promotion complete. 3 models promoted with per-stat optimal BL configs: pitcher K (+8% ROI), hits (+33.2%), RBIs (+44.2%). 3 models dropped: TB (0/540 profitable), runs (trivial edge), HR (no edge). Combined backtest: 1,064 bets, +21.25% ROI, 1.19 Sharpe. Dashboard updated (filter tabs, stat query filter, per-stat Model Picks). Phase 1 complete. 7 files modified, build clean, 694 tests pass.
-- **Session 25**: April 10, 2026 at 12:37 PM — Paper trader alignment fixes. MLB paper trader now uses per-stat BL blenders from STAT_BL_CONFIGS (was conservative tau=0.5 single blender → ~1 bet/day, now ~20-50). NBA paper trader now reads stored BL values from DB instead of re-blending from MC samples; removed L5_ABOVE_LINE and Q50_DIVERGENCE sanity checks that edge_refresh_job doesn't apply. 2 files modified. 3 models promoted with per-stat optimal BL configs: pitcher K (+8% ROI), hits (+33.2%), RBIs (+44.2%). 3 models dropped: TB (0/540 profitable), runs (trivial edge), HR (no edge). Combined backtest: 1,064 bets, +21.25% ROI, 1.19 Sharpe. Dashboard updated (filter tabs, stat query filter, per-stat Model Picks). Phase 1 complete. 7 files modified, build clean, 694 tests pass.
+- **Session 25**: April 10, 2026 at 12:37 PM — Paper trader alignment fixes. MLB paper trader now uses per-stat BL blenders from STAT_BL_CONFIGS (was conservative tau=0.5 single blender → ~1 bet/day, now ~20-50). NBA paper trader now reads stored BL values from DB instead of re-blending from MC samples; removed L5_ABOVE_LINE and Q50_DIVERGENCE sanity checks that edge_refresh_job doesn't apply. 2 files modified.
 - **Session 26**: April 10, 2026 at 4:33 PM — Kalshi NO-only overhaul. Analysis of 1,871 paper bets confirmed YES side structurally negative (-$499, -1.2σ), NO side strong edge (+$3,101, +5.8σ). Deployed: NO-only mode (env toggle), SUPPORTED_STATS whitelist, bankroll-proportional exposure cap, bet pool logging, BL probability fix in live trader, [NO-ONLY] Discord badge, --yes-bets CLI flag. Created live trading startup playbook (brain/Operations/Kalshi-Live-Trading-Startup.md) and analysis script (scripts/analyze_kalshi_paper_bets.py). 4 files modified, 2 new files, committed to Railway. READY TO LAUNCH pending 2-3 day validation.
 - **Session 27**: April 12, 2026 at 12:00 PM — Bot Tracker Value column + Kalshi market link icon, ruff fixes (analyze_kalshi + kalshi_analysis), MLB Model Picks per-stat BL params (all 4: edge/tau/z_max/max_weight) + dropdown styling, BL tau restored for MLB, MLB Stats Vault full implementation (MLBStatsPage, 6 column sets, migration 023 views + RLS). 8 files modified, 3 new. Build clean. Step 2.6 completed. Pending: apply migration 023 in Supabase.
 - **Session 28**: April 12, 2026 at 1:14 PM — Polymarket-Kalshi Arbitrage Scanner (Phase 9): 8 new files (polymarket_utils, polymarket_client, polymarket_market_scraper, market_matcher, arb_scanner, arb_scan_job + 2 inits), 2 files modified (alerts.py, scheduler.py), 2 DB tables applied (polymarket_markets, arb_opportunities), DISCORD_CHANNEL_ARB added to Railway. Scanner runs every 10 min on Railway, detects pure/soft arbs + sportsbook mispricings.

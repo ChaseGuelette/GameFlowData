@@ -11,7 +11,7 @@ if echo "$INPUT" | grep -qE '\.md"|\.json"|\.yaml"|\.yml"|\.toml"|\.txt"|\.csv"|
 fi
 
 # Check if the path is in a non-code directory — skip silently
-if echo "$INPUT" | grep -qE '"(.*/(brain|\.claude|handoffs|memory)/)'; then
+if echo "$INPUT" | grep -qE '"(.*/(brain|\.claude|handoffs|memory|plans)/)'; then
   exit 0
 fi
 

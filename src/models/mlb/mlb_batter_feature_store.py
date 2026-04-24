@@ -21,6 +21,8 @@ from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
 
+_PA_BY_LINEUP_POSITION = {1: 4.3, 2: 4.2, 3: 3.9, 4: 3.8, 5: 3.7, 6: 3.5, 7: 3.3, 8: 3.1, 9: 3.0}
+
 # ---------------------------------------------------------------------------
 # Feature lists (centralized, locked for model compatibility)
 # ---------------------------------------------------------------------------
@@ -463,7 +465,15 @@ class MLBBatterFeatureStore:
 
         # Projected AB for binomial model (use rolling avg, avoid leakage)
         if "batter_avg_ab_l5" in df.columns:
-            df["projected_ab"] = df["batter_avg_ab_l5"].clip(lower=1.0).fillna(3.5)
+            pa_map = _PA_BY_LINEUP_POSITION
+            df["_position_pa"] = df["lineup_position"].map(pa_map)
+            df["projected_ab"] = df.apply(
+                lambda r: max(0.5 * (r["batter_avg_ab_l5"] if pd.notna(r["batter_avg_ab_l5"]) else 3.5) + 0.5 * r["_position_pa"], 1.0)
+                if pd.notna(r["_position_pa"])
+                else max(r["batter_avg_ab_l5"] if pd.notna(r["batter_avg_ab_l5"]) else 3.5, 1.0),
+                axis=1,
+            )
+            df.drop(columns=["_position_pa"], inplace=True)
         else:
             df["projected_ab"] = 3.5
 
@@ -496,6 +506,30 @@ class MLBBatterFeatureStore:
         # 1. Batter rolling averages
         features.update(self._get_batter_rolling_stats(player_id, game_date))
 
+        # 1b. Historical average batting position as fallback
+        avg_batting_position_l20 = None
+        try:
+            with self.engine.connect() as conn:
+                pos_result = conn.execute(
+                    text("""
+                        SELECT AVG(lineup_position) AS avg_batting_position_l20
+                        FROM (
+                            SELECT lineup_position
+                            FROM mlb_player_game_stats_batting
+                            WHERE player_id = :player_id
+                              AND game_date < :game_date
+                              AND lineup_position IS NOT NULL
+                            ORDER BY game_date DESC
+                            LIMIT 20
+                        ) recent
+                    """),
+                    {"player_id": player_id, "game_date": game_date},
+                ).fetchone()
+            if pos_result and pos_result["avg_batting_position_l20"] is not None:
+                avg_batting_position_l20 = float(pos_result["avg_batting_position_l20"])
+        except Exception:
+            pass
+
         # 2. Statcast averages
         features.update(self._get_batter_statcast_stats(player_id, game_date))
 
@@ -514,7 +548,9 @@ class MLBBatterFeatureStore:
 
         # 5. Game context
         features["is_home"] = 1 if is_home else 0
-        features["lineup_position"] = lineup_pos or 0
+        avg_pos = avg_batting_position_l20
+        effective_pos = lineup_pos if lineup_pos is not None else (round(avg_pos) if avg_pos else 0)
+        features["lineup_position"] = effective_pos
 
         # 6. Game total line
         features["line_total"] = self._get_game_total(game_id)
@@ -549,7 +585,12 @@ class MLBBatterFeatureStore:
         )
 
         # Projected AB for binomial model
-        features["projected_ab"] = max(features.get("batter_avg_ab_l5", 3.5), 1.0)
+        avg_ab_l5 = features.get("batter_avg_ab_l5") or 3.5
+        if effective_pos and effective_pos in _PA_BY_LINEUP_POSITION:
+            position_pa = _PA_BY_LINEUP_POSITION[effective_pos]
+            features["projected_ab"] = max(0.5 * avg_ab_l5 + 0.5 * position_pa, 1.0)
+        else:
+            features["projected_ab"] = max(avg_ab_l5, 1.0)
 
         return features
 
