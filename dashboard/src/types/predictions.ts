@@ -2,7 +2,7 @@
 export type NBAStatType = 'pts' | 'reb' | 'ast' | 'stl' | 'blk' | '3pm' | 'pra' | 'pr' | 'pa' | 'ra'
 
 // MLB stat types
-export type MLBStatType = 'pitcher_strikeouts' | 'batter_hits' | 'batter_total_bases' | 'batter_home_runs' | 'batter_rbis' | 'batter_runs_scored'
+export type MLBStatType = 'pitcher_strikeouts' | 'batter_hits' | 'batter_total_bases' | 'batter_home_runs' | 'batter_rbis' | 'batter_runs_scored' | 'batter_hrr'
 
 export type StatType = NBAStatType | MLBStatType
 
@@ -213,6 +213,7 @@ export const STAT_LABELS: Record<StatType, string> = {
   batter_home_runs: 'Home Runs',
   batter_rbis: 'RBIs',
   batter_runs_scored: 'Runs',
+  batter_hrr: 'H+R+RBI',
 }
 
 // Stat colors for badges
@@ -235,4 +236,5 @@ export const STAT_COLORS: Record<StatType, string> = {
   batter_home_runs: 'bg-yellow-500',
   batter_rbis: 'bg-orange-600',
   batter_runs_scored: 'bg-violet-500',
+  batter_hrr: 'bg-amber-600',
 }

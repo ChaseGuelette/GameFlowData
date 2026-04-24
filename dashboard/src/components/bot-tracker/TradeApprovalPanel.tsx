@@ -72,7 +72,17 @@ function TradeRow({
         </button>
       </td>
       <td className="px-3 py-2 text-slate-300">{KALSHI_STAT_LABELS[trade.stat_type] ?? trade.stat_type}</td>
-      <td className="px-3 py-2 text-slate-300">{Number(trade.line)}</td>
+      <td className="px-3 py-2 text-slate-300">
+        <div>{Number(trade.line)}</div>
+        {trade.sportsbook_consensus_line != null && (
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-slate-500">SB: {Number(trade.sportsbook_consensus_line)}</span>
+            {Math.ceil(Number(trade.sportsbook_consensus_line)) !== Number(trade.line) && (
+              <span className="text-[10px] text-yellow-400" title="Kalshi line does not match sportsbook consensus">&#9888;</span>
+            )}
+          </div>
+        )}
+      </td>
       <td className="px-3 py-2">
         <span className={`text-xs font-medium ${trade.side === 'yes' ? 'text-green-400' : 'text-red-400'}`}>
           {trade.side.toUpperCase()}
@@ -121,8 +131,24 @@ export function TradeApprovalPanel() {
       .eq('player_id', trade.player_id)
       .eq('stat', trade.stat_type)
       .single()
+
+    if (error || !data) {
+      setPredLoading(false)
+      return
+    }
+
+    // For MLB: look up team_abbrev from mlb_teams using team_id
+    let teamAbbrev: string | undefined
+    if (trade.sport === 'mlb' && data.team_id) {
+      const { data: teamRow } = await supabase
+        .from('mlb_teams')
+        .select('team_abbreviation')
+        .eq('team_id', data.team_id)
+        .single()
+      teamAbbrev = teamRow?.team_abbreviation ?? undefined
+    }
+
     setPredLoading(false)
-    if (error || !data) return
     setSelectedPrediction({
       ...data,
       prop_line: data.line,
@@ -135,6 +161,8 @@ export function TradeApprovalPanel() {
       q50: data.pred_q50,
       q75: data.pred_q75,
       q90: data.pred_q90,
+      team_abbrev: teamAbbrev,
+      opponent_abbrev: (data.feat_opp_abbrev as string | undefined) ?? undefined,
     } as Prediction)
   }
 

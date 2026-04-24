@@ -126,6 +126,7 @@ export interface KalshiTradeQueueItem {
   kalshi_implied: number | null
   edge: number | null
   fee_adjusted_edge: number | null
+  sportsbook_consensus_line: number | null
   status: string
   proposed_at: string
   approved_at: string | null
@@ -157,4 +158,5 @@ export const KALSHI_STAT_LABELS: Record<string, string> = {
   pa: 'PTS+AST',
   ra: 'REB+AST',
   sb: 'Steals+Blocks',
+  batter_hrr: 'Hits+Runs+RBI',
 }
