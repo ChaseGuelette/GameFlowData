@@ -181,17 +181,20 @@ def run(
                     # (silently extends their timer if markets are still open)
                     renewed = trader.renew_expired_queue_trades(target_date, sport=sport)
 
-                    # Select NEW trades (skips player+stat combos already pending)
+                    already_pending = _get_pending_queue_trades(trader.engine, target_date, sport)
+
                     trades = trader.select_trades(target_date, sport=sport)
                     if trades:
                         proposed = trader.propose_trades(trades)
-                        _send_trade_approval_alert(trades, sport)
+                        _send_trade_approval_alert(trades, sport, already_pending=len(already_pending))
                         summary["live_trading"] = {
                             "selected": len(trades),
                             "proposed": proposed,
                             "renewed": renewed,
                         }
                     else:
+                        if already_pending:
+                            _send_reminder_alert(already_pending, sport)
                         summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": renewed}
             except RuntimeError as e:
                 logger.warning(f"Live trading not available: {e}")
@@ -218,7 +221,27 @@ def run(
     return summary
 
 
-def _send_trade_approval_alert(trades: list, sport: str) -> None:
+def _get_pending_queue_trades(engine, target_date, sport: str) -> list[dict]:
+    from sqlalchemy import text as sa_text
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT player_name, stat_type, side, contracts,
+                       expected_cost, fee_adjusted_edge
+                FROM kalshi_trade_queue
+                WHERE sport = :sport
+                  AND game_date = :d
+                  AND status = 'pending_approval'
+                  AND expires_at > now()
+                ORDER BY proposed_at ASC
+            """), {"sport": sport, "d": target_date}).fetchall()
+        return [dict(r._mapping) for r in rows]
+    except Exception as e:
+        logger.warning(f"Failed to query pending queue trades: {e}")
+        return []
+
+
+def _send_trade_approval_alert(trades: list, sport: str, already_pending: int = 0) -> None:
     """Send Discord notification that trades are pending approval."""
     try:
         from src.discord_bot.alerts import send_kalshi_trade_alert_sync
@@ -232,6 +255,7 @@ def _send_trade_approval_alert(trades: list, sport: str) -> None:
             "count": len(trades),
             "total_exposure": total_exposure,
             "edge_range": edge_range,
+            "already_pending": already_pending,
             "trades": [
                 {
                     "player_name": t.get("player_name", "Unknown"),
@@ -241,11 +265,38 @@ def _send_trade_approval_alert(trades: list, sport: str) -> None:
                     "expected_cost": t["expected_cost"],
                     "fee_adjusted_edge": t.get("fee_adjusted_edge", 0),
                 }
-                for t in trades[:10]  # Cap at 10 for Discord embed limits
+                for t in trades[:10]
             ],
         })
     except Exception as e:
         logger.warning(f"Failed to send trade approval alert: {e}")
+
+
+def _send_reminder_alert(pending_trades: list, sport: str) -> None:
+    try:
+        from src.discord_bot.alerts import send_kalshi_trade_alert_sync
+        total_exposure = sum(t.get("expected_cost", 0) for t in pending_trades)
+        edges = [t.get("fee_adjusted_edge", 0) for t in pending_trades if t.get("fee_adjusted_edge")]
+        edge_range = f"{min(edges):.0%}-{max(edges):.0%}" if edges else "N/A"
+        send_kalshi_trade_alert_sync("approval_reminder", {
+            "sport": sport.upper(),
+            "count": len(pending_trades),
+            "total_exposure": total_exposure,
+            "edge_range": edge_range,
+            "trades": [
+                {
+                    "player_name": t.get("player_name", "Unknown"),
+                    "stat_type": t.get("stat_type", ""),
+                    "side": t.get("side", "yes"),
+                    "contracts": t.get("contracts", 0),
+                    "expected_cost": t.get("expected_cost", 0),
+                    "fee_adjusted_edge": t.get("fee_adjusted_edge", 0),
+                }
+                for t in pending_trades[:10]
+            ],
+        })
+    except Exception as e:
+        logger.warning(f"Failed to send reminder alert: {e}")
 
 
 def _fetch_orderbooks(target_date: date, sport: str) -> int:

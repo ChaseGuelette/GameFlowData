@@ -1223,10 +1223,67 @@ def _build_kalshi_approval_embed(data: dict) -> dict:
             "inline": False,
         })
 
+    already_pending = data.get("already_pending", 0)
+    if already_pending > 0:
+        fields.append({
+            "name": "Already Pending",
+            "value": f"{already_pending} trade(s) from prior runs also awaiting approval",
+            "inline": False,
+        })
+
+    desc = f"{count} trade(s) queued for approval."
+    if already_pending > 0:
+        desc += f" Plus {already_pending} already pending from prior runs."
+    desc += " Approve on the Bot Tracker dashboard."
+
     return {
         "title": f"⏳ KALSHI APPROVAL NEEDED — {sport}",
-        "description": f"{count} trade(s) queued for approval. Approve on the Bot Tracker dashboard within 30 minutes.",
-        "color": 0xF39C12,  # Orange — action required
+        "description": desc,
+        "color": 0xF39C12,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": fields,
+        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+    }
+
+
+def _build_kalshi_reminder_embed(data: dict) -> dict:
+    sport = data.get("sport", "UNKNOWN")
+    count = data.get("count", 0)
+    total_exposure = data.get("total_exposure", 0)
+    edge_range = data.get("edge_range", "N/A")
+    trades = data.get("trades", [])
+
+    fields = [
+        {"name": "Sport", "value": sport, "inline": True},
+        {"name": "Still Pending", "value": str(count), "inline": True},
+        {"name": "Total Exposure", "value": f"${total_exposure:.2f}", "inline": True},
+        {"name": "Edge Range", "value": edge_range, "inline": True},
+    ]
+
+    for t in trades[:5]:
+        player = t.get("player_name", "Unknown")
+        stat = str(t.get("stat_type", "")).upper()
+        side = t.get("side", "yes").upper()
+        contracts = t.get("contracts", 0)
+        cost = t.get("expected_cost", 0)
+        edge = t.get("fee_adjusted_edge", 0)
+        fields.append({
+            "name": f"{player} — {stat}",
+            "value": f"{'OVER' if side == 'YES' else 'UNDER'} | {contracts} contracts @ ${cost:.2f} | edge: {edge:.1%}",
+            "inline": False,
+        })
+
+    if len(trades) > 5:
+        fields.append({
+            "name": f"... and {len(trades) - 5} more",
+            "value": "See Bot Tracker dashboard for full list",
+            "inline": False,
+        })
+
+    return {
+        "title": f"🔔 REMINDER — {count} Trade(s) Pending Approval ({sport})",
+        "description": f"{count} trade(s) are still awaiting your approval. Approve on the Bot Tracker dashboard.",
+        "color": 0xF1C40F,
         "timestamp": datetime.utcnow().isoformat(),
         "fields": fields,
         "footer": {"text": "Kalshi Live Trading | GameFlowData"},
@@ -1311,6 +1368,8 @@ def send_kalshi_trade_alert_sync(
         )
     elif alert_type == "approval_needed":
         embed = _build_kalshi_approval_embed(data)
+    elif alert_type == "approval_reminder":
+        embed = _build_kalshi_reminder_embed(data)
     elif alert_type == "daily_summary":
         embed = _build_kalshi_live_daily_summary_embed(data)
     else:
