@@ -807,7 +807,41 @@ class KalshiLiveTrader:
                 )
                 swept_from = snapshot_price
                 swept_to = actual_price
-                trade = {**trade, "yes_price": actual_price, "fee_adjusted_edge": recalc_edge_val}
+                new_contracts = self._kelly_contracts(
+                    trade["model_prob"], actual_price, trade["side"], balance
+                )
+                price_per = actual_price / 100.0 if trade["side"] == "yes" else (100 - actual_price) / 100.0
+                new_expected_cost = new_contracts * price_per
+                new_expected_fee = kalshi_taker_fee(
+                    actual_price if trade["side"] == "yes" else 100 - actual_price
+                ) * new_contracts
+
+                if new_expected_cost > balance:
+                    new_contracts = max(0, int(balance / price_per))
+                    new_expected_cost = new_contracts * price_per
+                    new_expected_fee = kalshi_taker_fee(
+                        actual_price if trade["side"] == "yes" else 100 - actual_price
+                    ) * new_contracts
+
+                if new_contracts == 0:
+                    logger.warning(
+                        f"SWEEP RESIZE: 0 contracts after resize for {trade['ticker']} — skipping"
+                    )
+                    continue
+
+                old_contracts = trade["contracts"]
+                logger.info(
+                    f"SWEEP RESIZE [{trade['ticker']}]: {old_contracts} -> {new_contracts} contracts "
+                    f"(price: {snapshot_price}c -> {actual_price}c, edge: {recalc_edge_val:.1%})"
+                )
+                trade = {
+                    **trade,
+                    "yes_price": actual_price,
+                    "fee_adjusted_edge": recalc_edge_val,
+                    "contracts": new_contracts,
+                    "expected_cost": new_expected_cost,
+                    "expected_fee": new_expected_fee,
+                }
 
             elif actual_price is None:
                 logger.warning(f"Orderbook unavailable for {trade['ticker']} — using snapshot+buffer fallback")

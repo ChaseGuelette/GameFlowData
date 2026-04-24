@@ -647,6 +647,16 @@ def run_kalshi_pending_fills():
     run_job("kalshi_pending_fills_job.py", silent_on_success=True)
 
 
+def run_kalshi_stale_fills():
+    """Detect pending orders whose game has started and enqueue for cancellation review."""
+    run_job("kalshi_stale_fills_job.py", silent_on_success=True)
+
+
+def run_kalshi_execute_cancellations():
+    """Execute human-approved order cancellations via Kalshi API."""
+    run_job("kalshi_execute_cancellations_job.py", silent_on_success=True)
+
+
 # ---- Arbitrage Scanner Jobs ----
 
 def run_arb_scan_mlb():
@@ -1027,6 +1037,22 @@ def main():
         CronTrigger(hour='9-23', minute='*/5', timezone=ET),
         id="kalshi_pending_fills",
         name="Kalshi Pending Fills (every 5 min, 9AM-11PM ET)",
+    )
+
+    # Stale fill detector — enqueues pending orders whose game has started for cancellation review
+    scheduler.add_job(
+        run_kalshi_stale_fills,
+        CronTrigger(hour='9-23', minute='*/5', timezone=ET),
+        id="kalshi_stale_fills",
+        name="Kalshi Stale Fill Detector (every 5 min, 9AM-11PM ET)",
+    )
+
+    # Cancellation executor — executes human-approved cancellations via Kalshi API
+    scheduler.add_job(
+        run_kalshi_execute_cancellations,
+        CronTrigger(hour='9-23', minute='*/2', timezone=ET),
+        id="kalshi_execute_cancellations",
+        name="Kalshi Cancel Executor (every 2 min, 9AM-11PM ET)",
     )
 
     # ==============================================================

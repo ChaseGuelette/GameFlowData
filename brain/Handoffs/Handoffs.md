@@ -50,4 +50,5 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-042]] - Fixed broken Kalshi contract links (series from ticker prefix, all lowercase); added BetAnalysisModal to bot tracker (L5 history + bet metadata for historical bets)
 - [[handoff-043]] - Infrastructure bug-fix: MLB edge refresh CTE fix, Kalshi orderbook parallelization (16 min → 1 min), numpy.int64 psycopg2 adapter, systemic UTC/ET timezone fix (11 callsites across 6 files — root cause of Apr 22 failed trades)
 - [[handoff-044]] - Kalshi fill polling (5-min job), reconcile_fills() date bug fix, Discord alerts for placed/filled/resolved, live trader daily performance summary
+- [[handoff-045]] - Orderbook price sweep, NBA trading re-enabled, Discord queue notifications every 10 min
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

@@ -1,10 +1,11 @@
 # Kalshi Live Trading — Startup Playbook
 
-> **Status:** POST-INCIDENT — Trade approval flow required. NBA trading disabled.
-> **Decision date:** Apr 10, 2026 (go-live), Apr 20, 2026 (post-mortem overhaul)
+> **Status:** LIVE — Trade approval flow required. NBA trading re-enabled Apr 24 2026.
+> **Decision date:** Apr 10, 2026 (go-live), Apr 20, 2026 (post-mortem overhaul), Apr 24, 2026 (NBA re-enabled, orderbook sweep + queue notifications)
 > **Analysis script:** `python scripts/analyze_kalshi_paper_bets.py`
 >
 > **Apr 19 Incident**: First live day placed 21 NBA bets ($233) in 16 seconds using a broken model (17-46% edges). 8-fix overhaul deployed Apr 20. See [[handoff-016]].
+> **Apr 24 Update**: NBA trading re-enabled (`NBA_TRADING_ENABLED=true`). Orderbook price sweep system added. Discord queue notification system overhauled (10-min reminder pings).
 
 ---
 
@@ -67,8 +68,8 @@ Complete in order before enabling `KALSHI_LIVE_TRADING_ENABLED=true`:
 # Gate
 KALSHI_LIVE_TRADING_ENABLED=true
 
-# Per-sport gates (added post-incident Apr 20)
-NBA_TRADING_ENABLED=false                 # Disabled until NBA model validated
+# Per-sport gates (added post-incident Apr 20; NBA re-enabled Apr 24)
+NBA_TRADING_ENABLED=true                  # Re-enabled Apr 24 — approval queue is the safety guard
 MLB_TRADING_ENABLED=true
 
 # Sizing
@@ -84,6 +85,10 @@ KALSHI_MAX_DAILY_EXPOSURE=1000            # safety ceiling
 
 # Edge sanity (added post-incident Apr 20)
 KALSHI_LIVE_MAX_EDGE=0.40                 # Reject edges > 40% as model garbage
+
+# Orderbook sweep (added Apr 24)
+KALSHI_SWEEP_MAX_CENTS=10                 # Skip trade if market price moved >10c from quoted
+KALSHI_SWEEP_EDGE_RETENTION=0.50          # Skip trade if recalculated edge < 50% of original edge
 
 # Circuit breakers
 KALSHI_LIVE_DRAWDOWN_LIMIT=0.30           # halt at $210 balance
