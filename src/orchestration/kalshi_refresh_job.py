@@ -177,25 +177,34 @@ def run(
                     logger.warning(f"Live trading halted: {reason}")
                     summary["live_trading"] = {"halted": True, "reason": reason}
                 else:
-                    # Carry forward any trades that expired without action
-                    # (silently extends their timer if markets are still open)
-                    renewed = trader.renew_expired_queue_trades(target_date, sport=sport)
+                    # Per-sport gate: skip all queue operations if sport is disabled.
+                    # Also controls renew — otherwise disabled-sport trades renew forever.
+                    sport_gate_var = f"{sport.upper()}_TRADING_ENABLED"
+                    sport_enabled = os.getenv(sport_gate_var, "false").lower() == "true"
 
-                    already_pending = _get_pending_queue_trades(trader.engine, target_date, sport)
-
-                    trades = trader.select_trades(target_date, sport=sport)
-                    if trades:
-                        proposed = trader.propose_trades(trades)
-                        _send_trade_approval_alert(trades, sport, already_pending=len(already_pending))
-                        summary["live_trading"] = {
-                            "selected": len(trades),
-                            "proposed": proposed,
-                            "renewed": renewed,
-                        }
+                    if not sport_enabled:
+                        logger.info(f"Step 4.5b: Live trading disabled for {sport} ({sport_gate_var}!=true) — skipping")
+                        summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": 0}
                     else:
-                        if already_pending:
-                            _send_reminder_alert(already_pending, sport)
-                        summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": renewed}
+                        # Carry forward any trades that expired without action
+                        # (silently extends their timer if markets are still open)
+                        renewed = trader.renew_expired_queue_trades(target_date, sport=sport)
+
+                        already_pending = _get_pending_queue_trades(trader.engine, target_date, sport)
+
+                        trades = trader.select_trades(target_date, sport=sport)
+                        if trades:
+                            proposed = trader.propose_trades(trades)
+                            _send_trade_approval_alert(trades, sport, already_pending=len(already_pending))
+                            summary["live_trading"] = {
+                                "selected": len(trades),
+                                "proposed": proposed,
+                                "renewed": renewed,
+                            }
+                        else:
+                            if already_pending:
+                                _send_reminder_alert(already_pending, sport)
+                            summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": renewed}
             except RuntimeError as e:
                 logger.warning(f"Live trading not available: {e}")
                 summary["live_trading"] = {"error": str(e)}

@@ -306,24 +306,29 @@ class KalshiLiveTrader:
     # ------------------------------------------------------------------
 
     def _get_best_available_price(self, ticker: str, side: str, target_cents: int) -> int | None:
+        """Get the best available fill price from the live orderbook.
+
+        Returns the price in YES-equivalent cents that a taker order would fill at,
+        or None if the orderbook is unavailable/empty. The target_cents param is
+        kept for signature compatibility but is NOT used for filtering — the sweep
+        guards in execute_trades() handle delta/edge checks.
+        """
         try:
             ob = self.client.get_orderbook(ticker, depth=10)
             if ob is None:
                 return None
-
             orderbook = ob.get("orderbook", {})
 
             if side == "yes":
                 no_bids = orderbook.get("no", [])
                 for no_bid, qty in no_bids:
-                    yes_ask = 100 - no_bid
-                    if yes_ask >= target_cents and qty > 0:
-                        return yes_ask
+                    if qty > 0:
+                        return 100 - no_bid
                 return None
             else:
                 yes_bids = orderbook.get("yes", [])
                 for yes_bid, qty in yes_bids:
-                    if yes_bid <= target_cents and qty > 0:
+                    if qty > 0:
                         return yes_bid
                 return None
         except Exception as e:
@@ -373,10 +378,11 @@ class KalshiLiveTrader:
         shared daily exposure cap, call with sport="mlb" first, then pass the
         resulting total cost as prior_exposure= when calling with sport="nba".
         """
-        # Per-sport trading gate: refuse to trade a sport that's disabled
+        # Per-sport trading gate: refuse to trade a sport that's disabled.
+        # Default is "false" — must be explicitly opted-in per sport.
         sport_gate_var = f"{sport.upper()}_TRADING_ENABLED"
-        if os.getenv(sport_gate_var, "true").lower() != "true":
-            logger.info(f"Live trading disabled for {sport} ({sport_gate_var}=false)")
+        if os.getenv(sport_gate_var, "false").lower() != "true":
+            logger.info(f"Live trading disabled for {sport} ({sport_gate_var}!=true)")
             return []
 
         # Get real balance from API
@@ -1181,6 +1187,205 @@ class KalshiLiveTrader:
                     """), {"id": queue_id})
 
         return results
+
+    def reprice_stale_orders(self) -> int:
+        """Detect and reprice resting Kalshi orders whose market price has moved.
+
+        Queries Kalshi API for resting orders, cross-references with
+        kalshi_live_orders for trade metadata, checks if the live orderbook
+        price has moved, and cancels+replaces if the edge is still retained.
+
+        Returns:
+            Number of orders successfully repriced.
+        """
+        resting = self.client.list_orders(status="resting")
+        if not resting:
+            logger.info("REPRICE: No resting orders found")
+            return 0
+
+        logger.info(f"REPRICE: Found {len(resting)} resting orders to evaluate")
+
+        order_ids = [o.get("order_id", o.get("id", "")) for o in resting]
+        if not order_ids:
+            return 0
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT kalshi_order_id, ticker, side, model_prob, fee_adjusted_edge,
+                       yes_price, game_date, sport, player_id, player_name,
+                       stat_type, line, edge, kalshi_implied, contracts,
+                       expected_fee, game_start_time
+                FROM kalshi_live_orders
+                WHERE kalshi_order_id = ANY(:ids)
+                  AND status = 'pending'
+            """), {"ids": order_ids}).fetchall()
+
+        db_orders = {}
+        for row in rows:
+            row_dict = dict(row._mapping)
+            db_orders[row_dict["kalshi_order_id"]] = row_dict
+
+        if not db_orders:
+            logger.info("REPRICE: No resting orders matched pending DB records")
+            return 0
+
+        repriced = 0
+        sweep_buffer = 3
+
+        for api_order in resting:
+            api_order_id = api_order.get("order_id", api_order.get("id", ""))
+            db_row = db_orders.get(api_order_id)
+            if db_row is None:
+                continue
+
+            ticker = db_row["ticker"]
+            side = db_row["side"]
+            resting_price = db_row["yes_price"]
+            model_prob = float(db_row["model_prob"])
+            original_edge = float(db_row["fee_adjusted_edge"])
+
+            actual_price = self._get_best_available_price(ticker, side, resting_price)
+            if actual_price is None:
+                logger.debug(f"REPRICE: Orderbook unavailable for {ticker} — skipping")
+                continue
+
+            delta = abs(actual_price - resting_price)
+            if delta == 0:
+                continue
+
+            if delta > KALSHI_SWEEP_MAX_CENTS:
+                logger.info(
+                    f"REPRICE SKIP [{ticker}]: price moved {delta}c "
+                    f"({resting_price}c -> {actual_price}c) exceeds max {KALSHI_SWEEP_MAX_CENTS}c"
+                )
+                continue
+
+            recalc_edge = fee_adjusted_edge(
+                model_prob, actual_price,
+                is_yes=(side == "yes"), is_maker=False,
+            )
+            edge_floor = original_edge * KALSHI_SWEEP_EDGE_RETENTION
+
+            if recalc_edge < edge_floor:
+                logger.info(
+                    f"REPRICE SKIP [{ticker}]: edge at {actual_price}c = {recalc_edge:.1%} "
+                    f"below {KALSHI_SWEEP_EDGE_RETENTION:.0%} floor {edge_floor:.1%}"
+                )
+                continue
+
+            cancel_result = self.client.cancel_order(api_order_id)
+            if cancel_result is None:
+                logger.warning(f"REPRICE: Failed to cancel {api_order_id} for {ticker}")
+                continue
+
+            if side == "yes":
+                new_order = self.client.create_order(
+                    ticker=ticker,
+                    action="buy",
+                    side="yes",
+                    order_type="market",
+                    count=int(db_row["contracts"]),
+                    yes_price=min(actual_price + sweep_buffer, 99),
+                )
+            else:
+                new_order = self.client.create_order(
+                    ticker=ticker,
+                    action="buy",
+                    side="no",
+                    order_type="market",
+                    count=int(db_row["contracts"]),
+                    no_price=min(100 - actual_price + sweep_buffer, 99),
+                )
+
+            if new_order is None:
+                logger.error(
+                    f"REPRICE FAILED [{ticker}]: cancelled {api_order_id} but replacement failed!"
+                )
+                with self.engine.begin() as conn:
+                    conn.execute(text("""
+                        UPDATE kalshi_live_orders
+                        SET status = 'cancelled'
+                        WHERE kalshi_order_id = :oid
+                    """), {"oid": api_order_id})
+                continue
+
+            new_order_data = new_order.get("order", new_order)
+            new_order_id = new_order_data.get("order_id", new_order_data.get("id", ""))
+            new_status = new_order_data.get("status", "unknown")
+
+            new_fill_price = None
+            new_fill_count = 0
+            new_total_cost = 0.0
+            new_fee_paid = 0.0
+
+            if new_status in ("executed", "filled"):
+                new_fill_price = new_order_data.get("yes_price") or new_order_data.get("avg_price") or actual_price
+                new_fill_count = new_order_data.get("count", int(db_row["contracts"]))
+                price_per = actual_price / 100.0 if side == "yes" else (100 - actual_price) / 100.0
+                new_total_cost = new_fill_count * price_per
+                new_fee_paid = kalshi_taker_fee(
+                    actual_price if side == "yes" else 100 - actual_price
+                ) * new_fill_count
+                record_status = "filled"
+            elif new_status == "resting":
+                record_status = "pending"
+            else:
+                record_status = "pending"
+
+            with self.engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE kalshi_live_orders
+                    SET status = 'cancelled'
+                    WHERE kalshi_order_id = :oid
+                """), {"oid": api_order_id})
+
+                conn.execute(text("""
+                    INSERT INTO kalshi_live_orders (
+                        game_date, ticker, sport, player_id, player_name,
+                        stat_type, line, side, order_type, contracts,
+                        kalshi_order_id, fill_price, fill_count, total_cost, fee_paid,
+                        model_prob, kalshi_implied, edge, fee_adjusted_edge,
+                        status, filled_at, game_start_time
+                    ) VALUES (
+                        :game_date, :ticker, :sport, :player_id, :player_name,
+                        :stat_type, :line, :side, 'market', :contracts,
+                        :order_id, :fill_price, :fill_count, :total_cost, :fee_paid,
+                        :model_prob, :kalshi_implied, :edge, :fee_adjusted_edge,
+                        :status, :filled_at, :game_start_time
+                    )
+                """), {
+                    "game_date": db_row["game_date"],
+                    "ticker": ticker,
+                    "sport": db_row["sport"],
+                    "player_id": db_row.get("player_id"),
+                    "player_name": db_row.get("player_name"),
+                    "stat_type": db_row["stat_type"],
+                    "line": db_row["line"],
+                    "side": side,
+                    "contracts": int(db_row["contracts"]),
+                    "order_id": new_order_id,
+                    "fill_price": new_fill_price,
+                    "fill_count": new_fill_count,
+                    "total_cost": round(new_total_cost, 2),
+                    "fee_paid": round(new_fee_paid, 4),
+                    "model_prob": model_prob,
+                    "kalshi_implied": db_row["kalshi_implied"],
+                    "edge": db_row["edge"],
+                    "fee_adjusted_edge": recalc_edge,
+                    "status": record_status,
+                    "filled_at": datetime.utcnow() if record_status == "filled" else None,
+                    "game_start_time": db_row.get("game_start_time"),
+                })
+
+            logger.info(
+                f"REPRICE OK [{ticker}]: {resting_price}c -> {actual_price}c, "
+                f"edge {original_edge:.1%} -> {recalc_edge:.1%}, "
+                f"old={api_order_id} new={new_order_id} status={record_status}"
+            )
+            repriced += 1
+
+        logger.info(f"REPRICE: Done — {repriced}/{len(resting)} orders repriced")
+        return repriced
 
     def _record_order(
         self,

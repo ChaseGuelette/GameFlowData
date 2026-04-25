@@ -8,6 +8,7 @@ import type { KalshiTradeQueueItem } from '@/types/bot-tracker'
 import { createClient } from '@/lib/supabase/client'
 import { AnalysisModal } from '@/components/analysis/AnalysisModal'
 import type { Prediction } from '@/types/predictions'
+import { NBA_CONFIG } from '@/lib/sport-config'
 
 function TimeRemaining({ expiresAt }: { expiresAt: string }) {
   const [remaining, setRemaining] = useState('')
@@ -142,9 +143,11 @@ export function TradeApprovalPanel() {
       return
     }
 
-    // For MLB: look up team_abbrev from mlb_teams using team_id
+    // Resolve team abbreviation from team_id
     let teamAbbrev: string | undefined
-    if (trade.sport === 'mlb' && data.team_id) {
+    if (trade.sport === 'nba' && data.team_id) {
+      teamAbbrev = NBA_CONFIG.teams[data.team_id as number] ?? undefined
+    } else if (trade.sport === 'mlb' && data.team_id) {
       const { data: teamRow } = await supabase
         .from('mlb_teams')
         .select('team_abbreviation')
@@ -356,6 +359,7 @@ export function TradeApprovalPanel() {
                 <th className="px-3 py-2">Side</th>
                 <th className="px-3 py-2">Cost</th>
                 <th className="px-3 py-2">Edge</th>
+                <th className="px-3 py-2">Placed</th>
                 <th className="px-3 py-2">Ticker</th>
                 <th className="px-3 py-2">Action</th>
               </tr>
@@ -363,7 +367,14 @@ export function TradeApprovalPanel() {
             <tbody className="divide-y divide-slate-700/50">
               {failedTrades.map((trade) => (
                 <tr key={trade.id} className="hover:bg-slate-700/30 bg-red-500/5">
-                  <td className="px-3 py-2 text-slate-200">{trade.player_name ?? '—'}</td>
+                  <td className="px-3 py-2">
+                    <button
+                      onClick={() => handleAnalyze(trade)}
+                      className="text-slate-200 font-medium hover:text-blue-400 hover:underline transition-colors text-left"
+                    >
+                      {trade.player_name ?? '—'}
+                    </button>
+                  </td>
                   <td className="px-3 py-2 text-slate-300">{KALSHI_STAT_LABELS[trade.stat_type] ?? trade.stat_type}</td>
                   <td className="px-3 py-2 text-slate-300">{Number(trade.line)}</td>
                   <td className="px-3 py-2">
@@ -374,6 +385,17 @@ export function TradeApprovalPanel() {
                   <td className="px-3 py-2 text-slate-300">${Number(trade.expected_cost).toFixed(2)}</td>
                   <td className="px-3 py-2 text-slate-300">
                     {trade.fee_adjusted_edge != null ? `${(Number(trade.fee_adjusted_edge) * 100).toFixed(1)}%` : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-slate-400 text-xs whitespace-nowrap">
+                    {(() => {
+                      const d = new Date(trade.proposed_at)
+                      const diffMs = Date.now() - d.getTime()
+                      const diffMins = Math.floor(diffMs / 60000)
+                      if (diffMins < 60) return `${diffMins}m ago`
+                      const diffHrs = Math.floor(diffMins / 60)
+                      const remMins = diffMins % 60
+                      return remMins > 0 ? `${diffHrs}h ${remMins}m ago` : `${diffHrs}h ago`
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-slate-400 text-xs font-mono">{trade.ticker}</td>
                   <td className="px-3 py-2">

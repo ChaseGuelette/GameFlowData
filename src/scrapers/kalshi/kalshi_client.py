@@ -369,6 +369,35 @@ class KalshiClient:
         """
         return self._request_with_body("DELETE", f"/portfolio/orders/{order_id}")
 
+    def list_orders(
+        self,
+        status: str = "resting",
+        ticker: str | None = None,
+        limit: int = 200,
+        cursor: str | None = None,
+    ) -> list[dict]:
+        """List portfolio orders filtered by status.
+
+        Args:
+            status: Order status filter (e.g., 'resting', 'executed', 'canceled').
+            ticker: Optional market ticker filter.
+            limit: Max results per page.
+            cursor: Pagination cursor.
+
+        Returns:
+            List of order dicts.
+        """
+        params: dict = {"limit": limit, "status": status}
+        if ticker:
+            params["ticker"] = ticker
+        if cursor:
+            params["cursor"] = cursor
+
+        result = self._request("GET", "/portfolio/orders", params=params)
+        if result is None:
+            return []
+        return result.get("orders", [])
+
     def get_fills(
         self,
         ticker: str | None = None,

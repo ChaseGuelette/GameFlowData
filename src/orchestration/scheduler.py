@@ -9,8 +9,19 @@ automatically by APScheduler + pytz.
 Schedule (ET):
     9:00 AM  - daily_stats_job
     9:00 AM  - mlb_roster_scraper_job
+    9:00 AM  - mlb_daily_stats_job
     9:00 AM  - nonsports_polymarket_scrape (2hr timeout)
+    9:20 AM  - mlb_daily_stats_retry
+    9:15 AM  - Kalshi live resolution
+    9:25 AM  - mlb_weather_forecast
     9:30 AM  - daily_stats_retry (if 9 AM failed)
+    9:30 AM  - mlb_lines_job --live --props-only --extended
+    9:35 AM  - mlb_lineup_scraper_job
+    9:50 AM  - mlb_inference_job (early MLB pass)
+
+    10:00 AM - kalshi_daily_summary_job
+    10:00 AM - lines_job --live --props-only (pre-NBA inference)
+    10:15 AM - inference_job (early NBA pass)
 
     9 AM - 11 PM ET every 5 min:
         :00,:05,...,:55  - lines_job --live --props-only  (silent)
@@ -19,14 +30,6 @@ Schedule (ET):
     9 AM - 11 PM ET every 10 min:
         kalshi_refresh (NBA + MLB + non-sports)
 
-    10:00 AM - mlb_daily_stats_job
-    10:00 AM - kalshi_daily_summary_job
-    10:30 AM - mlb_daily_stats_retry
-    10:45 AM - mlb_lines_job --live --props-only (early MLB props)
-    10:50 AM - mlb_lineup_scraper_job (early MLB lineups)
-    11:00 AM - mlb_inference_job (early MLB pass)
-    11:00 AM - lines_job --live --props-only (pre-NBA inference)
-    11:15 AM - inference_job (early NBA pass)
     12:00 PM - lines_job --live (full)
     12:15 PM - inference_job (full MC)
     12:15 PM - mlb_inference_job (noon MLB pass)
@@ -92,6 +95,7 @@ JOB_NAMES = {
     "arb_scan_job.py": "Arb Scanner",
     "kalshi_nonsports_refresh_job.py": "Kalshi Non-Sports Refresh",
     "kalshi_execute_approved_job.py": "Kalshi Execute Approved",
+    "kalshi_reprice_stale_job.py": "Kalshi Reprice Stale",
     "kalshi_pending_fills_job.py": "Kalshi Pending Fills",
     "resolve_user_paper_bets.py": "User Paper Bet Resolution",
 }
@@ -542,7 +546,7 @@ def run_mlb_daily_stats():
 
 
 def run_mlb_daily_stats_retry():
-    """Re-run MLB daily stats if the 10 AM run failed."""
+    """Re-run MLB daily stats if the 9 AM run failed."""
     status = JOB_STATUS.get("mlb_daily_stats_job.py", {})
     if status.get("status") == "success":
         logger.info("MLB daily stats already succeeded today, skipping 10:30 retry.")
@@ -640,6 +644,15 @@ def run_kalshi_execute_approved():
     or if there are no approved trades.
     """
     run_job("kalshi_execute_approved_job.py", silent_on_success=True)
+
+
+def run_kalshi_reprice_stale():
+    """Reprice stale resting Kalshi orders.
+
+    Checks for resting orders where the market price has moved and reprices
+    them if the edge is still retained. Exits gracefully if KALSHI_LIVE_TRADING_ENABLED != true.
+    """
+    run_job("kalshi_reprice_stale_job.py", silent_on_success=True)
 
 
 def run_kalshi_pending_fills():
@@ -832,12 +845,12 @@ def main():
         name="MLB Active Roster (9 AM ET)",
     )
 
-    # 10:00 AM ET - MLB daily stats (results from last night)
+    # 9:00 AM ET - MLB daily stats (results from last night)
     scheduler.add_job(
         run_mlb_daily_stats,
-        CronTrigger(hour=10, minute=0, timezone=ET),
+        CronTrigger(hour=9, minute=0, timezone=ET),
         id="mlb_daily_stats",
-        name="MLB Daily Stats (10 AM ET)",
+        name="MLB Daily Stats (9 AM ET)",
     )
 
     # 10:30 AM ET - Retry MLB daily stats if 10 AM failed
@@ -1028,6 +1041,15 @@ def main():
         CronTrigger(hour='9-23', minute='*/2', timezone=ET),
         id="kalshi_execute_approved",
         name="Kalshi Execute Approved (every 2 min, 9AM-11PM ET)",
+    )
+
+    # Every 2 min, 9 AM - 11 PM ET — reprice stale resting Kalshi orders
+    # Checks if market has moved from resting order price, cancels+replaces if edge retained.
+    scheduler.add_job(
+        run_kalshi_reprice_stale,
+        CronTrigger(hour='9-23', minute='*/2', timezone=ET),
+        id="kalshi_reprice_stale",
+        name="Kalshi Reprice Stale (every 2 min, 9AM-11PM ET)",
     )
 
     # Every 5 min, 9 AM - 11 PM ET — poll Kalshi API for pending order fills
