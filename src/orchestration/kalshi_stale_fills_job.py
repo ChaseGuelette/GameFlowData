@@ -46,13 +46,15 @@ def main():
     with engine.connect() as conn:
         stale_rows = conn.execute(text("""
             SELECT id, kalshi_order_id, game_date, ticker, sport, player_id,
-                   player_name, stat_type, line, side, contracts, expected_cost,
+                   player_name, stat_type, line, side, contracts, total_cost,
                    game_start_time
             FROM kalshi_live_orders
             WHERE status = 'pending'
-              AND game_start_time IS NOT NULL
-              AND game_start_time <= now()
-              AND game_date >= CURRENT_DATE - INTERVAL '1 day'
+              AND game_date >= CURRENT_DATE - INTERVAL '3 days'
+              AND (
+                (game_start_time IS NOT NULL AND game_start_time <= now())
+                OR (game_start_time IS NULL AND game_date < CURRENT_DATE)
+              )
         """)).fetchall()
 
     if not stale_rows:
