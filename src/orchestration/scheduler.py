@@ -853,38 +853,38 @@ def main():
         name="MLB Daily Stats (9 AM ET)",
     )
 
-    # 10:30 AM ET - Retry MLB daily stats if 10 AM failed
+    # 9:20 AM ET - Retry MLB daily stats if 9 AM failed
     scheduler.add_job(
         run_mlb_daily_stats_retry,
-        CronTrigger(hour=10, minute=30, timezone=ET),
+        CronTrigger(hour=9, minute=20, timezone=ET),
         id="mlb_daily_stats_retry",
-        name="MLB Daily Stats Retry (10:30 AM ET)",
+        name="MLB Daily Stats Retry (9:20 AM ET)",
     )
 
     # --- MLB early window: 11 AM inference ---
 
-    # 10:40 AM ET - MLB weather forecast (after daily stats retry, before props + inference)
+    # 9:25 AM ET - MLB weather forecast (before props + inference)
     scheduler.add_job(
         run_mlb_weather_forecast,
-        CronTrigger(hour=10, minute=40, timezone=ET),
+        CronTrigger(hour=9, minute=25, timezone=ET),
         id="mlb_weather_forecast",
-        name="MLB Weather Forecast (10:40 AM ET)",
+        name="MLB Weather Forecast (9:25 AM ET)",
     )
 
-    # 10:45 AM ET - Early MLB props scrape (feed 11:00 AM inference)
+    # 9:30 AM ET - Early MLB props scrape (feed 9:50 AM inference)
     scheduler.add_job(
         run_mlb_lines_props_only,
-        CronTrigger(hour=10, minute=45, timezone=ET),
-        id="mlb_lines_props_1045am",
-        name="MLB Props Only (10:45 AM ET, pre-inference)",
+        CronTrigger(hour=9, minute=30, timezone=ET),
+        id="mlb_lines_props_930am",
+        name="MLB Props Only (9:30 AM ET, pre-inference)",
     )
 
-    # 10:50 AM ET - Early MLB lineup scrape (best-available lineups)
+    # 9:35 AM ET - Early MLB lineup scrape (best-available lineups)
     scheduler.add_job(
         run_mlb_lineup_scraper,
-        CronTrigger(hour=10, minute=50, timezone=ET),
-        id="mlb_lineup_scraper_1050am",
-        name="MLB Lineup Scraper (10:50 AM ET)",
+        CronTrigger(hour=9, minute=35, timezone=ET),
+        id="mlb_lineup_scraper_935am",
+        name="MLB Lineup Scraper (9:35 AM ET)",
     )
 
     # 11:00 AM ET - Early MLB inference (pre-lineup-confirmation pass)
