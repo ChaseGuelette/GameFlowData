@@ -54,4 +54,6 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-046]] - Kalshi failed trade visibility + retry: Discord failure alert, failed orders section in bot-tracker, one-click Retry button
 - [[handoff-047]] - Kalshi live trader: sweep resize, fill_price/game_start_time fixes, F821 lint fix, cap-aware resizing identified as bug
 - [[handoff-048]] - Stale fill cancellation queue: detection job, human-approval dashboard panel, execution job, cancel API routes; Kalshi Kelly bet sizing analysis
+- [[handoff-049]] - NBA Analysis Modal fixes (headshots, team display, combo stats), TradeApprovalPanel NBA team bug, sport gate safe default + renewal bypass fix
+- [[handoff-050]] - Cap-aware exposure clamp in execute_trades; MLB/NBA early window shifted ~1hr earlier; reprice_stale_orders SQL bug fixed
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

@@ -95,3 +95,5 @@
 - **Session 053**: April 25, 2026 — Kalshi failed trade visibility + retry. Discord red embed on fill failure (`send_kalshi_trade_failure_alert`). Executor tracks `executed_tickers` set and fires failure alert for any unfilled trade. Queue API returns both pending + last-24h failed trades. Retry endpoint re-queues failed trades with fresh 30-min expiry. Bot-tracker shows "Failed Orders" section with per-row Retry button. Build clean. 6 files modified.
 - **Session 47**: April 25, 2026 — Sweep resize, fill_price/game_start fixes, cap-aware resizing identified
 - **Session 48**: April 25, 2026 at 03:14 PM — Implemented stale fill cancellation queue; analyzed Kalshi Kelly bet sizing
+- **Session 49**: April 25, 2026 — NBA Analysis Modal fixed (headshots, team display, combo stats); TradeApprovalPanel NBA team bug fixed; sport gate safe default + renewal bypass patched in kalshi_live_trader + kalshi_refresh_job
+- **Session 50**: April 25, 2026 — Cap-aware exposure clamp in execute_trades; MLB/NBA early window shifted ~1hr earlier; reprice_stale_orders SQL bug fixed
