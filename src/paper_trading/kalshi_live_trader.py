@@ -25,8 +25,10 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from sqlalchemy import text
@@ -73,6 +75,32 @@ def _env_int(name: str, default: int) -> int:
 
 KALSHI_SWEEP_MAX_CENTS = _env_int("KALSHI_SWEEP_MAX_CENTS", 10)
 KALSHI_SWEEP_EDGE_RETENTION = _env_float("KALSHI_SWEEP_EDGE_RETENTION", 0.50)
+
+# Ticker datetime parser — e.g. KXMLBHIT-26APR251415SEASTL → 2026-04-25 14:15 ET
+_TICKER_DT_RE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})(\d{4})[A-Z]")
+_MONTH_MAP = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+_ET = ZoneInfo("America/New_York")
+
+
+def _parse_game_time_from_ticker(ticker: str) -> datetime | None:
+    """Extract game start time (ET) from Kalshi ticker."""
+    m = _TICKER_DT_RE.search(ticker)
+    if not m:
+        return None
+    try:
+        year = 2000 + int(m.group(1))
+        month = _MONTH_MAP.get(m.group(2))
+        if month is None:
+            return None
+        day = int(m.group(3))
+        hhmm = m.group(4)
+        hour, minute = int(hhmm[:2]), int(hhmm[2:])
+        return datetime(year, month, day, hour, minute, tzinfo=_ET)
+    except (ValueError, IndexError):
+        return None
 
 
 class KalshiLiveTrader:
@@ -712,7 +740,7 @@ class KalshiLiveTrader:
                 "kalshi_implied": round(cand["kalshi_implied"], 4),
                 "edge": round(cand["raw_edge"], 4),
                 "fee_adjusted_edge": round(cand["fee_adjusted_edge"], 4),
-                "game_start_time": game_start_times.get(ticker),
+                "game_start_time": self._get_game_start_time(ticker, game_start_times),
                 "sportsbook_consensus_line": cand.get("sportsbook_line"),
             })
 
@@ -743,6 +771,17 @@ class KalshiLiveTrader:
         except Exception as e:
             logger.debug(f"Game start time lookup failed (non-fatal): {e}")
         return start_times
+
+    def _get_game_start_time(self, ticker: str, start_times: dict[str, datetime | None]) -> datetime | None:
+        """Get game start time for a ticker, with ticker-parsing fallback."""
+        db_time = start_times.get(ticker)
+        if db_time is not None:
+            return db_time
+        # Fallback: parse from ticker (e.g. KXMLBHIT-26APR251415SEASTL-...)
+        parsed = _parse_game_time_from_ticker(ticker)
+        if parsed is not None:
+            logger.debug(f"Parsed game_start_time from ticker {ticker}: {parsed}")
+        return parsed
 
     # ------------------------------------------------------------------
     # Trade execution
@@ -1214,7 +1253,7 @@ class KalshiLiveTrader:
                 SELECT kalshi_order_id, ticker, side, model_prob, fee_adjusted_edge,
                        yes_price, game_date, sport, player_id, player_name,
                        stat_type, line, edge, kalshi_implied, contracts,
-                       expected_fee, game_start_time
+                       game_start_time
                 FROM kalshi_live_orders
                 WHERE kalshi_order_id = ANY(:ids)
                   AND status = 'pending'
@@ -1492,14 +1531,30 @@ class KalshiLiveTrader:
         if not pending:
             return {"reconciled": 0}
 
+        resting_orders = self.client.list_orders(status='resting', limit=200)
+        resting_ids = {o['order_id'] for o in resting_orders}
+        logger.info(f"reconcile_fills: {len(resting_ids)} orders currently resting on Kalshi")
+
         reconciled = 0
+        cancelled = 0
         for row in pending:
-            order_id = row[1]
-            if not order_id:
+            db_id = row[0]
+            kalshi_order_id = row[1]
+            if not kalshi_order_id:
                 continue
 
-            fills = self.client.get_fills(order_id=order_id)
+            fills = self.client.get_fills(order_id=kalshi_order_id)
             if not fills:
+                if kalshi_order_id not in resting_ids:
+                    with self.engine.connect() as conn:
+                        conn.execute(text("""
+                            UPDATE kalshi_live_orders
+                            SET status = 'cancelled', pnl = 0.0, resolved_at = now()
+                            WHERE id = :id
+                        """), {"id": db_id})
+                        conn.commit()
+                    cancelled += 1
+                    logger.info(f"Marked order {kalshi_order_id} as cancelled (not resting on Kalshi, no fills)")
                 continue
 
             total_filled = sum(f.get("count", 0) for f in fills)
@@ -1536,8 +1591,8 @@ class KalshiLiveTrader:
                     conn.commit()
                 reconciled += 1
 
-        logger.info(f"Reconciled {reconciled} fills" + (f" for {target_date}" if target_date else ""))
-        return {"reconciled": reconciled}
+        logger.info(f"Reconciled {reconciled} fills, {cancelled} cancelled" + (f" for {target_date}" if target_date else ""))
+        return {"reconciled": reconciled, "cancelled": cancelled}
 
     # ------------------------------------------------------------------
     # Resolution

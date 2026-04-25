@@ -3,12 +3,20 @@
 Kalshi Stale Fills Job — runs every 5 minutes (9 AM - 11 PM ET).
 Detects pending Kalshi orders whose game has already started and enqueues
 them in kalshi_cancel_queue for human review.
+
+Detection methods (any one triggers):
+1. game_start_time <= now() (from kalshi_markets.close_time)
+2. Ticker-parsed game time <= now() (fallback when game_start_time is NULL)
+3. game_date < today (yesterday's leftovers)
 """
 
 import logging
 import os
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -31,6 +39,41 @@ logging.basicConfig(
 logger = logging.getLogger("kalshi_stale_fills_job")
 
 
+ET = ZoneInfo("America/New_York")
+
+# Regex to parse game datetime from Kalshi ticker second segment.
+# Example: KXMLBHIT-26APR251415SEASTL-... → year=26, mon=APR, day=25, time=1415
+_TICKER_DT_RE = re.compile(
+    r"-(\d{2})([A-Z]{3})(\d{2})(\d{4})[A-Z]",
+)
+_MONTH_MAP = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+
+def _parse_game_time_from_ticker(ticker: str) -> datetime | None:
+    """Extract game start time (ET) from Kalshi ticker.
+
+    Ticker format: KXMLBHIT-26APR251415SEASTL-...
+    where 26=year(2026), APR=month, 25=day, 1415=14:15 ET.
+    """
+    m = _TICKER_DT_RE.search(ticker)
+    if not m:
+        return None
+    try:
+        year = 2000 + int(m.group(1))
+        month = _MONTH_MAP.get(m.group(2))
+        if month is None:
+            return None
+        day = int(m.group(3))
+        hhmm = m.group(4)
+        hour, minute = int(hhmm[:2]), int(hhmm[2:])
+        return datetime(year, month, day, hour, minute, tzinfo=ET)
+    except (ValueError, IndexError):
+        return None
+
+
 def main():
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -43,22 +86,55 @@ def main():
 
     engine = get_engine()
 
+    # Fetch ALL pending orders (not just stale) — filter in Python
     with engine.connect() as conn:
-        stale_rows = conn.execute(text("""
+        all_pending = conn.execute(text("""
             SELECT id, kalshi_order_id, game_date, ticker, sport, player_id,
                    player_name, stat_type, line, side, contracts, total_cost,
                    game_start_time
             FROM kalshi_live_orders
             WHERE status = 'pending'
               AND game_date >= CURRENT_DATE - INTERVAL '3 days'
-              AND (
-                (game_start_time IS NOT NULL AND game_start_time <= now())
-                OR (game_start_time IS NULL AND game_date < CURRENT_DATE)
-              )
         """)).fetchall()
 
+    if not all_pending:
+        logger.info("No pending orders found.")
+        return
+
+    now = datetime.now(ET)
+    stale_rows = []
+
+    for row in all_pending:
+        game_start = row[12]  # game_start_time from DB
+        ticker = row[3]
+        game_date = row[2]
+
+        # Method 1: DB game_start_time is set and in the past
+        if game_start is not None:
+            # Ensure timezone-aware comparison
+            if game_start.tzinfo is None:
+                game_start = game_start.replace(tzinfo=ET)
+            if game_start <= now:
+                stale_rows.append(row)
+                continue
+
+        # Method 2: Parse game time from ticker (fallback for NULL game_start_time)
+        parsed_time = _parse_game_time_from_ticker(ticker)
+        if parsed_time is not None and parsed_time <= now:
+            logger.info(
+                f"Detected stale via ticker parse: {row[6] or ticker} "
+                f"(game started {parsed_time.strftime('%I:%M %p ET')})"
+            )
+            stale_rows.append(row)
+            continue
+
+        # Method 3: Yesterday's leftovers (game_date < today)
+        if game_date is not None and game_date < now.date():
+            stale_rows.append(row)
+            continue
+
     if not stale_rows:
-        logger.info("No stale pending orders found.")
+        logger.info(f"No stale orders among {len(all_pending)} pending orders.")
         return
 
     logger.info(f"Found {len(stale_rows)} stale pending order(s)")

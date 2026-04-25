@@ -79,6 +79,12 @@ def main():
                     SET status = 'cancelled', executed_at = now()
                     WHERE id = :id
                 """), {"id": queue_id})
+                # Also update the live order record so it stops showing as 'pending'
+                conn.execute(text("""
+                    UPDATE kalshi_live_orders
+                    SET status = 'cancelled'
+                    WHERE kalshi_order_id = :oid AND status = 'pending'
+                """), {"oid": order_id})
             logger.info(
                 f"Cancelled order {order_id} | "
                 f"{row[2] or '?'} {row[3] or ''} {row[4] or ''}"
