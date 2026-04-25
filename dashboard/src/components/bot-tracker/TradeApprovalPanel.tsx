@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTradeQueue, useTradeApproval } from '@/lib/hooks/useTradeQueue'
 import { KALSHI_STAT_LABELS } from '@/types/bot-tracker'
 import type { KalshiTradeQueueItem } from '@/types/bot-tracker'
@@ -113,11 +114,15 @@ function TradeRow({
 
 export function TradeApprovalPanel() {
   const { data: trades = [], isLoading } = useTradeQueue()
-  const { approve, reject, approveAll } = useTradeApproval()
+  const { approve, reject, approveAll, retry } = useTradeApproval()
+  const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [sportFilter, setSportFilter] = useState<string>('all')
   const [selectedPrediction, setSelectedPrediction] = useState<Prediction | null>(null)
   const [predLoading, setPredLoading] = useState(false)
+
+  const pendingTrades = useMemo(() => trades.filter(t => t.status === 'pending_approval'), [trades])
+  const failedTrades = useMemo(() => trades.filter(t => t.status === 'failed'), [trades])
 
   async function handleAnalyze(trade: KalshiTradeQueueItem) {
     if (!trade.player_id) return
@@ -168,23 +173,23 @@ export function TradeApprovalPanel() {
 
   // Prune stale selections — trades that disappeared (expired/approved) get dropped.
   // No useEffect needed; computed inline on each render.
-  const tradeIdSet = useMemo(() => new Set(trades.map(t => t.id)), [trades])
+  const tradeIdSet = useMemo(() => new Set(pendingTrades.map(t => t.id)), [pendingTrades])
   const validSelected = useMemo(
     () => new Set([...selected].filter(id => tradeIdSet.has(id))),
     [selected, tradeIdSet]
   )
   const sports = useMemo(
-    () => Array.from(new Set(trades.map((t) => t.sport))).sort(),
-    [trades]
+    () => Array.from(new Set(pendingTrades.map((t) => t.sport))).sort(),
+    [pendingTrades]
   )
   const filteredTrades = useMemo(
-    () => sportFilter === 'all' ? trades : trades.filter((t) => t.sport === sportFilter),
-    [trades, sportFilter]
+    () => sportFilter === 'all' ? pendingTrades : pendingTrades.filter((t) => t.sport === sportFilter),
+    [pendingTrades, sportFilter]
   )
 
-  if (isLoading || trades.length === 0) return null
+  if (isLoading || (pendingTrades.length === 0 && failedTrades.length === 0)) return null
 
-  const totalExposure = trades.reduce((sum, t) => sum + Number(t.expected_cost), 0)
+  const totalExposure = pendingTrades.reduce((sum, t) => sum + Number(t.expected_cost), 0)
 
   const allSelected = validSelected.size === filteredTrades.length && filteredTrades.length > 0
 
@@ -203,7 +208,7 @@ export function TradeApprovalPanel() {
   }
 
   const handleApprove = () => {
-    if (validSelected.size === trades.length) {
+    if (validSelected.size === pendingTrades.length) {
       approveAll.mutate()
     } else {
       approve.mutate(Array.from(validSelected))
@@ -214,9 +219,10 @@ export function TradeApprovalPanel() {
     reject.mutate(Array.from(validSelected))
   }
 
-  const isPending = approve.isPending || reject.isPending || approveAll.isPending
+  const isPending = approve.isPending || reject.isPending || approveAll.isPending || retry.isPending
 
   return (
+    <>
     <div className="rounded-lg border-2 border-yellow-500/50 bg-slate-800 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-slate-700 bg-yellow-500/5">
@@ -225,7 +231,7 @@ export function TradeApprovalPanel() {
             Pending Trade Approval
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            {trades.length} trade{trades.length !== 1 ? 's' : ''} pending
+            {pendingTrades.length} trade{pendingTrades.length !== 1 ? 's' : ''} pending
             {' | '}Total exposure: ${totalExposure.toFixed(2)}
           </p>
         </div>
@@ -254,7 +260,7 @@ export function TradeApprovalPanel() {
             disabled={validSelected.size === 0 || isPending}
             className="px-3 py-1.5 text-xs font-medium rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            {validSelected.size === trades.length ? 'Approve All' : `Approve (${validSelected.size})`}
+            {validSelected.size === pendingTrades.length ? 'Approve All' : `Approve (${validSelected.size})`}
           </button>
         </div>
       </div>
@@ -309,9 +315,9 @@ export function TradeApprovalPanel() {
           Trades rejected.
         </div>
       )}
-      {(approve.isError || reject.isError || approveAll.isError) && (
+      {(approve.isError || reject.isError || approveAll.isError || retry.isError) && (
         <div className="px-4 py-2 bg-red-500/10 text-red-400 text-xs">
-          Error: {(approve.error ?? reject.error ?? approveAll.error)?.message}
+          Error: {(approve.error ?? reject.error ?? approveAll.error ?? retry.error)?.message}
         </div>
       )}
       {predLoading && (
@@ -326,5 +332,78 @@ export function TradeApprovalPanel() {
         />
       )}
     </div>
+
+    {failedTrades.length > 0 && (
+      <div className="mt-4 rounded-lg border-2 border-red-500/50 bg-slate-800 overflow-hidden">
+        <div className="flex items-center justify-between p-4 border-b border-slate-700 bg-red-500/5">
+          <div>
+            <h3 className="text-sm font-semibold text-red-400">
+              Failed Orders (last 24h)
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {failedTrades.length} failed order{failedTrades.length !== 1 ? 's' : ''}
+            </p>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left">
+            <thead className="text-xs text-slate-400 bg-slate-900/50">
+              <tr>
+                <th className="px-3 py-2">Player</th>
+                <th className="px-3 py-2">Stat</th>
+                <th className="px-3 py-2">Line</th>
+                <th className="px-3 py-2">Side</th>
+                <th className="px-3 py-2">Cost</th>
+                <th className="px-3 py-2">Edge</th>
+                <th className="px-3 py-2">Ticker</th>
+                <th className="px-3 py-2">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-700/50">
+              {failedTrades.map((trade) => (
+                <tr key={trade.id} className="hover:bg-slate-700/30 bg-red-500/5">
+                  <td className="px-3 py-2 text-slate-200">{trade.player_name ?? '—'}</td>
+                  <td className="px-3 py-2 text-slate-300">{KALSHI_STAT_LABELS[trade.stat_type] ?? trade.stat_type}</td>
+                  <td className="px-3 py-2 text-slate-300">{Number(trade.line)}</td>
+                  <td className="px-3 py-2">
+                    <span className={`text-xs font-medium ${trade.side === 'yes' ? 'text-green-400' : 'text-red-400'}`}>
+                      {trade.side.toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-slate-300">${Number(trade.expected_cost).toFixed(2)}</td>
+                  <td className="px-3 py-2 text-slate-300">
+                    {trade.fee_adjusted_edge != null ? `${(Number(trade.fee_adjusted_edge) * 100).toFixed(1)}%` : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-slate-400 text-xs font-mono">{trade.ticker}</td>
+                  <td className="px-3 py-2">
+                    <button
+                      onClick={() => {
+                        retry.mutate([trade.id], {
+                          onSuccess: () => {
+                            queryClient.invalidateQueries({ queryKey: ['trade-queue'] })
+                          },
+                        })
+                      }}
+                      disabled={retry.isPending}
+                      className="px-2 py-1 text-xs font-medium rounded bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {retry.isSuccess && (
+          <div className="px-4 py-2 bg-green-500/10 text-green-400 text-xs">
+            Trade re-queued for execution.
+          </div>
+        )}
+      </div>
+    )}
+    </>
   )
 }

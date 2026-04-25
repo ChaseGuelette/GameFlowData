@@ -20,7 +20,7 @@ interface ApproveResult {
 }
 
 async function approveAction(
-  action: 'approve' | 'reject' | 'approve_all',
+  action: 'approve' | 'reject' | 'approve_all' | 'retry',
   tradeIds: number[] = [],
 ): Promise<ApproveResult> {
   const res = await fetch('/api/kalshi/approve', {
@@ -70,5 +70,13 @@ export function useTradeApproval() {
     },
   })
 
-  return { approve, reject, approveAll }
+  const retry = useMutation({
+    mutationFn: (tradeIds: number[]) => approveAction('retry', tradeIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trade-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['bot-tracker'] })
+    },
+  })
+
+  return { approve, reject, approveAll, retry }
 }

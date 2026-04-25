@@ -106,8 +106,10 @@ def main():
         f"(results={len(results)})"
     )
 
+    executed_tickers: set = set()
     for r in results:
         if r.get("order_id"):
+            executed_tickers.add(r["ticker"])
             try:
                 from src.discord_bot.alerts import send_kalshi_trade_alert_sync
 
@@ -134,6 +136,31 @@ def main():
                     }, channel_id=channel)
             except Exception as e:
                 logger.warning(f"Discord alert failed (non-fatal): {e}")
+
+    approved_trades = [
+        {
+            "id": row[0], "ticker": row[1], "player_name": row[2],
+            "stat_type": row[3], "line": float(row[4]) if row[4] else 0,
+            "side": row[5], "contracts": row[6],
+            "expected_cost": float(row[7]) if row[7] else 0,
+            "fee_adjusted_edge": float(row[8]) if row[8] is not None else 0,
+        }
+        for row in rows
+    ]
+    for trade in approved_trades:
+        if trade["ticker"] not in executed_tickers:
+            try:
+                from src.discord_bot.alerts import send_kalshi_trade_failure_alert_sync
+
+                channel = os.getenv("DISCORD_CHANNEL_KALSHI") or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+                if channel:
+                    send_kalshi_trade_failure_alert_sync(
+                        trade,
+                        "Order returned no fill — check orderbook liquidity",
+                        channel_id=channel,
+                    )
+            except Exception as e:
+                logger.warning(f"Discord failure alert failed (non-fatal): {e}")
 
 
 if __name__ == "__main__":

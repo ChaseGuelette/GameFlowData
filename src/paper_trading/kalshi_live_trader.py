@@ -716,19 +716,20 @@ class KalshiLiveTrader:
         return trades
 
     def _lookup_game_start_times(self, target_date: date, sport: str) -> dict[str, datetime | None]:
-        """Look up game start times from schedule tables, keyed by ticker."""
+        """Look up game start times from kalshi_markets.close_time, keyed by ticker.
+
+        Kalshi sports markets close at game start, so close_time is the game start time.
+        """
         start_times: dict[str, datetime | None] = {}
         try:
-            table = "nba_game_schedule" if sport == "nba" else "mlb_game_schedule"
             with self.engine.connect() as conn:
-                rows = conn.execute(text(f"""
-                    SELECT km.ticker, gs.game_time
-                    FROM kalshi_markets km
-                    JOIN {table} gs ON gs.game_date = :d
-                    WHERE km.sport = :sport
-                      AND (km.snapshot_time AT TIME ZONE 'America/New_York')::date = :d
-                      AND gs.game_time IS NOT NULL
-                    GROUP BY km.ticker, gs.game_time
+                rows = conn.execute(text("""
+                    SELECT DISTINCT ON (ticker) ticker, close_time
+                    FROM kalshi_markets
+                    WHERE sport = :sport
+                      AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :d
+                      AND close_time IS NOT NULL
+                    ORDER BY ticker, snapshot_time DESC
                 """), {"d": target_date, "sport": sport}).fetchall()
                 for row in rows:
                     start_times[row[0]] = row[1]
@@ -887,6 +888,9 @@ class KalshiLiveTrader:
             if status in ("executed", "filled"):
                 # Order fully filled
                 fill_price = order.get("yes_price") or order.get("avg_price")
+                if not fill_price:
+                    # API didn't return fill price — fall back to snapshot price
+                    fill_price = trade["yes_price"]
                 fill_count = order.get("count", trade["contracts"])
                 # Calculate actual cost from fill
                 if fill_price:

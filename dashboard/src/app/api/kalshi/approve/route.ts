@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 
 interface ApproveBody {
   trade_ids: number[]
-  action: 'approve' | 'reject' | 'approve_all'
+  action: 'approve' | 'reject' | 'approve_all' | 'retry'
 }
 
 export async function POST(request: NextRequest) {
@@ -23,12 +23,45 @@ export async function POST(request: NextRequest) {
   }
 
   const { action } = body
-  if (!action || !['approve', 'reject', 'approve_all'].includes(action)) {
+  if (!action || !['approve', 'reject', 'approve_all', 'retry'].includes(action)) {
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
   }
 
   const admin = createAdminClient()
   const now = new Date().toISOString()
+
+  if (action === 'retry') {
+    if (!body.trade_ids?.length) {
+      return NextResponse.json({ error: 'trade_ids required for retry' }, { status: 400 })
+    }
+
+    const { data: validTrades, error: fetchError } = await admin
+      .from('kalshi_trade_queue')
+      .select('id')
+      .in('id', body.trade_ids)
+      .eq('status', 'failed')
+
+    if (fetchError) {
+      return NextResponse.json({ error: fetchError.message }, { status: 500 })
+    }
+
+    const validIds = (validTrades ?? []).map((t: { id: number }) => t.id)
+    if (!validIds.length) {
+      return NextResponse.json({ error: 'No failed trades found for retry' }, { status: 404 })
+    }
+
+    const refreshedExpiry = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+    const { error: updateError } = await admin
+      .from('kalshi_trade_queue')
+      .update({ status: 'approved', approved_at: now, expires_at: refreshedExpiry })
+      .in('id', validIds)
+
+    if (updateError) {
+      return NextResponse.json({ error: updateError.message }, { status: 500 })
+    }
+
+    return NextResponse.json({ success: true, action: 'retry', count: validIds.length, trade_ids: validIds })
+  }
 
   if (action === 'reject') {
     if (!body.trade_ids?.length) {
