@@ -344,8 +344,8 @@ def _fetch_orderbooks(target_date: date, sport: str) -> int:
         )
     """)
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     import json
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _fetch_orderbook(ticker):
         try:

@@ -42,9 +42,6 @@ logger = logging.getLogger(__name__)
 # than this gap, allow the override.  Otherwise prefer the aligned line.
 _SPORTSBOOK_LINE_FALLBACK_GAP = 0.08  # 8 percentage points
 
-KALSHI_SWEEP_MAX_CENTS = _env_int("KALSHI_SWEEP_MAX_CENTS", 10)
-KALSHI_SWEEP_EDGE_RETENTION = _env_float("KALSHI_SWEEP_EDGE_RETENTION", 0.50)
-
 # Supported stat types per sport (skip markets without trained models)
 SUPPORTED_STATS: dict[str, set[str]] = {
     "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
@@ -72,6 +69,10 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         logger.warning(f"Invalid {name}={val}, using default {default}")
         return default
+
+
+KALSHI_SWEEP_MAX_CENTS = _env_int("KALSHI_SWEEP_MAX_CENTS", 10)
+KALSHI_SWEEP_EDGE_RETENTION = _env_float("KALSHI_SWEEP_EDGE_RETENTION", 0.50)
 
 
 class KalshiLiveTrader:

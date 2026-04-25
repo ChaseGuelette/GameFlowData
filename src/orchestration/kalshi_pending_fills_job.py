@@ -5,12 +5,14 @@ Polls the Kalshi API to reconcile any pending orders that have since filled.
 Exits early (zero API calls) if no pending orders exist.
 """
 
+import logging
 import os
 import sys
-import logging
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from datetime import UTC
 
 from dotenv import load_dotenv
 
@@ -65,13 +67,13 @@ def main():
 
     if reconciled > 0:
         try:
-            from datetime import datetime, timedelta, timezone
+            from datetime import datetime, timedelta
 
             from src.discord_bot.alerts import send_kalshi_trade_alert_sync
 
             channel = os.getenv("DISCORD_CHANNEL_KALSHI") or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
             if channel:
-                cutoff = datetime.now(timezone.utc) - timedelta(seconds=30)
+                cutoff = datetime.now(UTC) - timedelta(seconds=30)
                 with engine.connect() as conn:
                     filled_rows = conn.execute(text("""
                         SELECT player_name, stat_type, side, fill_price, contracts
