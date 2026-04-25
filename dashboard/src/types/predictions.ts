@@ -98,6 +98,11 @@ export interface PlayerGameStats {
   ast: number
   fg3m: number
   min: number
+  stl?: number
+  blk?: number
+  tov?: number
+  team_id?: number
+  matchup?: string
 }
 
 export interface BookmakerLine {

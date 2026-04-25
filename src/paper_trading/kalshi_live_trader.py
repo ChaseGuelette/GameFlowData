@@ -756,6 +756,29 @@ class KalshiLiveTrader:
 
         results: list[dict[str, Any]] = []
 
+        # --- Daily exposure cap (mirrors select_trades) ---
+        daily_exposure_pct = _env_float("KALSHI_DAILY_EXPOSURE_PCT", 0.60)
+        min_exposure = _env_float("KALSHI_MIN_DAILY_EXPOSURE", 80.0)
+        max_exposure = _env_float("KALSHI_MAX_DAILY_EXPOSURE", 500.0)
+        balance_data_for_cap = self.client.get_balance()
+        bankroll_for_cap = (balance_data_for_cap.get("balance", 0) / 100.0) if balance_data_for_cap else 0
+        dynamic_cap = bankroll_for_cap * daily_exposure_pct
+        effective_cap = max(min_exposure, min(dynamic_cap, max_exposure))
+
+        # Today's already-committed exposure
+        target_date = trades[0]["game_date"] if trades else date.today()
+        with self.engine.connect() as conn:
+            existing_exposure = conn.execute(text("""
+                SELECT COALESCE(SUM(total_cost), 0)
+                FROM kalshi_live_orders
+                WHERE game_date = :d AND status != 'cancelled'
+            """), {"d": target_date}).scalar()
+        running_exposure = float(existing_exposure or 0)
+        logger.info(
+            f"Execute exposure cap: ${effective_cap:.2f} | already committed: ${running_exposure:.2f} | "
+            f"headroom: ${effective_cap - running_exposure:.2f}"
+        )
+
         for trade in trades:
             # Fresh balance check before each order
             balance_data = self.client.get_balance()
@@ -770,6 +793,27 @@ class KalshiLiveTrader:
                     f"(cost: ${trade['expected_cost']:.2f}) — skipping"
                 )
                 continue
+
+            # Exposure cap check (non-swept path)
+            cap_remaining = effective_cap - running_exposure
+            if trade["expected_cost"] > cap_remaining:
+                if cap_remaining <= 0:
+                    logger.warning(
+                        f"Daily cap exhausted (${running_exposure:.2f}/${effective_cap:.2f}) "
+                        f"— skipping {trade['ticker']} and remaining trades"
+                    )
+                    break
+                # Reduce contracts to fit remaining cap
+                cost_per = trade["expected_cost"] / trade["contracts"]
+                new_contracts = int(math.floor(cap_remaining / cost_per))
+                if new_contracts <= 0:
+                    logger.warning(f"Cannot fit {trade['ticker']} in remaining cap — skipping")
+                    continue
+                trade = {**trade, "contracts": new_contracts, "expected_cost": round(new_contracts * cost_per, 2)}
+                logger.info(
+                    f"CAP CLAMP [{trade['ticker']}]: reduced to {new_contracts} contracts "
+                    f"(remaining cap: ${cap_remaining:.2f})"
+                )
 
             # --- Orderbook sweep check ---
             snapshot_price = trade["yes_price"]
@@ -824,6 +868,25 @@ class KalshiLiveTrader:
                     new_expected_fee = kalshi_taker_fee(
                         actual_price if trade["side"] == "yes" else 100 - actual_price
                     ) * new_contracts
+
+                # Clamp to daily exposure cap
+                cap_remaining = effective_cap - running_exposure
+                if new_expected_cost > cap_remaining:
+                    if cap_remaining <= price_per:
+                        logger.warning(
+                            f"SWEEP RESIZE: daily cap exhausted (${running_exposure:.2f}/${effective_cap:.2f}) "
+                            f"for {trade['ticker']} — skipping"
+                        )
+                        continue
+                    new_contracts = int(math.floor(cap_remaining / price_per))
+                    new_expected_cost = new_contracts * price_per
+                    new_expected_fee = kalshi_taker_fee(
+                        actual_price if trade["side"] == "yes" else 100 - actual_price
+                    ) * new_contracts
+                    logger.info(
+                        f"SWEEP CAP CLAMP [{trade['ticker']}]: capped to {new_contracts} contracts "
+                        f"(remaining cap: ${cap_remaining:.2f})"
+                    )
 
                 if new_contracts == 0:
                     logger.warning(
@@ -913,6 +976,9 @@ class KalshiLiveTrader:
             # Record to DB
             db_status = "filled" if status in ("executed", "filled") else "pending"
             self._record_order(trade, order_id, db_status, fill_price, fill_count, total_cost, fee_paid)
+
+            # Track running exposure for cap enforcement
+            running_exposure += total_cost
 
             # Get updated balance for alert
             new_balance_data = self.client.get_balance()

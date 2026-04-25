@@ -4,12 +4,15 @@ import Image from 'next/image'
 import { useState } from 'react'
 import { PLACEHOLDER_AVATAR } from '@/lib/utils'
 import { useSport } from '@/contexts/SportContext'
+import { getSportConfig, type Sport } from '@/lib/sport-config'
 
 interface PlayerAvatarProps {
   playerId: number
   playerName: string
   size?: 'sm' | 'md' | 'lg'
   className?: string
+  /** Override sport for headshot URL instead of reading global sport context */
+  sportOverride?: Sport
 }
 
 const sizeClasses = {
@@ -29,8 +32,10 @@ export function PlayerAvatar({
   playerName,
   size = 'md',
   className = '',
+  sportOverride,
 }: PlayerAvatarProps) {
-  const { config } = useSport()
+  const { config: globalConfig } = useSport()
+  const config = sportOverride ? getSportConfig(sportOverride) : globalConfig
   const [hasError, setHasError] = useState(false)
 
   return (

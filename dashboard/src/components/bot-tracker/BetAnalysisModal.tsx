@@ -7,6 +7,8 @@ import { Last5Chart } from '@/components/analysis/Last5Chart'
 import type { KalshiLiveOrder, KalshiPaperBet, BotTab } from '@/types/bot-tracker'
 import { KALSHI_STAT_LABELS } from '@/types/bot-tracker'
 import type { PlayerGameStats } from '@/types/predictions'
+import { NBA_CONFIG } from '@/lib/sport-config'
+import type { Sport } from '@/lib/sport-config'
 
 interface BetAnalysisModalProps {
   order: KalshiLiveOrder | KalshiPaperBet
@@ -29,6 +31,8 @@ export function BetAnalysisModal({ order, tab, onClose }: BetAnalysisModalProps)
   const [mlbHistoryValues, setMlbHistoryValues] = useState<number[]>([])
   const [mlbRawRows, setMlbRawRows] = useState<Record<string, unknown>[]>([])
   const [loading, setLoading] = useState(true)
+  const [teamAbbrev, setTeamAbbrev] = useState<string | null>(null)
+  const [matchupText, setMatchupText] = useState<string | null>(null)
 
   const isMlb = order.sport === 'mlb' || order.stat_type.startsWith('batter_') || order.stat_type.startsWith('pitcher_')
   const isPitcherStat = order.stat_type.startsWith('pitcher_')
@@ -82,14 +86,23 @@ export function BetAnalysisModal({ order, tab, onClose }: BetAnalysisModalProps)
 
       const { data, error } = await supabase
         .from('player_game_stats')
-        .select('game_date, pts, reb, ast, fg3m, min')
+        .select('game_date, pts, reb, ast, fg3m, stl, blk, tov, min, team_id, matchup')
         .eq('player_id', order.player_id)
         .gt('min', 0)
         .order('game_date', { ascending: false })
         .limit(5)
 
       if (!error && data) {
-        setHistory(data.reverse())
+        const reversed = data.reverse()
+        setHistory(reversed)
+        // Extract team info from most recent game
+        const latest = reversed[reversed.length - 1]
+        if (latest?.team_id) {
+          setTeamAbbrev(NBA_CONFIG.teams[latest.team_id] ?? null)
+        }
+        if (latest?.matchup) {
+          setMatchupText(latest.matchup)
+        }
       }
       setLoading(false)
     }
@@ -105,20 +118,31 @@ export function BetAnalysisModal({ order, tab, onClose }: BetAnalysisModalProps)
     return () => window.removeEventListener('keydown', handleEscape)
   }, [onClose])
 
-  const nbaStatColumn = (() => {
-    if (isMlb) return null
-    if (order.stat_type === 'pts') return 'pts' as keyof PlayerGameStats
-    if (order.stat_type === 'reb') return 'reb' as keyof PlayerGameStats
-    if (order.stat_type === 'ast') return 'ast' as keyof PlayerGameStats
-    return null
-  })()
+  // NBA stat column mapping — single stats map directly, combos are computed from components
+  const NBA_STAT_COLUMN: Record<string, keyof PlayerGameStats | null> = {
+    pts: 'pts', reb: 'reb', ast: 'ast',
+    stl: 'stl', blk: 'blk', fg3m: 'fg3m', tov: 'tov',
+    pra: null, pr: null, pa: null, ra: null, sb: null,
+  }
+  const NBA_COMBO_COMPONENTS: Record<string, (keyof PlayerGameStats)[]> = {
+    pra: ['pts', 'reb', 'ast'],
+    pr: ['pts', 'reb'],
+    pa: ['pts', 'ast'],
+    ra: ['reb', 'ast'],
+    sb: ['stl', 'blk'],
+  }
+
+  const nbaStatColumn = isMlb ? null : (NBA_STAT_COLUMN[order.stat_type] ?? null)
+  const nbaComboComponents = isMlb ? undefined : NBA_COMBO_COMPONENTS[order.stat_type]
 
   const l5Avg = history.length > 0
     ? isMlb && mlbHistoryValues.length > 0
       ? mlbHistoryValues.reduce((s, v) => s + v, 0) / mlbHistoryValues.length
-      : nbaStatColumn
-        ? history.reduce((sum, g) => sum + (Number(g[nbaStatColumn]) || 0), 0) / history.length
-        : null
+      : nbaComboComponents
+        ? history.reduce((sum, g) => sum + nbaComboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0), 0) / history.length
+        : nbaStatColumn
+          ? history.reduce((sum, g) => sum + (Number(g[nbaStatColumn]) || 0), 0) / history.length
+          : null
     : null
 
   const statusColors: Record<string, string> = {
@@ -150,19 +174,28 @@ export function BetAnalysisModal({ order, tab, onClose }: BetAnalysisModalProps)
                 playerName={order.player_name || 'Unknown'}
                 size="lg"
                 className="hidden sm:block"
+                sportOverride={order.sport as Sport}
               />
             )}
             <div className="flex-1">
               <h2 className="text-xl font-bold text-slate-50">
                 {order.player_name ?? 'Unknown'}
               </h2>
-              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                order.sport === 'nba'
-                  ? 'bg-orange-500/20 text-orange-400'
-                  : 'bg-blue-500/20 text-blue-400'
-              }`}>
-                {order.sport.toUpperCase()}
-              </span>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                  order.sport === 'nba'
+                    ? 'bg-orange-500/20 text-orange-400'
+                    : 'bg-blue-500/20 text-blue-400'
+                }`}>
+                  {order.sport.toUpperCase()}
+                </span>
+                {teamAbbrev && (
+                  <span className="text-sm text-slate-400">{teamAbbrev}</span>
+                )}
+                {matchupText && (
+                  <span className="text-xs text-slate-500">{matchupText}</span>
+                )}
+              </div>
             </div>
             <div className="text-left sm:text-right">
               <div className="text-lg font-bold text-slate-50">
@@ -245,7 +278,9 @@ export function BetAnalysisModal({ order, tab, onClose }: BetAnalysisModalProps)
                 values={
                   isMlb && mlbHistoryValues.length > 0
                     ? mlbHistoryValues
-                    : undefined
+                    : nbaComboComponents
+                      ? history.map(g => nbaComboComponents.reduce((s, col) => s + (Number(g[col]) || 0), 0))
+                      : undefined
                 }
               />
               <div className="mt-4 overflow-x-auto">
@@ -270,9 +305,24 @@ export function BetAnalysisModal({ order, tab, onClose }: BetAnalysisModalProps)
                       ) : (
                         <>
                           <th className="text-center py-2 px-1.5 sm:px-2">MIN</th>
-                          <th className="text-center py-2 px-1.5 sm:px-2">PTS</th>
-                          <th className="text-center py-2 px-1.5 sm:px-2">REB</th>
-                          <th className="text-center py-2 px-1.5 sm:px-2">AST</th>
+                          <th className={`text-center py-2 px-1.5 sm:px-2 ${nbaStatColumn === 'pts' || nbaComboComponents?.includes('pts') ? 'text-slate-200' : ''}`}>PTS</th>
+                          <th className={`text-center py-2 px-1.5 sm:px-2 ${nbaStatColumn === 'reb' || nbaComboComponents?.includes('reb') ? 'text-slate-200' : ''}`}>REB</th>
+                          <th className={`text-center py-2 px-1.5 sm:px-2 ${nbaStatColumn === 'ast' || nbaComboComponents?.includes('ast') ? 'text-slate-200' : ''}`}>AST</th>
+                          {(nbaStatColumn === 'stl' || nbaComboComponents?.includes('stl')) && (
+                            <th className="text-center py-2 px-1.5 sm:px-2 text-slate-200">STL</th>
+                          )}
+                          {(nbaStatColumn === 'blk' || nbaComboComponents?.includes('blk')) && (
+                            <th className="text-center py-2 px-1.5 sm:px-2 text-slate-200">BLK</th>
+                          )}
+                          {nbaStatColumn === 'fg3m' && (
+                            <th className="text-center py-2 px-1.5 sm:px-2 text-slate-200">3PM</th>
+                          )}
+                          {nbaStatColumn === 'tov' && (
+                            <th className="text-center py-2 px-1.5 sm:px-2 text-slate-200">TOV</th>
+                          )}
+                          {nbaComboComponents && (
+                            <th className="text-center py-2 px-1.5 sm:px-2 text-amber-400 font-semibold">{statLabel}</th>
+                          )}
                         </>
                       )}
                     </tr>
@@ -318,19 +368,38 @@ export function BetAnalysisModal({ order, tab, onClose }: BetAnalysisModalProps)
                           </tr>
                         )
                       }
+                      const isHighlighted = (col: string) =>
+                        nbaStatColumn === col || nbaComboComponents?.includes(col as keyof PlayerGameStats)
                       return (
                         <tr key={i} className="border-b border-slate-700/50">
                           <td className="py-2 px-1.5 sm:px-2 text-slate-300">{game.game_date}</td>
                           <td className="text-center py-2 px-1.5 sm:px-2 text-slate-400">{game.min}</td>
-                          <td className={`text-center py-2 px-1.5 sm:px-2 ${order.stat_type === 'pts' ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
+                          <td className={`text-center py-2 px-1.5 sm:px-2 ${isHighlighted('pts') ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
                             {game.pts}
                           </td>
-                          <td className={`text-center py-2 px-1.5 sm:px-2 ${order.stat_type === 'reb' ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
+                          <td className={`text-center py-2 px-1.5 sm:px-2 ${isHighlighted('reb') ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
                             {game.reb}
                           </td>
-                          <td className={`text-center py-2 px-1.5 sm:px-2 ${order.stat_type === 'ast' ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
+                          <td className={`text-center py-2 px-1.5 sm:px-2 ${isHighlighted('ast') ? 'text-slate-50 font-medium' : 'text-slate-400'}`}>
                             {game.ast}
                           </td>
+                          {(nbaStatColumn === 'stl' || nbaComboComponents?.includes('stl')) && (
+                            <td className="text-center py-2 px-1.5 sm:px-2 text-slate-50 font-medium">{game.stl ?? '—'}</td>
+                          )}
+                          {(nbaStatColumn === 'blk' || nbaComboComponents?.includes('blk')) && (
+                            <td className="text-center py-2 px-1.5 sm:px-2 text-slate-50 font-medium">{game.blk ?? '—'}</td>
+                          )}
+                          {nbaStatColumn === 'fg3m' && (
+                            <td className="text-center py-2 px-1.5 sm:px-2 text-slate-50 font-medium">{game.fg3m}</td>
+                          )}
+                          {nbaStatColumn === 'tov' && (
+                            <td className="text-center py-2 px-1.5 sm:px-2 text-slate-50 font-medium">{game.tov ?? '—'}</td>
+                          )}
+                          {nbaComboComponents && (
+                            <td className="text-center py-2 px-1.5 sm:px-2 text-amber-400 font-bold">
+                              {nbaComboComponents.reduce((s, col) => s + (Number(game[col]) || 0), 0)}
+                            </td>
+                          )}
                         </tr>
                       )
                     })}
