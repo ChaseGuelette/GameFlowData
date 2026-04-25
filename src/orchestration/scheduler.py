@@ -549,9 +549,9 @@ def run_mlb_daily_stats_retry():
     """Re-run MLB daily stats if the 9 AM run failed."""
     status = JOB_STATUS.get("mlb_daily_stats_job.py", {})
     if status.get("status") == "success":
-        logger.info("MLB daily stats already succeeded today, skipping 10:30 retry.")
+        logger.info("MLB daily stats already succeeded today, skipping 9:20 retry.")
         return
-    logger.warning("MLB daily stats failed or did not run at 10 AM — retrying now...")
+    logger.warning("MLB daily stats failed or did not run at 9 AM — retrying now...")
     run_job("mlb_daily_stats_job.py")
 
 
@@ -751,22 +751,22 @@ def main():
         name="User Paper Bet Resolution (9:30 AM ET)",
     )
 
-    # --- Early window: 11 AM NBA inference ---
+    # --- Early window: 10 AM NBA inference ---
 
-    # 11:00 AM ET - Early props scrape (feed 11:15 AM NBA inference)
+    # 10:00 AM ET - Early props scrape (feed 10:15 AM NBA inference)
     scheduler.add_job(
         run_lines_props_only,
-        CronTrigger(hour=11, minute=0, timezone=ET),
-        id="lines_props_11am",
-        name="Lines Props Only (11 AM ET, pre-inference)",
+        CronTrigger(hour=10, minute=0, timezone=ET),
+        id="lines_props_10am",
+        name="Lines Props Only (10 AM ET, pre-inference)",
     )
 
-    # 11:15 AM ET - Early NBA inference
+    # 10:15 AM ET - Early NBA inference
     scheduler.add_job(
         run_inference,
-        CronTrigger(hour=11, minute=15, timezone=ET),
-        id="inference_11am",
-        name="Inference (11:15 AM ET)",
+        CronTrigger(hour=10, minute=15, timezone=ET),
+        id="inference_1015am",
+        name="Inference (10:15 AM ET)",
     )
 
     # --- First window: noon full scrape + inference ---
@@ -861,7 +861,7 @@ def main():
         name="MLB Daily Stats Retry (9:20 AM ET)",
     )
 
-    # --- MLB early window: 11 AM inference ---
+    # --- MLB early window: 9:50 AM inference ---
 
     # 9:25 AM ET - MLB weather forecast (before props + inference)
     scheduler.add_job(
@@ -887,12 +887,12 @@ def main():
         name="MLB Lineup Scraper (9:35 AM ET)",
     )
 
-    # 11:00 AM ET - Early MLB inference (pre-lineup-confirmation pass)
+    # 9:50 AM ET - Early MLB inference (pre-lineup-confirmation pass)
     scheduler.add_job(
         run_mlb_inference,
-        CronTrigger(hour=11, minute=0, timezone=ET),
-        id="mlb_inference_11am",
-        name="MLB Inference (11:00 AM ET)",
+        CronTrigger(hour=9, minute=50, timezone=ET),
+        id="mlb_inference_950am",
+        name="MLB Inference (9:50 AM ET)",
     )
 
     # 12:00 PM ET - MLB full lines scrape (game lines + props + linker)
