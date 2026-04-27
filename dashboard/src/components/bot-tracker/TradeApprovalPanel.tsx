@@ -115,9 +115,10 @@ function TradeRow({
 
 export function TradeApprovalPanel() {
   const { data: trades = [], isLoading } = useTradeQueue()
-  const { approve, reject, approveAll, retry } = useTradeApproval()
+  const { approve, reject, approveAll, retry, dismiss, dismissAll } = useTradeApproval()
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [selectedFailed, setSelectedFailed] = useState<Set<number>>(new Set())
   const [sportFilter, setSportFilter] = useState<string>('all')
   const [selectedPrediction, setSelectedPrediction] = useState<Prediction | null>(null)
   const [predLoading, setPredLoading] = useState(false)
@@ -181,6 +182,12 @@ export function TradeApprovalPanel() {
     () => new Set([...selected].filter(id => tradeIdSet.has(id))),
     [selected, tradeIdSet]
   )
+  const failedIdSet = useMemo(() => new Set(failedTrades.map(t => t.id)), [failedTrades])
+  const validSelectedFailed = useMemo(
+    () => new Set([...selectedFailed].filter(id => failedIdSet.has(id))),
+    [selectedFailed, failedIdSet]
+  )
+  const allFailedSelected = validSelectedFailed.size === failedTrades.length && failedTrades.length > 0
   const sports = useMemo(
     () => Array.from(new Set(pendingTrades.map((t) => t.sport))).sort(),
     [pendingTrades]
@@ -210,6 +217,20 @@ export function TradeApprovalPanel() {
     else setSelected(new Set(filteredTrades.map((t) => t.id)))
   }
 
+  const toggleOneFailed = (id: number) => {
+    setSelectedFailed(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleAllFailed = () => {
+    if (allFailedSelected) setSelectedFailed(new Set())
+    else setSelectedFailed(new Set(failedTrades.map(t => t.id)))
+  }
+
   const handleApprove = () => {
     if (validSelected.size === pendingTrades.length) {
       approveAll.mutate()
@@ -222,7 +243,7 @@ export function TradeApprovalPanel() {
     reject.mutate(Array.from(validSelected))
   }
 
-  const isPending = approve.isPending || reject.isPending || approveAll.isPending || retry.isPending
+  const isPending = approve.isPending || reject.isPending || approveAll.isPending || retry.isPending || dismiss.isPending || dismissAll.isPending
 
   return (
     <>
@@ -340,12 +361,32 @@ export function TradeApprovalPanel() {
       <div className="mt-4 rounded-lg border-2 border-red-500/50 bg-slate-800 overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b border-slate-700 bg-red-500/5">
           <div>
-            <h3 className="text-sm font-semibold text-red-400">
-              Failed Orders (last 24h)
-            </h3>
+            <h3 className="text-sm font-semibold text-red-400">Failed Orders (last 24h)</h3>
             <p className="text-xs text-slate-400 mt-0.5">
               {failedTrades.length} failed order{failedTrades.length !== 1 ? 's' : ''}
             </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => retry.mutate(Array.from(validSelectedFailed), { onSuccess: () => queryClient.invalidateQueries({ queryKey: ['trade-queue'] }) })}
+              disabled={validSelectedFailed.size === 0 || isPending}
+              className="px-3 py-1.5 text-xs font-medium rounded bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Retry ({validSelectedFailed.size})
+            </button>
+            <button
+              onClick={() => {
+                if (allFailedSelected) {
+                  dismissAll.mutate()
+                } else {
+                  dismiss.mutate(Array.from(validSelectedFailed))
+                }
+              }}
+              disabled={validSelectedFailed.size === 0 || isPending}
+              className="px-3 py-1.5 text-xs font-medium rounded bg-slate-600/40 text-slate-400 hover:bg-slate-600/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {allFailedSelected ? 'Dismiss All' : `Dismiss (${validSelectedFailed.size})`}
+            </button>
           </div>
         </div>
 
@@ -353,6 +394,14 @@ export function TradeApprovalPanel() {
           <table className="w-full text-sm text-left">
             <thead className="text-xs text-slate-400 bg-slate-900/50">
               <tr>
+                <th className="px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={allFailedSelected}
+                    onChange={toggleAllFailed}
+                    className="accent-blue-500"
+                  />
+                </th>
                 <th className="px-3 py-2">Player</th>
                 <th className="px-3 py-2">Stat</th>
                 <th className="px-3 py-2">Line</th>
@@ -361,12 +410,19 @@ export function TradeApprovalPanel() {
                 <th className="px-3 py-2">Edge</th>
                 <th className="px-3 py-2">Placed</th>
                 <th className="px-3 py-2">Ticker</th>
-                <th className="px-3 py-2">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700/50">
               {failedTrades.map((trade) => (
                 <tr key={trade.id} className="hover:bg-slate-700/30 bg-red-500/5">
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={validSelectedFailed.has(trade.id)}
+                      onChange={() => toggleOneFailed(trade.id)}
+                      className="accent-blue-500"
+                    />
+                  </td>
                   <td className="px-3 py-2">
                     <button
                       onClick={() => handleAnalyze(trade)}
@@ -398,21 +454,6 @@ export function TradeApprovalPanel() {
                     })()}
                   </td>
                   <td className="px-3 py-2 text-slate-400 text-xs font-mono">{trade.ticker}</td>
-                  <td className="px-3 py-2">
-                    <button
-                      onClick={() => {
-                        retry.mutate([trade.id], {
-                          onSuccess: () => {
-                            queryClient.invalidateQueries({ queryKey: ['trade-queue'] })
-                          },
-                        })
-                      }}
-                      disabled={retry.isPending}
-                      className="px-2 py-1 text-xs font-medium rounded bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    >
-                      Retry
-                    </button>
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -422,6 +463,16 @@ export function TradeApprovalPanel() {
         {retry.isSuccess && (
           <div className="px-4 py-2 bg-green-500/10 text-green-400 text-xs">
             Trade re-queued for execution.
+          </div>
+        )}
+        {(dismiss.isSuccess || dismissAll.isSuccess) && (
+          <div className="px-4 py-2 bg-slate-700/50 text-slate-400 text-xs">
+            Failed orders dismissed.
+          </div>
+        )}
+        {(dismiss.isError || dismissAll.isError) && (
+          <div className="px-4 py-2 bg-red-500/10 text-red-400 text-xs">
+            Error: {(dismiss.error ?? dismissAll.error)?.message}
           </div>
         )}
       </div>

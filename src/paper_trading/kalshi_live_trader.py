@@ -298,16 +298,19 @@ class KalshiLiveTrader:
             """), {"d": target_date}).scalar()
         return float(result or 0)
 
-    def _get_consecutive_losses(self) -> int:
-        """Count consecutive losses from most recent resolved trades."""
+    def _get_consecutive_losses(self, target_date: date | None = None) -> int:
+        """Count consecutive losses from most recent resolved trades for a given date."""
+        if target_date is None:
+            target_date = date.today()
         with self.engine.connect() as conn:
             rows = conn.execute(text("""
                 SELECT status
                 FROM kalshi_live_orders
                 WHERE status IN ('won', 'lost')
+                  AND game_date = :d
                 ORDER BY resolved_at DESC
                 LIMIT :limit
-            """), {"limit": self.consec_loss_limit}).fetchall()
+            """), {"d": target_date, "limit": self.consec_loss_limit}).fetchall()
 
         streak = 0
         for row in rows:
@@ -318,7 +321,36 @@ class KalshiLiveTrader:
         return streak
 
     def _send_circuit_breaker_alert(self, reason: str, balance: float, action: str) -> None:
-        """Send Discord alert for circuit breaker trigger."""
+        """Send Discord alert for circuit breaker trigger — deduped to once per ET calendar day."""
+        from datetime import timezone as tz
+        ET = ZoneInfo("America/New_York")
+        today_et = datetime.now(ET).date()
+
+        try:
+            config = self._get_config()
+            last_alert = config.get("last_circuit_alert_at")
+            if last_alert is not None:
+                if isinstance(last_alert, str):
+                    last_alert = datetime.fromisoformat(last_alert)
+                if last_alert.tzinfo is None:
+                    last_alert = last_alert.replace(tzinfo=tz.utc)
+                if last_alert.astimezone(ET).date() >= today_et:
+                    logger.info(f"Circuit breaker alert suppressed (already sent today): {reason}")
+                    return
+        except Exception as e:
+            logger.warning(f"Dedup check failed, sending alert anyway: {e}")
+
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text("""
+                    UPDATE kalshi_live_trading_config
+                    SET last_circuit_alert_at = now(), last_updated = now()
+                    WHERE id = 1
+                """))
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to update last_circuit_alert_at: {e}")
+
         try:
             from src.discord_bot.alerts import send_kalshi_trade_alert_sync
             send_kalshi_trade_alert_sync("circuit_breaker", {
@@ -1510,20 +1542,25 @@ class KalshiLiveTrader:
     def reconcile_fills(self, target_date: date | None = None) -> dict[str, Any]:
         """Fetch fills from API and reconcile with our order records.
 
+        Also picks up filled orders with missing fill_price (stuck orders
+        where the API didn't return fill data at placement time).
+
         Args:
-            target_date: If provided, only reconcile pending orders for that date.
-                         If None, reconcile ALL pending orders regardless of game_date.
+            target_date: If provided, only reconcile orders for that date.
+                         If None, reconcile ALL eligible orders regardless of game_date.
         """
         if target_date is not None:
-            where_clause = "WHERE game_date = :d AND status = 'pending'"
+            where_clause = ("WHERE game_date = :d AND "
+                            "(status = 'pending' OR (status = 'filled' AND fill_price IS NULL))")
             params: dict = {"d": target_date}
         else:
-            where_clause = "WHERE status = 'pending'"
+            where_clause = "WHERE status = 'pending' OR (status = 'filled' AND fill_price IS NULL)"
             params = {}
 
         with self.engine.connect() as conn:
             pending = conn.execute(text(f"""
-                SELECT id, kalshi_order_id, ticker, side, contracts
+                SELECT id, kalshi_order_id, ticker, side, contracts,
+                       total_cost, fill_count, status, fill_price
                 FROM kalshi_live_orders
                 {where_clause}
             """), params).fetchall()
@@ -1537,15 +1574,74 @@ class KalshiLiveTrader:
 
         reconciled = 0
         cancelled = 0
+        derived = 0
+        promoted = 0
         for row in pending:
             db_id = row[0]
             kalshi_order_id = row[1]
+            row_side = row[3]
+            row_total_cost = row[5]
+            row_fill_count = row[6]
+            row_status = row[7]
+            row_fill_price = row[8]
+
             if not kalshi_order_id:
+                continue
+
+            # Fast path: pending order already has fill data in DB (recorded at
+            # placement from expected values) and is no longer resting on Kalshi.
+            # Promote to 'filled' without an API call — resolve_settled will
+            # handle PnL calculation.
+            if (row_status == 'pending' and row_fill_price is not None
+                    and row_fill_count and row_fill_count > 0
+                    and kalshi_order_id not in resting_ids):
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        UPDATE kalshi_live_orders
+                        SET status = 'filled', filled_at = COALESCE(filled_at, now())
+                        WHERE id = :id
+                    """), {"id": db_id})
+                    conn.commit()
+                promoted += 1
+                logger.info(f"Promoted pending order {db_id} ({row[2]}) to filled "
+                            f"(fill_price={row_fill_price}, count={row_fill_count})")
                 continue
 
             fills = self.client.get_fills(order_id=kalshi_order_id)
             if not fills:
-                if kalshi_order_id not in resting_ids:
+                # Fallback: if order is already filled with cost/count data but
+                # the API no longer returns fill history (settled markets), derive
+                # fill_price from total_cost and fill_count.
+                if (row_status == 'filled' and row_fill_count and row_fill_count > 0
+                        and row_total_cost is not None and float(row_total_cost) > 0):
+                    no_price_cents = round(float(row_total_cost) / row_fill_count * 100)
+                    derived_fill_price = 100 - no_price_cents if row_side == "no" else no_price_cents
+                    with self.engine.connect() as conn:
+                        conn.execute(text("""
+                            UPDATE kalshi_live_orders
+                            SET fill_price = :price
+                            WHERE id = :id
+                        """), {"price": derived_fill_price, "id": db_id})
+                        conn.commit()
+                    derived += 1
+                    logger.info(f"Derived fill_price={derived_fill_price} for order {db_id} "
+                                f"from total_cost={row_total_cost}/fill_count={row_fill_count}")
+                    continue
+
+                # Safety: NEVER cancel an order that has fill data — it was a real
+                # trade even if the API no longer returns fill history.
+                if row_fill_price is not None and row_fill_count and row_fill_count > 0:
+                    with self.engine.connect() as conn:
+                        conn.execute(text("""
+                            UPDATE kalshi_live_orders
+                            SET status = 'filled', filled_at = COALESCE(filled_at, now())
+                            WHERE id = :id
+                        """), {"id": db_id})
+                        conn.commit()
+                    promoted += 1
+                    logger.info(f"Promoted order {db_id} ({row[2]}) to filled — has fill data "
+                                f"(price={row_fill_price}, count={row_fill_count}) but API returned no fills")
+                elif kalshi_order_id not in resting_ids:
                     with self.engine.connect() as conn:
                         conn.execute(text("""
                             UPDATE kalshi_live_orders
@@ -1554,7 +1650,7 @@ class KalshiLiveTrader:
                         """), {"id": db_id})
                         conn.commit()
                     cancelled += 1
-                    logger.info(f"Marked order {kalshi_order_id} as cancelled (not resting on Kalshi, no fills)")
+                    logger.info(f"Marked order {kalshi_order_id} as cancelled (not resting, no fills, no fill data)")
                 continue
 
             total_filled = sum(f.get("count", 0) for f in fills)
@@ -1591,8 +1687,8 @@ class KalshiLiveTrader:
                     conn.commit()
                 reconciled += 1
 
-        logger.info(f"Reconciled {reconciled} fills, {cancelled} cancelled" + (f" for {target_date}" if target_date else ""))
-        return {"reconciled": reconciled, "cancelled": cancelled}
+        logger.info(f"Reconciled {reconciled} fills, {promoted} promoted, {derived} derived, {cancelled} cancelled" + (f" for {target_date}" if target_date else ""))
+        return {"reconciled": reconciled, "promoted": promoted, "derived": derived, "cancelled": cancelled}
 
     # ------------------------------------------------------------------
     # Resolution

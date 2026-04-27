@@ -64,8 +64,9 @@ class MLBTrainingOrchestrator:
         tuning_trials: int = 50,
         tuning_timeout: int | None = None,
         feature_tolerance: float = 0.02,
+        local: bool = False,
     ):
-        self.engine = get_engine()
+        self.engine = get_engine(local=local)
         self.feature_store = MLBFeatureStore(self.engine)
         self.feature_tolerance = feature_tolerance
 
@@ -492,6 +493,12 @@ if __name__ == "__main__":
         help="Base output directory for artifacts",
     )
 
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase",
+    )
+
     args = parser.parse_args()
 
     orchestrator = MLBTrainingOrchestrator(
@@ -500,6 +507,7 @@ if __name__ == "__main__":
         tuning_trials=args.tuning_trials,
         tuning_timeout=args.tuning_timeout,
         feature_tolerance=args.feature_tolerance,
+        local=args.local,
     )
 
     orchestrator.run(

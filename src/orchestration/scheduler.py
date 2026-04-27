@@ -31,8 +31,10 @@ Schedule (ET):
         kalshi_refresh (NBA + MLB + non-sports)
 
     12:00 PM - lines_job --live (full)
+    12:05 PM - mlb_lineup_scraper_job (before noon inference — catches early-posting lineups)
     12:15 PM - inference_job (full MC)
     12:15 PM - mlb_inference_job (noon MLB pass)
+    12:45 PM - mlb_lineup_scraper_job (catches late-posting afternoon lineups)
 
     4:00 PM  - lines_job --live --parallel (full)
     4:15 PM  - inference_job (full MC)
@@ -901,6 +903,14 @@ def main():
         CronTrigger(hour=12, minute=0, timezone=ET),
         id="mlb_lines_full_noon",
         name="MLB Full Lines (12 PM ET)",
+    )
+
+    # 12:05 PM ET - MLB lineup scrape (before noon inference — catches early-posting lineups)
+    scheduler.add_job(
+        run_mlb_lineup_scraper,
+        CronTrigger(hour=12, minute=5, timezone=ET),
+        id="mlb_lineup_scraper_1205pm",
+        name="MLB Lineup Scraper (12:05 PM ET)",
     )
 
     # 12:15 PM ET - MLB noon inference (some lineups now confirmed)
