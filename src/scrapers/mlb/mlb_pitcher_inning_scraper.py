@@ -208,8 +208,6 @@ class MLBPitcherInningScraper:
             n_swings = descriptions.isin(SWING_EVENTS).sum()
             n_whiffs = descriptions.isin(WHIFF_EVENTS).sum()
             n_csw = descriptions.isin(CSW_EVENTS).sum()
-            n_called_plus_swings = descriptions.isin(SWING_EVENTS | CALLED_STRIKE_EVENTS | {"called_strike"}).sum()
-
             # Zone rate
             zones = grp["zone"].dropna()
             n_in_zone = (zones <= 9).sum()  # zones 1-9 are in the strike zone
@@ -243,15 +241,6 @@ class MLBPitcherInningScraper:
             # Runs allowed (from post_bat_score changes if available)
             # Use a simpler approach: count scoring events
             runs = 0
-            if "post_bat_home_score" in grp.columns and "bat_score" in grp.columns:
-                # For pitches that end at-bats, check if runs scored
-                ab_end_mask = grp["events"].isin(AB_END_EVENTS)
-                if ab_end_mask.any():
-                    ab_end_pitches = grp[ab_end_mask]
-                    if "post_bat_score" in ab_end_pitches.columns:
-                        score_col = "post_bat_score"
-                    else:
-                        score_col = None
 
             # Batted ball quality
             batted = grp.dropna(subset=["launch_speed"])
@@ -356,7 +345,7 @@ class MLBPitcherInningScraper:
             for row in rows:
                 conn.execute(upsert_sql, row)
 
-        logger.info(f"  Upserted {len(rows)} pitcher-inning rows for {date_str}.")
+        logger.info(f"  Upserted {len(rows)} pitcher-inning rows for {rows[0]['game_date']}.")
         return len(rows)
 
 

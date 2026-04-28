@@ -26,7 +26,7 @@ import logging
 import math
 import os
 import re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -322,7 +322,6 @@ class KalshiLiveTrader:
 
     def _send_circuit_breaker_alert(self, reason: str, balance: float, action: str) -> None:
         """Send Discord alert for circuit breaker trigger — deduped to once per ET calendar day."""
-        from datetime import timezone as tz
         ET = ZoneInfo("America/New_York")
         today_et = datetime.now(ET).date()
 
@@ -333,7 +332,7 @@ class KalshiLiveTrader:
                 if isinstance(last_alert, str):
                     last_alert = datetime.fromisoformat(last_alert)
                 if last_alert.tzinfo is None:
-                    last_alert = last_alert.replace(tzinfo=tz.utc)
+                    last_alert = last_alert.replace(tzinfo=UTC)
                 if last_alert.astimezone(ET).date() >= today_et:
                     logger.info(f"Circuit breaker alert suppressed (already sent today): {reason}")
                     return

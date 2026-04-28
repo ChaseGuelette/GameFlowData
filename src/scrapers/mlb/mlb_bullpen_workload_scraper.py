@@ -172,7 +172,7 @@ class MLBBullpenWorkloadScraper:
             closer_id = None
             closer_days_rest = None
             closer_pitches_3d = 0
-            save_counts = last_7d[last_7d["is_save"] == True].groupby("player_id").size()
+            save_counts = last_7d[last_7d["is_save"]].groupby("player_id").size()
             if not save_counts.empty:
                 closer_id = save_counts.idxmax()
                 closer_games = team_data[team_data["player_id"] == closer_id]
