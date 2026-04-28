@@ -58,4 +58,5 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-050]] - Cap-aware exposure clamp in execute_trades; MLB/NBA early window shifted ~1hr earlier; reprice_stale_orders SQL bug fixed
 - [[handoff-051]] - MLB model drift confirmed (2026 backtest: hits 51.6%/+12% ROI, K 53.6%/+13%); retrain plan ready (2024-2025 train, 2026 cal); --local flag added to pitcher pipeline; excluded bookmaker leak identified
 - [[handoff-052]] - Kalshi resolution pipeline 4-bug fix (reconcile_fills): fill data preserved from cancellation, fill_price derivation fallback, pending-to-filled promotion, WHERE clause expanded. 32 incorrectly cancelled orders restored, 21 resolved. batter_hits kill zone identified (yes_price 65-71), DB P&L approximate (expected vs actual fill prices).
+- [[handoff-053]] - MLB model architecture overhaul: pitcher K → IP + K-rate copula, batter hits → AB NegBin + compound Binomial, 13 new features (inning fatigue + bullpen workload). 7 files, +1,011 lines. Code complete, pending retraining.
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

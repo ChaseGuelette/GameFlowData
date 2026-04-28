@@ -93,6 +93,15 @@ BATTER_BASE_FEATURES: list[str] = [
     "has_precip",
     # Derived (Python post-SQL)
     "batter_h_l5_l10_ratio",
+    # Opposing bullpen workload (mlb_bullpen_daily_status)
+    "opp_bullpen_ip_last_3d",
+    "opp_bullpen_era_last_7d",
+    "opp_relievers_available",
+    "opp_bullpen_pitches_last_3d",
+    # Opposing starter inning-level (mlb_pitcher_inning_stats)
+    "opp_pitcher_velo_drop_late_l5",
+    "opp_pitcher_avg_pitches_per_inning_l5",
+    "opp_pitcher_deep_inning_pct_l5",
 ]
 
 # Per-stat extensions
@@ -192,6 +201,7 @@ class MLBBatterFeatureStore:
         uses pre-computed data instead of re-querying the database.
         """
         from src.processing.mlb.mlb_batter_matchup_features import (
+            compute_opposing_pitcher_inning_bulk,
             compute_opposing_starter_bulk,
             compute_platoon_splits_bulk,
         )
@@ -238,6 +248,39 @@ class MLBBatterFeatureStore:
             df["batter_avg_hr_vs_hand_l20"] = df["batter_avg_hr_vs_hand_l20"].fillna(0)
         else:
             df["batter_avg_hr_vs_hand_l20"] = 0
+
+        # Bullpen workload defaults (loaded from SQL, fill any NULLs)
+        for col, default in [
+            ("opp_bullpen_ip_last_3d", 0),
+            ("opp_bullpen_era_last_7d", 4.50),
+            ("opp_relievers_available", 5),
+            ("opp_bullpen_pitches_last_3d", 0),
+        ]:
+            if col in df.columns:
+                df[col] = df[col].fillna(default)
+            else:
+                df[col] = default
+
+        # Merge opposing pitcher inning-level features
+        opp_inn_frames = []
+        for season in seasons:
+            s = int(season)
+            opp_inn_frames.append(compute_opposing_pitcher_inning_bulk(self.engine, s))
+
+        if opp_inn_frames:
+            opp_inn_df = pd.concat(opp_inn_frames, ignore_index=True)
+            df = df.merge(opp_inn_df, on=["player_id", "game_id"], how="left", suffixes=("", "_opp_inn"))
+
+        # Opposing pitcher inning-level defaults
+        for col, default in [
+            ("opp_pitcher_velo_drop_late_l5", 0),
+            ("opp_pitcher_avg_pitches_per_inning_l5", 15),
+            ("opp_pitcher_deep_inning_pct_l5", 0.5),
+        ]:
+            if col in df.columns:
+                df[col] = df[col].fillna(default)
+            else:
+                df[col] = default
 
         return df
 
@@ -354,7 +397,13 @@ class MLBBatterFeatureStore:
                 COALESCE(lines.game_total, 0) AS line_total,
 
                 -- Player prop line (dynamic per stat)
-                COALESCE(props.prop_line, 0) AS prop_line
+                COALESCE(props.prop_line, 0) AS prop_line,
+
+                -- Opposing bullpen workload
+                COALESCE(bull.bullpen_ip_last_3d, 0) AS opp_bullpen_ip_last_3d,
+                COALESCE(bull.bullpen_era_last_7d, 4.50) AS opp_bullpen_era_last_7d,
+                COALESCE(bull.relievers_available, 5) AS opp_relievers_available,
+                COALESCE(bull.bullpen_pitches_last_3d, 0) AS opp_bullpen_pitches_last_3d
 
             FROM mlb_player_game_stats_batting bgs
 
@@ -435,6 +484,13 @@ class MLBBatterFeatureStore:
                 ) sub
                 LIMIT 1
             ) props ON TRUE
+
+            -- Opposing bullpen workload
+            LEFT JOIN mlb_bullpen_daily_status bull
+                ON bull.team_id = CASE WHEN gs.home_team_id = bgs.team_id
+                                       THEN gs.away_team_id
+                                       ELSE gs.home_team_id END
+               AND bull.game_date = bgs.game_date
 
             WHERE bgs.is_starter = TRUE
               AND bgs.did_not_play = FALSE
@@ -562,6 +618,7 @@ class MLBBatterFeatureStore:
         # 8. Opposing starter stats
         if opp_pitcher_id:
             from src.processing.mlb.mlb_batter_matchup_features import (
+                get_opposing_pitcher_inning_stats,
                 get_opposing_starter_stats,
             )
             opp_stats = get_opposing_starter_stats(self.engine, opp_pitcher_id, game_date)
@@ -569,6 +626,10 @@ class MLBBatterFeatureStore:
 
             # Platoon
             features.update(self._get_platoon_features(player_id, opp_pitcher_id, game_date))
+
+            # 8b. Opposing pitcher inning-level features
+            opp_inn = get_opposing_pitcher_inning_stats(self.engine, opp_pitcher_id, game_date)
+            features.update(opp_inn)
         else:
             for col in [c for c in BATTER_BASE_FEATURES if c.startswith("opp_pitcher_")]:
                 features.setdefault(col, 0)
@@ -576,6 +637,11 @@ class MLBBatterFeatureStore:
             features.setdefault("batter_avg_h_vs_hand_l20", 0)
             features.setdefault("batter_avg_ops_vs_hand_l20", 0)
             features.setdefault("batter_avg_hr_vs_hand_l20", 0)
+            features["opp_pitcher_avg_pitches_per_inning_l5"] = 15
+            features["opp_pitcher_deep_inning_pct_l5"] = 0.5
+
+        # 8c. Opposing bullpen workload
+        features.update(self._get_opposing_bullpen_stats(opp_team_id, game_date))
 
         # 9. Derived features
         features["batter_h_l5_l10_ratio"] = (
@@ -720,7 +786,13 @@ class MLBBatterFeatureStore:
                 COALESCE(lines.game_total, 0) AS line_total,
 
                 -- Prop line
-                COALESCE(props.prop_line, 0) AS prop_line
+                COALESCE(props.prop_line, 0) AS prop_line,
+
+                -- Opposing bullpen workload
+                COALESCE(bull.bullpen_ip_last_3d, 0) AS opp_bullpen_ip_last_3d,
+                COALESCE(bull.bullpen_era_last_7d, 4.50) AS opp_bullpen_era_last_7d,
+                COALESCE(bull.relievers_available, 5) AS opp_relievers_available,
+                COALESCE(bull.bullpen_pitches_last_3d, 0) AS opp_bullpen_pitches_last_3d
 
             FROM mlb_player_game_stats_batting bgs
 
@@ -793,6 +865,13 @@ class MLBBatterFeatureStore:
                 ) sub
                 LIMIT 1
             ) props ON TRUE
+
+            -- Opposing bullpen workload
+            LEFT JOIN mlb_bullpen_daily_status bull
+                ON bull.team_id = CASE WHEN gs.home_team_id = bgs.team_id
+                                       THEN gs.away_team_id
+                                       ELSE gs.home_team_id END
+               AND bull.game_date = bgs.game_date
 
             WHERE bgs.game_date = :game_date
               AND bgs.is_starter = TRUE
@@ -1144,3 +1223,31 @@ class MLBBatterFeatureStore:
             "batter_avg_hr_vs_hand_l20": float(prow.avg_hr or 0) if prow else 0,
             "batter_avg_ops_vs_hand_l20": float(prow.ops or 0) if prow else 0,
         }
+
+    def _get_opposing_bullpen_stats(self, opp_team_id: int, game_date: str) -> dict:
+        """Fetch opposing bullpen workload features."""
+        query = text("""
+            SELECT bullpen_ip_last_3d, bullpen_era_last_7d,
+                   relievers_available, bullpen_pitches_last_3d
+            FROM mlb_bullpen_daily_status
+            WHERE team_id = :opp_team_id
+              AND game_date = :game_date
+        """)
+        with self.engine.connect() as conn:
+            row = conn.execute(query, {"opp_team_id": opp_team_id, "game_date": game_date}).fetchone()
+
+        if row is None:
+            return {
+                "opp_bullpen_ip_last_3d": 0,
+                "opp_bullpen_era_last_7d": 4.50,
+                "opp_relievers_available": 5,
+                "opp_bullpen_pitches_last_3d": 0,
+            }
+
+        return {
+            "opp_bullpen_ip_last_3d": float(row.bullpen_ip_last_3d or 0),
+            "opp_bullpen_era_last_7d": float(row.bullpen_era_last_7d if row.bullpen_era_last_7d is not None else 4.50),
+            "opp_relievers_available": int(row.relievers_available if row.relievers_available is not None else 5),
+            "opp_bullpen_pitches_last_3d": float(row.bullpen_pitches_last_3d or 0),
+        }
+

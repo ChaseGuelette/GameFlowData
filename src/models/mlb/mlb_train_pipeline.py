@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import json as json_module
 import logging
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 
 # Add project root to path
 sys.path.append(str(Path(__file__).resolve().parents[3]))
@@ -65,6 +67,7 @@ class MLBTrainingOrchestrator:
         tuning_timeout: int | None = None,
         feature_tolerance: float = 0.02,
         local: bool = False,
+        copula: bool = False,
     ):
         self.engine = get_engine(local=local)
         self.feature_store = MLBFeatureStore(self.engine)
@@ -73,6 +76,7 @@ class MLBTrainingOrchestrator:
         self.tune_hyperparams = tune_hyperparams
         self.tuning_trials = tuning_trials
         self.tuning_timeout = tuning_timeout
+        self.copula = copula
 
         # Create timestamped run directory with _incomplete suffix
         self.timestamp = datetime.now()
@@ -124,6 +128,28 @@ class MLBTrainingOrchestrator:
         # Step 3: Feature selection
         selected_features = self._run_feature_selection(train_df)
 
+        # Copula decomposition (if enabled)
+        if self.copula:
+            logger.info("=== COPULA MODE: Training IP + K-rate decomposition ===")
+
+            logger.info("Step 3a: Feature selection for IP model...")
+            ip_features = self._run_feature_selection_for_target(train_df, "actual_ip")
+
+            logger.info("Step 3b: Feature selection for K-rate model...")
+            krate_df_tmp = train_df[train_df["actual_ip"] > 0].copy()
+            krate_df_tmp["actual_krate"] = krate_df_tmp["actual_so"] / krate_df_tmp["actual_ip"]
+            krate_features = self._run_feature_selection_for_target(krate_df_tmp, "actual_krate")
+
+            ip_pipeline = self._train_ip_model(train_df, ip_features)
+
+            krate_pipeline = self._train_krate_model(train_df, krate_features)
+
+            copula_rho = self._compute_copula_params(train_df)
+
+            self._save_copula_artifacts(ip_pipeline, krate_pipeline, copula_rho, ip_features, krate_features)
+
+            logger.info("=== Also training single direct model for comparison ===")
+
         # Step 4: Optional hyperparameter tuning
         config = self._run_hyperparameter_tuning(train_df, selected_features)
 
@@ -172,6 +198,7 @@ class MLBTrainingOrchestrator:
             "team_id",
             "opp_team_id",
             "actual_so",
+            "actual_ip",
             "player_name",
         }
         candidates = [
@@ -386,6 +413,117 @@ class MLBTrainingOrchestrator:
         logger.info("Sanity check PASSED")
 
     # ------------------------------------------------------------------
+    # Copula decomposition: IP model + K-rate model
+    # ------------------------------------------------------------------
+
+    def _run_feature_selection_for_target(
+        self, df: pd.DataFrame, target_col: str
+    ) -> dict[float, list[str]]:
+        """Run feature selection for an arbitrary target column."""
+        selector = ImprovedFeatureSelector(
+            n_splits=3,
+            tolerance=self.feature_tolerance,
+        )
+
+        excluded = {
+            "game_id", "player_id", "game_date", "season", "team_id",
+            "opp_team_id", "actual_so", "actual_ip", "actual_krate", "player_name",
+        }
+        candidates = [
+            c for c in df.columns if c not in excluded and df[c].dtype in ("float64", "float32", "int64", "int32")
+        ]
+
+        valid_df = df[df[target_col].notna() & (df[target_col] >= 0)].fillna(0)
+
+        selected = selector.select_features_per_quantile(
+            valid_df, target_col, candidates, model_name=f"Pitcher {target_col}"
+        )
+
+        for q, feats in selected.items():
+            logger.info(f"  {target_col} Q{q:.2f}: {len(feats)} features")
+
+        return selected
+
+    def _train_ip_model(
+        self, df: pd.DataFrame, selected_features: dict[float, list[str]], config=None
+    ) -> MLBPitcherKPipeline:
+        """Train quantile model for innings pitched (IP)."""
+        logger.info("Training IP sub-model...")
+
+        ip_df = df[df["actual_ip"] > 0].copy()
+
+        ip_df = ip_df.rename(columns={"actual_so": "_actual_so_backup", "actual_ip": "actual_so"})
+
+        pipeline = MLBPitcherKPipeline(config=config)
+        pipeline.train(ip_df, feature_names_per_quantile=selected_features)
+
+        logger.info(f"IP model trained on {len(ip_df)} rows")
+        return pipeline
+
+    def _train_krate_model(
+        self, df: pd.DataFrame, selected_features: dict[float, list[str]], config=None
+    ) -> MLBPitcherKPipeline:
+        """Train quantile model for K-rate (SO/IP)."""
+        logger.info("Training K-rate sub-model...")
+
+        krate_df = df[df["actual_ip"] > 0].copy()
+
+        krate_df["actual_krate"] = krate_df["actual_so"] / krate_df["actual_ip"]
+
+        krate_df = krate_df.rename(columns={"actual_so": "_actual_so_backup", "actual_krate": "actual_so"})
+
+        pipeline = MLBPitcherKPipeline(config=config)
+        pipeline.train(krate_df, feature_names_per_quantile=selected_features)
+
+        logger.info(f"K-rate model trained on {len(krate_df)} rows")
+        return pipeline
+
+    def _compute_copula_params(self, df: pd.DataFrame) -> float:
+        """Compute Spearman ρ between IP and K-rate for Gaussian copula."""
+        valid = df[(df["actual_ip"] >= 3) & (df["actual_so"].notna())].copy()
+        valid["krate"] = valid["actual_so"] / valid["actual_ip"]
+
+        if len(valid) < 50:
+            logger.warning("Insufficient data for copula params (%d rows), defaulting ρ=0.0", len(valid))
+            return 0.0
+
+        rho_s, p_value = spearmanr(valid["actual_ip"], valid["krate"])
+        logger.info(f"Copula Spearman ρ(IP, K-rate): {rho_s:.4f} (p={p_value:.4f}, n={len(valid)})")
+
+        return float(rho_s)
+
+    def _save_copula_artifacts(
+        self,
+        ip_pipeline: MLBPitcherKPipeline,
+        krate_pipeline: MLBPitcherKPipeline,
+        copula_rho: float,
+        ip_features: dict[float, list[str]],
+        krate_features: dict[float, list[str]],
+    ):
+        """Save IP model, K-rate model, and copula params to run directory."""
+        ip_dir = self.run_dir / "ip_model"
+        ip_dir.mkdir(exist_ok=True)
+        ip_pipeline.save(str(ip_dir))
+
+        krate_dir = self.run_dir / "krate_model"
+        krate_dir.mkdir(exist_ok=True)
+        krate_pipeline.save(str(krate_dir))
+
+        copula_path = self.run_dir / "pitcher_k_copula_params.json"
+        with open(copula_path, "w") as f:
+            json_module.dump({"pitcher_strikeouts": copula_rho}, f, indent=2)
+
+        ip_manifest_path = self.run_dir / "ip_feature_manifest.json"
+        krate_manifest_path = self.run_dir / "krate_feature_manifest.json"
+
+        with open(ip_manifest_path, "w") as f:
+            json_module.dump({str(k): v for k, v in ip_features.items()}, f, indent=2)
+        with open(krate_manifest_path, "w") as f:
+            json_module.dump({str(k): v for k, v in krate_features.items()}, f, indent=2)
+
+        logger.info(f"Saved copula artifacts: IP model, K-rate model, ρ={copula_rho:.4f}")
+
+    # ------------------------------------------------------------------
     # Artifact Saving Helpers
     # ------------------------------------------------------------------
 
@@ -498,6 +636,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase",
     )
+    parser.add_argument(
+        "--copula",
+        action="store_true",
+        help="Train IP + K-rate copula decomposition alongside single model",
+    )
 
     args = parser.parse_args()
 
@@ -508,6 +651,7 @@ if __name__ == "__main__":
         tuning_timeout=args.tuning_timeout,
         feature_tolerance=args.feature_tolerance,
         local=args.local,
+        copula=args.copula,
     )
 
     orchestrator.run(

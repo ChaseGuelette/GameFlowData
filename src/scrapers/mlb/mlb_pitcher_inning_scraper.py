@@ -341,9 +341,12 @@ class MLBPitcherInningScraper:
                 inserted_at = NOW()
         """)
 
-        with self.engine.begin() as conn:
-            for row in rows:
-                conn.execute(upsert_sql, row)
+        chunk_size = 200
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i : i + chunk_size]
+            with self.engine.begin() as conn:
+                for row in chunk:
+                    conn.execute(upsert_sql, row)
 
         logger.info(f"  Upserted {len(rows)} pitcher-inning rows for {rows[0]['game_date']}.")
         return len(rows)

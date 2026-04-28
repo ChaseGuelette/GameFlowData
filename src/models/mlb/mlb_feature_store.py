@@ -70,6 +70,13 @@ PITCHER_K_FEATURES: list[str] = [
     "pitcher_est_bf_l5",
     # Trend
     "pitcher_so_l3_l5_ratio",
+    # Inning-level fatigue (from mlb_pitcher_inning_stats)
+    "pitcher_velo_drop_late_l5",
+    "pitcher_avg_whiff_rate_late_l5",
+    "pitcher_avg_k_rate_early_l5",
+    "pitcher_avg_pitches_per_inning_l5",
+    "pitcher_avg_csw_rate_l5_inning",
+    "pitcher_deep_inning_pct_l5",
 ]
 
 
@@ -132,6 +139,7 @@ class MLBFeatureStore:
 
                 -- Target
                 pgs.so AS actual_so,
+                pgs.ip AS actual_ip,
 
                 -- Game context
                 CASE WHEN gs.home_team_id = pgs.team_id THEN 1 ELSE 0 END AS is_home,
@@ -180,7 +188,15 @@ class MLBFeatureStore:
                 COALESCE(lines.game_total, 0) AS line_total,
 
                 -- Player prop line (pitcher strikeouts)
-                COALESCE(props.prop_line, 0) AS prop_line_pitcher_strikeouts
+                COALESCE(props.prop_line, 0) AS prop_line_pitcher_strikeouts,
+
+                -- Inning-level fatigue features (L5 starts)
+                COALESCE(inn_agg.velo_drop_late, 0) AS pitcher_velo_drop_late_l5,
+                COALESCE(inn_agg.avg_whiff_rate_late, 0) AS pitcher_avg_whiff_rate_late_l5,
+                COALESCE(inn_agg.avg_k_rate_early, 0) AS pitcher_avg_k_rate_early_l5,
+                COALESCE(inn_agg.avg_pitches_per_inning, 15) AS pitcher_avg_pitches_per_inning_l5,
+                COALESCE(inn_agg.avg_csw_rate, 0) AS pitcher_avg_csw_rate_l5_inning,
+                COALESCE(inn_agg.deep_inning_pct, 0.5) AS pitcher_deep_inning_pct_l5
 
             FROM mlb_player_game_stats_pitching pgs
 
@@ -253,6 +269,42 @@ class MLBFeatureStore:
                 ) sub
                 LIMIT 1
             ) props ON TRUE
+
+            -- Inning-level fatigue from L5 starts
+            LEFT JOIN LATERAL (
+                SELECT
+                    AVG(CASE WHEN sub.inning <= 3 THEN sub.avg_release_speed END)
+                        - COALESCE(AVG(CASE WHEN sub.inning >= 5 THEN sub.avg_release_speed END),
+                                   AVG(CASE WHEN sub.inning <= 3 THEN sub.avg_release_speed END))
+                        AS velo_drop_late,
+                    CASE WHEN SUM(CASE WHEN sub.inning >= 5 THEN sub.pitches_thrown END) > 0
+                         THEN SUM(CASE WHEN sub.inning >= 5 THEN sub.whiff_rate * sub.pitches_thrown END)
+                              / SUM(CASE WHEN sub.inning >= 5 THEN sub.pitches_thrown END)
+                         ELSE 0 END AS avg_whiff_rate_late,
+                    CASE WHEN SUM(CASE WHEN sub.inning <= 3 THEN sub.batters_faced END) > 0
+                         THEN SUM(CASE WHEN sub.inning <= 3 THEN sub.strikeouts END)::float
+                              / SUM(CASE WHEN sub.inning <= 3 THEN sub.batters_faced END)
+                         ELSE 0 END AS avg_k_rate_early,
+                    CASE WHEN COUNT(*) > 0
+                         THEN AVG(sub.pitches_thrown)
+                         ELSE 15 END AS avg_pitches_per_inning,
+                    CASE WHEN SUM(sub.pitches_thrown) > 0
+                         THEN SUM(sub.csw_rate * sub.pitches_thrown) / SUM(sub.pitches_thrown)
+                         ELSE 0 END AS avg_csw_rate,
+                    COUNT(DISTINCT CASE WHEN sub.inning >= 6 THEN sub.game_id END)::float
+                        / GREATEST(COUNT(DISTINCT sub.game_id), 1) AS deep_inning_pct
+                FROM mlb_pitcher_inning_stats sub
+                INNER JOIN (
+                    SELECT DISTINCT game_id, game_date
+                    FROM mlb_pitcher_inning_stats
+                    WHERE player_id = pgs.player_id
+                      AND is_starter = TRUE
+                      AND game_date < pgs.game_date
+                    ORDER BY game_date DESC
+                    LIMIT 5
+                ) recent ON sub.game_id = recent.game_id
+                WHERE sub.player_id = pgs.player_id
+            ) inn_agg ON TRUE
 
             WHERE pgs.is_starter = TRUE
               AND pgs.did_not_play = FALSE
@@ -375,6 +427,10 @@ class MLBFeatureStore:
         features["opp_team_k_pct_l10"] = opp_stats.get("opp_team_k_pct_l10") or 0
         features["opp_team_whiff_pct_l10"] = opp_stats.get("opp_team_whiff_pct_l10") or 0
 
+        # 8b. Inning-level fatigue features
+        inning_fatigue = self._get_inning_fatigue_stats(player_id, game_date)
+        features.update(inning_fatigue)
+
         # 9. Derived features
         features["pitcher_so_l3_l5_ratio"] = (
             features["pitcher_avg_so_l3"] / features["pitcher_avg_so_l5"]
@@ -410,6 +466,7 @@ class MLBFeatureStore:
 
                 -- Target (for backtesting evaluation)
                 pgs.so AS actual_so,
+                pgs.ip AS actual_ip,
 
                 -- Game context
                 CASE WHEN gs.home_team_id = pgs.team_id THEN 1 ELSE 0 END AS is_home,
@@ -458,7 +515,15 @@ class MLBFeatureStore:
                 COALESCE(lines.game_total, 0) AS line_total,
 
                 -- Prop line
-                COALESCE(props.prop_line, 0) AS prop_line_pitcher_strikeouts
+                COALESCE(props.prop_line, 0) AS prop_line_pitcher_strikeouts,
+
+                -- Inning-level fatigue features (L5 starts)
+                COALESCE(inn_agg.velo_drop_late, 0) AS pitcher_velo_drop_late_l5,
+                COALESCE(inn_agg.avg_whiff_rate_late, 0) AS pitcher_avg_whiff_rate_late_l5,
+                COALESCE(inn_agg.avg_k_rate_early, 0) AS pitcher_avg_k_rate_early_l5,
+                COALESCE(inn_agg.avg_pitches_per_inning, 15) AS pitcher_avg_pitches_per_inning_l5,
+                COALESCE(inn_agg.avg_csw_rate, 0) AS pitcher_avg_csw_rate_l5_inning,
+                COALESCE(inn_agg.deep_inning_pct, 0.5) AS pitcher_deep_inning_pct_l5
 
             FROM mlb_player_game_stats_pitching pgs
 
@@ -523,6 +588,42 @@ class MLBFeatureStore:
                 ) sub
                 LIMIT 1
             ) props ON TRUE
+
+            -- Inning-level fatigue from L5 starts
+            LEFT JOIN LATERAL (
+                SELECT
+                    AVG(CASE WHEN sub.inning <= 3 THEN sub.avg_release_speed END)
+                        - COALESCE(AVG(CASE WHEN sub.inning >= 5 THEN sub.avg_release_speed END),
+                                   AVG(CASE WHEN sub.inning <= 3 THEN sub.avg_release_speed END))
+                        AS velo_drop_late,
+                    CASE WHEN SUM(CASE WHEN sub.inning >= 5 THEN sub.pitches_thrown END) > 0
+                         THEN SUM(CASE WHEN sub.inning >= 5 THEN sub.whiff_rate * sub.pitches_thrown END)
+                              / SUM(CASE WHEN sub.inning >= 5 THEN sub.pitches_thrown END)
+                         ELSE 0 END AS avg_whiff_rate_late,
+                    CASE WHEN SUM(CASE WHEN sub.inning <= 3 THEN sub.batters_faced END) > 0
+                         THEN SUM(CASE WHEN sub.inning <= 3 THEN sub.strikeouts END)::float
+                              / SUM(CASE WHEN sub.inning <= 3 THEN sub.batters_faced END)
+                         ELSE 0 END AS avg_k_rate_early,
+                    CASE WHEN COUNT(*) > 0
+                         THEN AVG(sub.pitches_thrown)
+                         ELSE 15 END AS avg_pitches_per_inning,
+                    CASE WHEN SUM(sub.pitches_thrown) > 0
+                         THEN SUM(sub.csw_rate * sub.pitches_thrown) / SUM(sub.pitches_thrown)
+                         ELSE 0 END AS avg_csw_rate,
+                    COUNT(DISTINCT CASE WHEN sub.inning >= 6 THEN sub.game_id END)::float
+                        / GREATEST(COUNT(DISTINCT sub.game_id), 1) AS deep_inning_pct
+                FROM mlb_pitcher_inning_stats sub
+                INNER JOIN (
+                    SELECT DISTINCT game_id, game_date
+                    FROM mlb_pitcher_inning_stats
+                    WHERE player_id = pgs.player_id
+                      AND is_starter = TRUE
+                      AND game_date < pgs.game_date
+                    ORDER BY game_date DESC
+                    LIMIT 5
+                ) recent ON sub.game_id = recent.game_id
+                WHERE sub.player_id = pgs.player_id
+            ) inn_agg ON TRUE
 
             WHERE pgs.game_date = :game_date
               AND pgs.is_starter = TRUE
@@ -694,3 +795,61 @@ class MLBFeatureStore:
         with self.engine.connect() as conn:
             row = conn.execute(query, {"player_id": player_id, "game_id": game_id}).fetchone()
         return float(row.line) if row and row.line else 0
+
+    def _get_inning_fatigue_stats(self, player_id: int, game_date: str) -> dict:
+        """Fetch inning-level fatigue features from L5 starts."""
+        query = text("""
+            SELECT
+                AVG(CASE WHEN sub.inning <= 3 THEN sub.avg_release_speed END)
+                    - COALESCE(AVG(CASE WHEN sub.inning >= 5 THEN sub.avg_release_speed END),
+                               AVG(CASE WHEN sub.inning <= 3 THEN sub.avg_release_speed END))
+                    AS velo_drop_late,
+                CASE WHEN SUM(CASE WHEN sub.inning >= 5 THEN sub.pitches_thrown END) > 0
+                     THEN SUM(CASE WHEN sub.inning >= 5 THEN sub.whiff_rate * sub.pitches_thrown END)
+                          / SUM(CASE WHEN sub.inning >= 5 THEN sub.pitches_thrown END)
+                     ELSE 0 END AS avg_whiff_rate_late,
+                CASE WHEN SUM(CASE WHEN sub.inning <= 3 THEN sub.batters_faced END) > 0
+                     THEN SUM(CASE WHEN sub.inning <= 3 THEN sub.strikeouts END)::float
+                          / SUM(CASE WHEN sub.inning <= 3 THEN sub.batters_faced END)
+                     ELSE 0 END AS avg_k_rate_early,
+                CASE WHEN COUNT(*) > 0
+                     THEN AVG(sub.pitches_thrown)
+                     ELSE 15 END AS avg_pitches_per_inning,
+                CASE WHEN SUM(sub.pitches_thrown) > 0
+                     THEN SUM(sub.csw_rate * sub.pitches_thrown) / SUM(sub.pitches_thrown)
+                     ELSE 0 END AS avg_csw_rate,
+                COUNT(DISTINCT CASE WHEN sub.inning >= 6 THEN sub.game_id END)::float
+                    / GREATEST(COUNT(DISTINCT sub.game_id), 1) AS deep_inning_pct
+            FROM mlb_pitcher_inning_stats sub
+            INNER JOIN (
+                SELECT DISTINCT game_id, game_date
+                FROM mlb_pitcher_inning_stats
+                WHERE player_id = :player_id
+                  AND is_starter = TRUE
+                  AND game_date < :game_date
+                ORDER BY game_date DESC
+                LIMIT 5
+            ) recent ON sub.game_id = recent.game_id
+            WHERE sub.player_id = :player_id
+        """)
+        with self.engine.connect() as conn:
+            row = conn.execute(query, {"player_id": player_id, "game_date": game_date}).fetchone()
+
+        if row is None:
+            return {
+                "pitcher_velo_drop_late_l5": 0,
+                "pitcher_avg_whiff_rate_late_l5": 0,
+                "pitcher_avg_k_rate_early_l5": 0,
+                "pitcher_avg_pitches_per_inning_l5": 15,
+                "pitcher_avg_csw_rate_l5_inning": 0,
+                "pitcher_deep_inning_pct_l5": 0.5,
+            }
+
+        return {
+            "pitcher_velo_drop_late_l5": float(row.velo_drop_late or 0),
+            "pitcher_avg_whiff_rate_late_l5": float(row.avg_whiff_rate_late or 0),
+            "pitcher_avg_k_rate_early_l5": float(row.avg_k_rate_early or 0),
+            "pitcher_avg_pitches_per_inning_l5": float(row.avg_pitches_per_inning if row.avg_pitches_per_inning is not None else 15),
+            "pitcher_avg_csw_rate_l5_inning": float(row.avg_csw_rate or 0),
+            "pitcher_deep_inning_pct_l5": float(row.deep_inning_pct if row.deep_inning_pct is not None else 0.5),
+        }

@@ -20,13 +20,9 @@
 - [[Execution-Plan]] - Phased build roadmap with task tracking
 - [[Assets]] - Images, videos, PDFs, and other media
 
-## Agents
-- [[builder]] - Implements features, ships code, makes technical decisions
-- [[strategist]] - Product thinking, monetization, growth, go-to-market
-- [[analyst]] - Model performance, calibration, backtesting, data analysis
-- [[ops]] - Infrastructure, monitoring, pipeline health, incident response
-- [[explorer]] - Lightweight codebase search agent
-- [[sql-runner]] - Database query agent
+## Subagents
+- [[explorer]] - Haiku-powered codebase search and file reading
+- [[sql-runner]] - Haiku-powered database queries
 
 ## Session Log
 - **Session 0**: Brain initialized. March 24, 2026
@@ -98,3 +94,4 @@
 - **Session 49**: April 25, 2026 — NBA Analysis Modal fixed (headshots, team display, combo stats); TradeApprovalPanel NBA team bug fixed; sport gate safe default + renewal bypass patched in kalshi_live_trader + kalshi_refresh_job
 - **Session 50**: April 25, 2026 — Cap-aware exposure clamp in execute_trades; MLB/NBA early window shifted ~1hr earlier; reprice_stale_orders SQL bug fixed
 - **Session 51**: April 27, 2026 — Kalshi resolution pipeline 4-bug fix in `reconcile_fills()`: WHERE clause expanded to catch filled+NULL orders, fill_price derivation from total_cost/fill_count, pending-to-filled promotion, CRITICAL never-cancel orders with fill data. 32 incorrectly cancelled bets restored. New diagnostic script `scripts/kalshi_bet_category_analysis.py`. batter_hits kill zone: yes_price 65-71 (14.3% win, -$32). DB P&L found to be approximate (expected vs actual fill prices).
+- **Session 52**: April 28, 2026 at 1:38 PM — MLB model architecture overhaul: pitcher K decomposed into IP + K-rate sub-models with Gaussian copula (NBA minutes x rate pattern); batter hits now uses AB NegBin + compound Binomial sampling; 13 new features wired from `mlb_pitcher_inning_stats` and `mlb_bullpen_daily_status`. 7 files modified, +1,011 lines. Code complete, pending retraining.
