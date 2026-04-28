@@ -33,7 +33,13 @@ from src.models.monte_carlo import PropPrediction
 from src.models.negbin_model import NegBinModel
 
 from .mlb_binary_model import MLBBinaryModel
-from .mlb_monte_carlo import MLBBinomialPredictor, MLBCompoundBinomialPredictor, MLBMonteCarloPredictor, MLBNegBinPredictor, MLBPitcherKCopulaPredictor
+from .mlb_monte_carlo import (
+    MLBBinomialPredictor,
+    MLBCompoundBinomialPredictor,
+    MLBMonteCarloPredictor,
+    MLBNegBinPredictor,
+    MLBPitcherKCopulaPredictor,
+)
 from .mlb_quantile_trainer import MLBPitcherKPipeline
 from .mlb_stat_config import MLB_STATS
 

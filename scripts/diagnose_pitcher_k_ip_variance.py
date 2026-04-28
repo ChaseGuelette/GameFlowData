@@ -121,7 +121,7 @@ def analyze_ip_variance(bets: pd.DataFrame, pitching: pd.DataFrame) -> None:
     )
 
     print(f"\n{'='*60}")
-    print(f"IP DISTRIBUTION: HIGH-CONFIDENCE LOSSES vs WINS")
+    print("IP DISTRIBUTION: HIGH-CONFIDENCE LOSSES vs WINS")
     print(f"{'='*60}")
 
     loss_dist = ip_buckets.value_counts(normalize=True).sort_index()
@@ -144,7 +144,7 @@ def analyze_ip_variance(bets: pd.DataFrame, pitching: pd.DataFrame) -> None:
 
     # --- Over vs Under decomposition ---
     print(f"\n{'='*60}")
-    print(f"OVER vs UNDER BET LOSSES BY IP BUCKET")
+    print("OVER vs UNDER BET LOSSES BY IP BUCKET")
     print(f"{'='*60}")
 
     for side in ["over", "under"]:
@@ -166,7 +166,7 @@ def analyze_ip_variance(bets: pd.DataFrame, pitching: pd.DataFrame) -> None:
 
     # --- Rate Decomposition ---
     print(f"\n{'='*60}")
-    print(f"RATE vs IP DECOMPOSITION (OVER bets only)")
+    print("RATE vs IP DECOMPOSITION (OVER bets only)")
     print(f"{'='*60}")
 
     over_losses = losses[losses["side"] == "over"].copy()
@@ -208,7 +208,7 @@ def analyze_ip_variance(bets: pd.DataFrame, pitching: pd.DataFrame) -> None:
 
     # --- Under bet analysis ---
     print(f"\n{'='*60}")
-    print(f"UNDER BET LOSSES: IP ANALYSIS")
+    print("UNDER BET LOSSES: IP ANALYSIS")
     print(f"{'='*60}")
 
     under_losses = losses[losses["side"] == "under"].copy()
@@ -225,7 +225,7 @@ def analyze_ip_variance(bets: pd.DataFrame, pitching: pd.DataFrame) -> None:
 
     # --- Summary ---
     print(f"\n{'='*60}")
-    print(f"SUMMARY")
+    print("SUMMARY")
     print(f"{'='*60}")
     short_ip_losses = (losses["innings_pitched"] <= 5.0).sum()
     total_losses = len(losses)

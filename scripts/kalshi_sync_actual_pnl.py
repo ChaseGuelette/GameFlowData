@@ -13,8 +13,8 @@ load_dotenv()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.db.client import get_engine
-from src.scrapers.kalshi.kalshi_client import KalshiClient
+from src.db.client import get_engine  # noqa: E402
+from src.scrapers.kalshi.kalshi_client import KalshiClient  # noqa: E402
 
 
 def fetch_settled_positions() -> dict[str, float]:

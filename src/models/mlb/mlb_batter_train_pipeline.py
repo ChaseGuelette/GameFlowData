@@ -242,7 +242,7 @@ class MLBBatterTrainingOrchestrator:
 
         # Step 3b: Train AB NegBin model
         logger.info("Step 3b: Training AB NegBin model...")
-        from src.models.negbin_model import NegBinModel, NegBinConfig
+        from src.models.negbin_model import NegBinConfig, NegBinModel
 
         ab_excluded = {
             "game_id", "player_id", "game_date", "season", "team_id",
