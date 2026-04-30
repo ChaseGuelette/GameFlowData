@@ -11,19 +11,20 @@ Usage:
     python src/orchestration/mlb_edge_refresh_job.py [--date YYYY-MM-DD] [--dry-run] [--skip-discord]
 """
 
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[2]))
+
 import argparse
 import logging
-import sys
 import time
 from datetime import date, datetime
-from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import text
 
 from src.discord_bot.alerts import send_predictions_alert_sync
-
-sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 LOG_DIR.mkdir(exist_ok=True)
