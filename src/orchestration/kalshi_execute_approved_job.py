@@ -61,7 +61,8 @@ def main():
     # Find approved trades that haven't expired yet
     with engine.connect() as conn:
         rows = conn.execute(text("""
-            SELECT id, ticker, player_name, stat_type, line, side, contracts, expected_cost
+            SELECT id, ticker, player_name, stat_type, line, side, contracts, expected_cost,
+                   fee_adjusted_edge
             FROM kalshi_trade_queue
             WHERE status = 'approved'
               AND expires_at > now()
@@ -104,6 +105,62 @@ def main():
         f"Executed {placed}/{len(trade_ids)} trades in {elapsed:.1f}s "
         f"(results={len(results)})"
     )
+
+    executed_tickers: set = set()
+    for r in results:
+        if r.get("order_id"):
+            executed_tickers.add(r["ticker"])
+            try:
+                from src.discord_bot.alerts import send_kalshi_trade_alert_sync
+
+                row_data = next((row for row in rows if row[1] == r["ticker"]), None)
+                player_name = row_data[2] if row_data else "Unknown"
+                stat_type = row_data[3] if row_data else ""
+                side = row_data[5] if row_data else r.get("side", "")
+                line = float(row_data[4]) if row_data else 0
+                contracts = row_data[6] if row_data else r.get("contracts", 0)
+                edge_val = float(row_data[8]) if row_data and row_data[8] is not None else 0
+
+                channel = os.getenv("DISCORD_CHANNEL_KALSHI") or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+                if channel:
+                    send_kalshi_trade_alert_sync("placed", {
+                        "player_name": player_name,
+                        "stat_type": stat_type,
+                        "side": side,
+                        "line": line,
+                        "fill_price": r.get("fill_price"),
+                        "contracts": contracts,
+                        "total_cost": r.get("total_cost", 0),
+                        "fee_adjusted_edge": edge_val,
+                        "balance_after": 0,
+                    }, channel_id=channel)
+            except Exception as e:
+                logger.warning(f"Discord alert failed (non-fatal): {e}")
+
+    approved_trades = [
+        {
+            "id": row[0], "ticker": row[1], "player_name": row[2],
+            "stat_type": row[3], "line": float(row[4]) if row[4] else 0,
+            "side": row[5], "contracts": row[6],
+            "expected_cost": float(row[7]) if row[7] else 0,
+            "fee_adjusted_edge": float(row[8]) if row[8] is not None else 0,
+        }
+        for row in rows
+    ]
+    for trade in approved_trades:
+        if trade["ticker"] not in executed_tickers:
+            try:
+                from src.discord_bot.alerts import send_kalshi_trade_failure_alert_sync
+
+                channel = os.getenv("DISCORD_CHANNEL_KALSHI") or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+                if channel:
+                    send_kalshi_trade_failure_alert_sync(
+                        trade,
+                        "Order returned no fill — check orderbook liquidity",
+                        channel_id=channel,
+                    )
+            except Exception as e:
+                logger.warning(f"Discord failure alert failed (non-fatal): {e}")
 
 
 if __name__ == "__main__":

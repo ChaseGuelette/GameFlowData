@@ -1101,6 +1101,45 @@ def _build_kalshi_trade_placed_embed(trade: dict, mode: str = "live") -> dict:
     }
 
 
+def _build_kalshi_order_filled_embed(data: dict) -> dict:
+    """Build Discord embed for a Kalshi order fill notification."""
+    return {
+        "title": "Kalshi Order Filled",
+        "color": 0x00AA00,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {"name": "Player", "value": str(data.get("player_name", "Unknown")), "inline": True},
+            {"name": "Stat", "value": str(data.get("stat_type", "")), "inline": True},
+            {"name": "Side", "value": str(data.get("side", "")), "inline": True},
+            {"name": "Fill Price", "value": str(data.get("fill_price", "?")), "inline": True},
+            {"name": "Contracts", "value": str(data.get("contracts", "?")), "inline": True},
+        ],
+        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+    }
+
+
+def _build_kalshi_live_daily_summary_embed(data: dict) -> dict:
+    """Build Discord embed for Kalshi live trading daily performance summary."""
+    wins = data.get("wins", 0)
+    losses = data.get("losses", 0)
+    daily_pnl = data.get("daily_pnl", 0)
+    win_rate = data.get("win_rate", 0)
+    total_pnl = data.get("total_pnl", 0)
+
+    return {
+        "title": "Kalshi Live Daily Performance",
+        "color": 0x00AA44 if daily_pnl >= 0 else 0xCC2200,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {"name": "Yesterday's Record", "value": f"{wins}W-{losses}L", "inline": True},
+            {"name": "Daily P&L", "value": f"${daily_pnl:+.2f}", "inline": True},
+            {"name": "Win Rate", "value": f"{win_rate:.1f}%", "inline": True},
+            {"name": "Total P&L", "value": f"${total_pnl:+.2f}", "inline": True},
+        ],
+        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+    }
+
+
 def _build_kalshi_trade_resolved_embed(trade: dict, mode: str = "live") -> dict:
     """Build Discord embed for a resolved Kalshi trade."""
     player = trade.get("player_name", "Unknown")
@@ -1129,6 +1168,102 @@ def _build_kalshi_trade_resolved_embed(trade: dict, mode: str = "live") -> dict:
         ],
         "footer": {"text": f"Kalshi {mode.title()} Trading | GameFlowData"},
     }
+
+
+def _build_kalshi_trade_failure_embed(trade: dict, error_msg: str) -> dict:
+    player = trade.get("player_name", "Unknown")
+    stat = str(trade.get("stat_type", "")).upper()
+    line = trade.get("line", "—")
+    side = trade.get("side", "yes").upper()
+    contracts = trade.get("contracts", 0)
+    total_cost = trade.get("expected_cost", 0)
+    edge = trade.get("fee_adjusted_edge", 0)
+    ticker = trade.get("ticker", "—")
+
+    return {
+        "title": "⚠️ Kalshi Order Failed",
+        "description": f"**{player}** {stat} {'OVER' if side == 'YES' else 'UNDER'} {line}",
+        "color": 0xFF0000,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": [
+            {"name": "Player", "value": player, "inline": True},
+            {"name": "Stat", "value": stat, "inline": True},
+            {"name": "Line", "value": str(line), "inline": True},
+            {"name": "Side", "value": side, "inline": True},
+            {"name": "Contracts", "value": str(contracts), "inline": True},
+            {"name": "Cost", "value": f"${total_cost:.2f}", "inline": True},
+            {"name": "Edge", "value": f"{edge:.1%}", "inline": True},
+            {"name": "Ticker", "value": ticker, "inline": True},
+            {"name": "Error", "value": error_msg, "inline": False},
+        ],
+        "footer": {"text": f"Kalshi Live Trading | GameFlowData | {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"},
+    }
+
+
+async def send_kalshi_trade_failure_alert(
+    trade: dict,
+    error_msg: str,
+    channel_id: str | None = None,
+) -> bool:
+    load_dotenv()
+
+    bot_token = os.getenv("DISCORD_BOT_TOKEN")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured, skipping Kalshi trade failure alert")
+        return False
+
+    if not channel_id:
+        channel_id = (
+            os.getenv("DISCORD_CHANNEL_KALSHI")
+            or os.getenv("DISCORD_CHANNEL_PREDICTIONS")
+        )
+    if not channel_id:
+        logger.warning("No Kalshi channel configured, skipping trade failure alert")
+        return False
+
+    embed = _build_kalshi_trade_failure_embed(trade, error_msg)
+
+    url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status in (200, 201):
+                    logger.info("Sent Kalshi trade failure alert")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Discord API error {response.status}: {error_text}")
+                    return False
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi trade failure alert: {e}")
+        return False
+
+
+def send_kalshi_trade_failure_alert_sync(
+    trade: dict,
+    error_msg: str,
+    channel_id: str | None = None,
+) -> bool:
+    import asyncio
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                send_kalshi_trade_failure_alert(trade, error_msg, channel_id), loop,
+            )
+            return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(send_kalshi_trade_failure_alert(trade, error_msg, channel_id))
+    except Exception as e:
+        logger.exception(f"Failed to send Kalshi trade failure alert synchronously: {e}")
+        return False
 
 
 def _build_kalshi_circuit_breaker_embed(reason: str, details: dict) -> dict:
@@ -1184,10 +1319,67 @@ def _build_kalshi_approval_embed(data: dict) -> dict:
             "inline": False,
         })
 
+    already_pending = data.get("already_pending", 0)
+    if already_pending > 0:
+        fields.append({
+            "name": "Already Pending",
+            "value": f"{already_pending} trade(s) from prior runs also awaiting approval",
+            "inline": False,
+        })
+
+    desc = f"{count} trade(s) queued for approval."
+    if already_pending > 0:
+        desc += f" Plus {already_pending} already pending from prior runs."
+    desc += " Approve on the Bot Tracker dashboard."
+
     return {
         "title": f"⏳ KALSHI APPROVAL NEEDED — {sport}",
-        "description": f"{count} trade(s) queued for approval. Approve on the Bot Tracker dashboard within 30 minutes.",
-        "color": 0xF39C12,  # Orange — action required
+        "description": desc,
+        "color": 0xF39C12,
+        "timestamp": datetime.utcnow().isoformat(),
+        "fields": fields,
+        "footer": {"text": "Kalshi Live Trading | GameFlowData"},
+    }
+
+
+def _build_kalshi_reminder_embed(data: dict) -> dict:
+    sport = data.get("sport", "UNKNOWN")
+    count = data.get("count", 0)
+    total_exposure = data.get("total_exposure", 0)
+    edge_range = data.get("edge_range", "N/A")
+    trades = data.get("trades", [])
+
+    fields = [
+        {"name": "Sport", "value": sport, "inline": True},
+        {"name": "Still Pending", "value": str(count), "inline": True},
+        {"name": "Total Exposure", "value": f"${total_exposure:.2f}", "inline": True},
+        {"name": "Edge Range", "value": edge_range, "inline": True},
+    ]
+
+    for t in trades[:5]:
+        player = t.get("player_name", "Unknown")
+        stat = str(t.get("stat_type", "")).upper()
+        side = t.get("side", "yes").upper()
+        contracts = t.get("contracts", 0)
+        cost = t.get("expected_cost", 0)
+        edge = t.get("fee_adjusted_edge", 0)
+        fields.append({
+            "name": f"{player} — {stat}",
+            "value": f"{'OVER' if side == 'YES' else 'UNDER'} | {contracts} contracts @ ${cost:.2f} | edge: {edge:.1%}",
+            "inline": False,
+        })
+
+    if len(trades) > 5:
+        fields.append({
+            "name": f"... and {len(trades) - 5} more",
+            "value": "See Bot Tracker dashboard for full list",
+            "inline": False,
+        })
+
+    return {
+        "title": f"🔔 REMINDER — {count} Trade(s) Pending Approval ({sport})",
+        "description": f"{count} trade(s) are still awaiting your approval. Approve on the Bot Tracker dashboard.",
+        "color": 0xF1C40F,
         "timestamp": datetime.utcnow().isoformat(),
         "fields": fields,
         "footer": {"text": "Kalshi Live Trading | GameFlowData"},
@@ -1262,6 +1454,8 @@ def send_kalshi_trade_alert_sync(
 
     if alert_type == "placed":
         embed = _build_kalshi_trade_placed_embed(data, mode=mode)
+    elif alert_type == "filled":
+        embed = _build_kalshi_order_filled_embed(data)
     elif alert_type == "resolved":
         embed = _build_kalshi_trade_resolved_embed(data, mode=mode)
     elif alert_type == "circuit_breaker":
@@ -1270,6 +1464,10 @@ def send_kalshi_trade_alert_sync(
         )
     elif alert_type == "approval_needed":
         embed = _build_kalshi_approval_embed(data)
+    elif alert_type == "approval_reminder":
+        embed = _build_kalshi_reminder_embed(data)
+    elif alert_type == "daily_summary":
+        embed = _build_kalshi_live_daily_summary_embed(data)
     else:
         logger.error(f"Unknown Kalshi alert type: {alert_type}")
         return False

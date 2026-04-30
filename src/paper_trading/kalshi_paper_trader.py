@@ -36,9 +36,9 @@ from src.scrapers.kalshi.kalshi_utils import fee_adjusted_edge, kalshi_taker_fee
 
 logger = logging.getLogger(__name__)
 
-# When two lines for the same player+stat are within this edge gap,
-# prefer the line closest to the sportsbook consensus (more reliable signal).
-_LINE_TIEBREAK_THRESHOLD = 0.03  # 3 percentage points
+# When a non-sportsbook-aligned Kalshi line beats the aligned line by more
+# than this gap, allow the override.  Otherwise prefer the aligned line.
+_SPORTSBOOK_LINE_FALLBACK_GAP = 0.08  # 8 percentage points
 
 # NBA stat resolution: stat_type -> (table, [columns to sum])
 NBA_STAT_RESOLUTION: dict[str, tuple[str, list[str]]] = {
@@ -211,7 +211,7 @@ class KalshiPaperTrader:
                 close_time
             FROM kalshi_markets
             WHERE sport = :sport
-              AND snapshot_time::date = :target_date
+              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
               AND market_status = 'open'
               AND model_prob IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
@@ -334,31 +334,56 @@ class KalshiPaperTrader:
                 logger.debug(f"SKIP {row['player_name']} {stat_type} {direction}: {reason}")
                 continue
 
-            # Sportsbook-proximity tiebreaker
-            sb_line = float(row["sportsbook_consensus_line"]) if pd.notna(row.get("sportsbook_consensus_line")) else None
-            kalshi_line = float(row["line"])
-            sb_dist = abs(kalshi_line - sb_line) if sb_line is not None else float("inf")
+            # Star-batter filter: NO on 1+ hits with high yes_price means
+            # betting a likely star goes hitless.  Model tail P(0 hits) is
+            # miscalibrated for elite contact hitters (28.8% win rate vs
+            # 39.4% for non-stars in paper trading).  Threshold from data:
+            # stars avg yes_price 72+, non-stars 70-.
+            _STAR_YES_PRICE = int(os.environ.get("KALSHI_STAR_HITS_YES_PRICE", "72"))
+            if stat_type == "batter_hits" and side == "no" and line_val == 1.0 and yes_price >= _STAR_YES_PRICE:
+                logger.debug(
+                    f"SKIP star-hitter filter: {row['player_name']} batter_hits "
+                    f"NO@1+ yes_price={yes_price} >= {_STAR_YES_PRICE}"
+                )
+                continue
 
-            # Same-run dedup: keep best edge per (player_id, stat_type)
+            # Sportsbook-alignment check
+            kalshi_line = float(row["line"])
+            sb_line = float(row["sportsbook_consensus_line"]) if pd.notna(row.get("sportsbook_consensus_line")) else None
+
+            is_matching = False
+            if sb_line is not None:
+                matching_target = math.ceil(sb_line)
+                is_matching = (int(kalshi_line) == matching_target)
+
+            # Same-run dedup: prefer sportsbook-aligned line per (player_id, stat_type)
             if pos_key in run_candidates:
                 existing = run_candidates[pos_key]
-                existing_edge = existing["fee_adjusted_edge"]
-                edge_gap = edge - existing_edge  # positive = new is better
-                if edge_gap > _LINE_TIEBREAK_THRESHOLD:
-                    pass  # new candidate clearly better — replace
-                elif edge_gap >= -_LINE_TIEBREAK_THRESHOLD:
-                    # Edges within threshold — prefer sportsbook-aligned line
-                    if sb_dist >= existing.get("sb_dist", float("inf")):
-                        continue  # existing is closer to sportsbook, keep it
-                    # else: new candidate is closer to sportsbook, replace
+                ex_edge = existing["fee_adjusted_edge"]
+                ex_matching = existing.get("is_matching_line", False)
+
+                if is_matching and not ex_matching:
+                    # New is sportsbook-aligned, existing is not
+                    if ex_edge > edge + _SPORTSBOOK_LINE_FALLBACK_GAP:
+                        continue  # keep existing (huge edge advantage)
                     logger.info(
-                        f"Line tiebreak: {row['player_name']} {stat_type} — "
-                        f"replacing {existing['line']} (edge={existing_edge:.3f}, sb_dist={existing.get('sb_dist', float('inf')):.1f}) "
-                        f"with {kalshi_line} (edge={edge:.3f}, sb_dist={sb_dist:.1f}) "
-                        f"[gap={edge_gap:.3f}]"
+                        f"SB-align: {row['player_name']} {stat_type} — "
+                        f"replacing line {existing['line']} (edge={ex_edge:.3f}) "
+                        f"with SB-aligned line {kalshi_line} (edge={edge:.3f})"
+                    )
+                elif ex_matching and not is_matching:
+                    # Existing is sportsbook-aligned, new is not
+                    if edge <= ex_edge + _SPORTSBOOK_LINE_FALLBACK_GAP:
+                        continue
+                    logger.info(
+                        f"SB-override: {row['player_name']} {stat_type} — "
+                        f"overriding SB-aligned line {existing['line']} (edge={ex_edge:.3f}) "
+                        f"with line {kalshi_line} (edge={edge:.3f}, gap={edge - ex_edge:.3f})"
                     )
                 else:
-                    continue  # existing candidate is clearly better
+                    # Both same alignment — pick higher edge
+                    if edge <= ex_edge:
+                        continue
 
             kalshi_implied = float(row["kalshi_implied"]) if pd.notna(row["kalshi_implied"]) else yes_price / 100.0
 
@@ -366,7 +391,8 @@ class KalshiPaperTrader:
                 "ticker": row["ticker"],
                 "player_name": row["player_name"],
                 "line": kalshi_line,
-                "sb_dist": sb_dist,
+                "is_matching_line": is_matching,
+                "sportsbook_line": sb_line,
                 "side": side,
                 "yes_price": yes_price,
                 "model_prob": model_prob,
@@ -377,7 +403,6 @@ class KalshiPaperTrader:
                 "bl_model_prob": float(row["bl_model_prob"]) if pd.notna(row.get("bl_model_prob")) else None,
                 "bl_edge": float(row["bl_edge"]) if pd.notna(row.get("bl_edge")) else None,
                 "bl_confidence": float(row["bl_confidence"]) if pd.notna(row.get("bl_confidence")) else None,
-                "sportsbook_line": float(row["sportsbook_consensus_line"]) if pd.notna(row.get("sportsbook_consensus_line")) else None,
                 "line_vs_sportsbook": float(row["line_vs_sportsbook"]) if pd.notna(row.get("line_vs_sportsbook")) else None,
                 "market_title": str(row["market_title"]) if pd.notna(row.get("market_title")) else None,
                 "volume": int(row["volume"]) if pd.notna(row.get("volume")) else None,

@@ -66,6 +66,8 @@ MLB_TABLES: dict[str, tuple[str | None, str]] = {
     "mlb_player_average_statcast_pitching": ("game_date", "incremental"),
     "mlb_raw_game_lines":                   ("commence_time", "incremental"),
     "mlb_raw_player_props":                 ("snapshot_time", "incremental"),
+    "mlb_pitcher_inning_stats":             ("game_date", "incremental"),
+    "mlb_bullpen_daily_status":             ("game_date", "incremental"),
 }
 
 NBA_TABLES: dict[str, tuple[str | None, str]] = {

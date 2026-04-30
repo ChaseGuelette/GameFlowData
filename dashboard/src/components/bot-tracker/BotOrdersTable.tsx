@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react'
 import type { KalshiLiveOrder, KalshiPaperBet, BotTab } from '@/types/bot-tracker'
 import { KALSHI_STAT_LABELS } from '@/types/bot-tracker'
+import { BetAnalysisModal } from './BetAnalysisModal'
 
 type SortField = 'placed_at' | 'player_name' | 'stat_type' | 'edge' | 'pnl' | 'status'
 type SortDir = 'asc' | 'desc'
@@ -40,18 +41,11 @@ function formatTime(isoString: string | null | undefined): string {
   return new Date(isoString).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
 }
 
-function getKalshiUrl(ticker: string | null | undefined, sport: string): string | null {
+function getKalshiUrl(ticker: string | null | undefined): string | null {
   if (!ticker) return null
-  const parts = ticker.split('-')
-  if (parts.length < 2) return null
-  const matchup = parts[1].toLowerCase()
-  if (sport === 'nba') {
-    return `https://kalshi.com/markets/kxnbagame/professional-basketball-game/kxnbagame-${matchup}`
-  }
-  if (sport === 'mlb') {
-    return `https://kalshi.com/markets/kxmlbgame/professional-baseball-game/kxmlbgame-${matchup}`
-  }
-  return null
+  const series = ticker.split('-')[0].toLowerCase()
+  if (!series) return null
+  return `https://kalshi.com/markets/${series}/${ticker.toLowerCase()}`
 }
 
 export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
@@ -61,6 +55,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [sportFilter, setSportFilter] = useState<string>('all')
   const [showOverflow, setShowOverflow] = useState<boolean>(false)
+  const [analysisOrder, setAnalysisOrder] = useState<KalshiLiveOrder | KalshiPaperBet | null>(null)
 
   const statTypes = useMemo(() => {
     const types = new Set(orders.map((o) => o.stat_type))
@@ -281,7 +276,7 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                   : entryPrice != null
                     ? (order.contracts * entryPrice) / 100
                     : null
-                const kalshiUrl = getKalshiUrl(order.ticker, order.sport)
+                const kalshiUrl = getKalshiUrl(order.ticker)
                 const isOverflow = (order.status ?? '').startsWith('overflow')
                 return (
                   <tr key={order.id} className={`hover:bg-slate-700/30 ${isOverflow ? 'opacity-40' : ''}`}>
@@ -345,7 +340,18 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
                     >
                       {formatPnl(order.pnl != null ? Number(order.pnl) : null)}
                     </td>
-                    <td className="px-3 py-2 text-center">
+                    <td className="px-3 py-2 text-center whitespace-nowrap">
+                      {order.player_id && (
+                        <button
+                          onClick={() => setAnalysisOrder(order)}
+                          className="text-slate-500 hover:text-blue-400 transition-colors mr-1"
+                          title="View analysis"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="inline w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                          </svg>
+                        </button>
+                      )}
                       {kalshiUrl ? (
                         <a
                           href={kalshiUrl}
@@ -367,6 +373,14 @@ export function BotOrdersTable({ orders, tab, loading }: BotOrdersTableProps) {
           </tbody>
         </table>
       </div>
+
+      {analysisOrder && (
+        <BetAnalysisModal
+          order={analysisOrder}
+          tab={tab}
+          onClose={() => setAnalysisOrder(null)}
+        />
+      )}
     </div>
   )
 }

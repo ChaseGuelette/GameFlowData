@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 import time
 from datetime import date, timedelta
@@ -275,6 +276,66 @@ def _send_analysis(dry_run: bool = False) -> None:
         logger.warning(f"FAILED: Kalshi analysis — {e}")
 
 
+def _send_live_trader_summary(dry_run: bool = False) -> None:
+    """Send Kalshi live trader daily performance summary to Discord."""
+    logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: Kalshi live trader daily summary")
+
+    yesterday = date.today() - timedelta(days=1)
+
+    try:
+        from sqlalchemy import text
+
+        from src.db.client import get_engine
+
+        engine = get_engine()
+
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT status, SUM(pnl) as pnl, COUNT(*) as cnt
+                FROM kalshi_live_orders
+                WHERE game_date = :d AND status IN ('won', 'lost')
+                GROUP BY status
+            """), {"d": yesterday}).fetchall()
+
+        wins = next((int(r.cnt) for r in rows if r.status == 'won'), 0)
+        losses = next((int(r.cnt) for r in rows if r.status == 'lost'), 0)
+        daily_pnl = sum(float(r.pnl) for r in rows if r.pnl is not None)
+
+        if wins + losses == 0:
+            logger.info("No resolved Kalshi live bets yesterday — skipping live summary")
+            return
+
+        with engine.connect() as conn:
+            total_pnl = conn.execute(text(
+                "SELECT COALESCE(SUM(pnl), 0) FROM kalshi_live_orders WHERE status IN ('won', 'lost')"
+            )).scalar()
+
+        win_rate = wins / (wins + losses) * 100
+
+        if dry_run:
+            logger.info(
+                f"  Would send live summary: {wins}W-{losses}L, "
+                f"P&L=${daily_pnl:+.2f}, total=${float(total_pnl):+.2f}"
+            )
+            return
+
+        from src.discord_bot.alerts import send_kalshi_trade_alert_sync
+
+        channel = os.getenv("DISCORD_CHANNEL_PERFORMANCE")
+        if channel:
+            send_kalshi_trade_alert_sync("daily_summary", {
+                "wins": wins,
+                "losses": losses,
+                "daily_pnl": daily_pnl,
+                "win_rate": win_rate,
+                "total_pnl": float(total_pnl),
+            }, channel_id=channel, mode="live")
+        logger.info(f"Kalshi live summary sent: {wins}W-{losses}L, P&L=${daily_pnl:+.2f}")
+
+    except Exception as e:
+        logger.warning(f"FAILED: Kalshi live trader summary — {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Kalshi daily summary: P&L + analysis to Discord")
     parser.add_argument("--dry-run", action="store_true", help="Log what would be sent, skip Discord")
@@ -305,6 +366,9 @@ def main():
 
     # Step 4: Compute analysis + send embed
     _send_analysis(dry_run=dry_run)
+
+    # Step 5: Live trader daily summary
+    _send_live_trader_summary(dry_run=dry_run)
 
     logger.info("=" * 60)
     logger.info(f"{prefix}Kalshi Daily Summary Job Complete")

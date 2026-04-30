@@ -1,0 +1,18 @@
+Query 1: Check kalshi_cancel_queue data
+SELECT status, COUNT(*) FROM kalshi_cancel_queue GROUP BY status ORDER BY status;
+
+Query 2: Count pending orders by game_date
+SELECT game_date, COUNT(*) as cnt
+FROM kalshi_live_orders
+WHERE status = 'pending'
+GROUP BY game_date
+ORDER BY game_date;
+
+Query 3: Check cancelled orders in kalshi_live_orders
+SELECT status, COUNT(*) FROM kalshi_live_orders GROUP BY status ORDER BY status;
+
+Query 4: Check kalshi_cancel_queue table structure
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name = 'kalshi_cancel_queue'
+ORDER BY ordinal_position;

@@ -25,8 +25,10 @@ from __future__ import annotations
 import logging
 import math
 import os
-from datetime import date, datetime
+import re
+from datetime import UTC, date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from sqlalchemy import text
@@ -38,9 +40,9 @@ from src.scrapers.kalshi.kalshi_utils import fee_adjusted_edge, kalshi_taker_fee
 
 logger = logging.getLogger(__name__)
 
-# When two lines for the same player+stat are within this edge gap,
-# prefer the line closest to the sportsbook consensus (more reliable signal).
-_LINE_TIEBREAK_THRESHOLD = 0.03  # 3 percentage points
+# When a non-sportsbook-aligned Kalshi line beats the aligned line by more
+# than this gap, allow the override.  Otherwise prefer the aligned line.
+_SPORTSBOOK_LINE_FALLBACK_GAP = 0.08  # 8 percentage points
 
 # Supported stat types per sport (skip markets without trained models)
 SUPPORTED_STATS: dict[str, set[str]] = {
@@ -69,6 +71,36 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         logger.warning(f"Invalid {name}={val}, using default {default}")
         return default
+
+
+KALSHI_SWEEP_MAX_CENTS = _env_int("KALSHI_SWEEP_MAX_CENTS", 10)
+KALSHI_SWEEP_EDGE_RETENTION = _env_float("KALSHI_SWEEP_EDGE_RETENTION", 0.50)
+
+# Ticker datetime parser — e.g. KXMLBHIT-26APR251415SEASTL → 2026-04-25 14:15 ET
+_TICKER_DT_RE = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})(\d{4})[A-Z]")
+_MONTH_MAP = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+_ET = ZoneInfo("America/New_York")
+
+
+def _parse_game_time_from_ticker(ticker: str) -> datetime | None:
+    """Extract game start time (ET) from Kalshi ticker."""
+    m = _TICKER_DT_RE.search(ticker)
+    if not m:
+        return None
+    try:
+        year = 2000 + int(m.group(1))
+        month = _MONTH_MAP.get(m.group(2))
+        if month is None:
+            return None
+        day = int(m.group(3))
+        hhmm = m.group(4)
+        hour, minute = int(hhmm[:2]), int(hhmm[2:])
+        return datetime(year, month, day, hour, minute, tzinfo=_ET)
+    except (ValueError, IndexError):
+        return None
 
 
 class KalshiLiveTrader:
@@ -266,16 +298,19 @@ class KalshiLiveTrader:
             """), {"d": target_date}).scalar()
         return float(result or 0)
 
-    def _get_consecutive_losses(self) -> int:
-        """Count consecutive losses from most recent resolved trades."""
+    def _get_consecutive_losses(self, target_date: date | None = None) -> int:
+        """Count consecutive losses from most recent resolved trades for a given date."""
+        if target_date is None:
+            target_date = date.today()
         with self.engine.connect() as conn:
             rows = conn.execute(text("""
                 SELECT status
                 FROM kalshi_live_orders
                 WHERE status IN ('won', 'lost')
+                  AND game_date = :d
                 ORDER BY resolved_at DESC
                 LIMIT :limit
-            """), {"limit": self.consec_loss_limit}).fetchall()
+            """), {"d": target_date, "limit": self.consec_loss_limit}).fetchall()
 
         streak = 0
         for row in rows:
@@ -286,7 +321,35 @@ class KalshiLiveTrader:
         return streak
 
     def _send_circuit_breaker_alert(self, reason: str, balance: float, action: str) -> None:
-        """Send Discord alert for circuit breaker trigger."""
+        """Send Discord alert for circuit breaker trigger — deduped to once per ET calendar day."""
+        ET = ZoneInfo("America/New_York")
+        today_et = datetime.now(ET).date()
+
+        try:
+            config = self._get_config()
+            last_alert = config.get("last_circuit_alert_at")
+            if last_alert is not None:
+                if isinstance(last_alert, str):
+                    last_alert = datetime.fromisoformat(last_alert)
+                if last_alert.tzinfo is None:
+                    last_alert = last_alert.replace(tzinfo=UTC)
+                if last_alert.astimezone(ET).date() >= today_et:
+                    logger.info(f"Circuit breaker alert suppressed (already sent today): {reason}")
+                    return
+        except Exception as e:
+            logger.warning(f"Dedup check failed, sending alert anyway: {e}")
+
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text("""
+                    UPDATE kalshi_live_trading_config
+                    SET last_circuit_alert_at = now(), last_updated = now()
+                    WHERE id = 1
+                """))
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to update last_circuit_alert_at: {e}")
+
         try:
             from src.discord_bot.alerts import send_kalshi_trade_alert_sync
             send_kalshi_trade_alert_sync("circuit_breaker", {
@@ -300,6 +363,36 @@ class KalshiLiveTrader:
     # ------------------------------------------------------------------
     # Kelly sizing (taker fees)
     # ------------------------------------------------------------------
+
+    def _get_best_available_price(self, ticker: str, side: str, target_cents: int) -> int | None:
+        """Get the best available fill price from the live orderbook.
+
+        Returns the price in YES-equivalent cents that a taker order would fill at,
+        or None if the orderbook is unavailable/empty. The target_cents param is
+        kept for signature compatibility but is NOT used for filtering — the sweep
+        guards in execute_trades() handle delta/edge checks.
+        """
+        try:
+            ob = self.client.get_orderbook(ticker, depth=10)
+            if ob is None:
+                return None
+            orderbook = ob.get("orderbook", {})
+
+            if side == "yes":
+                no_bids = orderbook.get("no", [])
+                for no_bid, qty in no_bids:
+                    if qty > 0:
+                        return 100 - no_bid
+                return None
+            else:
+                yes_bids = orderbook.get("yes", [])
+                for yes_bid, qty in yes_bids:
+                    if qty > 0:
+                        return yes_bid
+                return None
+        except Exception as e:
+            logger.warning(f"Orderbook query failed for {ticker}: {e}")
+            return None
 
     def _kelly_contracts(
         self, model_prob: float, price_cents: int, side: str, bankroll: float,
@@ -344,10 +437,11 @@ class KalshiLiveTrader:
         shared daily exposure cap, call with sport="mlb" first, then pass the
         resulting total cost as prior_exposure= when calling with sport="nba".
         """
-        # Per-sport trading gate: refuse to trade a sport that's disabled
+        # Per-sport trading gate: refuse to trade a sport that's disabled.
+        # Default is "false" — must be explicitly opted-in per sport.
         sport_gate_var = f"{sport.upper()}_TRADING_ENABLED"
-        if os.getenv(sport_gate_var, "true").lower() != "true":
-            logger.info(f"Live trading disabled for {sport} ({sport_gate_var}=false)")
+        if os.getenv(sport_gate_var, "false").lower() != "true":
+            logger.info(f"Live trading disabled for {sport} ({sport_gate_var}!=true)")
             return []
 
         # Get real balance from API
@@ -388,10 +482,11 @@ class KalshiLiveTrader:
                 yes_price, model_prob, kalshi_implied,
                 raw_edge, maker_fee_adjusted_edge,
                 volume, bid_ask_spread, market_status,
-                bl_model_prob, bl_edge
+                bl_model_prob, bl_edge,
+                sportsbook_consensus_line, line_vs_sportsbook
             FROM kalshi_markets
             WHERE sport = :sport
-              AND snapshot_time::date = :target_date
+              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
               AND market_status = 'open'
               AND model_prob IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
@@ -517,6 +612,19 @@ class KalshiLiveTrader:
                 logger.debug(f"SKIP {row['player_name']} {stat_type} {direction}: {reason}")
                 continue
 
+            # Star-batter filter: NO on 1+ hits with high yes_price means
+            # betting a likely star goes hitless.  Model tail P(0 hits) is
+            # miscalibrated for elite contact hitters (28.8% win rate vs
+            # 39.4% for non-stars in paper trading).  Threshold from data:
+            # stars avg yes_price 72+, non-stars 70-.
+            _STAR_YES_PRICE = int(os.environ.get("KALSHI_STAR_HITS_YES_PRICE", "72"))
+            if stat_type == "batter_hits" and side == "no" and line_val == 1.0 and yes_price >= _STAR_YES_PRICE:
+                logger.debug(
+                    f"SKIP star-hitter filter: {row['player_name']} batter_hits "
+                    f"NO@1+ yes_price={yes_price} >= {_STAR_YES_PRICE}"
+                )
+                continue
+
             # Edge sanity cap: reject absurd edges that indicate model garbage
             MAX_EDGE = _env_float("KALSHI_LIVE_MAX_EDGE", 0.40)
             if edge > MAX_EDGE:
@@ -534,37 +642,50 @@ class KalshiLiveTrader:
                 if _direction not in _allowed:
                     continue
 
-            # Sportsbook-proximity tiebreaker
-            sb_line = float(row["sportsbook_consensus_line"]) if pd.notna(row.get("sportsbook_consensus_line")) else None
+            # Sportsbook-alignment check
             kalshi_line = float(row["line"])
-            sb_dist = abs(kalshi_line - sb_line) if sb_line is not None else float("inf")
+            sb_line = float(row["sportsbook_consensus_line"]) if pd.notna(row.get("sportsbook_consensus_line")) else None
 
-            # Same-run dedup: keep best edge per (player_id, stat_type)
+            is_matching = False
+            if sb_line is not None:
+                matching_target = math.ceil(sb_line)
+                is_matching = (int(kalshi_line) == matching_target)
+
+            # Same-run dedup: prefer sportsbook-aligned line per (player_id, stat_type)
             if pos_key in run_candidates:
                 existing = run_candidates[pos_key]
-                existing_edge = existing["fee_adjusted_edge"]
-                edge_gap = edge - existing_edge  # positive = new is better
-                if edge_gap > _LINE_TIEBREAK_THRESHOLD:
-                    pass  # new candidate clearly better — replace
-                elif edge_gap >= -_LINE_TIEBREAK_THRESHOLD:
-                    # Edges within threshold — prefer sportsbook-aligned line
-                    if sb_dist >= existing.get("sb_dist", float("inf")):
-                        continue  # existing is closer to sportsbook, keep it
-                    # else: new candidate is closer to sportsbook, replace
+                ex_edge = existing["fee_adjusted_edge"]
+                ex_matching = existing.get("is_matching_line", False)
+
+                if is_matching and not ex_matching:
+                    # New is sportsbook-aligned, existing is not
+                    if ex_edge > edge + _SPORTSBOOK_LINE_FALLBACK_GAP:
+                        continue  # keep existing (huge edge advantage)
                     logger.info(
-                        f"Line tiebreak: {row['player_name']} {stat_type} — "
-                        f"replacing {existing['line']} (edge={existing_edge:.3f}, sb_dist={existing.get('sb_dist', float('inf')):.1f}) "
-                        f"with {kalshi_line} (edge={edge:.3f}, sb_dist={sb_dist:.1f}) "
-                        f"[gap={edge_gap:.3f}]"
+                        f"SB-align: {row['player_name']} {stat_type} — "
+                        f"replacing line {existing['line']} (edge={ex_edge:.3f}) "
+                        f"with SB-aligned line {kalshi_line} (edge={edge:.3f})"
+                    )
+                elif ex_matching and not is_matching:
+                    # Existing is sportsbook-aligned, new is not
+                    if edge <= ex_edge + _SPORTSBOOK_LINE_FALLBACK_GAP:
+                        continue
+                    logger.info(
+                        f"SB-override: {row['player_name']} {stat_type} — "
+                        f"overriding SB-aligned line {existing['line']} (edge={ex_edge:.3f}) "
+                        f"with line {kalshi_line} (edge={edge:.3f}, gap={edge - ex_edge:.3f})"
                     )
                 else:
-                    continue  # existing candidate is clearly better
+                    # Both same alignment — pick higher edge
+                    if edge <= ex_edge:
+                        continue
 
             run_candidates[pos_key] = {
                 "ticker": row["ticker"],
                 "player_name": row["player_name"],
                 "line": kalshi_line,
-                "sb_dist": sb_dist,
+                "is_matching_line": is_matching,
+                "sportsbook_line": sb_line,
                 "side": side,
                 "yes_price": yes_price,
                 "model_prob": model_prob,
@@ -650,7 +771,8 @@ class KalshiLiveTrader:
                 "kalshi_implied": round(cand["kalshi_implied"], 4),
                 "edge": round(cand["raw_edge"], 4),
                 "fee_adjusted_edge": round(cand["fee_adjusted_edge"], 4),
-                "game_start_time": game_start_times.get(ticker),
+                "game_start_time": self._get_game_start_time(ticker, game_start_times),
+                "sportsbook_consensus_line": cand.get("sportsbook_line"),
             })
 
         logger.info(
@@ -660,25 +782,37 @@ class KalshiLiveTrader:
         return trades
 
     def _lookup_game_start_times(self, target_date: date, sport: str) -> dict[str, datetime | None]:
-        """Look up game start times from schedule tables, keyed by ticker."""
+        """Look up game start times from kalshi_markets.close_time, keyed by ticker.
+
+        Kalshi sports markets close at game start, so close_time is the game start time.
+        """
         start_times: dict[str, datetime | None] = {}
         try:
-            table = "nba_game_schedule" if sport == "nba" else "mlb_game_schedule"
             with self.engine.connect() as conn:
-                rows = conn.execute(text(f"""
-                    SELECT km.ticker, gs.game_time
-                    FROM kalshi_markets km
-                    JOIN {table} gs ON gs.game_date = :d
-                    WHERE km.sport = :sport
-                      AND km.snapshot_time::date = :d
-                      AND gs.game_time IS NOT NULL
-                    GROUP BY km.ticker, gs.game_time
+                rows = conn.execute(text("""
+                    SELECT DISTINCT ON (ticker) ticker, close_time
+                    FROM kalshi_markets
+                    WHERE sport = :sport
+                      AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :d
+                      AND close_time IS NOT NULL
+                    ORDER BY ticker, snapshot_time DESC
                 """), {"d": target_date, "sport": sport}).fetchall()
                 for row in rows:
                     start_times[row[0]] = row[1]
         except Exception as e:
             logger.debug(f"Game start time lookup failed (non-fatal): {e}")
         return start_times
+
+    def _get_game_start_time(self, ticker: str, start_times: dict[str, datetime | None]) -> datetime | None:
+        """Get game start time for a ticker, with ticker-parsing fallback."""
+        db_time = start_times.get(ticker)
+        if db_time is not None:
+            return db_time
+        # Fallback: parse from ticker (e.g. KXMLBHIT-26APR251415SEASTL-...)
+        parsed = _parse_game_time_from_ticker(ticker)
+        if parsed is not None:
+            logger.debug(f"Parsed game_start_time from ticker {ticker}: {parsed}")
+        return parsed
 
     # ------------------------------------------------------------------
     # Trade execution
@@ -698,6 +832,29 @@ class KalshiLiveTrader:
 
         results: list[dict[str, Any]] = []
 
+        # --- Daily exposure cap (mirrors select_trades) ---
+        daily_exposure_pct = _env_float("KALSHI_DAILY_EXPOSURE_PCT", 0.60)
+        min_exposure = _env_float("KALSHI_MIN_DAILY_EXPOSURE", 80.0)
+        max_exposure = _env_float("KALSHI_MAX_DAILY_EXPOSURE", 500.0)
+        balance_data_for_cap = self.client.get_balance()
+        bankroll_for_cap = (balance_data_for_cap.get("balance", 0) / 100.0) if balance_data_for_cap else 0
+        dynamic_cap = bankroll_for_cap * daily_exposure_pct
+        effective_cap = max(min_exposure, min(dynamic_cap, max_exposure))
+
+        # Today's already-committed exposure
+        target_date = trades[0]["game_date"] if trades else date.today()
+        with self.engine.connect() as conn:
+            existing_exposure = conn.execute(text("""
+                SELECT COALESCE(SUM(total_cost), 0)
+                FROM kalshi_live_orders
+                WHERE game_date = :d AND status != 'cancelled'
+            """), {"d": target_date}).scalar()
+        running_exposure = float(existing_exposure or 0)
+        logger.info(
+            f"Execute exposure cap: ${effective_cap:.2f} | already committed: ${running_exposure:.2f} | "
+            f"headroom: ${effective_cap - running_exposure:.2f}"
+        )
+
         for trade in trades:
             # Fresh balance check before each order
             balance_data = self.client.get_balance()
@@ -712,6 +869,124 @@ class KalshiLiveTrader:
                     f"(cost: ${trade['expected_cost']:.2f}) — skipping"
                 )
                 continue
+
+            # Exposure cap check (non-swept path)
+            cap_remaining = effective_cap - running_exposure
+            if trade["expected_cost"] > cap_remaining:
+                if cap_remaining <= 0:
+                    logger.warning(
+                        f"Daily cap exhausted (${running_exposure:.2f}/${effective_cap:.2f}) "
+                        f"— skipping {trade['ticker']} and remaining trades"
+                    )
+                    break
+                # Reduce contracts to fit remaining cap
+                cost_per = trade["expected_cost"] / trade["contracts"]
+                new_contracts = int(math.floor(cap_remaining / cost_per))
+                if new_contracts <= 0:
+                    logger.warning(f"Cannot fit {trade['ticker']} in remaining cap — skipping")
+                    continue
+                trade = {**trade, "contracts": new_contracts, "expected_cost": round(new_contracts * cost_per, 2)}
+                logger.info(
+                    f"CAP CLAMP [{trade['ticker']}]: reduced to {new_contracts} contracts "
+                    f"(remaining cap: ${cap_remaining:.2f})"
+                )
+
+            # --- Orderbook sweep check ---
+            snapshot_price = trade["yes_price"]
+            actual_price = self._get_best_available_price(trade["ticker"], trade["side"], snapshot_price)
+            swept_from: int | None = None
+            swept_to: int | None = None
+            recalc_edge_val: float | None = None
+
+            if actual_price is not None and actual_price != snapshot_price:
+                price_delta = abs(actual_price - snapshot_price)
+
+                if price_delta > KALSHI_SWEEP_MAX_CENTS:
+                    logger.warning(
+                        f"SWEEP REJECTED [{trade['ticker']}]: price moved {price_delta}c "
+                        f"({snapshot_price}c -> {actual_price}c) exceeds max {KALSHI_SWEEP_MAX_CENTS}c — skipping"
+                    )
+                    continue
+
+                recalc_edge_val = fee_adjusted_edge(
+                    trade["model_prob"], actual_price,
+                    is_yes=(trade["side"] == "yes"), is_maker=False,
+                )
+                original_edge = trade["fee_adjusted_edge"]
+                edge_floor = original_edge * KALSHI_SWEEP_EDGE_RETENTION
+
+                if recalc_edge_val < edge_floor:
+                    logger.warning(
+                        f"SWEEP REJECTED [{trade['ticker']}]: edge at {actual_price}c = "
+                        f"{recalc_edge_val:.1%} below {KALSHI_SWEEP_EDGE_RETENTION:.0%} retention "
+                        f"floor {edge_floor:.1%} (original: {original_edge:.1%}) — skipping"
+                    )
+                    continue
+
+                logger.info(
+                    f"SWEEP ACCEPTED [{trade['ticker']}]: {snapshot_price}c -> {actual_price}c, "
+                    f"recalc edge {recalc_edge_val:.1%} (was {original_edge:.1%})"
+                )
+                swept_from = snapshot_price
+                swept_to = actual_price
+                new_contracts = self._kelly_contracts(
+                    trade["model_prob"], actual_price, trade["side"], balance
+                )
+                price_per = actual_price / 100.0 if trade["side"] == "yes" else (100 - actual_price) / 100.0
+                new_expected_cost = new_contracts * price_per
+                new_expected_fee = kalshi_taker_fee(
+                    actual_price if trade["side"] == "yes" else 100 - actual_price
+                ) * new_contracts
+
+                if new_expected_cost > balance:
+                    new_contracts = max(0, int(balance / price_per))
+                    new_expected_cost = new_contracts * price_per
+                    new_expected_fee = kalshi_taker_fee(
+                        actual_price if trade["side"] == "yes" else 100 - actual_price
+                    ) * new_contracts
+
+                # Clamp to daily exposure cap
+                cap_remaining = effective_cap - running_exposure
+                if new_expected_cost > cap_remaining:
+                    if cap_remaining <= price_per:
+                        logger.warning(
+                            f"SWEEP RESIZE: daily cap exhausted (${running_exposure:.2f}/${effective_cap:.2f}) "
+                            f"for {trade['ticker']} — skipping"
+                        )
+                        continue
+                    new_contracts = int(math.floor(cap_remaining / price_per))
+                    new_expected_cost = new_contracts * price_per
+                    new_expected_fee = kalshi_taker_fee(
+                        actual_price if trade["side"] == "yes" else 100 - actual_price
+                    ) * new_contracts
+                    logger.info(
+                        f"SWEEP CAP CLAMP [{trade['ticker']}]: capped to {new_contracts} contracts "
+                        f"(remaining cap: ${cap_remaining:.2f})"
+                    )
+
+                if new_contracts == 0:
+                    logger.warning(
+                        f"SWEEP RESIZE: 0 contracts after resize for {trade['ticker']} — skipping"
+                    )
+                    continue
+
+                old_contracts = trade["contracts"]
+                logger.info(
+                    f"SWEEP RESIZE [{trade['ticker']}]: {old_contracts} -> {new_contracts} contracts "
+                    f"(price: {snapshot_price}c -> {actual_price}c, edge: {recalc_edge_val:.1%})"
+                )
+                trade = {
+                    **trade,
+                    "yes_price": actual_price,
+                    "fee_adjusted_edge": recalc_edge_val,
+                    "contracts": new_contracts,
+                    "expected_cost": new_expected_cost,
+                    "expected_fee": new_expected_fee,
+                }
+
+            elif actual_price is None:
+                logger.warning(f"Orderbook unavailable for {trade['ticker']} — using snapshot+buffer fallback")
+            # --- End sweep check ---
 
             # Place market order with a 3-cent sweep buffer so the taker order
             # fills immediately (Kalshi "market" orders require a price field).
@@ -753,6 +1028,9 @@ class KalshiLiveTrader:
             if status in ("executed", "filled"):
                 # Order fully filled
                 fill_price = order.get("yes_price") or order.get("avg_price")
+                if not fill_price:
+                    # API didn't return fill price — fall back to snapshot price
+                    fill_price = trade["yes_price"]
                 fill_count = order.get("count", trade["contracts"])
                 # Calculate actual cost from fill
                 if fill_price:
@@ -775,12 +1053,18 @@ class KalshiLiveTrader:
             db_status = "filled" if status in ("executed", "filled") else "pending"
             self._record_order(trade, order_id, db_status, fill_price, fill_count, total_cost, fee_paid)
 
+            # Track running exposure for cap enforcement
+            running_exposure += total_cost
+
             # Get updated balance for alert
             new_balance_data = self.client.get_balance()
             new_balance = (new_balance_data.get("balance", 0) / 100.0) if new_balance_data else balance - total_cost
 
             # Discord alert
-            self._send_trade_placed_alert(trade, fill_price, fill_count, total_cost, new_balance)
+            self._send_trade_placed_alert(
+                trade, fill_price, fill_count, total_cost, new_balance,
+                swept_from=swept_from, swept_to=swept_to, recalc_edge=recalc_edge_val,
+            )
 
             results.append({
                 "ticker": trade["ticker"],
@@ -821,12 +1105,14 @@ class KalshiLiveTrader:
                         game_date, ticker, sport, player_id, player_name,
                         stat_type, line, side, yes_price, contracts,
                         expected_cost, expected_fee, model_prob, kalshi_implied,
-                        edge, fee_adjusted_edge, status, expires_at
+                        edge, fee_adjusted_edge, sportsbook_consensus_line,
+                        status, expires_at
                     ) VALUES (
                         :game_date, :ticker, :sport, :player_id, :player_name,
                         :stat_type, :line, :side, :yes_price, :contracts,
                         :expected_cost, :expected_fee, :model_prob, :kalshi_implied,
-                        :edge, :fee_adjusted_edge, 'pending_approval',
+                        :edge, :fee_adjusted_edge, :sportsbook_consensus_line,
+                        'pending_approval',
                         now() + interval '30 minutes'
                     )
                 """), {
@@ -846,6 +1132,7 @@ class KalshiLiveTrader:
                     "kalshi_implied": trade["kalshi_implied"],
                     "edge": trade["edge"],
                     "fee_adjusted_edge": trade["fee_adjusted_edge"],
+                    "sportsbook_consensus_line": trade.get("sportsbook_consensus_line"),
                 })
 
         logger.info(f"Proposed {len(trades)} trades to approval queue")
@@ -971,6 +1258,205 @@ class KalshiLiveTrader:
 
         return results
 
+    def reprice_stale_orders(self) -> int:
+        """Detect and reprice resting Kalshi orders whose market price has moved.
+
+        Queries Kalshi API for resting orders, cross-references with
+        kalshi_live_orders for trade metadata, checks if the live orderbook
+        price has moved, and cancels+replaces if the edge is still retained.
+
+        Returns:
+            Number of orders successfully repriced.
+        """
+        resting = self.client.list_orders(status="resting")
+        if not resting:
+            logger.info("REPRICE: No resting orders found")
+            return 0
+
+        logger.info(f"REPRICE: Found {len(resting)} resting orders to evaluate")
+
+        order_ids = [o.get("order_id", o.get("id", "")) for o in resting]
+        if not order_ids:
+            return 0
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT kalshi_order_id, ticker, side, model_prob, fee_adjusted_edge,
+                       yes_price, game_date, sport, player_id, player_name,
+                       stat_type, line, edge, kalshi_implied, contracts,
+                       game_start_time
+                FROM kalshi_live_orders
+                WHERE kalshi_order_id = ANY(:ids)
+                  AND status = 'pending'
+            """), {"ids": order_ids}).fetchall()
+
+        db_orders = {}
+        for row in rows:
+            row_dict = dict(row._mapping)
+            db_orders[row_dict["kalshi_order_id"]] = row_dict
+
+        if not db_orders:
+            logger.info("REPRICE: No resting orders matched pending DB records")
+            return 0
+
+        repriced = 0
+        sweep_buffer = 3
+
+        for api_order in resting:
+            api_order_id = api_order.get("order_id", api_order.get("id", ""))
+            db_row = db_orders.get(api_order_id)
+            if db_row is None:
+                continue
+
+            ticker = db_row["ticker"]
+            side = db_row["side"]
+            resting_price = db_row["yes_price"]
+            model_prob = float(db_row["model_prob"])
+            original_edge = float(db_row["fee_adjusted_edge"])
+
+            actual_price = self._get_best_available_price(ticker, side, resting_price)
+            if actual_price is None:
+                logger.debug(f"REPRICE: Orderbook unavailable for {ticker} — skipping")
+                continue
+
+            delta = abs(actual_price - resting_price)
+            if delta == 0:
+                continue
+
+            if delta > KALSHI_SWEEP_MAX_CENTS:
+                logger.info(
+                    f"REPRICE SKIP [{ticker}]: price moved {delta}c "
+                    f"({resting_price}c -> {actual_price}c) exceeds max {KALSHI_SWEEP_MAX_CENTS}c"
+                )
+                continue
+
+            recalc_edge = fee_adjusted_edge(
+                model_prob, actual_price,
+                is_yes=(side == "yes"), is_maker=False,
+            )
+            edge_floor = original_edge * KALSHI_SWEEP_EDGE_RETENTION
+
+            if recalc_edge < edge_floor:
+                logger.info(
+                    f"REPRICE SKIP [{ticker}]: edge at {actual_price}c = {recalc_edge:.1%} "
+                    f"below {KALSHI_SWEEP_EDGE_RETENTION:.0%} floor {edge_floor:.1%}"
+                )
+                continue
+
+            cancel_result = self.client.cancel_order(api_order_id)
+            if cancel_result is None:
+                logger.warning(f"REPRICE: Failed to cancel {api_order_id} for {ticker}")
+                continue
+
+            if side == "yes":
+                new_order = self.client.create_order(
+                    ticker=ticker,
+                    action="buy",
+                    side="yes",
+                    order_type="market",
+                    count=int(db_row["contracts"]),
+                    yes_price=min(actual_price + sweep_buffer, 99),
+                )
+            else:
+                new_order = self.client.create_order(
+                    ticker=ticker,
+                    action="buy",
+                    side="no",
+                    order_type="market",
+                    count=int(db_row["contracts"]),
+                    no_price=min(100 - actual_price + sweep_buffer, 99),
+                )
+
+            if new_order is None:
+                logger.error(
+                    f"REPRICE FAILED [{ticker}]: cancelled {api_order_id} but replacement failed!"
+                )
+                with self.engine.begin() as conn:
+                    conn.execute(text("""
+                        UPDATE kalshi_live_orders
+                        SET status = 'cancelled'
+                        WHERE kalshi_order_id = :oid
+                    """), {"oid": api_order_id})
+                continue
+
+            new_order_data = new_order.get("order", new_order)
+            new_order_id = new_order_data.get("order_id", new_order_data.get("id", ""))
+            new_status = new_order_data.get("status", "unknown")
+
+            new_fill_price = None
+            new_fill_count = 0
+            new_total_cost = 0.0
+            new_fee_paid = 0.0
+
+            if new_status in ("executed", "filled"):
+                new_fill_price = new_order_data.get("yes_price") or new_order_data.get("avg_price") or actual_price
+                new_fill_count = new_order_data.get("count", int(db_row["contracts"]))
+                price_per = actual_price / 100.0 if side == "yes" else (100 - actual_price) / 100.0
+                new_total_cost = new_fill_count * price_per
+                new_fee_paid = kalshi_taker_fee(
+                    actual_price if side == "yes" else 100 - actual_price
+                ) * new_fill_count
+                record_status = "filled"
+            elif new_status == "resting":
+                record_status = "pending"
+            else:
+                record_status = "pending"
+
+            with self.engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE kalshi_live_orders
+                    SET status = 'cancelled'
+                    WHERE kalshi_order_id = :oid
+                """), {"oid": api_order_id})
+
+                conn.execute(text("""
+                    INSERT INTO kalshi_live_orders (
+                        game_date, ticker, sport, player_id, player_name,
+                        stat_type, line, side, order_type, contracts,
+                        kalshi_order_id, fill_price, fill_count, total_cost, fee_paid,
+                        model_prob, kalshi_implied, edge, fee_adjusted_edge,
+                        status, filled_at, game_start_time
+                    ) VALUES (
+                        :game_date, :ticker, :sport, :player_id, :player_name,
+                        :stat_type, :line, :side, 'market', :contracts,
+                        :order_id, :fill_price, :fill_count, :total_cost, :fee_paid,
+                        :model_prob, :kalshi_implied, :edge, :fee_adjusted_edge,
+                        :status, :filled_at, :game_start_time
+                    )
+                """), {
+                    "game_date": db_row["game_date"],
+                    "ticker": ticker,
+                    "sport": db_row["sport"],
+                    "player_id": db_row.get("player_id"),
+                    "player_name": db_row.get("player_name"),
+                    "stat_type": db_row["stat_type"],
+                    "line": db_row["line"],
+                    "side": side,
+                    "contracts": int(db_row["contracts"]),
+                    "order_id": new_order_id,
+                    "fill_price": new_fill_price,
+                    "fill_count": new_fill_count,
+                    "total_cost": round(new_total_cost, 2),
+                    "fee_paid": round(new_fee_paid, 4),
+                    "model_prob": model_prob,
+                    "kalshi_implied": db_row["kalshi_implied"],
+                    "edge": db_row["edge"],
+                    "fee_adjusted_edge": recalc_edge,
+                    "status": record_status,
+                    "filled_at": datetime.utcnow() if record_status == "filled" else None,
+                    "game_start_time": db_row.get("game_start_time"),
+                })
+
+            logger.info(
+                f"REPRICE OK [{ticker}]: {resting_price}c -> {actual_price}c, "
+                f"edge {original_edge:.1%} -> {recalc_edge:.1%}, "
+                f"old={api_order_id} new={new_order_id} status={record_status}"
+            )
+            repriced += 1
+
+        logger.info(f"REPRICE: Done — {repriced}/{len(resting)} orders repriced")
+        return repriced
+
     def _record_order(
         self,
         trade: dict,
@@ -1023,12 +1509,15 @@ class KalshiLiveTrader:
             conn.commit()
 
     def _send_trade_placed_alert(
-        self, trade: dict, fill_price: int | None, contracts: int, total_cost: float, balance: float,
+        self, trade: dict, fill_price: int | None, contracts: int,
+        total_cost: float, balance: float,
+        swept_from: int | None = None, swept_to: int | None = None,
+        recalc_edge: float | None = None,
     ) -> None:
         """Send Discord alert for a placed trade."""
         try:
             from src.discord_bot.alerts import send_kalshi_trade_alert_sync
-            send_kalshi_trade_alert_sync("placed", {
+            payload = {
                 "player_name": trade.get("player_name", "Unknown"),
                 "stat_type": trade["stat_type"],
                 "line": trade["line"],
@@ -1038,7 +1527,10 @@ class KalshiLiveTrader:
                 "total_cost": total_cost,
                 "fee_adjusted_edge": trade["fee_adjusted_edge"],
                 "balance_after": balance,
-            })
+            }
+            if swept_from is not None and swept_to is not None and swept_from != swept_to:
+                payload["swept"] = f"{swept_from}c -> {swept_to}c (edge: {recalc_edge:.1%})"
+            send_kalshi_trade_alert_sync("placed", payload)
         except Exception as e:
             logger.warning(f"Failed to send trade placed alert: {e}")
 
@@ -1046,26 +1538,118 @@ class KalshiLiveTrader:
     # Fill reconciliation
     # ------------------------------------------------------------------
 
-    def reconcile_fills(self, target_date: date) -> dict[str, Any]:
-        """Fetch fills from API and reconcile with our order records."""
+    def reconcile_fills(self, target_date: date | None = None) -> dict[str, Any]:
+        """Fetch fills from API and reconcile with our order records.
+
+        Also picks up filled orders with missing fill_price (stuck orders
+        where the API didn't return fill data at placement time).
+
+        Args:
+            target_date: If provided, only reconcile orders for that date.
+                         If None, reconcile ALL eligible orders regardless of game_date.
+        """
+        if target_date is not None:
+            where_clause = ("WHERE game_date = :d AND "
+                            "(status = 'pending' OR (status = 'filled' AND fill_price IS NULL))")
+            params: dict = {"d": target_date}
+        else:
+            where_clause = "WHERE status = 'pending' OR (status = 'filled' AND fill_price IS NULL)"
+            params = {}
+
         with self.engine.connect() as conn:
-            pending = conn.execute(text("""
-                SELECT id, kalshi_order_id, ticker, side, contracts
+            pending = conn.execute(text(f"""
+                SELECT id, kalshi_order_id, ticker, side, contracts,
+                       total_cost, fill_count, status, fill_price
                 FROM kalshi_live_orders
-                WHERE game_date = :d AND status = 'pending'
-            """), {"d": target_date}).fetchall()
+                {where_clause}
+            """), params).fetchall()
 
         if not pending:
             return {"reconciled": 0}
 
+        resting_orders = self.client.list_orders(status='resting', limit=200)
+        resting_ids = {o['order_id'] for o in resting_orders}
+        logger.info(f"reconcile_fills: {len(resting_ids)} orders currently resting on Kalshi")
+
         reconciled = 0
+        cancelled = 0
+        derived = 0
+        promoted = 0
         for row in pending:
-            order_id = row[1]
-            if not order_id:
+            db_id = row[0]
+            kalshi_order_id = row[1]
+            row_side = row[3]
+            row_total_cost = row[5]
+            row_fill_count = row[6]
+            row_status = row[7]
+            row_fill_price = row[8]
+
+            if not kalshi_order_id:
                 continue
 
-            fills = self.client.get_fills(order_id=order_id)
+            # Fast path: pending order already has fill data in DB (recorded at
+            # placement from expected values) and is no longer resting on Kalshi.
+            # Promote to 'filled' without an API call — resolve_settled will
+            # handle PnL calculation.
+            if (row_status == 'pending' and row_fill_price is not None
+                    and row_fill_count and row_fill_count > 0
+                    and kalshi_order_id not in resting_ids):
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        UPDATE kalshi_live_orders
+                        SET status = 'filled', filled_at = COALESCE(filled_at, now())
+                        WHERE id = :id
+                    """), {"id": db_id})
+                    conn.commit()
+                promoted += 1
+                logger.info(f"Promoted pending order {db_id} ({row[2]}) to filled "
+                            f"(fill_price={row_fill_price}, count={row_fill_count})")
+                continue
+
+            fills = self.client.get_fills(order_id=kalshi_order_id)
             if not fills:
+                # Fallback: if order is already filled with cost/count data but
+                # the API no longer returns fill history (settled markets), derive
+                # fill_price from total_cost and fill_count.
+                if (row_status == 'filled' and row_fill_count and row_fill_count > 0
+                        and row_total_cost is not None and float(row_total_cost) > 0):
+                    no_price_cents = round(float(row_total_cost) / row_fill_count * 100)
+                    derived_fill_price = 100 - no_price_cents if row_side == "no" else no_price_cents
+                    with self.engine.connect() as conn:
+                        conn.execute(text("""
+                            UPDATE kalshi_live_orders
+                            SET fill_price = :price
+                            WHERE id = :id
+                        """), {"price": derived_fill_price, "id": db_id})
+                        conn.commit()
+                    derived += 1
+                    logger.info(f"Derived fill_price={derived_fill_price} for order {db_id} "
+                                f"from total_cost={row_total_cost}/fill_count={row_fill_count}")
+                    continue
+
+                # Safety: NEVER cancel an order that has fill data — it was a real
+                # trade even if the API no longer returns fill history.
+                if row_fill_price is not None and row_fill_count and row_fill_count > 0:
+                    with self.engine.connect() as conn:
+                        conn.execute(text("""
+                            UPDATE kalshi_live_orders
+                            SET status = 'filled', filled_at = COALESCE(filled_at, now())
+                            WHERE id = :id
+                        """), {"id": db_id})
+                        conn.commit()
+                    promoted += 1
+                    logger.info(f"Promoted order {db_id} ({row[2]}) to filled — has fill data "
+                                f"(price={row_fill_price}, count={row_fill_count}) but API returned no fills")
+                elif kalshi_order_id not in resting_ids:
+                    with self.engine.connect() as conn:
+                        conn.execute(text("""
+                            UPDATE kalshi_live_orders
+                            SET status = 'cancelled', pnl = 0.0, resolved_at = now()
+                            WHERE id = :id
+                        """), {"id": db_id})
+                        conn.commit()
+                    cancelled += 1
+                    logger.info(f"Marked order {kalshi_order_id} as cancelled (not resting, no fills, no fill data)")
                 continue
 
             total_filled = sum(f.get("count", 0) for f in fills)
@@ -1102,8 +1686,8 @@ class KalshiLiveTrader:
                     conn.commit()
                 reconciled += 1
 
-        logger.info(f"Reconciled {reconciled} fills for {target_date}")
-        return {"reconciled": reconciled}
+        logger.info(f"Reconciled {reconciled} fills, {promoted} promoted, {derived} derived, {cancelled} cancelled" + (f" for {target_date}" if target_date else ""))
+        return {"reconciled": reconciled, "promoted": promoted, "derived": derived, "cancelled": cancelled}
 
     # ------------------------------------------------------------------
     # Resolution

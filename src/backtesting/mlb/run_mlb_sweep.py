@@ -1206,8 +1206,10 @@ def find_latest_model_dir(base_dir: str) -> Path:
     if prod.exists() and prod.is_dir():
         return prod
 
-    # 2. Legacy: model files directly in base_dir
+    # 2. Model files directly in base_dir (run dir passed directly, or legacy layout)
     if (base / "pitcher_k_model.joblib").exists():
+        return base
+    if any(base.glob("*_binomial_booster.json")):
         return base
 
     # 3. Scan mlb_run_* directories, pick latest

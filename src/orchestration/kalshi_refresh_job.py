@@ -71,7 +71,7 @@ def run(
             from src.paper_trading.kalshi_live_trader import KalshiLiveTrader
 
             resolver = KalshiLiveTrader(resolve_only=True)
-            resolver.reconcile_fills(target_date)
+            resolver.reconcile_fills()
             resolve_result = resolver.resolve_settled()
             summary["live_resolution"] = resolve_result
             logger.info(f"Resolve-only result: {resolve_result}")
@@ -177,22 +177,34 @@ def run(
                     logger.warning(f"Live trading halted: {reason}")
                     summary["live_trading"] = {"halted": True, "reason": reason}
                 else:
-                    # Carry forward any trades that expired without action
-                    # (silently extends their timer if markets are still open)
-                    renewed = trader.renew_expired_queue_trades(target_date, sport=sport)
+                    # Per-sport gate: skip all queue operations if sport is disabled.
+                    # Also controls renew — otherwise disabled-sport trades renew forever.
+                    sport_gate_var = f"{sport.upper()}_TRADING_ENABLED"
+                    sport_enabled = os.getenv(sport_gate_var, "false").lower() == "true"
 
-                    # Select NEW trades (skips player+stat combos already pending)
-                    trades = trader.select_trades(target_date, sport=sport)
-                    if trades:
-                        proposed = trader.propose_trades(trades)
-                        _send_trade_approval_alert(trades, sport)
-                        summary["live_trading"] = {
-                            "selected": len(trades),
-                            "proposed": proposed,
-                            "renewed": renewed,
-                        }
+                    if not sport_enabled:
+                        logger.info(f"Step 4.5b: Live trading disabled for {sport} ({sport_gate_var}!=true) — skipping")
+                        summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": 0}
                     else:
-                        summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": renewed}
+                        # Carry forward any trades that expired without action
+                        # (silently extends their timer if markets are still open)
+                        renewed = trader.renew_expired_queue_trades(target_date, sport=sport)
+
+                        already_pending = _get_pending_queue_trades(trader.engine, target_date, sport)
+
+                        trades = trader.select_trades(target_date, sport=sport)
+                        if trades:
+                            proposed = trader.propose_trades(trades)
+                            _send_trade_approval_alert(trades, sport, already_pending=len(already_pending))
+                            summary["live_trading"] = {
+                                "selected": len(trades),
+                                "proposed": proposed,
+                                "renewed": renewed,
+                            }
+                        else:
+                            if already_pending:
+                                _send_reminder_alert(already_pending, sport)
+                            summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": renewed}
             except RuntimeError as e:
                 logger.warning(f"Live trading not available: {e}")
                 summary["live_trading"] = {"error": str(e)}
@@ -218,7 +230,27 @@ def run(
     return summary
 
 
-def _send_trade_approval_alert(trades: list, sport: str) -> None:
+def _get_pending_queue_trades(engine, target_date, sport: str) -> list[dict]:
+    from sqlalchemy import text as sa_text
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT player_name, stat_type, side, contracts,
+                       expected_cost, fee_adjusted_edge
+                FROM kalshi_trade_queue
+                WHERE sport = :sport
+                  AND game_date = :d
+                  AND status = 'pending_approval'
+                  AND expires_at > now()
+                ORDER BY proposed_at ASC
+            """), {"sport": sport, "d": target_date}).fetchall()
+        return [dict(r._mapping) for r in rows]
+    except Exception as e:
+        logger.warning(f"Failed to query pending queue trades: {e}")
+        return []
+
+
+def _send_trade_approval_alert(trades: list, sport: str, already_pending: int = 0) -> None:
     """Send Discord notification that trades are pending approval."""
     try:
         from src.discord_bot.alerts import send_kalshi_trade_alert_sync
@@ -232,6 +264,7 @@ def _send_trade_approval_alert(trades: list, sport: str) -> None:
             "count": len(trades),
             "total_exposure": total_exposure,
             "edge_range": edge_range,
+            "already_pending": already_pending,
             "trades": [
                 {
                     "player_name": t.get("player_name", "Unknown"),
@@ -241,11 +274,38 @@ def _send_trade_approval_alert(trades: list, sport: str) -> None:
                     "expected_cost": t["expected_cost"],
                     "fee_adjusted_edge": t.get("fee_adjusted_edge", 0),
                 }
-                for t in trades[:10]  # Cap at 10 for Discord embed limits
+                for t in trades[:10]
             ],
         })
     except Exception as e:
         logger.warning(f"Failed to send trade approval alert: {e}")
+
+
+def _send_reminder_alert(pending_trades: list, sport: str) -> None:
+    try:
+        from src.discord_bot.alerts import send_kalshi_trade_alert_sync
+        total_exposure = sum(t.get("expected_cost", 0) for t in pending_trades)
+        edges = [t.get("fee_adjusted_edge", 0) for t in pending_trades if t.get("fee_adjusted_edge")]
+        edge_range = f"{min(edges):.0%}-{max(edges):.0%}" if edges else "N/A"
+        send_kalshi_trade_alert_sync("approval_reminder", {
+            "sport": sport.upper(),
+            "count": len(pending_trades),
+            "total_exposure": total_exposure,
+            "edge_range": edge_range,
+            "trades": [
+                {
+                    "player_name": t.get("player_name", "Unknown"),
+                    "stat_type": t.get("stat_type", ""),
+                    "side": t.get("side", "yes"),
+                    "contracts": t.get("contracts", 0),
+                    "expected_cost": t.get("expected_cost", 0),
+                    "fee_adjusted_edge": t.get("fee_adjusted_edge", 0),
+                }
+                for t in pending_trades[:10]
+            ],
+        })
+    except Exception as e:
+        logger.warning(f"Failed to send reminder alert: {e}")
 
 
 def _fetch_orderbooks(target_date: date, sport: str) -> int:
@@ -272,7 +332,7 @@ def _fetch_orderbooks(target_date: date, sport: str) -> int:
     query = text("""
         SELECT DISTINCT ticker FROM kalshi_markets
         WHERE sport = :sport
-          AND snapshot_time::date = :target_date
+          AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
           AND market_status = 'open'
     """)
     with engine.connect() as conn:
@@ -293,13 +353,28 @@ def _fetch_orderbooks(target_date: date, sport: str) -> int:
         )
     """)
 
+    import json
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _fetch_orderbook(ticker):
+        try:
+            return ticker, client.get_orderbook(ticker)
+        except Exception as e:
+            logger.warning(f"Orderbook fetch failed for {ticker}: {e}")
+            return ticker, None
+
+    orderbook_results = {}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(_fetch_orderbook, t): t for t in tickers}
+        for future in as_completed(futures):
+            ticker, result = future.result()
+            if result is None:
+                continue
+            orderbook_results[ticker] = result
+
     count = 0
     with engine.begin() as conn:
-        for ticker in tickers:
-            result = client.get_orderbook(ticker)
-            if not result:
-                continue
-
+        for ticker, result in orderbook_results.items():
             ob = result.get("orderbook", {})
             yes_bids = ob.get("yes", [])
             no_bids = ob.get("no", [])
@@ -314,7 +389,6 @@ def _fetch_orderbooks(target_date: date, sport: str) -> int:
             total_bid_depth = sum(level[1] for level in yes_bids) if yes_bids else 0
             total_ask_depth = sum(level[1] for level in no_bids) if no_bids else 0
 
-            import json
             conn.execute(insert_stmt, {
                 "ticker": ticker,
                 "snapshot_time": snapshot_time,
@@ -353,7 +427,7 @@ def _send_high_edge_alerts(target_date: date, sport: str, min_edge: float = 0.05
             maker_fee_adjusted_edge, close_time, model_prob, kalshi_implied
         FROM kalshi_markets
         WHERE sport = :sport
-          AND snapshot_time::date = :target_date
+          AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
           AND market_status = 'open'
           AND maker_fee_adjusted_edge IS NOT NULL
           AND maker_fee_adjusted_edge >= :min_edge

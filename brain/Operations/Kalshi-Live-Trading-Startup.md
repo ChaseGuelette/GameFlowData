@@ -1,10 +1,11 @@
 # Kalshi Live Trading — Startup Playbook
 
-> **Status:** POST-INCIDENT — Trade approval flow required. NBA trading disabled.
-> **Decision date:** Apr 10, 2026 (go-live), Apr 20, 2026 (post-mortem overhaul)
+> **Status:** LIVE — Trade approval flow required. NBA trading re-enabled Apr 24 2026.
+> **Decision date:** Apr 10, 2026 (go-live), Apr 20, 2026 (post-mortem overhaul), Apr 24, 2026 (NBA re-enabled, orderbook sweep + queue notifications)
 > **Analysis script:** `python scripts/analyze_kalshi_paper_bets.py`
 >
 > **Apr 19 Incident**: First live day placed 21 NBA bets ($233) in 16 seconds using a broken model (17-46% edges). 8-fix overhaul deployed Apr 20. See [[handoff-016]].
+> **Apr 24 Update**: NBA trading re-enabled (`NBA_TRADING_ENABLED=true`). Orderbook price sweep system added. Discord queue notification system overhauled (10-min reminder pings).
 
 ---
 
@@ -67,8 +68,8 @@ Complete in order before enabling `KALSHI_LIVE_TRADING_ENABLED=true`:
 # Gate
 KALSHI_LIVE_TRADING_ENABLED=true
 
-# Per-sport gates (added post-incident Apr 20)
-NBA_TRADING_ENABLED=false                 # Disabled until NBA model validated
+# Per-sport gates (added post-incident Apr 20; NBA re-enabled Apr 24)
+NBA_TRADING_ENABLED=true                  # Re-enabled Apr 24 — approval queue is the safety guard
 MLB_TRADING_ENABLED=true
 
 # Sizing
@@ -84,6 +85,10 @@ KALSHI_MAX_DAILY_EXPOSURE=1000            # safety ceiling
 
 # Edge sanity (added post-incident Apr 20)
 KALSHI_LIVE_MAX_EDGE=0.40                 # Reject edges > 40% as model garbage
+
+# Orderbook sweep (added Apr 24)
+KALSHI_SWEEP_MAX_CENTS=10                 # Skip trade if market price moved >10c from quoted
+KALSHI_SWEEP_EDGE_RETENTION=0.50          # Skip trade if recalculated edge < 50% of original edge
 
 # Circuit breakers
 KALSHI_LIVE_DRAWDOWN_LIMIT=0.30           # halt at $210 balance
@@ -154,6 +159,27 @@ These are from MEMORY.md — do not retrain unless:
 
 ---
 
+## Stale Fill Cancellation Queue (added Apr 25, 2026)
+
+Detects pending `kalshi_live_orders` whose games have already started (unfilled resting orders), queues them for human-approval cancellation, and executes approved cancellations via the Kalshi API.
+
+### How it works
+1. **Detection** (`src/orchestration/kalshi_stale_fills_job.py`) — runs every 5 min, 9AM–11PM ET. Queries pending orders where `game_start_time <= now()`. Inserts new records into `kalshi_cancel_queue` with `status='pending_review'` (deduplicates on `kalshi_order_id`). Fires a `circuit_breaker`-type Discord alert listing the stale tickers.
+2. **Human approval** — `/bot-tracker` dashboard shows a `StaleOrdersPanel` (polls every 30s, hidden when empty). Each row has "Cancel Order" (approve) and "Keep" (reject) buttons. Approve-all is available.
+   - GET `/api/kalshi/cancel-queue` — returns pending_review orders
+   - POST `/api/kalshi/cancel-approve` — accepts `action: 'approve' | 'reject' | 'approve_all'`
+3. **Execution** (`src/orchestration/kalshi_execute_cancellations_job.py`) — runs every 2 min, 9AM–11PM ET. Polls approved records, calls `KalshiClient.cancel_order()`, updates status to `cancelled` (success) or `failed` (error). **NOT gated on `KALSHI_LIVE_TRADING_ENABLED`** — cancellations always run regardless of trading state.
+
+### DB table: `kalshi_cancel_queue`
+Status flow: `pending_review` → `approved` / `rejected` → `cancelled` / `failed`
+
+Key columns: `kalshi_order_id` (UNIQUE), `ticker`, `sport`, `player_name`, `stat_type`, `line`, `side`, `contracts`, `expected_cost` (snapshot of `total_cost` at detection time), `game_start_time`, `detected_at`, `status`, `approved_at`, `executed_at`, `cancel_error`
+
+### Column note
+`kalshi_live_orders` uses `total_cost`, not `expected_cost`. The cancel queue's `expected_cost` column stores a snapshot of that value at detection time — the naming difference is intentional.
+
+---
+
 ## Failure Mode Guide
 
 | Symptom | Likely cause | Check |
@@ -164,6 +190,8 @@ These are from MEMORY.md — do not retrain unless:
 | Exposure always exactly $80 | Bankroll below $133 (floor dominates) | Fund account more or lower `KALSHI_MIN_DAILY_EXPOSURE` |
 | Circuit breaker fires repeatedly | API errors, not actual losses | Check Kalshi API status; inspect `kalshi_live_orders` table |
 | Edge degrades over time | Model drift | Run calibration check; don't retrain unless ROI < 8% |
+| Stale fills not appearing in dashboard | `kalshi_stale_fills_job` not running or game_start_time NULL | Check Railway scheduler logs for `kalshi_stale_fills` job registration; verify `game_start_time` populated on `kalshi_live_orders` rows |
+| Cancel executed but order still open on Kalshi | `cancel_order()` returned success but Kalshi async | Check `kalshi_cancel_queue.cancel_error`; re-approve to retry |
 
 ---
 

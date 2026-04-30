@@ -59,7 +59,7 @@ class KalshiEdgeCalculator:
                 volume, open_interest, close_time, market_status, snapshot_time
             FROM kalshi_markets
             WHERE sport = :sport
-              AND snapshot_time::date = :target_date
+              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
               AND market_status = 'open'
               AND line IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
@@ -237,10 +237,10 @@ class KalshiEdgeCalculator:
             }
             default_blender = BlackLittermanBlender(config=DEFAULT_BL_CONFIG)
         else:
-            # NBA: regular season tau=0.5/z_max=1.0/mw=0.5; playoffs tau=0.9/z_max=0.25/mw=0.8
+            # NBA: regular season tau=0.5/z_max=1.0/mw=0.5; playoffs tau=0.9/z_max=1.0/mw=0.8
             _playoff = os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes")
             if _playoff:
-                _bl_cfg = BLConfig(tau=0.9, z_max=0.25, max_weight=0.8)
+                _bl_cfg = BLConfig(tau=0.9, z_max=1.0, max_weight=0.8)
             else:
                 _bl_cfg = BLConfig(tau=0.5, z_max=1.0, max_weight=0.5)
             stat_blenders = {}

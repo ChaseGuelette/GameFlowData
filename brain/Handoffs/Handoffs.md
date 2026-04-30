@@ -46,4 +46,18 @@ Session continuity notes. Each handoff captures what was done, decisions made, a
 - [[handoff-038]] - MLB feature pipeline fix: feat_* columns now populated (L5 avg, rest days, park factor), MLB_COLD_OVER filter strengthened, per-stat daily bet caps added
 - [[handoff-039]] - Phase 10 Manual Paper Trader shipped: is_paper_trade column, Paper Trade button, Real/Paper toggle, resolver + scheduler wiring, onConflict + isPaperTrade forwarding bug fixes
 - [[handoff-040]] - Calibration Discord alerts: sample-size awareness (LOW_CONFIDENCE_THRESHOLD=75, relaxed thresholds, severity cap, "Early Signal" title)
+- [[handoff-041]] - Kalshi sportsbook line alignment, live trader SQL bug fix, star-hitter filter (yes_price >= 72), approval panel SB line display
+- [[handoff-042]] - Fixed broken Kalshi contract links (series from ticker prefix, all lowercase); added BetAnalysisModal to bot tracker (L5 history + bet metadata for historical bets)
+- [[handoff-043]] - Infrastructure bug-fix: MLB edge refresh CTE fix, Kalshi orderbook parallelization (16 min → 1 min), numpy.int64 psycopg2 adapter, systemic UTC/ET timezone fix (11 callsites across 6 files — root cause of Apr 22 failed trades)
+- [[handoff-044]] - Kalshi fill polling (5-min job), reconcile_fills() date bug fix, Discord alerts for placed/filled/resolved, live trader daily performance summary
+- [[handoff-045]] - Orderbook price sweep, NBA trading re-enabled, Discord queue notifications every 10 min
+- [[handoff-046]] - Kalshi failed trade visibility + retry: Discord failure alert, failed orders section in bot-tracker, one-click Retry button
+- [[handoff-047]] - Kalshi live trader: sweep resize, fill_price/game_start_time fixes, F821 lint fix, cap-aware resizing identified as bug
+- [[handoff-048]] - Stale fill cancellation queue: detection job, human-approval dashboard panel, execution job, cancel API routes; Kalshi Kelly bet sizing analysis
+- [[handoff-049]] - NBA Analysis Modal fixes (headshots, team display, combo stats), TradeApprovalPanel NBA team bug, sport gate safe default + renewal bypass fix
+- [[handoff-050]] - Cap-aware exposure clamp in execute_trades; MLB/NBA early window shifted ~1hr earlier; reprice_stale_orders SQL bug fixed
+- [[handoff-051]] - MLB model drift confirmed (2026 backtest: hits 51.6%/+12% ROI, K 53.6%/+13%); retrain plan ready (2024-2025 train, 2026 cal); --local flag added to pitcher pipeline; excluded bookmaker leak identified
+- [[handoff-052]] - Kalshi resolution pipeline 4-bug fix (reconcile_fills): fill data preserved from cancellation, fill_price derivation fallback, pending-to-filled promotion, WHERE clause expanded. 32 incorrectly cancelled orders restored, 21 resolved. batter_hits kill zone identified (yes_price 65-71), DB P&L approximate (expected vs actual fill prices).
+- [[handoff-053]] - MLB model architecture overhaul: pitcher K → IP + K-rate copula, batter hits → AB NegBin + compound Binomial, 13 new features (inning fatigue + bullpen workload). 7 files, +1,011 lines. Code complete, pending retraining.
+- [[handoff-054]] - Diagnostic session: confirmed copula model not yet trained (April 28 artifacts missing). Bash non-functional. No code changes. Next: create index, sync local DB, retrain copula, run sweep.
 - [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

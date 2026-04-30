@@ -70,7 +70,7 @@ class ArbPaperTrader:
         today = date.today()
         count_q = text("""
             SELECT COUNT(*) FROM arb_paper_bets
-            WHERE placed_at::date = :today AND sport = :sport
+            WHERE (placed_at AT TIME ZONE 'America/New_York')::date = :today AND sport = :sport
         """)
         with self.engine.connect() as conn:
             placed_today = conn.execute(count_q, {"today": today, "sport": sport}).scalar() or 0

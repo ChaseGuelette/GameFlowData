@@ -354,7 +354,7 @@ class MLBDailyPredictionRunner:
 
         game_pks = list({b["game_id"] for b in batters})
         query = text("""
-            SELECT DISTINCT player_id, game_pk
+            SELECT player_id, game_pk, lineup_position
             FROM mlb_game_lineups
             WHERE game_date = :d
               AND game_pk IN :pks
@@ -366,12 +366,16 @@ class MLBDailyPredictionRunner:
 
         if not rows:
             logger.info("No lineup data available yet — using all active batters (fallback)")
+            for b in batters:
+                b["confirmed_lineup_pos"] = None
             return batters
 
-        # Build per-game lineup sets
+        # Build per-game lineup sets and position lookup
         lineup_by_game: dict[int, set[int]] = {}
+        lineup_pos_map: dict[tuple[int, int], int] = {}
         for row in rows:
             lineup_by_game.setdefault(row.game_pk, set()).add(row.player_id)
+            lineup_pos_map[(row.game_pk, row.player_id)] = row.lineup_position
 
         confirmed_games = len(lineup_by_game)
         confirmed_players = sum(len(v) for v in lineup_by_game.values())
@@ -386,9 +390,11 @@ class MLBDailyPredictionRunner:
             if game_pk in lineup_by_game:
                 # Lineup is confirmed for this game — only include lineup players
                 if b["player_id"] in lineup_by_game[game_pk]:
+                    b["confirmed_lineup_pos"] = lineup_pos_map.get((game_pk, b["player_id"]))
                     filtered.append(b)
             else:
                 # Lineup not yet posted for this game — include all active batters
+                b["confirmed_lineup_pos"] = None
                 filtered.append(b)
 
         logger.info(f"Lineup filter: {len(batters)} → {len(filtered)} batters")
@@ -521,6 +527,7 @@ class MLBDailyPredictionRunner:
         # Build features in parallel (one call per batter, covers all stats)
         def fetch_batter_features(batter: dict) -> tuple[dict, dict | None]:
             try:
+                lineup_pos = batter.get("confirmed_lineup_pos")
                 features = self.batter_feature_store.get_player_game_features(
                     player_id=batter["player_id"],
                     game_id=batter["game_id"],
@@ -531,8 +538,8 @@ class MLBDailyPredictionRunner:
                     season=batter.get("season") or target_date.year,
                     is_home=batter["is_home"],
                     opp_pitcher_id=batter.get("opp_pitcher_id"),
-                    lineup_pos=0,  # Lineup data not available pre-game
-                    stat="hits",   # Base features (stat-specific prop line added per-stat)
+                    lineup_pos=lineup_pos,
+                    stat="hits",
                 )
                 return batter, features
             except Exception as e:

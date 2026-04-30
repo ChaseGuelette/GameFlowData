@@ -33,7 +33,13 @@ from src.models.monte_carlo import PropPrediction
 from src.models.negbin_model import NegBinModel
 
 from .mlb_binary_model import MLBBinaryModel
-from .mlb_monte_carlo import MLBBinomialPredictor, MLBMonteCarloPredictor, MLBNegBinPredictor
+from .mlb_monte_carlo import (
+    MLBBinomialPredictor,
+    MLBCompoundBinomialPredictor,
+    MLBMonteCarloPredictor,
+    MLBNegBinPredictor,
+    MLBPitcherKCopulaPredictor,
+)
 from .mlb_quantile_trainer import MLBPitcherKPipeline
 from .mlb_stat_config import MLB_STATS
 
@@ -183,24 +189,68 @@ class MLBModelSuite:
         suite = cls()
         suite._directory = directory
 
-        # 1. Pitcher K (quantile model)
-        pitcher_k_path = directory / "pitcher_k_model.joblib"
-        if pitcher_k_path.exists():
+        # 1a. Pitcher K copula (IP + K-rate decomposition) — preferred if available
+        ip_model_dir = directory / "ip_model"
+        krate_model_dir = directory / "krate_model"
+        copula_params_path = directory / "pitcher_k_copula_params.json"
+
+        if ip_model_dir.exists() and krate_model_dir.exists() and copula_params_path.exists():
             try:
-                pipeline = MLBPitcherKPipeline.load(str(directory))
-                predictor = MLBMonteCarloPredictor(
-                    pipeline, n_samples=n_samples, random_state=random_state,
+                ip_pipeline = MLBPitcherKPipeline.load(str(ip_model_dir))
+                krate_pipeline = MLBPitcherKPipeline.load(str(krate_model_dir))
+
+                with open(copula_params_path) as f:
+                    copula_params = json.load(f)
+                copula_rho = copula_params.get("pitcher_strikeouts", 0.3)
+
+                predictor = MLBPitcherKCopulaPredictor(
+                    ip_pipeline=ip_pipeline,
+                    krate_pipeline=krate_pipeline,
+                    copula_rho=copula_rho,
+                    n_samples=n_samples,
+                    random_state=random_state,
                 )
                 suite.predictors["pitcher_strikeouts"] = predictor
-                logger.info("Loaded pitcher_strikeouts (quantile) model")
+                logger.info("Loaded pitcher_strikeouts (copula: IP × K-rate) model, ρ=%.3f", copula_rho)
             except Exception as e:
-                logger.error("Failed to load pitcher K model: %s", e)
+                logger.error("Failed to load pitcher K copula model: %s", e)
+
+        # 1b. Pitcher K single model (fallback if copula not available)
+        if "pitcher_strikeouts" not in suite.predictors:
+            pitcher_k_path = directory / "pitcher_k_model.joblib"
+            if pitcher_k_path.exists():
+                try:
+                    pipeline = MLBPitcherKPipeline.load(str(directory))
+                    predictor = MLBMonteCarloPredictor(
+                        pipeline, n_samples=n_samples, random_state=random_state,
+                    )
+                    suite.predictors["pitcher_strikeouts"] = predictor
+                    logger.info("Loaded pitcher_strikeouts (single quantile) model")
+                except Exception as e:
+                    logger.error("Failed to load pitcher K model: %s", e)
 
         # 2. Batter count models (binomial for hits, negbin for others)
         for stat_key, model_name in STAT_TO_NEGBIN_MODEL_NAME.items():
             short_stat = STAT_TO_NEGBIN_SHORT[stat_key]
 
-            # Check for binomial model first (hits)
+            # 2a. Compound Binomial (AB NegBin + hit Binomial) — preferred for hits
+            if stat_key == "batter_hits" and NegBinModel.exists(directory, model_name="batter_ab"):
+                if BinomialModel.exists(directory, model_name=model_name):
+                    try:
+                        predictor = MLBCompoundBinomialPredictor.from_directory(
+                            directory,
+                            stat=short_stat,
+                            n_samples=n_samples,
+                            random_state=random_state,
+                        )
+                        predictor.stat = stat_key
+                        suite.predictors[stat_key] = predictor
+                        logger.info("Loaded %s (compound binomial: AB NegBin + hit Binomial)", stat_key)
+                        continue  # Skip to next stat
+                    except Exception as e:
+                        logger.error("Failed to load %s compound model, falling back: %s", stat_key, e)
+
+            # 2b. Check for binomial model first (hits)
             if BinomialModel.exists(directory, model_name=model_name):
                 try:
                     predictor = MLBBinomialPredictor.from_directory(

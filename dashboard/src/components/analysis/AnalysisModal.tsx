@@ -73,6 +73,7 @@ const STAT_TO_MARKET: Record<string, string> = {
   batter_home_runs: 'batter_home_runs',
   batter_rbis: 'batter_rbis',
   batter_runs_scored: 'batter_runs_scored',
+  batter_hrr: 'batter_hits_runs_rbis',
 }
 
 // MLB stat → table + column for game history
@@ -83,6 +84,7 @@ const MLB_STAT_HISTORY: Record<string, { table: string; column: string }> = {
   batter_home_runs: { table: 'mlb_player_game_stats_batting', column: 'hr' },
   batter_rbis: { table: 'mlb_player_game_stats_batting', column: 'rbi' },
   batter_runs_scored: { table: 'mlb_player_game_stats_batting', column: 'r' },
+  batter_hrr: { table: 'mlb_player_game_stats_batting', column: 'h' }, // combo: h+r+rbi computed below
 }
 
 // Format odds for display
@@ -192,7 +194,14 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         if (!error && data) {
           const reversed = [...data].reverse()
           setHistory(reversed.map((row) => ({ game_date: (row as { game_date: string }).game_date } as PlayerGameStats)))
-          setMlbHistoryValues(reversed.map((row) => Number((row as Record<string, unknown>)[col]) || 0))
+          setMlbHistoryValues(reversed.map((row) => {
+            if (prediction.stat === 'batter_hrr') {
+              return (Number((row as Record<string, unknown>)['h']) || 0) +
+                     (Number((row as Record<string, unknown>)['r']) || 0) +
+                     (Number((row as Record<string, unknown>)['rbi']) || 0)
+            }
+            return Number((row as Record<string, unknown>)[col]) || 0
+          }))
           setMlbRawRows(reversed as Record<string, unknown>[])
         }
         setLoading(false)
@@ -324,7 +333,9 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   // Get stat values for chart
   const statColumn = STAT_COLUMN_MAP[prediction.stat] ?? null
   const comboComponents = COMBO_COMPONENTS[prediction.stat]
-  const statLabel = STAT_LABELS[prediction.stat]
+  const isHrrCombo = prediction.stat === 'batter_hrr'
+  // Defensive fallback prevents crash from any unknown stat missing from STAT_LABELS
+  const statLabel = (STAT_LABELS as Record<string, string>)[prediction.stat] ?? prediction.stat
   const isPitcherStat = effectiveSport === 'mlb' && prediction.stat.startsWith('pitcher_')
   const mlbStatCol = MLB_STAT_HISTORY[prediction.stat]?.column
   // Binary model: quantiles are all 0/1 (Bernoulli output), show probability instead of bars
@@ -512,11 +523,12 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                         ) : (
                           <>
                             <th className="text-center py-2 px-1.5 sm:px-2 text-slate-500">AB</th>
-                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'h' ? 'text-slate-200' : ''}`}>H</th>
-                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'tb' ? 'text-slate-200' : ''}`}>TB</th>
-                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'hr' ? 'text-slate-200' : ''}`}>HR</th>
-                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'rbi' ? 'text-slate-200' : ''}`}>RBI</th>
-                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'r' ? 'text-slate-200' : ''}`}>R</th>
+                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'h' || isHrrCombo ? 'text-slate-200' : ''}`}>H</th>
+                            <th className="text-center py-2 px-1.5 sm:px-2 text-slate-500">TB</th>
+                            <th className="text-center py-2 px-1.5 sm:px-2 text-slate-500">HR</th>
+                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'rbi' || isHrrCombo ? 'text-slate-200' : ''}`}>RBI</th>
+                            <th className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'r' || isHrrCombo ? 'text-slate-200' : ''}`}>R</th>
+                            {isHrrCombo && <th className="text-center py-2 px-1.5 sm:px-2 text-amber-400 font-semibold">H+R+RBI</th>}
                           </>
                         )
                       ) : (
@@ -548,21 +560,26 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                                 <td className="text-center py-2 px-1.5 sm:px-2 text-slate-500">
                                   {String(rawRow['ab'] ?? '—')}
                                 </td>
-                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'h' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'h' || isHrrCombo ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
                                   {String(rawRow['h'] ?? '—')}
                                 </td>
-                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'tb' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                <td className="text-center py-2 px-1.5 sm:px-2 text-slate-400">
                                   {String(rawRow['tb'] ?? '—')}
                                 </td>
-                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'hr' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                <td className="text-center py-2 px-1.5 sm:px-2 text-slate-400">
                                   {String(rawRow['hr'] ?? '—')}
                                 </td>
-                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'rbi' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'rbi' || isHrrCombo ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
                                   {String(rawRow['rbi'] ?? '—')}
                                 </td>
-                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'r' ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
+                                <td className={`text-center py-2 px-1.5 sm:px-2 ${mlbStatCol === 'r' || isHrrCombo ? 'text-slate-50 font-semibold' : 'text-slate-400'}`}>
                                   {String(rawRow['r'] ?? '—')}
                                 </td>
+                                {isHrrCombo && (
+                                  <td className="text-center py-2 px-1.5 sm:px-2 text-amber-400 font-bold">
+                                    {(Number(rawRow['h']) || 0) + (Number(rawRow['r']) || 0) + (Number(rawRow['rbi']) || 0)}
+                                  </td>
+                                )}
                               </>
                             )}
                           </tr>

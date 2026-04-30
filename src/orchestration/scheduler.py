@@ -9,8 +9,19 @@ automatically by APScheduler + pytz.
 Schedule (ET):
     9:00 AM  - daily_stats_job
     9:00 AM  - mlb_roster_scraper_job
+    9:00 AM  - mlb_daily_stats_job
     9:00 AM  - nonsports_polymarket_scrape (2hr timeout)
+    9:20 AM  - mlb_daily_stats_retry
+    9:15 AM  - Kalshi live resolution
+    9:25 AM  - mlb_weather_forecast
     9:30 AM  - daily_stats_retry (if 9 AM failed)
+    9:30 AM  - mlb_lines_job --live --props-only --extended
+    9:35 AM  - mlb_lineup_scraper_job
+    9:50 AM  - mlb_inference_job (early MLB pass)
+
+    10:00 AM - kalshi_daily_summary_job
+    10:00 AM - lines_job --live --props-only (pre-NBA inference)
+    10:15 AM - inference_job (early NBA pass)
 
     9 AM - 11 PM ET every 5 min:
         :00,:05,...,:55  - lines_job --live --props-only  (silent)
@@ -19,17 +30,11 @@ Schedule (ET):
     9 AM - 11 PM ET every 10 min:
         kalshi_refresh (NBA + MLB + non-sports)
 
-    10:00 AM - mlb_daily_stats_job
-    10:00 AM - kalshi_daily_summary_job
-    10:30 AM - mlb_daily_stats_retry
-    10:45 AM - mlb_lines_job --live --props-only (early MLB props)
-    10:50 AM - mlb_lineup_scraper_job (early MLB lineups)
-    11:00 AM - mlb_inference_job (early MLB pass)
-    11:00 AM - lines_job --live --props-only (pre-NBA inference)
-    11:15 AM - inference_job (early NBA pass)
     12:00 PM - lines_job --live (full)
+    12:05 PM - mlb_lineup_scraper_job (before noon inference — catches early-posting lineups)
     12:15 PM - inference_job (full MC)
     12:15 PM - mlb_inference_job (noon MLB pass)
+    12:45 PM - mlb_lineup_scraper_job (catches late-posting afternoon lineups)
 
     4:00 PM  - lines_job --live --parallel (full)
     4:15 PM  - inference_job (full MC)
@@ -92,6 +97,8 @@ JOB_NAMES = {
     "arb_scan_job.py": "Arb Scanner",
     "kalshi_nonsports_refresh_job.py": "Kalshi Non-Sports Refresh",
     "kalshi_execute_approved_job.py": "Kalshi Execute Approved",
+    "kalshi_reprice_stale_job.py": "Kalshi Reprice Stale",
+    "kalshi_pending_fills_job.py": "Kalshi Pending Fills",
     "resolve_user_paper_bets.py": "User Paper Bet Resolution",
 }
 
@@ -541,12 +548,12 @@ def run_mlb_daily_stats():
 
 
 def run_mlb_daily_stats_retry():
-    """Re-run MLB daily stats if the 10 AM run failed."""
+    """Re-run MLB daily stats if the 9 AM run failed."""
     status = JOB_STATUS.get("mlb_daily_stats_job.py", {})
     if status.get("status") == "success":
-        logger.info("MLB daily stats already succeeded today, skipping 10:30 retry.")
+        logger.info("MLB daily stats already succeeded today, skipping 9:20 retry.")
         return
-    logger.warning("MLB daily stats failed or did not run at 10 AM — retrying now...")
+    logger.warning("MLB daily stats failed or did not run at 9 AM — retrying now...")
     run_job("mlb_daily_stats_job.py")
 
 
@@ -641,6 +648,30 @@ def run_kalshi_execute_approved():
     run_job("kalshi_execute_approved_job.py", silent_on_success=True)
 
 
+def run_kalshi_reprice_stale():
+    """Reprice stale resting Kalshi orders.
+
+    Checks for resting orders where the market price has moved and reprices
+    them if the edge is still retained. Exits gracefully if KALSHI_LIVE_TRADING_ENABLED != true.
+    """
+    run_job("kalshi_reprice_stale_job.py", silent_on_success=True)
+
+
+def run_kalshi_pending_fills():
+    """Poll Kalshi API every 5 min to catch pending orders that have since filled."""
+    run_job("kalshi_pending_fills_job.py", silent_on_success=True)
+
+
+def run_kalshi_stale_fills():
+    """Detect pending orders whose game has started and enqueue for cancellation review."""
+    run_job("kalshi_stale_fills_job.py", silent_on_success=True)
+
+
+def run_kalshi_execute_cancellations():
+    """Execute human-approved order cancellations via Kalshi API."""
+    run_job("kalshi_execute_cancellations_job.py", silent_on_success=True)
+
+
 # ---- Arbitrage Scanner Jobs ----
 
 def run_arb_scan_mlb():
@@ -722,22 +753,22 @@ def main():
         name="User Paper Bet Resolution (9:30 AM ET)",
     )
 
-    # --- Early window: 11 AM NBA inference ---
+    # --- Early window: 10 AM NBA inference ---
 
-    # 11:00 AM ET - Early props scrape (feed 11:15 AM NBA inference)
+    # 10:00 AM ET - Early props scrape (feed 10:15 AM NBA inference)
     scheduler.add_job(
         run_lines_props_only,
-        CronTrigger(hour=11, minute=0, timezone=ET),
-        id="lines_props_11am",
-        name="Lines Props Only (11 AM ET, pre-inference)",
+        CronTrigger(hour=10, minute=0, timezone=ET),
+        id="lines_props_10am",
+        name="Lines Props Only (10 AM ET, pre-inference)",
     )
 
-    # 11:15 AM ET - Early NBA inference
+    # 10:15 AM ET - Early NBA inference
     scheduler.add_job(
         run_inference,
-        CronTrigger(hour=11, minute=15, timezone=ET),
-        id="inference_11am",
-        name="Inference (11:15 AM ET)",
+        CronTrigger(hour=10, minute=15, timezone=ET),
+        id="inference_1015am",
+        name="Inference (10:15 AM ET)",
     )
 
     # --- First window: noon full scrape + inference ---
@@ -816,54 +847,54 @@ def main():
         name="MLB Active Roster (9 AM ET)",
     )
 
-    # 10:00 AM ET - MLB daily stats (results from last night)
+    # 9:00 AM ET - MLB daily stats (results from last night)
     scheduler.add_job(
         run_mlb_daily_stats,
-        CronTrigger(hour=10, minute=0, timezone=ET),
+        CronTrigger(hour=9, minute=0, timezone=ET),
         id="mlb_daily_stats",
-        name="MLB Daily Stats (10 AM ET)",
+        name="MLB Daily Stats (9 AM ET)",
     )
 
-    # 10:30 AM ET - Retry MLB daily stats if 10 AM failed
+    # 9:20 AM ET - Retry MLB daily stats if 9 AM failed
     scheduler.add_job(
         run_mlb_daily_stats_retry,
-        CronTrigger(hour=10, minute=30, timezone=ET),
+        CronTrigger(hour=9, minute=20, timezone=ET),
         id="mlb_daily_stats_retry",
-        name="MLB Daily Stats Retry (10:30 AM ET)",
+        name="MLB Daily Stats Retry (9:20 AM ET)",
     )
 
-    # --- MLB early window: 11 AM inference ---
+    # --- MLB early window: 9:50 AM inference ---
 
-    # 10:40 AM ET - MLB weather forecast (after daily stats retry, before props + inference)
+    # 9:25 AM ET - MLB weather forecast (before props + inference)
     scheduler.add_job(
         run_mlb_weather_forecast,
-        CronTrigger(hour=10, minute=40, timezone=ET),
+        CronTrigger(hour=9, minute=25, timezone=ET),
         id="mlb_weather_forecast",
-        name="MLB Weather Forecast (10:40 AM ET)",
+        name="MLB Weather Forecast (9:25 AM ET)",
     )
 
-    # 10:45 AM ET - Early MLB props scrape (feed 11:00 AM inference)
+    # 9:30 AM ET - Early MLB props scrape (feed 9:50 AM inference)
     scheduler.add_job(
         run_mlb_lines_props_only,
-        CronTrigger(hour=10, minute=45, timezone=ET),
-        id="mlb_lines_props_1045am",
-        name="MLB Props Only (10:45 AM ET, pre-inference)",
+        CronTrigger(hour=9, minute=30, timezone=ET),
+        id="mlb_lines_props_930am",
+        name="MLB Props Only (9:30 AM ET, pre-inference)",
     )
 
-    # 10:50 AM ET - Early MLB lineup scrape (best-available lineups)
+    # 9:35 AM ET - Early MLB lineup scrape (best-available lineups)
     scheduler.add_job(
         run_mlb_lineup_scraper,
-        CronTrigger(hour=10, minute=50, timezone=ET),
-        id="mlb_lineup_scraper_1050am",
-        name="MLB Lineup Scraper (10:50 AM ET)",
+        CronTrigger(hour=9, minute=35, timezone=ET),
+        id="mlb_lineup_scraper_935am",
+        name="MLB Lineup Scraper (9:35 AM ET)",
     )
 
-    # 11:00 AM ET - Early MLB inference (pre-lineup-confirmation pass)
+    # 9:50 AM ET - Early MLB inference (pre-lineup-confirmation pass)
     scheduler.add_job(
         run_mlb_inference,
-        CronTrigger(hour=11, minute=0, timezone=ET),
-        id="mlb_inference_11am",
-        name="MLB Inference (11:00 AM ET)",
+        CronTrigger(hour=9, minute=50, timezone=ET),
+        id="mlb_inference_950am",
+        name="MLB Inference (9:50 AM ET)",
     )
 
     # 12:00 PM ET - MLB full lines scrape (game lines + props + linker)
@@ -872,6 +903,14 @@ def main():
         CronTrigger(hour=12, minute=0, timezone=ET),
         id="mlb_lines_full_noon",
         name="MLB Full Lines (12 PM ET)",
+    )
+
+    # 12:05 PM ET - MLB lineup scrape (before noon inference — catches early-posting lineups)
+    scheduler.add_job(
+        run_mlb_lineup_scraper,
+        CronTrigger(hour=12, minute=5, timezone=ET),
+        id="mlb_lineup_scraper_1205pm",
+        name="MLB Lineup Scraper (12:05 PM ET)",
     )
 
     # 12:15 PM ET - MLB noon inference (some lineups now confirmed)
@@ -1012,6 +1051,40 @@ def main():
         CronTrigger(hour='9-23', minute='*/2', timezone=ET),
         id="kalshi_execute_approved",
         name="Kalshi Execute Approved (every 2 min, 9AM-11PM ET)",
+    )
+
+    # Every 2 min, 9 AM - 11 PM ET — reprice stale resting Kalshi orders
+    # Checks if market has moved from resting order price, cancels+replaces if edge retained.
+    scheduler.add_job(
+        run_kalshi_reprice_stale,
+        CronTrigger(hour='9-23', minute='*/2', timezone=ET),
+        id="kalshi_reprice_stale",
+        name="Kalshi Reprice Stale (every 2 min, 9AM-11PM ET)",
+    )
+
+    # Every 5 min, 9 AM - 11 PM ET — poll Kalshi API for pending order fills
+    # Exits early (zero API calls) if no pending orders exist.
+    scheduler.add_job(
+        run_kalshi_pending_fills,
+        CronTrigger(hour='9-23', minute='*/5', timezone=ET),
+        id="kalshi_pending_fills",
+        name="Kalshi Pending Fills (every 5 min, 9AM-11PM ET)",
+    )
+
+    # Stale fill detector — enqueues pending orders whose game has started for cancellation review
+    scheduler.add_job(
+        run_kalshi_stale_fills,
+        CronTrigger(hour='9-23', minute='*/5', timezone=ET),
+        id="kalshi_stale_fills",
+        name="Kalshi Stale Fill Detector (every 5 min, 9AM-11PM ET)",
+    )
+
+    # Cancellation executor — executes human-approved cancellations via Kalshi API
+    scheduler.add_job(
+        run_kalshi_execute_cancellations,
+        CronTrigger(hour='9-23', minute='*/2', timezone=ET),
+        id="kalshi_execute_cancellations",
+        name="Kalshi Cancel Executor (every 2 min, 9AM-11PM ET)",
     )
 
     # ==============================================================

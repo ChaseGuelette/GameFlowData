@@ -43,36 +43,31 @@ These rules must NEVER be violated:
 8. **NEVER call Supabase MCP directly in main context** — delegate to sql-runner subagent (see Context Protection Rules)
 9. **NEVER use Explore agents for SQL** — Explore is file-only (Read/Grep/Glob). Use sql-runner for DB queries.
 10. **Keep Explore agents narrow** — max_turns: 10, focused prompts, 5-12 tool calls max
-11. **After plan approval, TRY GLM via OpenCode first** — attempt `opencode run --attach` with the spec. If OpenCode fails (server down, escaping issues, timeout), fall back to implementing directly.
+11. **After plan approval, HAND OFF to GLM via OpenCode** — do NOT read implementation files into your context. Write the spec, attach source files via `-f` flags, and let GLM do the reading and editing. Fall back to direct implementation ONLY if OpenCode fails (server down, escaping issues, timeout).
 12. **NEVER trust a sql-runner count without verification before destructive actions** — Haiku agents can hallucinate plausible row counts. Before any UPDATE/DELETE based on a subagent's "N rows found", spawn a second sql-runner with `SELECT COUNT(*)` to verify the number is non-zero and matches. If the counts disagree, the subagent fabricated results.
 
 ## Assets
 The [[Assets]] folder contains images, videos, PDFs, and other media. When working on any task, check Assets/ for related materials. You can analyze images, read PDFs, and process any file dropped there.
 
-## Model Routing & Escalation
+## Model Routing
 
-Default session model: **Sonnet**. Use cheaper models for mechanical work, escalate to Opus for hard reasoning.
+The user manually selects the session model (`/model opus`, `/model sonnet`). No auto-escalation rules — the model in use handles everything directly.
 
-### Escalation Rules — When to Spawn an Opus Subagent
-When running as Sonnet, ALWAYS use Task tool with `model: "opus"` for:
-- **"Why" questions** about model performance, ROI degradation, or calibration drift
-- **Debugging that spans 3+ files** or involves subtle cross-system interactions
-- **Architecture or design decisions** — choosing approaches, evaluating trade-offs
-- **Calibration interpretation** (not data gathering — the interpretation step)
-- **Novel problem-solving** where you're uncertain about the right approach
-- **Planning multi-step implementations** that touch 5+ files
-
-For everything else (file reading, SQL, small edits, clear-spec implementation, status checks), handle directly.
+For mechanical subtasks, delegate to cheaper subagents:
+- **Haiku**: File search (explorer), SQL queries (sql-runner)
+- **Sonnet**: Brain file I/O (resume/wrap-up braintree skills)
 
 ### Code Implementation via OpenCode + GLM (PREFERRED — fallback to direct edit)
 A headless OpenCode server runs at `http://localhost:4096` (started from the project root).
 
-**RULE: When a plan is approved, ATTEMPT to hand off implementation to GLM via OpenCode.** If OpenCode fails (server down, escaping issues, timeout, file-not-found errors), fall back to implementing directly. Do not retry OpenCode more than once — if it fails, just do the work yourself.
+**RULE: When a plan is approved, IMMEDIATELY hand off implementation to GLM via OpenCode.** Do NOT read implementation files into your context first — you already have the plan. Write the spec file, attach the target source files via `-f` flags (GLM reads them, not you), and hand off. If OpenCode fails (server down, escaping issues, timeout, file-not-found errors), fall back to implementing directly. Do not retry OpenCode more than once — if it fails, just do the work yourself.
 
-**This applies when ALL of these are true:**
-- A plan or spec exists with clear file paths, function names, and behavior
-- The change touches code (not config, not markdown, not brain files)
-- The change is more than ~20 lines
+**This applies when ANY of these are true:**
+- The total estimated edits exceed ~20 lines of changes (even in a single file)
+- The plan touches 2+ code files
+- A plan or spec exists with clear file paths, function names, and behavior AND the changes touch code
+
+**CRITICAL: Do NOT read implementation files into your own context after plan approval.** The plan describes what to change. The `-f` flag gives GLM the source files as context. Reading 1000+ line files into your context and then implementing directly defeats the purpose of GLM delegation and wastes tokens.
 
 **Workflow:**
 1. Write the spec to a file, then pass it to OpenCode. **ALWAYS use `run_in_background: true`** on the Bash tool — GLM calls can exceed the 2-minute timeout.
@@ -96,11 +91,12 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
    **Use relative paths** in specs (not absolute) — the server runs from the project root.
    **Spec filenames must be unique** — use `.claude/glm_spec_<YYYYMMDD_HHMMSS>.md` (not a fixed name). Multiple sessions can run concurrently.
    The `-f` flag attaches files for GLM to read as context (existing source files AND the spec file).
-2. Check the background task output with `TaskOutput`. Then **review GLM's work**: run `git diff` and compare against the plan in your context. Check for:
-   - Missing steps from the plan
+2. **Review GLM's work (diff-only — do NOT read full files).** Check the background task output with `TaskOutput`, then run `git diff -- <file1> <file2> ...` scoped to ONLY the files listed in your spec. Do NOT use bare `git diff` — other terminals may have concurrent uncommitted changes that would pollute the review. You already have the plan in your context — compare the diff against it. Do NOT Read the modified files; the diff is sufficient. Check for:
+   - Missing steps from the plan (GLM skipped something)
    - Wrong imports or function signatures
    - Logic that doesn't match the spec
    - Project conventions violated (e.g., connection patterns, RLS, etc.)
+   If the diff matches the plan: done. If mismatches found: flag them to the user with specifics ("GLM missed step 3" or "wrong function signature on line X").
 3. Fix small issues directly (Edit tool). For larger problems, send corrections back to OpenCode with a targeted prompt.
 4. Run tests/linting if applicable.
 
@@ -113,14 +109,10 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
 - `/tmp/` writes fail — Windows doesn't have `/tmp/`. Use `.claude/glm_spec_<timestamp>.md` instead.
 - Bash tool returns "Error: Exit code 1" repeatedly — Bash may be non-functional in the session. Fall back to direct Edit.
 - Concurrent OpenCode calls can collide — send one at a time.
+- **Concurrent terminal diffs collide** — When multiple terminals delegate to GLM, bare `git diff` shows ALL terminals' changes. Always scope: `git diff -- file1.py file2.py` using only the files from your spec.
 - **Exit code 1 ≠ GLM failed** — OpenCode transport can return exit code 1 even when GLM successfully wrote all files. Before falling back, check whether the target output file(s) exist and have content. If GLM wrote them, skip the fallback to avoid duplicate work. Only fall back if the files are missing or empty.
 
 **Do NOT use OpenCode for:** small edits (< 20 lines), config changes, brain/markdown updates, or tasks requiring deep cross-system reasoning.
-
-### Subagent Model Assignment
-- **Haiku**: File search (explorer), SQL queries (sql-runner), status checks
-- **Sonnet**: Code review, brain file I/O (resume/wrap-up), calibration data gathering
-- **Opus**: Architecture decisions, complex debugging, calibration interpretation
 
 ### Context Protection Rules
 - **NEVER call Supabase MCP tools directly in the main context.** Always delegate SQL to a `sql-runner` subagent (Task tool, `model: "haiku"`). SQL results can be thousands of tokens — they must stay in the subagent. The main context only receives the subagent's summary.
@@ -131,17 +123,14 @@ A headless OpenCode server runs at `http://localhost:4096` (started from the pro
   - **3+ searches OR reading 3+ files**: Launch an Explore agent
   - **Unknown scope** (don't know which files are relevant): Launch an Explore agent
   - When in plan mode: ALWAYS use Explore agents for investigation
+- **Keep Plan agent prompts authoritative and bounded.** Set `max_turns: 15` on all Plan agent Task calls. Include in the prompt: "The context provided above is authoritative — do NOT re-read files already described. Only look up files not covered in this prompt." A Plan agent should design a solution from the context it receives, not re-explore the codebase. If it needs more context, the Explore phase was insufficient — fix the Explore prompts, don't let Plan agents compensate with unbounded exploration.
 - **Brain-first exploration.** When investigating a system, start from the BrainTree (`brain/` folder) for orientation before diving into source code. `brain/Pipeline/Component-Docs.md` indexes 40+ module docs via wikilinks. Read the relevant brain doc first to understand architecture, then go to source files for current implementation details. Pattern: Explore 1 reads brain docs for "what should exist", Explore 2 reads source for "what actually exists" — run in parallel.
-- **After plan approval, try GLM via OpenCode first.** Write spec to `.claude/glm_spec_<timestamp>.md` (unique per session), run with `"prompt" -f <spec_file>` (prompt BEFORE -f), backgrounded. If OpenCode fails, fall back to direct implementation — don't waste tool calls retrying.
+- **After plan approval, hand off to GLM via OpenCode immediately.** Do NOT read the implementation files yourself — write the spec to `.claude/glm_spec_<timestamp>.md` (unique per session), attach source files via `-f` flags, run with `"prompt" -f <spec_file> -f <source_files>` (prompt BEFORE -f), backgrounded. GLM reads the files, not you. If OpenCode fails, fall back to direct implementation — don't waste tool calls retrying.
 
-## Agent Personas
-Available specialized agents in .claude/agents/:
-- [[builder]] - Implements features, ships code, makes technical decisions
-- [[strategist]] - Product thinking, monetization, growth, go-to-market
-- [[analyst]] - Model performance, calibration, backtesting, data analysis
-- [[ops]] - Infrastructure, monitoring, pipeline health, incident response
-- [[explorer]] - Haiku-powered codebase search and file reading
-- [[sql-runner]] - Haiku-powered database queries
+## Subagents
+Specialized agents in .claude/agents/:
+- [[explorer]] - Haiku-powered codebase search and file reading (max 5-12 tool calls)
+- [[sql-runner]] - Haiku-powered database queries (read-only, anti-hallucination rules)
 
 ## Commands
 - /init-braintree - Initialize a new brain

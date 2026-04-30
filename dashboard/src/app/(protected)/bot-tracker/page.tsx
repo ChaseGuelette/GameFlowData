@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useBotSummary, useBotOrders, useBotDailyLogs } from '@/lib/hooks/useBotTracker'
 import { TradeApprovalPanel } from '@/components/bot-tracker/TradeApprovalPanel'
+import { StaleOrdersPanel } from '@/components/bot-tracker/StaleOrdersPanel'
 import { CircuitBreakerCard } from '@/components/bot-tracker/CircuitBreakerCard'
 import { BotSummaryCards } from '@/components/bot-tracker/BotSummaryCards'
 import { BotOrdersTable } from '@/components/bot-tracker/BotOrdersTable'
@@ -35,6 +36,9 @@ export default function BotTrackerPage() {
 
       {/* Trade Approval Queue (shows only when trades pending) */}
       {tab === 'live' && <TradeApprovalPanel />}
+
+      {/* Stale Orders — pending orders whose game has started */}
+      {tab === 'live' && <StaleOrdersPanel />}
 
       {/* Circuit Breaker */}
       {summary && <CircuitBreakerCard config={summary.config} />}

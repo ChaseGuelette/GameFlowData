@@ -240,6 +240,67 @@ class MLBBatterTrainingOrchestrator:
         )
         logger.info("Binomial feature set: %d features", len(selected_features))
 
+        # Step 3b: Train AB NegBin model
+        logger.info("Step 3b: Training AB NegBin model...")
+        from src.models.negbin_model import NegBinConfig, NegBinModel
+
+        ab_excluded = {
+            "game_id", "player_id", "game_date", "season", "team_id",
+            "opp_team_id", "actual", "player_name", "actual_at_bats",
+            "projected_ab",
+        }
+        ab_candidates = [
+            c for c in train_df.columns
+            if c not in ab_excluded and train_df[c].dtype in ("float64", "float32", "int64", "int32")
+        ]
+
+        ab_valid_df = valid_df[valid_df["actual_at_bats"] > 0].copy()
+        ab_selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
+        try:
+            ab_selected = ab_selector.select_features_negbin_nll(
+                ab_valid_df, "actual_at_bats", ab_candidates,
+                model_name="Batter AB (NegBin)",
+            )
+        except AttributeError:
+            logger.warning("NegBin feature selector not available, using top AB-correlated features")
+            correlations = ab_valid_df[ab_candidates].corrwith(ab_valid_df["actual_at_bats"]).abs()
+            ab_selected = correlations.nlargest(min(20, len(ab_candidates))).index.tolist()
+
+        logger.info("AB model feature set: %d features", len(ab_selected))
+
+        ab_config = NegBinConfig(
+            n_estimators=800,
+            max_depth=4,
+            learning_rate=0.03,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            min_child_weight=5,
+            early_stopping_rounds=50,
+            exposure_col=None,
+        )
+
+        X_ab_train = ab_valid_df[ab_selected].fillna(0)
+        y_ab_train = ab_valid_df["actual_at_bats"]
+
+        ab_model = NegBinModel(config=ab_config, model_name="batter_ab")
+        ab_fit_info = ab_model.fit(X_ab_train, y_ab_train)
+        logger.info("AB model fit info: %s", ab_fit_info)
+
+        ab_samples_test = ab_model.sample_single(
+            {f: float(X_ab_train.iloc[0][f]) for f in ab_selected},
+            n_samples=5000,
+        )
+        logger.info(
+            "AB model check: mean=%.2f, median=%.1f, min=%d, max=%d",
+            ab_samples_test.mean(), np.median(ab_samples_test),
+            ab_samples_test.min(), ab_samples_test.max(),
+        )
+        if ab_samples_test.mean() < 1 or ab_samples_test.mean() > 7:
+            logger.warning("AB model predictions outside expected range [1, 7]")
+
+        ab_model.save(self.run_dir)
+        logger.info("Saved AB NegBin model to %s", self.run_dir)
+
         X_train = valid_df[selected_features].fillna(0)
         y_train = valid_df["actual"]
         at_bats_train = valid_df["actual_at_bats"].values
@@ -313,7 +374,7 @@ class MLBBatterTrainingOrchestrator:
         # Step 9: Save
         logger.info("Step 9: Saving artifacts...")
         model.save(self.run_dir)
-        self._save_feature_manifest({"binomial": selected_features})
+        self._save_feature_manifest({"binomial": selected_features, "ab_negbin": ab_selected})
         self._save_calibration_report({f"batter_{self.stat}": cal_report})
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
 

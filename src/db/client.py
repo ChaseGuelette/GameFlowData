@@ -1,8 +1,14 @@
 # File: src/db/client.py
 import os
 
+import numpy as np
+import psycopg2.extensions
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+
+psycopg2.extensions.register_adapter(
+    np.int64, lambda val: psycopg2.extensions.AsIs(int(val))
+)
 
 # 1. Load env variables ONCE
 load_dotenv()
