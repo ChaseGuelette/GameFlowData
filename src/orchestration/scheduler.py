@@ -572,6 +572,11 @@ def run_mlb_lineup_scraper():
     run_job("mlb_lineup_scraper_job.py")
 
 
+def run_mlb_umpire_scraper():
+    """Scrape MLB umpire assignments from the MLB Stats API boxscore endpoint."""
+    run_job("mlb_umpire_scraper_job.py")
+
+
 def run_mlb_roster_scraper():
     """Scrape 26-man active MLB rosters (IL/availability tracking)."""
     run_job("mlb_roster_scraper_job.py")
@@ -887,6 +892,14 @@ def main():
         CronTrigger(hour=9, minute=35, timezone=ET),
         id="mlb_lineup_scraper_935am",
         name="MLB Lineup Scraper (9:35 AM ET)",
+    )
+
+    # 9:36 AM ET - MLB umpire assignments (same boxscore endpoint, after lineup scrape)
+    scheduler.add_job(
+        run_mlb_umpire_scraper,
+        CronTrigger(hour=9, minute=36, timezone=ET),
+        id="mlb_umpire_scraper_936am",
+        name="MLB Umpire Scraper (9:36 AM ET)",
     )
 
     # 9:50 AM ET - Early MLB inference (pre-lineup-confirmation pass)

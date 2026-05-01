@@ -99,12 +99,14 @@ class MLBBatterTrainingOrchestrator:
         logger.info("Step 1: Loading training data...")
         train_df = self.feature_store.get_training_dataset(seasons=train_seasons, stat=self.stat)
         train_df = self.feature_store.enrich_with_matchup_features(train_df)
+        train_df = self.feature_store._add_batter_interaction_features(train_df)
         logger.info("Training data: %d rows", len(train_df))
 
         # Step 2: Load calibration data
         logger.info("Step 2: Loading calibration data...")
         cal_df = self.feature_store.get_training_dataset(seasons=[cal_season], stat=self.stat)
         cal_df = self.feature_store.enrich_with_matchup_features(cal_df)
+        cal_df = self.feature_store._add_batter_interaction_features(cal_df)
         if cal_end_date:
             from datetime import datetime as _dt
             _cutoff = _dt.strptime(cal_end_date, "%Y-%m-%d").date() if isinstance(cal_end_date, str) else cal_end_date

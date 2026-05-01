@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -28,6 +29,9 @@ def get_opposing_starter_stats(engine: Engine, opp_pitcher_id: int, game_date: s
             COALESCE(pa.avg_bb_per_9_l5, 0) AS opp_pitcher_avg_bb_per_9_l5,
             COALESCE(pa.avg_h_allowed_l5, 0) AS opp_pitcher_avg_h_allowed_l5,
             COALESCE(pa.avg_hr_allowed_l5, 0) AS opp_pitcher_avg_hr_allowed_l5,
+            COALESCE(pa.avg_so_l5, 0) AS opp_pitcher_avg_so_l5,
+            COALESCE(pa.avg_bb_l5, 0) AS opp_pitcher_avg_bb_l5,
+            COALESCE(pa.avg_ip_l5, 0) AS opp_pitcher_avg_ip_l5,
             COALESCE(sc.avg_xwoba_against_l5, 0) AS opp_pitcher_xwoba_against_l5,
             COALESCE(sc.avg_hard_hit_pct_against_l5, 0) AS opp_pitcher_hard_hit_pct_against_l5,
             COALESCE(sc.avg_avg_fastball_velo_l5, 0) AS opp_pitcher_avg_fastball_velo_l5,
@@ -53,10 +57,14 @@ def get_opposing_starter_stats(engine: Engine, opp_pitcher_id: int, game_date: s
         "opp_pitcher_avg_bb_per_9_l5": 0,
         "opp_pitcher_avg_h_allowed_l5": 0,
         "opp_pitcher_avg_hr_allowed_l5": 0,
+        "opp_pitcher_avg_so_l5": 0,
+        "opp_pitcher_avg_bb_l5": 0,
+        "opp_pitcher_avg_ip_l5": 0,
         "opp_pitcher_xwoba_against_l5": 0,
         "opp_pitcher_hard_hit_pct_against_l5": 0,
         "opp_pitcher_avg_fastball_velo_l5": 0,
         "opp_pitcher_days_rest": 5,
+        "opp_pitcher_babip_against_l5": 0.300,
     }
 
     with engine.connect() as conn:
@@ -65,7 +73,19 @@ def get_opposing_starter_stats(engine: Engine, opp_pitcher_id: int, game_date: s
     if row is None:
         return defaults
 
-    return {col: float(getattr(row, col) or defaults[col]) for col in defaults}
+    result = {col: float(getattr(row, col) or defaults[col]) for col in defaults if col != "opp_pitcher_babip_against_l5"}
+
+    # Derive BABIP-against
+    h = result["opp_pitcher_avg_h_allowed_l5"]
+    hr = result["opp_pitcher_avg_hr_allowed_l5"]
+    so = result["opp_pitcher_avg_so_l5"]
+    bb = result["opp_pitcher_avg_bb_l5"]
+    ip = result["opp_pitcher_avg_ip_l5"]
+    estimated_bf = 3 * ip + h + bb
+    denominator = estimated_bf - so - hr
+    result["opp_pitcher_babip_against_l5"] = (h - hr) / denominator if denominator > 0 else 0.300
+
+    return result
 
 
 def get_opposing_pitcher_inning_stats(engine: Engine, opp_pitcher_id: int, game_date: str) -> dict:
@@ -141,6 +161,9 @@ def compute_opposing_starter_bulk(engine: Engine, season: int) -> pd.DataFrame:
             COALESCE(pa.avg_bb_per_9_l5, 0) AS opp_pitcher_avg_bb_per_9_l5,
             COALESCE(pa.avg_h_allowed_l5, 0) AS opp_pitcher_avg_h_allowed_l5,
             COALESCE(pa.avg_hr_allowed_l5, 0) AS opp_pitcher_avg_hr_allowed_l5,
+            COALESCE(pa.avg_so_l5, 0) AS opp_pitcher_avg_so_l5,
+            COALESCE(pa.avg_bb_l5, 0) AS opp_pitcher_avg_bb_l5,
+            COALESCE(pa.avg_ip_l5, 0) AS opp_pitcher_avg_ip_l5,
             COALESCE(sc.avg_xwoba_against_l5, 0) AS opp_pitcher_xwoba_against_l5,
             COALESCE(sc.avg_hard_hit_pct_against_l5, 0) AS opp_pitcher_hard_hit_pct_against_l5,
             COALESCE(sc.avg_avg_fastball_velo_l5, 0) AS opp_pitcher_avg_fastball_velo_l5,
@@ -152,7 +175,8 @@ def compute_opposing_starter_bulk(engine: Engine, season: int) -> pd.DataFrame:
            AND os.pitcher_team_id != bgs.team_id
         LEFT JOIN LATERAL (
             SELECT avg_era_l5, avg_whip_l5, avg_k_per_9_l5, avg_bb_per_9_l5,
-                   avg_h_allowed_l5, avg_hr_allowed_l5, days_rest
+                   avg_h_allowed_l5, avg_hr_allowed_l5, days_rest,
+                   avg_so_l5, avg_bb_l5, avg_ip_l5
             FROM mlb_player_average_pitching pa2
             WHERE pa2.player_id = os.pitcher_id
               AND pa2.game_date <= bgs.game_date
@@ -174,6 +198,19 @@ def compute_opposing_starter_bulk(engine: Engine, season: int) -> pd.DataFrame:
     with engine.connect() as conn:
         conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
         df = pd.read_sql(query, conn, params={"season": season})
+
+    # Derive opposing pitcher BABIP-against from rolling averages
+    if not df.empty:
+        estimated_bf = (
+            3 * df["opp_pitcher_avg_ip_l5"]
+            + df["opp_pitcher_avg_h_allowed_l5"]
+            + df["opp_pitcher_avg_bb_l5"]
+        )
+        numerator = df["opp_pitcher_avg_h_allowed_l5"] - df["opp_pitcher_avg_hr_allowed_l5"]
+        denominator = estimated_bf - df["opp_pitcher_avg_so_l5"] - df["opp_pitcher_avg_hr_allowed_l5"]
+        df["opp_pitcher_babip_against_l5"] = (
+            numerator / denominator.replace(0, np.nan)
+        ).fillna(0.300)
 
     logger.info("Computed opposing starter features for season %d: %d rows", season, len(df))
     return df

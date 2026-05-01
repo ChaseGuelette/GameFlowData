@@ -111,12 +111,14 @@ class MLBTrainingOrchestrator:
         logger.info("Step 1: Loading training data...")
         train_df = self.feature_store.get_training_dataset(seasons=train_seasons)
         train_df = self.feature_store.enrich_with_matchup_features(train_df)
+        train_df = self.feature_store._add_interaction_features(train_df)
         logger.info(f"Training data: {len(train_df):,} rows")
 
         # Step 2: Load calibration data
         logger.info("Step 2: Loading calibration data...")
         cal_df = self.feature_store.get_training_dataset(seasons=[cal_season])
         cal_df = self.feature_store.enrich_with_matchup_features(cal_df)
+        cal_df = self.feature_store._add_interaction_features(cal_df)
         if cal_end_date:
             pre_filter = len(cal_df)
             cal_end_date = pd.Timestamp(cal_end_date).date()

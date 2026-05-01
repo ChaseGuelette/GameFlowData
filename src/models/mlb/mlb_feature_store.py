@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -68,6 +69,7 @@ PITCHER_K_FEATURES: list[str] = [
     "prop_line_pitcher_strikeouts",
     # Derived
     "pitcher_est_bf_l5",
+    "pitcher_pitches_per_ip_l5",
     # Trend
     "pitcher_so_l3_l5_ratio",
     # Inning-level fatigue (from mlb_pitcher_inning_stats)
@@ -77,6 +79,21 @@ PITCHER_K_FEATURES: list[str] = [
     "pitcher_avg_pitches_per_inning_l5",
     "pitcher_avg_csw_rate_l5_inning",
     "pitcher_deep_inning_pct_l5",
+    # First-5-IP K rate
+    "pitcher_avg_k_first_5ip_l5",
+    # Interaction features
+    "pitcher_k_opp_k_interaction",
+    "pitcher_whiff_opp_whiff_interaction",
+    # Pitch repertoire diversity
+    "pitcher_fastball_pct_l5",
+    "pitcher_breaking_pct_l5",
+    "pitcher_offspeed_pct_l5",
+    "pitcher_num_pitch_types_l5",
+    # Opposing lineup composition
+    "projected_lineup_k_pct",
+    "pct_opp_lineup_same_hand",
+    # Umpire tendency
+    "umpire_avg_k_per_game_l20",
 ]
 
 
@@ -172,6 +189,9 @@ class MLBFeatureStore:
                 COALESCE(sc_avg.avg_zone_pct_l5, 0) AS pitcher_avg_zone_pct_l5,
                 COALESCE(sc_avg.avg_avg_fastball_velo_l5, 0) AS pitcher_avg_fastball_velo_l5,
                 COALESCE(sc_avg.std_whiff_pct_l3, 0) AS pitcher_std_whiff_pct_l3,
+                COALESCE(sc_avg.avg_fastball_pct_l5, 0) AS pitcher_fastball_pct_l5,
+                COALESCE(sc_avg.avg_breaking_pct_l5, 0) AS pitcher_breaking_pct_l5,
+                COALESCE(sc_avg.avg_offspeed_pct_l5, 0) AS pitcher_offspeed_pct_l5,
 
                 -- FanGraphs season-level
                 COALESCE(fg.fip, 0) AS pitcher_fip_szn,
@@ -196,7 +216,8 @@ class MLBFeatureStore:
                 COALESCE(inn_agg.avg_k_rate_early, 0) AS pitcher_avg_k_rate_early_l5,
                 COALESCE(inn_agg.avg_pitches_per_inning, 15) AS pitcher_avg_pitches_per_inning_l5,
                 COALESCE(inn_agg.avg_csw_rate, 0) AS pitcher_avg_csw_rate_l5_inning,
-                COALESCE(inn_agg.deep_inning_pct, 0.5) AS pitcher_deep_inning_pct_l5
+                COALESCE(inn_agg.deep_inning_pct, 0.5) AS pitcher_deep_inning_pct_l5,
+                COALESCE(inn_agg.avg_k_first_5ip, 0) AS pitcher_avg_k_first_5ip_l5
 
             FROM mlb_player_game_stats_pitching pgs
 
@@ -225,7 +246,8 @@ class MLBFeatureStore:
                 SELECT avg_whiff_pct_l5, avg_csw_pct_l5,
                        avg_chase_pct_l5, avg_zone_pct_l5,
                        avg_avg_fastball_velo_l5,
-                       std_whiff_pct_l3
+                       std_whiff_pct_l3,
+                       avg_fastball_pct_l5, avg_breaking_pct_l5, avg_offspeed_pct_l5
                 FROM mlb_player_average_statcast_pitching sc
                 WHERE sc.player_id = pgs.player_id
                   AND sc.game_date <= pgs.game_date
@@ -292,7 +314,12 @@ class MLBFeatureStore:
                          THEN SUM(sub.csw_rate * sub.pitches_thrown) / SUM(sub.pitches_thrown)
                          ELSE 0 END AS avg_csw_rate,
                     COUNT(DISTINCT CASE WHEN sub.inning >= 6 THEN sub.game_id END)::float
-                        / GREATEST(COUNT(DISTINCT sub.game_id), 1) AS deep_inning_pct
+                        / GREATEST(COUNT(DISTINCT sub.game_id), 1) AS deep_inning_pct,
+                    COALESCE(
+                        SUM(CASE WHEN sub.inning <= 5 THEN sub.strikeouts ELSE 0 END)::FLOAT /
+                        NULLIF(SUM(CASE WHEN sub.inning <= 5 THEN sub.batters_faced ELSE 0 END), 0),
+                        0
+                    ) AS avg_k_first_5ip
                 FROM mlb_pitcher_inning_stats sub
                 INNER JOIN (
                     SELECT DISTINCT game_id, game_date
@@ -328,6 +355,17 @@ class MLBFeatureStore:
         # Estimated batters faced per game (L5 avg): BF ≈ 3*IP + H + BB
         df["pitcher_est_bf_l5"] = 3 * df["pitcher_avg_ip_l5"] + df["pitcher_avg_h_allowed_l5"] + df["pitcher_avg_bb_l5"]
 
+        # Pitch count efficiency
+        df["pitcher_pitches_per_ip_l5"] = df["pitcher_avg_pitches_thrown_l3"].div(
+            df["pitcher_avg_ip_l5"].replace(0, np.nan)
+        ).fillna(0)
+
+        # Pitch repertoire diversity: count pitch types with > 5% usage
+        pitch_type_cols = ["pitcher_fastball_pct_l5", "pitcher_breaking_pct_l5", "pitcher_offspeed_pct_l5"]
+        df["pitcher_num_pitch_types_l5"] = (
+            df[pitch_type_cols].fillna(0).gt(0.05).sum(axis=1)
+        )
+
         return df
 
     def enrich_with_matchup_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -336,6 +374,7 @@ class MLBFeatureStore:
         Uses compute_matchup_features_bulk from mlb_matchup_features for efficiency.
         """
         from src.processing.mlb.mlb_matchup_features import (
+            compute_lineup_features_bulk,
             compute_matchup_features_bulk,
         )
 
@@ -366,6 +405,34 @@ class MLBFeatureStore:
         df["opp_team_k_pct_l10"] = df["opp_team_k_pct_l10"].fillna(0)
         df["opp_team_whiff_pct_l10"] = df["opp_team_whiff_pct_l10"].fillna(0)
 
+        # Lineup-based features (projected K%, handedness composition)
+        lineup_frames = []
+        for season in seasons:
+            lf = compute_lineup_features_bulk(self.engine, int(season))
+            if not lf.empty:
+                lineup_frames.append(lf)
+
+        if lineup_frames:
+            lineup_df = pd.concat(lineup_frames, ignore_index=True)
+            df = df.merge(lineup_df, on=["player_id", "game_id"], how="left", suffixes=("", "_lineup"))
+        df["projected_lineup_k_pct"] = df["projected_lineup_k_pct"].fillna(0.22) if "projected_lineup_k_pct" in df.columns else 0.22
+        df["pct_opp_lineup_same_hand"] = df["pct_opp_lineup_same_hand"].fillna(0.50) if "pct_opp_lineup_same_hand" in df.columns else 0.50
+
+        # Umpire tendency features
+        df = self._compute_umpire_features_bulk(df)
+
+        return df
+
+    def _add_interaction_features(self, df):
+        """Compute interaction features that depend on matchup data."""
+        df["pitcher_k_opp_k_interaction"] = (
+            df["pitcher_avg_k_per_9_l5"].fillna(0) *
+            df["opp_team_k_pct_l10"].fillna(0)
+        )
+        df["pitcher_whiff_opp_whiff_interaction"] = (
+            df["pitcher_avg_whiff_pct_l5"].fillna(0) *
+            df["opp_team_whiff_pct_l10"].fillna(0)
+        )
         return df
 
     # ------------------------------------------------------------------
@@ -418,7 +485,9 @@ class MLBFeatureStore:
 
         # 8. Opposing team batting
         from src.processing.mlb.mlb_matchup_features import (
+            get_lineup_k_features,
             get_opposing_team_batting_stats,
+            get_pitcher_handedness,
         )
 
         opp_stats = get_opposing_team_batting_stats(self.engine, opp_team_id, game_date, season)
@@ -426,6 +495,14 @@ class MLBFeatureStore:
         features["opp_team_avg_batting_avg_l10"] = opp_stats.get("opp_team_avg_batting_avg_l10") or 0
         features["opp_team_k_pct_l10"] = opp_stats.get("opp_team_k_pct_l10") or 0
         features["opp_team_whiff_pct_l10"] = opp_stats.get("opp_team_whiff_pct_l10") or 0
+
+        # 8a. Lineup-based features (K%, handedness)
+        pitcher_throws = get_pitcher_handedness(self.engine, player_id)
+        lineup_feats = get_lineup_k_features(
+            self.engine, opp_team_id, game_id, game_date, season,
+            pitcher_throws=pitcher_throws,
+        )
+        features.update(lineup_feats)
 
         # 8b. Inning-level fatigue features
         inning_fatigue = self._get_inning_fatigue_stats(player_id, game_date)
@@ -442,6 +519,31 @@ class MLBFeatureStore:
             + features.get("pitcher_avg_h_allowed_l5", 0)
             + features.get("pitcher_avg_bb_l5", 0)
         )
+        features["pitcher_pitches_per_ip_l5"] = (
+            features.get("pitcher_avg_pitches_thrown_l3", 0) /
+            max(features.get("pitcher_avg_ip_l5", 1), 0.1)
+        )
+
+        # Interaction features
+        features["pitcher_k_opp_k_interaction"] = (
+            features.get("pitcher_avg_k_per_9_l5", 0) *
+            features.get("opp_team_k_pct_l10", 0)
+        )
+        features["pitcher_whiff_opp_whiff_interaction"] = (
+            features.get("pitcher_avg_whiff_pct_l5", 0) *
+            features.get("opp_team_whiff_pct_l10", 0)
+        )
+
+        # Pitch repertoire diversity
+        pitch_pcts = [
+            features.get("pitcher_fastball_pct_l5", 0),
+            features.get("pitcher_breaking_pct_l5", 0),
+            features.get("pitcher_offspeed_pct_l5", 0),
+        ]
+        features["pitcher_num_pitch_types_l5"] = sum(1 for p in pitch_pcts if p > 0.05)
+
+        # Umpire tendency
+        features.update(self._get_umpire_features(game_id, game_date))
 
         return features
 
@@ -499,6 +601,9 @@ class MLBFeatureStore:
                 COALESCE(sc_avg.avg_zone_pct_l5, 0) AS pitcher_avg_zone_pct_l5,
                 COALESCE(sc_avg.avg_avg_fastball_velo_l5, 0) AS pitcher_avg_fastball_velo_l5,
                 COALESCE(sc_avg.std_whiff_pct_l3, 0) AS pitcher_std_whiff_pct_l3,
+                COALESCE(sc_avg.avg_fastball_pct_l5, 0) AS pitcher_fastball_pct_l5,
+                COALESCE(sc_avg.avg_breaking_pct_l5, 0) AS pitcher_breaking_pct_l5,
+                COALESCE(sc_avg.avg_offspeed_pct_l5, 0) AS pitcher_offspeed_pct_l5,
 
                 -- FanGraphs
                 COALESCE(fg.fip, 0) AS pitcher_fip_szn,
@@ -523,7 +628,8 @@ class MLBFeatureStore:
                 COALESCE(inn_agg.avg_k_rate_early, 0) AS pitcher_avg_k_rate_early_l5,
                 COALESCE(inn_agg.avg_pitches_per_inning, 15) AS pitcher_avg_pitches_per_inning_l5,
                 COALESCE(inn_agg.avg_csw_rate, 0) AS pitcher_avg_csw_rate_l5_inning,
-                COALESCE(inn_agg.deep_inning_pct, 0.5) AS pitcher_deep_inning_pct_l5
+                COALESCE(inn_agg.deep_inning_pct, 0.5) AS pitcher_deep_inning_pct_l5,
+                COALESCE(inn_agg.avg_k_first_5ip, 0) AS pitcher_avg_k_first_5ip_l5
 
             FROM mlb_player_game_stats_pitching pgs
 
@@ -548,7 +654,8 @@ class MLBFeatureStore:
                 SELECT avg_whiff_pct_l5, avg_csw_pct_l5,
                        avg_chase_pct_l5, avg_zone_pct_l5,
                        avg_avg_fastball_velo_l5,
-                       std_whiff_pct_l3
+                       std_whiff_pct_l3,
+                       avg_fastball_pct_l5, avg_breaking_pct_l5, avg_offspeed_pct_l5
                 FROM mlb_player_average_statcast_pitching sc
                 WHERE sc.player_id = pgs.player_id
                   AND sc.game_date <= pgs.game_date
@@ -611,7 +718,12 @@ class MLBFeatureStore:
                          THEN SUM(sub.csw_rate * sub.pitches_thrown) / SUM(sub.pitches_thrown)
                          ELSE 0 END AS avg_csw_rate,
                     COUNT(DISTINCT CASE WHEN sub.inning >= 6 THEN sub.game_id END)::float
-                        / GREATEST(COUNT(DISTINCT sub.game_id), 1) AS deep_inning_pct
+                        / GREATEST(COUNT(DISTINCT sub.game_id), 1) AS deep_inning_pct,
+                    COALESCE(
+                        SUM(CASE WHEN sub.inning <= 5 THEN sub.strikeouts ELSE 0 END)::FLOAT /
+                        NULLIF(SUM(CASE WHEN sub.inning <= 5 THEN sub.batters_faced ELSE 0 END), 0),
+                        0
+                    ) AS avg_k_first_5ip
                 FROM mlb_pitcher_inning_stats sub
                 INNER JOIN (
                     SELECT DISTINCT game_id, game_date
@@ -642,6 +754,9 @@ class MLBFeatureStore:
 
         # Add matchup features
         df = self.enrich_with_matchup_features(df)
+
+        # Add interaction features
+        df = self._add_interaction_features(df)
 
         return df
 
@@ -693,7 +808,8 @@ class MLBFeatureStore:
             SELECT avg_whiff_pct_l5, avg_csw_pct_l5,
                    avg_chase_pct_l5, avg_zone_pct_l5,
                    avg_avg_fastball_velo_l5,
-                   std_whiff_pct_l3
+                   std_whiff_pct_l3,
+                   avg_fastball_pct_l5, avg_breaking_pct_l5, avg_offspeed_pct_l5
             FROM mlb_player_average_statcast_pitching
             WHERE player_id = :player_id
               AND game_date <= :game_date
@@ -710,6 +826,9 @@ class MLBFeatureStore:
                 "pitcher_avg_zone_pct_l5": 0,
                 "pitcher_avg_fastball_velo_l5": 0,
                 "pitcher_std_whiff_pct_l3": 0,
+                "pitcher_fastball_pct_l5": 0,
+                "pitcher_breaking_pct_l5": 0,
+                "pitcher_offspeed_pct_l5": 0,
             }
 
         return {
@@ -719,6 +838,9 @@ class MLBFeatureStore:
             "pitcher_avg_zone_pct_l5": float(row.avg_zone_pct_l5 or 0),
             "pitcher_avg_fastball_velo_l5": float(row.avg_avg_fastball_velo_l5 or 0),
             "pitcher_std_whiff_pct_l3": float(row.std_whiff_pct_l3 or 0),
+            "pitcher_fastball_pct_l5": float(row.avg_fastball_pct_l5 or 0),
+            "pitcher_breaking_pct_l5": float(row.avg_breaking_pct_l5 or 0),
+            "pitcher_offspeed_pct_l5": float(row.avg_offspeed_pct_l5 or 0),
         }
 
     def _get_fangraphs_stats(self, player_id: int, season: int) -> dict:
@@ -819,7 +941,12 @@ class MLBFeatureStore:
                      THEN SUM(sub.csw_rate * sub.pitches_thrown) / SUM(sub.pitches_thrown)
                      ELSE 0 END AS avg_csw_rate,
                 COUNT(DISTINCT CASE WHEN sub.inning >= 6 THEN sub.game_id END)::float
-                    / GREATEST(COUNT(DISTINCT sub.game_id), 1) AS deep_inning_pct
+                    / GREATEST(COUNT(DISTINCT sub.game_id), 1) AS deep_inning_pct,
+                COALESCE(
+                    SUM(CASE WHEN sub.inning <= 5 THEN sub.strikeouts ELSE 0 END)::FLOAT /
+                    NULLIF(SUM(CASE WHEN sub.inning <= 5 THEN sub.batters_faced ELSE 0 END), 0),
+                    0
+                ) AS avg_k_first_5ip
             FROM mlb_pitcher_inning_stats sub
             INNER JOIN (
                 SELECT DISTINCT game_id, game_date
@@ -843,6 +970,7 @@ class MLBFeatureStore:
                 "pitcher_avg_pitches_per_inning_l5": 15,
                 "pitcher_avg_csw_rate_l5_inning": 0,
                 "pitcher_deep_inning_pct_l5": 0.5,
+                "pitcher_avg_k_first_5ip_l5": 0,
             }
 
         return {
@@ -852,4 +980,106 @@ class MLBFeatureStore:
             "pitcher_avg_pitches_per_inning_l5": float(row.avg_pitches_per_inning if row.avg_pitches_per_inning is not None else 15),
             "pitcher_avg_csw_rate_l5_inning": float(row.avg_csw_rate or 0),
             "pitcher_deep_inning_pct_l5": float(row.deep_inning_pct if row.deep_inning_pct is not None else 0.5),
+            "pitcher_avg_k_first_5ip_l5": float(row.avg_k_first_5ip or 0),
         }
+
+    def _get_umpire_features(self, game_id: int, game_date: str) -> dict:
+        """Get umpire-based features for a single game.
+
+        Computes rolling average total Ks in the home plate umpire's last 20 games.
+        Falls back to 8.5 (league average K/game) when no umpire data exists.
+        """
+        query = text("""
+            WITH hp_umpire AS (
+                SELECT umpire_id
+                FROM mlb_game_umpires
+                WHERE game_id = :game_id AND position = 'Home Plate'
+                LIMIT 1
+            ),
+            recent_games AS (
+                SELECT gu.game_id, gu.game_date
+                FROM mlb_game_umpires gu
+                JOIN hp_umpire hp ON hp.umpire_id = gu.umpire_id
+                WHERE gu.position = 'Home Plate'
+                    AND gu.game_date < :game_date
+                ORDER BY gu.game_date DESC
+                LIMIT 20
+            )
+            SELECT COALESCE(AVG(total_k), 8.5) AS umpire_avg_k_per_game_l20
+            FROM (
+                SELECT rg.game_id, SUM(pgs.so) AS total_k
+                FROM recent_games rg
+                JOIN mlb_player_game_stats_pitching pgs ON pgs.game_id = rg.game_id
+                GROUP BY rg.game_id
+            ) game_ks
+        """)
+
+        with self.engine.connect() as conn:
+            result = conn.execute(query, {"game_id": game_id, "game_date": str(game_date)}).fetchone()
+
+        return {"umpire_avg_k_per_game_l20": float(result.umpire_avg_k_per_game_l20) if result else 8.5}
+
+    def _compute_umpire_features_bulk(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add umpire_avg_k_per_game_l20 to a DataFrame with game_id and game_date columns.
+
+        For each game, finds the home-plate umpire and computes the rolling avg
+        total Ks in that umpire's last 20 games. Falls back to 8.5 when no data.
+        """
+        if df.empty:
+            df["umpire_avg_k_per_game_l20"] = 8.5
+            return df
+
+        game_ids = df["game_id"].unique().tolist()
+        if not game_ids:
+            df["umpire_avg_k_per_game_l20"] = 8.5
+            return df
+
+        query = text("""
+            WITH target_umpires AS (
+                SELECT gu.game_id, gu.umpire_id, gu.game_date
+                FROM mlb_game_umpires gu
+                WHERE gu.game_id = ANY(:game_ids)
+                  AND gu.position = 'Home Plate'
+            ),
+            umpire_history AS (
+                SELECT
+                    tu.game_id AS target_game_id,
+                    hist.game_id AS hist_game_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY tu.game_id
+                        ORDER BY hist.game_date DESC
+                    ) AS rn
+                FROM target_umpires tu
+                JOIN mlb_game_umpires hist
+                    ON hist.umpire_id = tu.umpire_id
+                   AND hist.position = 'Home Plate'
+                   AND hist.game_date < tu.game_date
+            ),
+            recent_20 AS (
+                SELECT target_game_id, hist_game_id
+                FROM umpire_history
+                WHERE rn <= 20
+            ),
+            game_ks AS (
+                SELECT r.target_game_id, r.hist_game_id, SUM(pgs.so) AS total_k
+                FROM recent_20 r
+                JOIN mlb_player_game_stats_pitching pgs ON pgs.game_id = r.hist_game_id
+                GROUP BY r.target_game_id, r.hist_game_id
+            )
+            SELECT target_game_id AS game_id,
+                   AVG(total_k) AS umpire_avg_k_per_game_l20
+            FROM game_ks
+            GROUP BY target_game_id
+        """)
+
+        with self.engine.connect() as conn:
+            conn.execute(text("SET statement_timeout = '120000'"))
+            ump_df = pd.read_sql(query, conn, params={"game_ids": game_ids})
+
+        if ump_df.empty:
+            df["umpire_avg_k_per_game_l20"] = 8.5
+            return df
+
+        df = df.merge(ump_df, on="game_id", how="left")
+        df["umpire_avg_k_per_game_l20"] = df["umpire_avg_k_per_game_l20"].fillna(8.5)
+        return df

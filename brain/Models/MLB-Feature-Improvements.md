@@ -25,6 +25,8 @@ Run BEFORE adding any new features. Retrain batter hits model with these 4 featu
 
 **How to run:** Remove from `BATTER_BASE_FEATURES` in `mlb_batter_feature_store.py`, retrain with identical settings, sweep on same OOS window, compare hit rate and ROI.
 
+**Status (May 1 2026):** Ablation removals applied to feature lists, but training pipeline ignores feature lists — uses NLL-based selection from all DataFrame columns. The selector independently kept `batter_avg_hr_szn` and `batter_avg_r_l5` (they reduce NLL). `batter_avg_rbi_szn` was already excluded by the selector. Ablation inconclusive. Fix: filter pipeline candidates to intersect with feature list, or trust the NLL selector.
+
 ---
 
 ## Batch 1: Ship and Retrain (~16-18 hours total)
@@ -206,3 +208,21 @@ These were suggested but the system already has them:
 - **BABIP-against is a batch 1 dependency:** The `batter_babip × opp_pitcher_babip_against` interaction feature can't ship until BABIP-against is built.
 - **Retrain both models after batch 1:** Run full sweep on 2026 OOS window to measure aggregate improvement before proceeding to batch 2.
 - **Feature importance extraction:** After batch 1 retrain, save XGBoost `feature_importances_` to artifact directory for ongoing monitoring.
+
+### Batch 1 Implementation Status (May 1 2026)
+
+All 9 items COMPLETE. Code wired into all 3 paths (training SQL, batch inference, single-game inference) for both models.
+
+| Item | Feature | Status |
+|------|---------|--------|
+| 1 | GB/FB tendency (batter hits) | ✅ Wired into BATTER_HITS_FEATURES + all SQL paths |
+| 2 | Pitch count efficiency | ✅ `pitcher_pitches_per_ip_l5` derived feature |
+| 3 | First-5-IP K rate | ✅ `pitcher_avg_k_first_5ip_l5` via inn_agg LATERAL JOIN |
+| 4 | Interaction features (4) | ✅ 2 pitcher + 2 batter interactions |
+| 5 | Pitch repertoire diversity | ✅ 3 pcts + num_pitch_types derived |
+| 6 | Projected lineup K-rate | ✅ `projected_lineup_k_pct` (bulk + single-game) |
+| 7 | Pitcher handedness x lineup | ✅ `pct_opp_lineup_same_hand` |
+| 8 | Umpire infrastructure | ✅ DB table + scraper + scheduler + feature in both models |
+| 9 | Opposing pitcher BABIP-against | ✅ Derived from existing boxscore stats |
+
+**Pending**: Umpire backfill (2023-2025), retrain both models, backtest sweep.
