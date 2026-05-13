@@ -44,6 +44,17 @@ Load the relevant skill before acting:
 - Use direct file tools for 1-2 targeted searches. Use a bounded explorer for unknown scope or 3+ searches/reads.
 - Keep SQL isolated in a delegated/read-only runner. Main context should receive concise summaries, not large result sets.
 
+## Modeling/architecture lesson retrieval
+
+This is mandatory always-loaded behavior, not optional runbook advice. Before recommending model architecture changes, feature-family validation, calibration changes, model promotion, or betting/backtest interpretation:
+
+1. Query/read `operations/hard-facts` and `operations/critical-invariants` first.
+2. Retrieve lessons via `mcp_gbrain_list_pages(tag='lesson')` plus keyword search for relevant terms; do not rely only on hybrid query.
+3. Retrieve canonical decisions/model pages next, then recent handoffs for recency/evidence.
+4. Include a compact “Relevant prior lessons/invariants” section in the recommendation, or explicitly say no relevant prior lesson surfaced.
+
+Current high-priority lesson slugs include `lessons/feature-selector-is-not-an-ablation`, `lessons/cheap-baseline-before-architecture`, `lessons/correlated-feature-family-validation`, `lessons/q10-miscalibration-is-edge`, and `lessons/empirical-cdf-for-probabilities`.
+
 ## Implementation lane
 
 Use direct edits for tiny/config/markdown changes. For approved code plans that exceed roughly 20 changed lines, touch 2+ implementation files, or already have a precise spec, prefer the implementation-worker lane:
