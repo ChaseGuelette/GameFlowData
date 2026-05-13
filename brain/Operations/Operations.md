@@ -11,6 +11,8 @@ Daily runbooks, critical invariants, incident response procedures, and maintenan
 - [[Maintenance-Tasks]] - Periodic maintenance and cleanup
 - [[Known-Issues]] - Active bugs and technical debt
 - [[Claude-Commands]] - Slash commands registered for Claude Code sessions
+- [[Hermes-GBrain-Migration-Checklist]] - Practical migration plan from Claude/BrainTree/Solokit to Hermes + GBrain
+- [[Remote-Hermes-Agent-Setup]] - Always-on VPS/Discord Hermes operator setup for remote code changes and PRs
 - [[Project-Root-Files]] - Root-level project documents (HANDOFF, ARCHITECTURE, etc.)
 - [[Kalshi-Live-Trading-Startup]] - Live trading launch playbook: pre-flight checklist, $300 bankroll config, circuit breakers, scaling plan
 

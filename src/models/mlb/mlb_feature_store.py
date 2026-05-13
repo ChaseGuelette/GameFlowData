@@ -36,6 +36,7 @@ PITCHER_K_FEATURES: list[str] = [
     "pitcher_avg_ip_l3",
     "pitcher_avg_ip_l5",
     "pitcher_avg_ip_szn",
+    "pitcher_min_ip_l5",
     "pitcher_avg_pitches_thrown_l3",
     "pitcher_avg_bb_l5",
     "pitcher_std_so_l3",
@@ -53,6 +54,8 @@ PITCHER_K_FEATURES: list[str] = [
     "pitcher_days_rest",
     "pitcher_pitch_count_last_start",
     "pitcher_starts_szn",
+    "team_bullpen_ip_last_3d",
+    "team_bullpen_pitches_last_3d",
     # Opposing team batting context
     "opp_team_avg_so_l10",
     "opp_team_avg_batting_avg_l10",
@@ -172,6 +175,7 @@ class MLBFeatureStore:
                 COALESCE(p_avg.avg_ip_l3, 0) AS pitcher_avg_ip_l3,
                 COALESCE(p_avg.avg_ip_l5, 0) AS pitcher_avg_ip_l5,
                 COALESCE(p_avg.avg_ip_szn, 0) AS pitcher_avg_ip_szn,
+                COALESCE(p_avg.min_ip_l5, 0) AS pitcher_min_ip_l5,
                 COALESCE(p_avg.avg_pitches_thrown_l3, 0) AS pitcher_avg_pitches_thrown_l3,
                 COALESCE(p_avg.avg_bb_l5, 0) AS pitcher_avg_bb_l5,
                 COALESCE(p_avg.std_so_l3, 0) AS pitcher_std_so_l3,
@@ -204,6 +208,10 @@ class MLBFeatureStore:
                 COALESCE(gw.air_density_idx, 1.0) AS air_density_idx,
                 COALESCE(gw.wind_out_mph, 0.0) AS wind_out_mph,
 
+                -- Own-team bullpen workload
+                COALESCE(bull.bullpen_ip_last_3d, 0) AS team_bullpen_ip_last_3d,
+                COALESCE(bull.bullpen_pitches_last_3d, 0) AS team_bullpen_pitches_last_3d,
+
                 -- Game lines (total)
                 COALESCE(lines.game_total, 0) AS line_total,
 
@@ -231,6 +239,7 @@ class MLBFeatureStore:
                 SELECT avg_so_l3, avg_so_l5, avg_so_szn,
                        avg_k_per_9_l5,
                        avg_ip_l3, avg_ip_l5, avg_ip_szn,
+                       min_ip_l5,
                        avg_pitches_thrown_l3,
                        avg_bb_l5, avg_h_allowed_l5,
                        std_so_l3,
@@ -267,6 +276,11 @@ class MLBFeatureStore:
 
             -- Game weather
             LEFT JOIN mlb_game_weather gw ON gw.game_pk = pgs.game_id
+
+            -- Own-team bullpen workload
+            LEFT JOIN mlb_bullpen_daily_status bull
+                ON bull.team_id = pgs.team_id
+               AND bull.game_date = pgs.game_date
 
             -- Game total line (latest snapshot from pinnacle/draftkings)
             LEFT JOIN LATERAL (
@@ -477,6 +491,9 @@ class MLBFeatureStore:
         # 5. Game context
         features["is_home"] = 1 if is_home else 0
 
+        # 5b. Own-team bullpen workload
+        features.update(self._get_team_bullpen_stats(team_id, game_date))
+
         # 6. Game total line
         features["line_total"] = self._get_game_total(game_id)
 
@@ -584,6 +601,7 @@ class MLBFeatureStore:
                 COALESCE(p_avg.avg_ip_l3, 0) AS pitcher_avg_ip_l3,
                 COALESCE(p_avg.avg_ip_l5, 0) AS pitcher_avg_ip_l5,
                 COALESCE(p_avg.avg_ip_szn, 0) AS pitcher_avg_ip_szn,
+                COALESCE(p_avg.min_ip_l5, 0) AS pitcher_min_ip_l5,
                 COALESCE(p_avg.avg_pitches_thrown_l3, 0) AS pitcher_avg_pitches_thrown_l3,
                 COALESCE(p_avg.avg_bb_l5, 0) AS pitcher_avg_bb_l5,
                 COALESCE(p_avg.std_so_l3, 0) AS pitcher_std_so_l3,
@@ -616,6 +634,10 @@ class MLBFeatureStore:
                 COALESCE(gw.air_density_idx, 1.0) AS air_density_idx,
                 COALESCE(gw.wind_out_mph, 0.0) AS wind_out_mph,
 
+                -- Own-team bullpen workload
+                COALESCE(bull.bullpen_ip_last_3d, 0) AS team_bullpen_ip_last_3d,
+                COALESCE(bull.bullpen_pitches_last_3d, 0) AS team_bullpen_pitches_last_3d,
+
                 -- Game lines
                 COALESCE(lines.game_total, 0) AS line_total,
 
@@ -640,6 +662,7 @@ class MLBFeatureStore:
                 SELECT avg_so_l3, avg_so_l5, avg_so_szn,
                        avg_k_per_9_l5,
                        avg_ip_l3, avg_ip_l5, avg_ip_szn,
+                       min_ip_l5,
                        avg_pitches_thrown_l3,
                        avg_bb_l5, avg_h_allowed_l5,
                        std_so_l3,
@@ -673,6 +696,11 @@ class MLBFeatureStore:
 
             -- Game weather
             LEFT JOIN mlb_game_weather gw ON gw.game_pk = pgs.game_id
+
+            -- Own-team bullpen workload
+            LEFT JOIN mlb_bullpen_daily_status bull
+                ON bull.team_id = pgs.team_id
+               AND bull.game_date = pgs.game_date
 
             LEFT JOIN LATERAL (
                 SELECT MAX(CASE WHEN market_key = 'totals'
@@ -770,6 +798,7 @@ class MLBFeatureStore:
             SELECT avg_so_l3, avg_so_l5, avg_so_szn,
                    avg_k_per_9_l5,
                    avg_ip_l3, avg_ip_l5, avg_ip_szn,
+                   min_ip_l5,
                    avg_pitches_thrown_l3,
                    avg_bb_l5, avg_h_allowed_l5,
                    std_so_l3,
@@ -783,7 +812,9 @@ class MLBFeatureStore:
             row = conn.execute(query, {"player_id": player_id, "game_date": game_date}).fetchone()
 
         if row is None:
-            return {f: 0 for f in PITCHER_K_FEATURES if f.startswith("pitcher_avg_") or f.startswith("pitcher_std_")}
+            defaults = {f: 0 for f in PITCHER_K_FEATURES if f.startswith("pitcher_avg_") or f.startswith("pitcher_std_")}
+            defaults["pitcher_min_ip_l5"] = 0
+            return defaults
 
         return {
             "pitcher_avg_so_l3": float(row.avg_so_l3 or 0),
@@ -793,6 +824,7 @@ class MLBFeatureStore:
             "pitcher_avg_ip_l3": float(row.avg_ip_l3 or 0),
             "pitcher_avg_ip_l5": float(row.avg_ip_l5 or 0),
             "pitcher_avg_ip_szn": float(row.avg_ip_szn or 0),
+            "pitcher_min_ip_l5": float(row.min_ip_l5 or 0),
             "pitcher_avg_pitches_thrown_l3": float(row.avg_pitches_thrown_l3 or 0),
             "pitcher_avg_bb_l5": float(row.avg_bb_l5 or 0),
             "pitcher_avg_h_allowed_l5": float(row.avg_h_allowed_l5 or 0),
@@ -888,6 +920,25 @@ class MLBFeatureStore:
         return {
             "air_density_idx": float(row.air_density_idx or 1.0),
             "wind_out_mph": float(row.wind_out_mph or 0.0),
+        }
+
+    def _get_team_bullpen_stats(self, team_id: int, game_date: str) -> dict[str, float]:
+        """Fetch own-team bullpen workload for pitcher inference."""
+        query = text("""
+            SELECT bullpen_ip_last_3d, bullpen_pitches_last_3d
+            FROM mlb_bullpen_daily_status
+            WHERE team_id = :team_id
+              AND game_date = :game_date
+        """)
+        with self.engine.connect() as conn:
+            row = conn.execute(query, {"team_id": team_id, "game_date": game_date}).fetchone()
+
+        if row is None:
+            return {"team_bullpen_ip_last_3d": 0.0, "team_bullpen_pitches_last_3d": 0.0}
+
+        return {
+            "team_bullpen_ip_last_3d": float(row.bullpen_ip_last_3d or 0.0),
+            "team_bullpen_pitches_last_3d": float(row.bullpen_pitches_last_3d or 0.0),
         }
 
     def _get_game_total(self, game_id: int) -> float:

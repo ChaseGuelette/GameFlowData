@@ -242,6 +242,11 @@ def calculate_pitching_rolling_for_player(player_df: pd.DataFrame) -> pd.DataFra
             else:
                 player_df[col] = shifted.rolling(window=wsize, min_periods=1).mean()
 
+    # Short-outing risk: minimum IP over prior 5 pitching appearances.
+    if "ip" in player_df.columns:
+        shifted_ip = player_df["ip"].shift(1)
+        player_df["min_ip_l5"] = shifted_ip.rolling(window=5, min_periods=1).min()
+
     # Std devs
     for stat in PITCHING_STD_STATS:
         if stat not in player_df.columns:
@@ -387,14 +392,15 @@ def upsert_pitching_averages(engine, df: pd.DataFrame):
     base_cols = ["player_id", "game_id", "game_date", "season", "team_id"]
     avg_cols = [c for c in df.columns if c.startswith("avg_")]
     std_cols = [c for c in df.columns if c.startswith("std_")]
+    min_cols = [c for c in ["min_ip_l5"] if c in df.columns]
     ctx_cols = [c for c in ["game_number", "days_rest", "pitch_count_last_start",
                              "starts_l3", "starts_l5", "starts_szn"] if c in df.columns]
 
-    all_cols = base_cols + avg_cols + std_cols + ctx_cols
+    all_cols = base_cols + avg_cols + std_cols + min_cols + ctx_cols
     insert_df = df[[c for c in all_cols if c in df.columns]].copy()
 
     for col in insert_df.columns:
-        if col.startswith("avg_") or col.startswith("std_"):
+        if col.startswith("avg_") or col.startswith("std_") or col == "min_ip_l5":
             insert_df[col] = insert_df[col].round(4)
 
     for col in ["days_rest", "starts_l3", "starts_l5", "starts_szn"]:

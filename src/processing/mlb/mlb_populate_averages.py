@@ -235,6 +235,12 @@ def calculate_pitching_averages(df: pd.DataFrame) -> pd.DataFrame:
             col = f"avg_{stat}_{wname}"
             df[col] = rolling_with_groupby(shifted, group_key, window=wsize)
 
+    # Short-outing risk: minimum IP over prior 5 pitching appearances.
+    # Uses shifted IP to preserve temporal integrity for game N.
+    if "ip" in df.columns:
+        shifted_ip = df.groupby(group_cols)["ip"].shift(1)
+        df["min_ip_l5"] = rolling_with_groupby(shifted_ip, group_key, window=5, agg="min")
+
     # Std devs: so at L3, er at L3
     for stat in PITCHING_STD_STATS:
         if stat not in df.columns:
@@ -390,6 +396,9 @@ def insert_pitching_averages(engine, df: pd.DataFrame):
         if col in df.columns:
             columns.append(col)
 
+    if "min_ip_l5" in df.columns:
+        columns.append("min_ip_l5")
+
     for stat in PITCHING_STD_STATS:
         col = f"std_{stat}_l3"
         if col in df.columns:
@@ -403,7 +412,7 @@ def insert_pitching_averages(engine, df: pd.DataFrame):
 
     # Round numerics
     for col in insert_df.columns:
-        if col.startswith("avg_") or col.startswith("std_"):
+        if col.startswith("avg_") or col.startswith("std_") or col == "min_ip_l5":
             insert_df[col] = insert_df[col].round(4)
 
     # Cast smallint columns

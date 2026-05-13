@@ -1,0 +1,12 @@
+[mcp_servers.github]
+args = [
+    "-y",
+    "@modelcontextprotocol/server-github",
+]
+command = "npx.cmd"
+
+[mcp_servers.github.env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_YourActualTokenHere"
+
+[mcp_servers.supabase]
+url = "https://mcp.supabase.com/mcp?project_ref=pijbpbkjessclpejddfg"
