@@ -27,11 +27,14 @@ import psycopg2
 from dotenv import load_dotenv
 
 TABLE_SPECS = [
-    ("mlb_game_schedule", False),
-    ("mlb_player_game_stats_pitching", False),
-    ("mlb_player_game_stats_batting", False),
-    ("mlb_player_average_pitching", True),
-    ("mlb_bullpen_daily_status", False),
+    ("mlb_game_schedule", "game_date", False),
+    ("mlb_teams", None, False),
+    ("mlb_player_game_stats_pitching", "game_date", False),
+    ("mlb_player_game_stats_batting", "game_date", False),
+    ("mlb_player_average_pitching", "game_date", True),
+    ("mlb_bullpen_daily_status", "game_date", False),
+    ("mlb_game_lineups", "game_date", False),
+    ("mlb_game_umpires", "game_date", False),
 ]
 
 SUMMARY_SQL = """
@@ -42,6 +45,8 @@ SELECT
     COUNT(DISTINCT game_date)::bigint AS distinct_dates
 FROM {table}
 """
+
+COUNT_SQL = "SELECT COUNT(*)::bigint AS row_count FROM {table}"
 
 MIN_IP_SQL = """
 SELECT COUNT(min_ip_l5)::bigint
@@ -89,9 +94,18 @@ def validate_target(target: str) -> bool:
     try:
         with conn, conn.cursor() as cur:
             print(f"{'table':35} {'rows':>12} {'min_date':>12} {'max_date':>12} {'dates':>8} {'min_ip_l5':>12}")
-            for table, has_min_ip in TABLE_SPECS:
-                cur.execute(SUMMARY_SQL.format(table=table))
-                row_count, min_date, max_date, distinct_dates = cur.fetchone()
+            for table, date_col, has_min_ip in TABLE_SPECS:
+                cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table}",))
+                if not cur.fetchone()[0]:
+                    print(f"{table:35} {'MISSING':>12} {'':>12} {'':>12} {'':>8} {'':>12}")
+                    continue
+                if date_col:
+                    cur.execute(SUMMARY_SQL.replace("game_date", date_col).format(table=table))
+                    row_count, min_date, max_date, distinct_dates = cur.fetchone()
+                else:
+                    cur.execute(COUNT_SQL.format(table=table))
+                    row_count = cur.fetchone()[0]
+                    min_date = max_date = distinct_dates = ""
                 min_ip = ""
                 if has_min_ip:
                     cur.execute(MIN_IP_SQL)

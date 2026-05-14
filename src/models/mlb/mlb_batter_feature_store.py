@@ -167,6 +167,16 @@ class MLBBatterFeatureStore:
         self.engine = engine
         self.config = config or MLBBatterFeatureConfig()
 
+    def _table_exists(self, table_name: str) -> bool:
+        """Return True when an optional public table exists in the target DB."""
+        with self.engine.connect() as conn:
+            return bool(
+                conn.execute(
+                    text("SELECT to_regclass(:table_name) IS NOT NULL"),
+                    {"table_name": f"public.{table_name}"},
+                ).scalar()
+            )
+
     # ------------------------------------------------------------------
     # Training data
     # ------------------------------------------------------------------
@@ -1296,6 +1306,10 @@ class MLBBatterFeatureStore:
         Computes rolling average total Ks in the home plate umpire's last 20 games.
         Falls back to 8.5 (league average K/game) when no umpire data exists.
         """
+        if not self._table_exists("mlb_game_umpires"):
+            logger.warning("mlb_game_umpires table not found; using default umpire K tendency")
+            return {"umpire_avg_k_per_game_l20": 8.5}
+
         query = text("""
             WITH hp_umpire AS (
                 SELECT umpire_id
@@ -1333,6 +1347,11 @@ class MLBBatterFeatureStore:
         total Ks in that umpire's last 20 games. Falls back to 8.5 when no data.
         """
         if df.empty:
+            df["umpire_avg_k_per_game_l20"] = 8.5
+            return df
+
+        if not self._table_exists("mlb_game_umpires"):
+            logger.warning("mlb_game_umpires table not found; using default umpire K tendency for %d rows", len(df))
             df["umpire_avg_k_per_game_l20"] = 8.5
             return df
 

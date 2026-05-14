@@ -22,8 +22,9 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time as datetime_time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -92,13 +93,15 @@ class SweepConfig:
     kelly_fraction: float
     z_max: float = 1.0
     max_weight: float = 0.50
+    flat_bet_size: float | None = None
 
     @property
     def label(self) -> str:
+        sizing = f"flat=${self.flat_bet_size:g}" if self.flat_bet_size is not None else f"kelly={self.kelly_fraction}"
         if self.tau is None:
-            return f"no_BL | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
+            return f"no_BL | edge={self.edge_threshold} | {sizing}"
         mw = f" mw={self.max_weight}" if self.max_weight != 0.50 else ""
-        return f"tau={self.tau} z_max={self.z_max}{mw} | edge={self.edge_threshold} | kelly={self.kelly_fraction}"
+        return f"tau={self.tau} z_max={self.z_max}{mw} | edge={self.edge_threshold} | {sizing}"
 
     def to_dict(self) -> dict:
         return {
@@ -107,6 +110,7 @@ class SweepConfig:
             "max_weight": self.max_weight,
             "edge_threshold": self.edge_threshold,
             "kelly_fraction": self.kelly_fraction,
+            "flat_bet_size": self.flat_bet_size,
         }
 
 
@@ -186,6 +190,7 @@ def run_shared_phases(
     start_date: date,
     end_date: date,
     stats: list[str],
+    quote_clean_cutoff_time_et: str | None = None,
 ) -> tuple[
     list[date],
     dict[date, list[DatePrediction]],
@@ -267,6 +272,7 @@ def run_shared_phases(
             preds, lines = _process_date_shared(
                 engine, pitcher_feature_store, batter_feature_store, suite,
                 game_date, stats, matchup_cache=matchup_cache,
+                quote_clean_cutoff_time_et=quote_clean_cutoff_time_et,
             )
             if preds:
                 date_predictions[game_date] = preds
@@ -292,6 +298,7 @@ def _process_date_shared(
     game_date: date,
     stats: list[str],
     matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None,
+    quote_clean_cutoff_time_et: str | None = None,
 ) -> tuple[list[DatePrediction], pd.DataFrame | None]:
     """Generate predictions + fetch lines for a single date."""
     # Get games
@@ -430,13 +437,43 @@ def _process_date_shared(
     # Fetch lines for all players on this date
     game_ids = [g["game_id"] for g in games]
     market_keys = [s for s in stats if s in STAT_ACTUALS]
-    lines_df = _fetch_lines_for_date(engine, game_ids, market_keys)
+    quote_clean_cutoff_ts = None
+    if quote_clean_cutoff_time_et is not None:
+        quote_clean_cutoff_ts = _build_quote_clean_cutoff_ts(game_date, quote_clean_cutoff_time_et)
+    lines_df = _fetch_lines_for_date(
+        engine,
+        game_ids,
+        market_keys,
+        quote_clean_cutoff_ts=quote_clean_cutoff_ts,
+    )
 
     return predictions, lines_df
 
 
+def _build_quote_clean_cutoff_ts(game_date: date, cutoff_time_et: str) -> datetime:
+    """Build a timezone-aware ET cutoff timestamp for quote-clean line selection.
+
+    The production inference path effectively sees only rows already present in
+    `mlb_raw_player_props` when the job runs. For historical quote-clean replay,
+    this helper turns a fixed ET inference time (HH:MM) into a timestamp cutoff
+    that can be applied to `snapshot_time`.
+    """
+    try:
+        hour_s, minute_s = cutoff_time_et.split(":", 1)
+        cutoff_t = datetime_time(hour=int(hour_s), minute=int(minute_s))
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid --quote-cutoff-time-et={cutoff_time_et!r}; expected HH:MM"
+        ) from exc
+
+    return datetime.combine(game_date, cutoff_t, tzinfo=ZoneInfo("America/New_York"))
+
+
 def _fetch_lines_for_date(
-    engine, game_ids: list[int], market_keys: list[str],
+    engine,
+    game_ids: list[int],
+    market_keys: list[str],
+    quote_clean_cutoff_ts: datetime | None = None,
 ) -> pd.DataFrame:
     """Fetch all prop lines for a set of games, excluding invalid bookmakers.
 
@@ -464,23 +501,68 @@ def _fetch_lines_for_date(
     for i, bk in enumerate(EXCLUDED_BOOKMAKERS):
         params[f"excl_{i}"] = bk
 
-    query = text(f"""
-        WITH ranked AS (
+    if quote_clean_cutoff_ts is not None:
+        params["quote_clean_cutoff_ts"] = quote_clean_cutoff_ts
+        query = text(f"""
+            WITH ranked_lines AS (
+                SELECT
+                    player_id,
+                    game_id,
+                    bookmaker,
+                    market_key,
+                    line,
+                    outcome_label,
+                    odds_american,
+                    snapshot_time,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
+                        ORDER BY snapshot_time DESC NULLS LAST
+                    ) AS rn
+                FROM mlb_raw_player_props
+                WHERE game_id IN ({game_id_placeholders})
+                  AND market_key IN ({market_placeholders})
+                  AND bookmaker NOT IN ({excl_placeholders})
+                  AND player_id IS NOT NULL
+                  AND snapshot_time <= :quote_clean_cutoff_ts
+            )
             SELECT
-                player_id, game_id, bookmaker, market_key, line,
-                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
-                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
-            FROM mlb_raw_player_props
-            WHERE game_id IN ({game_id_placeholders})
-              AND market_key IN ({market_placeholders})
-              AND bookmaker NOT IN ({excl_placeholders})
-              AND player_id IS NOT NULL
+                player_id,
+                game_id,
+                bookmaker,
+                market_key,
+                line,
+                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
+                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds,
+                MAX(CASE WHEN outcome_label = 'Over' THEN snapshot_time END) AS over_snapshot_time,
+                MAX(CASE WHEN outcome_label = 'Under' THEN snapshot_time END) AS under_snapshot_time,
+                GREATEST(
+                    MAX(CASE WHEN outcome_label = 'Over' THEN snapshot_time END),
+                    MAX(CASE WHEN outcome_label = 'Under' THEN snapshot_time END)
+                ) AS selected_snapshot_time
+            FROM ranked_lines
+            WHERE rn = 1
             GROUP BY player_id, game_id, bookmaker, market_key, line
             HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
                AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
-        )
-        SELECT * FROM ranked
-    """)
+        """)
+    else:
+        query = text(f"""
+            WITH ranked AS (
+                SELECT
+                    player_id, game_id, bookmaker, market_key, line,
+                    MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
+                    MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
+                FROM mlb_raw_player_props
+                WHERE game_id IN ({game_id_placeholders})
+                  AND market_key IN ({market_placeholders})
+                  AND bookmaker NOT IN ({excl_placeholders})
+                  AND player_id IS NOT NULL
+                GROUP BY player_id, game_id, bookmaker, market_key, line
+                HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
+                   AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
+            )
+            SELECT * FROM ranked
+        """)
 
     with engine.connect() as conn:
         conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
@@ -504,9 +586,18 @@ def _odds_to_prob(odds: float) -> float:
         return abs(odds) / (abs(odds) + 100)
 
 
-def _select_sharpest_line(lines: pd.DataFrame, player_id: int, market_key: str) -> dict | None:
+def _select_sharpest_line(
+    lines: pd.DataFrame,
+    player_id: int,
+    game_id: int,
+    market_key: str,
+) -> dict | None:
     """Find the lowest-vig line for a player/market from all bookmakers."""
-    mask = (lines["player_id"] == player_id) & (lines["market_key"] == market_key)
+    mask = (
+        (lines["player_id"] == player_id)
+        & (lines["game_id"] == game_id)
+        & (lines["market_key"] == market_key)
+    )
     player_lines = lines[mask]
 
     if player_lines.empty:
@@ -529,6 +620,9 @@ def _select_sharpest_line(lines: pd.DataFrame, player_id: int, market_key: str) 
                 "over_odds": over_odds,
                 "under_odds": under_odds,
                 "bookmaker": row["bookmaker"],
+                "selected_snapshot_time": row.get("selected_snapshot_time"),
+                "over_snapshot_time": row.get("over_snapshot_time"),
+                "under_snapshot_time": row.get("under_snapshot_time"),
             }
 
     return best_line
@@ -570,7 +664,7 @@ def compute_edges_for_config(
         # Find best line
         line_info = None
         if lines_df is not None and not lines_df.empty:
-            line_info = _select_sharpest_line(lines_df, pred.player_id, pred.stat)
+            line_info = _select_sharpest_line(lines_df, pred.player_id, pred.game_id, pred.stat)
 
         if line_info is None:
             results.append(row)
@@ -615,6 +709,9 @@ def compute_edges_for_config(
         row["over_odds"] = over_odds
         row["under_odds"] = under_odds
         row["bookmaker"] = line_info["bookmaker"]
+        row["selected_snapshot_time"] = line_info.get("selected_snapshot_time")
+        row["over_snapshot_time"] = line_info.get("over_snapshot_time")
+        row["under_snapshot_time"] = line_info.get("under_snapshot_time")
         row["over_prob"] = over_prob
         row["under_prob"] = under_prob
         row["implied_over"] = implied_over
@@ -666,7 +763,8 @@ def precompute_mlb_base_probs(
         if ldf.empty:
             continue
 
-        # Vectorized best-line selection: compute booksum, pick lowest-vig per (player_id, market_key)
+        # Vectorized best-line selection: compute booksum, pick lowest-vig per
+        # (player_id, game_id, market_key), matching production line selection.
         over_arr = ldf["over_odds"].values.astype(float)
         under_arr = ldf["under_odds"].values.astype(float)
         raw_over = np.where(over_arr > 0, 100.0 / (over_arr + 100.0), np.abs(over_arr) / (np.abs(over_arr) + 100.0))
@@ -675,14 +773,14 @@ def precompute_mlb_base_probs(
         ldf["_raw_under"] = raw_under
         ldf["_booksum"] = raw_over + raw_under
 
-        best_idx = ldf.groupby(["player_id", "market_key"])["_booksum"].idxmin()
-        best_lines = ldf.loc[best_idx.values].set_index(["player_id", "market_key"])
+        best_idx = ldf.groupby(["player_id", "game_id", "market_key"])["_booksum"].idxmin()
+        best_lines = ldf.loc[best_idx.values].set_index(["player_id", "game_id", "market_key"])
 
         actuals_dict = date_actuals.get(gd, {})
 
         for pred in preds:
             try:
-                bl_row = best_lines.loc[(pred.player_id, pred.stat)]
+                bl_row = best_lines.loc[(pred.player_id, pred.game_id, pred.stat)]
             except KeyError:
                 continue
 
@@ -712,6 +810,9 @@ def precompute_mlb_base_probs(
                 "over_odds": over_odds,
                 "under_odds": under_odds,
                 "bookmaker": bl_row["bookmaker"],
+                "selected_snapshot_time": bl_row.get("selected_snapshot_time"),
+                "over_snapshot_time": bl_row.get("over_snapshot_time"),
+                "under_snapshot_time": bl_row.get("under_snapshot_time"),
                 "model_over": model_over,
                 "market_over": market_over,
                 "market_under": 1.0 - market_over,
@@ -993,7 +1094,10 @@ def run_combined_config(
 
     # Build a representative SweepConfig for labeling
     label_config = SweepConfig(
-        tau=None, edge_threshold=min_edge, kelly_fraction=kelly_fraction,
+        tau=None,
+        edge_threshold=min_edge,
+        kelly_fraction=kelly_fraction,
+        flat_bet_size=flat_bet_size,
     )
 
     elapsed = time.time() - t0
@@ -1138,6 +1242,7 @@ def save_results(
             "max_weight": r.config.max_weight,
             "edge_threshold": r.config.edge_threshold,
             "kelly_fraction": r.config.kelly_fraction,
+            "flat_bet_size": r.config.flat_bet_size,
             "total_bets": m.total_bets,
             "wins": m.wins,
             "losses": m.losses,
@@ -1250,7 +1355,13 @@ def main():
                         default=["pitcher_strikeouts", "batter_hits", "batter_rbis"])
     parser.add_argument("--starting-bankroll", type=float, default=10000.0)
     parser.add_argument("--max-bet-pct", type=float, default=None)
-    parser.add_argument("--flat-bet", type=float, default=None)
+    parser.add_argument(
+        "--flat", "--flat-bet",
+        dest="flat_bet",
+        type=float,
+        default=None,
+        help="Use fixed dollar stake per bet instead of Kelly sizing (e.g. --flat 100).",
+    )
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
@@ -1261,6 +1372,21 @@ def main():
                         help="Restrict bet direction for all stats (default: both). "
                              "In --combined mode, per-stat allowed_directions from mlb_stat_config.py "
                              "are also applied on top of this filter.")
+    parser.add_argument(
+        "--quote-clean",
+        action="store_true",
+        help=(
+            "Use production-equivalent quote selection: latest snapshot at/before "
+            "--quote-cutoff-time-et per book/line/outcome, then lowest-vig line. "
+            "Without this flag, preserves legacy optimistic line aggregation."
+        ),
+    )
+    parser.add_argument(
+        "--quote-cutoff-time-et",
+        type=str,
+        default="13:30",
+        help="ET cutoff time for --quote-clean historical replay (HH:MM, default 13:30).",
+    )
 
     args = parser.parse_args()
 
@@ -1282,6 +1408,8 @@ def main():
         cli_allowed_bets = {(stat, args.direction) for stat in args.stats}
 
     configs = build_sweep_grid(tau_values, args.edge, args.kelly, args.z_max, args.max_weight)
+    for config in configs:
+        config.flat_bet_size = args.flat_bet
     logger.info(f"Sweep grid: {len(configs)} configurations")
 
     if args.output_dir:
@@ -1313,6 +1441,15 @@ def main():
     t_shared = time.time()
 
     logger.info(f"Excluding bookmakers: {list(EXCLUDED_BOOKMAKERS)}")
+    if args.quote_clean:
+        logger.info(
+            "Quote-clean line mode enabled: latest snapshots <= %s ET, then lowest-vig production line selection",
+            args.quote_cutoff_time_et,
+        )
+    else:
+        logger.warning(
+            "Legacy line mode enabled: aggregates odds across all snapshots; results are not promotion-grade."
+        )
     game_dates, date_predictions, date_lines, date_actuals = run_shared_phases(
         engine=engine,
         pitcher_feature_store=pitcher_feature_store,
@@ -1321,6 +1458,7 @@ def main():
         start_date=start_date,
         end_date=end_date,
         stats=args.stats,
+        quote_clean_cutoff_time_et=args.quote_cutoff_time_et if args.quote_clean else None,
     )
 
     phase01_time = time.time() - t_shared

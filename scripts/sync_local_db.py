@@ -56,6 +56,7 @@ MLB_TABLES: dict[str, tuple[str | None, str]] = {
     "mlb_park_factors":                     (None, "full"),
     "mlb_game_weather":                     ("game_date", "incremental"),
     "mlb_players":                          (None, "full"),
+    "mlb_teams":                            (None, "full"),
     "mlb_player_season_advanced":           (None, "full"),
     "mlb_player_game_stats_batting":        ("game_date", "incremental"),
     "mlb_player_game_stats_pitching":       ("game_date", "incremental"),
@@ -68,6 +69,8 @@ MLB_TABLES: dict[str, tuple[str | None, str]] = {
     "mlb_raw_player_props":                 ("snapshot_time", "incremental"),
     "mlb_pitcher_inning_stats":             ("game_date", "incremental"),
     "mlb_bullpen_daily_status":             ("game_date", "incremental"),
+    "mlb_game_lineups":                      ("game_date", "incremental"),
+    "mlb_game_umpires":                      ("game_date", "incremental"),
 }
 
 NBA_TABLES: dict[str, tuple[str | None, str]] = {

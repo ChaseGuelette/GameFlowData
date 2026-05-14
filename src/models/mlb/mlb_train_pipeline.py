@@ -52,6 +52,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MLBTrainingPipeline")
 
+SINGLE_HOOK_ABLATION_FEATURES = {
+    "hook_avg_ip_l30": "team_starter_avg_ip_l30",
+    "hook_short_hook_l30": "team_starter_short_hook_rate_l30",
+    "hook_deep_start_l30": "team_starter_deep_start_rate_l30",
+}
+ABLATION_VARIANTS = ("none", "static_no_l30", "hook_only", "ip_only", "ip_hook", *SINGLE_HOOK_ABLATION_FEATURES.keys())
+L30_HOOK_FEATURES = [
+    "team_starter_avg_ip_l30",
+    "team_starter_short_hook_rate_l30",
+    "team_starter_deep_start_rate_l30",
+]
+PREDICTED_IP_FEATURES = [
+    "predicted_ip_q25",
+    "predicted_ip_q50",
+    "predicted_ip_spread",
+    "predicted_ip_q25_delta",
+]
+
 
 class MLBTrainingOrchestrator:
     """Orchestrates end-to-end MLB pitcher K model training."""
@@ -68,6 +86,7 @@ class MLBTrainingOrchestrator:
         feature_tolerance: float = 0.02,
         local: bool = False,
         copula: bool = False,
+        ablation_variant: str = "none",
     ):
         self.engine = get_engine(local=local)
         self.feature_store = MLBFeatureStore(self.engine)
@@ -77,6 +96,12 @@ class MLBTrainingOrchestrator:
         self.tuning_trials = tuning_trials
         self.tuning_timeout = tuning_timeout
         self.copula = copula
+        if ablation_variant not in ABLATION_VARIANTS:
+            raise ValueError(f"Unknown ablation_variant={ablation_variant!r}; expected one of {ABLATION_VARIANTS}")
+        self.ablation_variant = ablation_variant
+        self.forced_features: list[str] = []
+        self.ip_feature_correlations: dict[str, dict[str, float | None]] = {}
+        self.ip_feature_manifest: dict[float, list[str]] = {}
 
         # Create timestamped run directory with _incomplete suffix
         self.timestamp = datetime.now()
@@ -89,6 +114,7 @@ class MLBTrainingOrchestrator:
         logger.info(f"Artifacts will be saved to: {self.run_dir} (renamed on completion)")
         if tune_hyperparams:
             logger.info(f"Hyperparameter tuning ENABLED: {tuning_trials} trials")
+        logger.info("IP feature-source ablation variant: %s", self.ablation_variant)
 
     def run(
         self,
@@ -127,8 +153,22 @@ class MLBTrainingOrchestrator:
         else:
             logger.info(f"Calibration data: {len(cal_df):,} rows")
 
+        # Optional IP-feature-source ablation: train direct IP model and append predictions
+        if self.ablation_variant in ("ip_only", "ip_hook"):
+            train_df, cal_df = self._add_predicted_ip_features(train_df, cal_df)
+
         # Step 3: Feature selection
-        selected_features = self._run_feature_selection(train_df)
+        if self.ablation_variant in ("ip_only", "static_no_l30"):
+            excluded_for_k = L30_HOOK_FEATURES
+        elif self.ablation_variant in SINGLE_HOOK_ABLATION_FEATURES:
+            selected_hook = SINGLE_HOOK_ABLATION_FEATURES[self.ablation_variant]
+            excluded_for_k = [f for f in L30_HOOK_FEATURES if f != selected_hook]
+        else:
+            excluded_for_k = None
+        selected_features = self._run_feature_selection(train_df, excluded_features=excluded_for_k)
+        selected_features = self._apply_ablation_forced_features(selected_features, train_df)
+        if self.ablation_variant in ("ip_only", "ip_hook"):
+            self._save_ip_feature_source_metadata(self.ip_feature_manifest)
 
         # Copula decomposition (if enabled)
         if self.copula:
@@ -183,7 +223,11 @@ class MLBTrainingOrchestrator:
     # Step 3: Feature Selection
     # ------------------------------------------------------------------
 
-    def _run_feature_selection(self, df: pd.DataFrame) -> dict[float, list[str]]:
+    def _run_feature_selection(
+        self,
+        df: pd.DataFrame,
+        excluded_features: list[str] | None = None,
+    ) -> dict[float, list[str]]:
         """Run per-quantile feature selection on training data."""
         logger.info("Step 3: Running per-quantile feature selection...")
         selector = ImprovedFeatureSelector(
@@ -203,6 +247,9 @@ class MLBTrainingOrchestrator:
             "actual_ip",
             "player_name",
         }
+        if excluded_features:
+            excluded.update(excluded_features)
+
         candidates = [
             c for c in df.columns if c not in excluded and df[c].dtype in ("float64", "float32", "int64", "int32")
         ]
@@ -216,6 +263,98 @@ class MLBTrainingOrchestrator:
             logger.info(f"  Q{q:.2f}: {len(feats)} features selected")
 
         return selected
+
+    def _apply_ablation_forced_features(
+        self,
+        selected: dict[float, list[str]],
+        df: pd.DataFrame,
+    ) -> dict[float, list[str]]:
+        """Force ablation feature groups into every K quantile when present."""
+        requested: list[str] = []
+        if self.ablation_variant in ("hook_only", "ip_hook"):
+            requested.extend(L30_HOOK_FEATURES)
+        if self.ablation_variant in SINGLE_HOOK_ABLATION_FEATURES:
+            requested.append(SINGLE_HOOK_ABLATION_FEATURES[self.ablation_variant])
+        if self.ablation_variant in ("ip_only", "ip_hook"):
+            requested.extend(PREDICTED_IP_FEATURES)
+
+        present = [f for f in requested if f in df.columns]
+        self.forced_features = present
+        if not present:
+            return selected
+
+        forced: dict[float, list[str]] = {}
+        for q, feats in selected.items():
+            q_feats = [f for f in feats if not (self.ablation_variant == "ip_only" and f in L30_HOOK_FEATURES)]
+            for feat in present:
+                if feat not in q_feats:
+                    q_feats.append(feat)
+            forced[q] = q_feats
+
+        logger.info("Forced ablation features into K model: %s", present)
+        return forced
+
+    def _add_predicted_ip_features(
+        self,
+        train_df: pd.DataFrame,
+        cal_df: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Train a direct actual_ip quantile source model and append its predictions."""
+        logger.info("Training direct IP feature-source model for ablation variant=%s", self.ablation_variant)
+        ip_features = self._run_feature_selection_for_target(train_df, "actual_ip")
+        self.ip_feature_manifest = ip_features
+        ip_pipeline = self._train_ip_model(train_df, ip_features)
+
+        ip_dir = self.run_dir / "ip_feature_model"
+        ip_dir.mkdir(exist_ok=True)
+        ip_pipeline.save(str(ip_dir))
+
+        train_aug = self._append_ip_predictions(train_df, ip_pipeline)
+        cal_aug = self._append_ip_predictions(cal_df, ip_pipeline)
+        self.ip_feature_correlations = {
+            "train": self._compute_ip_feature_correlations(train_aug),
+            "cal": self._compute_ip_feature_correlations(cal_aug),
+        }
+
+        return train_aug, cal_aug
+
+    def _append_ip_predictions(self, df: pd.DataFrame, ip_pipeline: MLBPitcherKPipeline) -> pd.DataFrame:
+        df = df.copy()
+        feature_names = ip_pipeline.model.all_feature_names
+        X = df.reindex(columns=feature_names, fill_value=0).fillna(0)
+        preds = ip_pipeline.predict(X)
+        df["predicted_ip_q25"] = preds["q25"].values
+        df["predicted_ip_q50"] = preds["q50"].values
+        df["predicted_ip_spread"] = preds["q75"].values - preds["q25"].values
+        baseline = df.get("pitcher_avg_ip_l5", pd.Series(0.0, index=df.index)).fillna(0)
+        df["predicted_ip_q25_delta"] = df["predicted_ip_q25"] - baseline
+        return df
+
+    def _compute_ip_feature_correlations(self, df: pd.DataFrame) -> dict[str, float | None]:
+        if "pitcher_avg_ip_l5" not in df.columns:
+            return {feat: None for feat in PREDICTED_IP_FEATURES}
+        out: dict[str, float | None] = {}
+        base = pd.to_numeric(df["pitcher_avg_ip_l5"], errors="coerce")
+        for feat in PREDICTED_IP_FEATURES:
+            if feat not in df.columns:
+                out[feat] = None
+                continue
+            vals = pd.to_numeric(df[feat], errors="coerce")
+            valid = base.notna() & vals.notna()
+            out[feat] = float(vals[valid].corr(base[valid])) if valid.sum() >= 3 else None
+        return out
+
+    def _save_ip_feature_source_metadata(self, ip_features: dict[float, list[str]]) -> None:
+        metadata = {
+            "ablation_variant": self.ablation_variant,
+            "forced_features": self.forced_features,
+            "predicted_ip_features": PREDICTED_IP_FEATURES,
+            "l30_hook_features": L30_HOOK_FEATURES,
+            "ip_feature_manifest": {str(k): v for k, v in ip_features.items()},
+            "ip_feature_correlations_vs_pitcher_avg_ip_l5": self.ip_feature_correlations,
+        }
+        with open(self.run_dir / "ip_feature_source_metadata.json", "w") as f:
+            json.dump(metadata, f, indent=4)
 
     # ------------------------------------------------------------------
     # Step 4: Hyperparameter Tuning
@@ -538,6 +677,8 @@ class MLBTrainingOrchestrator:
             "tune_hyperparams": self.tune_hyperparams,
             "tuning_trials": self.tuning_trials,
             "feature_tolerance": self.feature_tolerance,
+            "ablation_variant": self.ablation_variant,
+            "copula": self.copula,
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
         }
@@ -564,6 +705,11 @@ class MLBTrainingOrchestrator:
             "train_rows": len(train_df),
             "cal_rows": len(cal_df),
             "feature_count": len(PITCHER_K_FEATURES),
+            "ablation_variant": self.ablation_variant,
+            "forced_features": self.forced_features,
+            "predicted_ip_features": PREDICTED_IP_FEATURES if self.ablation_variant in ("ip_only", "ip_hook") else [],
+            "l30_hook_features": L30_HOOK_FEATURES,
+            "ip_feature_correlations_vs_pitcher_avg_ip_l5": self.ip_feature_correlations,
             "timestamp": self.timestamp.isoformat(),
             "git_hash": git_hash,
         }
@@ -643,6 +789,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Train IP + K-rate copula decomposition alongside single model",
     )
+    parser.add_argument(
+        "--ablation-variant",
+        choices=ABLATION_VARIANTS,
+        default="none",
+        help="Pitcher K IP-feature-source ablation: none, hook_only, ip_only, ip_hook",
+    )
 
     args = parser.parse_args()
 
@@ -654,6 +806,7 @@ if __name__ == "__main__":
         feature_tolerance=args.feature_tolerance,
         local=args.local,
         copula=args.copula,
+        ablation_variant=args.ablation_variant,
     )
 
     orchestrator.run(

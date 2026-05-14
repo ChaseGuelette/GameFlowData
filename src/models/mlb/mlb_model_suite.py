@@ -36,6 +36,7 @@ from .mlb_binary_model import MLBBinaryModel
 from .mlb_monte_carlo import (
     MLBBinomialPredictor,
     MLBCompoundBinomialPredictor,
+    MLBIPFeatureSourcePredictor,
     MLBMonteCarloPredictor,
     MLBNegBinPredictor,
     MLBPitcherKCopulaPredictor,
@@ -218,14 +219,27 @@ class MLBModelSuite:
         # 1b. Pitcher K single model (fallback if copula not available)
         if "pitcher_strikeouts" not in suite.predictors:
             pitcher_k_path = directory / "pitcher_k_model.joblib"
+            ip_feature_model_dir = directory / "ip_feature_model"
+            ip_feature_metadata_path = directory / "ip_feature_source_metadata.json"
             if pitcher_k_path.exists():
                 try:
                     pipeline = MLBPitcherKPipeline.load(str(directory))
-                    predictor = MLBMonteCarloPredictor(
-                        pipeline, n_samples=n_samples, random_state=random_state,
-                    )
-                    suite.predictors["pitcher_strikeouts"] = predictor
-                    logger.info("Loaded pitcher_strikeouts (single quantile) model")
+                    if ip_feature_model_dir.exists() and ip_feature_metadata_path.exists():
+                        ip_pipeline = MLBPitcherKPipeline.load(str(ip_feature_model_dir))
+                        predictor = MLBIPFeatureSourcePredictor(
+                            k_pipeline=pipeline,
+                            ip_pipeline=ip_pipeline,
+                            n_samples=n_samples,
+                            random_state=random_state,
+                        )
+                        suite.predictors["pitcher_strikeouts"] = predictor
+                        logger.info("Loaded pitcher_strikeouts (single quantile + IP feature-source) model")
+                    else:
+                        predictor = MLBMonteCarloPredictor(
+                            pipeline, n_samples=n_samples, random_state=random_state,
+                        )
+                        suite.predictors["pitcher_strikeouts"] = predictor
+                        logger.info("Loaded pitcher_strikeouts (single quantile) model")
                 except Exception as e:
                     logger.error("Failed to load pitcher K model: %s", e)
 

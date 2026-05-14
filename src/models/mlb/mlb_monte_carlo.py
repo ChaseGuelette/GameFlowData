@@ -241,6 +241,73 @@ class MLBMonteCarloPredictor:
         return df
 
 
+class MLBIPFeatureSourcePredictor:
+    """Wrapper that derives predicted-IP features before pitcher K inference.
+
+    This is intentionally non-copula: the IP model is only a feature source for
+    the downstream direct pitcher-K quantile model. Final probabilities remain
+    empirical-CDF samples from MLBMonteCarloPredictor.
+    """
+
+    def __init__(
+        self,
+        k_pipeline: MLBPitcherKPipeline,
+        ip_pipeline: MLBPitcherKPipeline,
+        n_samples: int = 10_000,
+        random_state: int = 42,
+    ):
+        self.k_pipeline = k_pipeline
+        self.ip_pipeline = ip_pipeline
+        self.k_predictor = MLBMonteCarloPredictor(
+            k_pipeline, n_samples=n_samples, random_state=random_state,
+        )
+
+    def predict(
+        self,
+        player_id: int,
+        game_id: int,
+        features: dict,
+    ) -> PropPrediction:
+        enriched = self._add_ip_features_to_dict(features)
+        return self.k_predictor.predict(player_id, game_id, enriched)
+
+    def predict_batch(
+        self,
+        player_games: list[tuple[int, int, dict]],
+    ) -> list[PropPrediction]:
+        if not player_games:
+            return []
+
+        enriched_features = self._add_ip_features_batch([features for _, _, features in player_games])
+        enriched_games = [
+            (player_id, game_id, enriched_features[i])
+            for i, (player_id, game_id, _) in enumerate(player_games)
+        ]
+        return self.k_predictor.predict_batch(enriched_games)
+
+    def _add_ip_features_to_dict(self, features: dict) -> dict:
+        return self._add_ip_features_batch([features])[0]
+
+    def _add_ip_features_batch(self, features_list: list[dict]) -> list[dict]:
+        ip_feature_names = self.ip_pipeline.model.all_feature_names
+        rows = [{f: features.get(f, 0) for f in ip_feature_names} for features in features_list]
+        X_ip = pd.DataFrame(rows).apply(pd.to_numeric, errors="coerce").fillna(0).astype(np.float32)
+        ip_preds = self.ip_pipeline.predict(X_ip)
+
+        enriched: list[dict] = []
+        for i, features in enumerate(features_list):
+            out = dict(features)
+            q25 = float(ip_preds.iloc[i]["q25"])
+            q50 = float(ip_preds.iloc[i]["q50"])
+            q75 = float(ip_preds.iloc[i]["q75"])
+            out["predicted_ip_q25"] = q25
+            out["predicted_ip_q50"] = q50
+            out["predicted_ip_spread"] = q75 - q25
+            out["predicted_ip_q25_delta"] = q25 - float(out.get("pitcher_avg_ip_l5", 0) or 0)
+            enriched.append(out)
+        return enriched
+
+
 class MLBPitcherKCopulaPredictor:
     """Copula-based pitcher K predictor: K = IP × K_rate.
 
