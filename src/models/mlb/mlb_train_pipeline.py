@@ -37,7 +37,13 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from src.db.client import get_engine
 from src.models.hyperparameter_tuner import QuantileHyperparameterTuner
-from src.models.mlb.mlb_feature_store import PITCHER_K_FEATURES, MLBFeatureStore
+from src.models.mlb.mlb_feature_store import (
+    MLBFeatureStore,
+    PITCHER_K_EXCLUDED_TRAINING_FEATURES,
+    PITCHER_K_FEATURES,
+    PITCHER_K_PHASE3B_ADDED_FEATURES,
+    PITCHER_K_TRAINING_FEATURES,
+)
 from src.models.mlb.mlb_monte_carlo import MLBMonteCarloPredictor
 from src.models.mlb.mlb_quantile_trainer import (
     MLB_PITCHER_K_CONFIG,
@@ -251,8 +257,18 @@ class MLBTrainingOrchestrator:
             excluded.update(excluded_features)
 
         candidates = [
-            c for c in df.columns if c not in excluded and df[c].dtype in ("float64", "float32", "int64", "int32")
+            c
+            for c in PITCHER_K_TRAINING_FEATURES
+            if c not in excluded and c in df.columns and df[c].dtype in ("float64", "float32", "int64", "int32")
         ]
+
+        locked_out_present = sorted(PITCHER_K_EXCLUDED_TRAINING_FEATURES.intersection(df.columns))
+        if locked_out_present:
+            logger.info("Locked out rejected/non-3B training features: %s", locked_out_present)
+
+        missing_phase3b = [f for f in PITCHER_K_PHASE3B_ADDED_FEATURES if f not in candidates]
+        if missing_phase3b:
+            raise ValueError(f"Missing Phase 3B feature-store columns: {missing_phase3b}")
 
         logger.info(f"Candidate features: {len(candidates)}")
 
@@ -571,7 +587,9 @@ class MLBTrainingOrchestrator:
             "opp_team_id", "actual_so", "actual_ip", "actual_krate", "player_name",
         }
         candidates = [
-            c for c in df.columns if c not in excluded and df[c].dtype in ("float64", "float32", "int64", "int32")
+            c
+            for c in PITCHER_K_TRAINING_FEATURES
+            if c in df.columns and df[c].dtype in ("float64", "float32", "int64", "int32")
         ]
 
         valid_df = df[df[target_col].notna() & (df[target_col] >= 0)].fillna(0)
@@ -705,6 +723,9 @@ class MLBTrainingOrchestrator:
             "train_rows": len(train_df),
             "cal_rows": len(cal_df),
             "feature_count": len(PITCHER_K_FEATURES),
+            "training_feature_count": len(PITCHER_K_TRAINING_FEATURES),
+            "phase3b_added_features": PITCHER_K_PHASE3B_ADDED_FEATURES,
+            "locked_out_training_features": sorted(PITCHER_K_EXCLUDED_TRAINING_FEATURES),
             "ablation_variant": self.ablation_variant,
             "forced_features": self.forced_features,
             "predicted_ip_features": PREDICTED_IP_FEATURES if self.ablation_variant in ("ip_only", "ip_hook") else [],

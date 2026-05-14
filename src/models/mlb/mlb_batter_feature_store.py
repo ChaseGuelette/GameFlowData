@@ -3,7 +3,6 @@
 Mirrors MLBFeatureStore (pitcher) but adapted for batter targets:
 - Batter rolling averages from mlb_player_average_batting
 - Batter Statcast features from mlb_player_average_statcast_batting
-- FanGraphs season stats (player_type='batter')
 - Opposing starting pitcher stats
 - Platoon splits (batter vs pitcher handedness)
 - Park factors (hits, HR, runs)
@@ -14,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 import pandas as pd
 from sqlalchemy import text
@@ -72,9 +72,10 @@ BATTER_BASE_FEATURES: list[str] = [
     "batter_xba_l5", "batter_xba_l10",
     "batter_xslg_l5", "batter_xwoba_l5",
     "batter_zone_pct_l5", "batter_chase_pct_l5", "batter_whiff_pct_l5",
-    # FanGraphs season (mlb_player_season_advanced, player_type='batter')
-    "batter_wrc_plus_szn", "batter_woba_szn", "batter_iso_szn",
-    "batter_bb_pct_szn", "batter_k_pct_szn", "batter_hard_pct_szn", "batter_babip_szn",
+    # NOTE: batter_wrc_plus_szn / woba_szn / iso_szn / bb_pct_szn / k_pct_szn /
+    # hard_pct_szn / babip_szn removed — mlb_player_season_advanced has no
+    # temporal stamp and stores end-of-season values, leaking the target into
+    # past-season backtests. Restore only after rebuilding as point-in-time.
     # Lineup
     "lineup_position",
     # Opposing starter pitcher
@@ -112,7 +113,10 @@ BATTER_HITS_FEATURES: list[str] = BATTER_BASE_FEATURES + [
     "park_hits_factor", "prop_line_batter_hits",
     "projected_ab",
     "batter_gb_pct_l10", "batter_fb_pct_l10",
-    "batter_babip_opp_babip_interaction", "projected_ab_x_recent_form",
+    # NOTE: batter_babip_opp_babip_interaction removed — depended on the leaky
+    # batter_babip_szn feature. Re-add once batter_babip_szn is rebuilt as
+    # point-in-time.
+    "projected_ab_x_recent_form",
 ]
 BATTER_HR_FEATURES: list[str] = BATTER_BASE_FEATURES + [
     "park_hr_factor", "batter_avg_hr_vs_hand_l20",
@@ -209,6 +213,7 @@ class MLBBatterFeatureStore:
         self,
         df: pd.DataFrame,
         matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None,
+        as_of_time: datetime | None = None,
     ) -> pd.DataFrame:
         """Merge opposing starter stats and platoon splits into training DataFrame.
 
@@ -382,15 +387,6 @@ class MLBBatterFeatureStore:
                 COALESCE(sc.avg_fb_pct_l10, 0) AS batter_fb_pct_l10,
                 COALESCE(sc.avg_gb_pct_l10, 0) AS batter_gb_pct_l10,
 
-                -- FanGraphs season-level (batter)
-                COALESCE(fg.wrc_plus, 0) AS batter_wrc_plus_szn,
-                COALESCE(fg.woba, 0) AS batter_woba_szn,
-                COALESCE(fg.iso, 0) AS batter_iso_szn,
-                COALESCE(fg.bb_pct, 0) AS batter_bb_pct_szn,
-                COALESCE(fg.k_pct, 0) AS batter_k_pct_szn,
-                COALESCE(fg.hard_pct, 0) AS batter_hard_pct_szn,
-                COALESCE(fg.babip, 0) AS batter_babip_szn,
-
                 -- Park factors (handedness-stratified)
                 CASE
                     WHEN bp.bats = 'L' THEN COALESCE(pf.hits_factor_l, pf.hits_factor, 1.0)
@@ -464,12 +460,6 @@ class MLBBatterFeatureStore:
                 ORDER BY sc2.game_date DESC LIMIT 1
             ) sc ON TRUE
 
-            -- FanGraphs season advanced (batter rows)
-            LEFT JOIN mlb_player_season_advanced fg
-                ON fg.player_id = bgs.player_id
-               AND fg.season = bgs.season
-               AND fg.player_type = 'batter'
-
             -- Park factors (join on venue)
             LEFT JOIN mlb_park_factors pf
                 ON pf.venue_id = gs.venue_id
@@ -500,7 +490,11 @@ class MLBBatterFeatureStore:
                       AND game_id = bgs.game_id
                       AND market_key = :market_key
                       AND bookmaker IN ('pinnacle', 'draftkings')
-                    ORDER BY market_key, snapshot_time DESC NULLS LAST
+                      AND (
+                          :as_of_time IS NULL
+                          OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                      )
+                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
                 LIMIT 1
             ) props ON TRUE
@@ -557,10 +551,6 @@ class MLBBatterFeatureStore:
 
     def _add_batter_interaction_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Compute batter interaction features that depend on matchup data."""
-        df["batter_babip_opp_babip_interaction"] = (
-            df["batter_babip_szn"].fillna(0.300)
-            * df["opp_pitcher_babip_against_l5"].fillna(0.300)
-        )
         df["projected_ab_x_recent_form"] = (
             df["projected_ab"].fillna(0) * df["batter_avg_h_l10"].fillna(0)
         )
@@ -583,6 +573,7 @@ class MLBBatterFeatureStore:
         opp_pitcher_id: int | None = None,
         lineup_pos: int | None = None,
         stat: str = "hits",
+        as_of_time: datetime | None = None,
     ) -> dict:
         """Assemble features for a single batter for inference.
 
@@ -620,9 +611,6 @@ class MLBBatterFeatureStore:
         # 2. Statcast averages
         features.update(self._get_batter_statcast_stats(player_id, game_date))
 
-        # 3. FanGraphs season stats
-        features.update(self._get_batter_fangraphs_stats(player_id, season))
-
         # 4. Park factors (handedness-stratified)
         bats, opp_throws = self._get_batter_handedness(player_id, opp_pitcher_id)
         park = self._get_park_factors(venue_id, season, bats=bats, opp_throws=opp_throws)
@@ -644,7 +632,12 @@ class MLBBatterFeatureStore:
 
         # 7. Prop line
         market_key = BATTER_STAT_MARKET_KEY[stat]
-        features[f"prop_line_{market_key}"] = self._get_prop_line(player_id, game_id, market_key)
+        features[f"prop_line_{market_key}"] = self._get_prop_line(
+            player_id,
+            game_id,
+            market_key,
+            as_of_time=as_of_time,
+        )
 
         # 8. Opposing starter stats
         if opp_pitcher_id:
@@ -690,10 +683,6 @@ class MLBBatterFeatureStore:
             features["projected_ab"] = max(avg_ab_l5, 1.0)
 
         # 10. Batter interaction features
-        features["batter_babip_opp_babip_interaction"] = (
-            features.get("batter_babip_szn", 0.300)
-            * features.get("opp_pitcher_babip_against_l5", 0.300)
-        )
         features["projected_ab_x_recent_form"] = (
             features.get("projected_ab", 0) * features.get("batter_avg_h_l10", 0)
         )
@@ -712,6 +701,7 @@ class MLBBatterFeatureStore:
         game_date: str,
         stat: str = "hits",
         matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None,
+        as_of_time: datetime | None = None,
     ) -> pd.DataFrame:
         """Get features for all starting batters on a given date.
 
@@ -795,15 +785,6 @@ class MLBBatterFeatureStore:
                 COALESCE(sc.avg_fb_pct_l10, 0) AS batter_fb_pct_l10,
                 COALESCE(sc.avg_gb_pct_l10, 0) AS batter_gb_pct_l10,
 
-                -- FanGraphs
-                COALESCE(fg.wrc_plus, 0) AS batter_wrc_plus_szn,
-                COALESCE(fg.woba, 0) AS batter_woba_szn,
-                COALESCE(fg.iso, 0) AS batter_iso_szn,
-                COALESCE(fg.bb_pct, 0) AS batter_bb_pct_szn,
-                COALESCE(fg.k_pct, 0) AS batter_k_pct_szn,
-                COALESCE(fg.hard_pct, 0) AS batter_hard_pct_szn,
-                COALESCE(fg.babip, 0) AS batter_babip_szn,
-
                 -- Park factors (handedness-stratified; uses alias p.bats from mlb_players join)
                 CASE
                     WHEN p.bats = 'L' THEN COALESCE(pf.hits_factor_l, pf.hits_factor, 1.0)
@@ -876,11 +857,6 @@ class MLBBatterFeatureStore:
                 ORDER BY sc2.game_date DESC LIMIT 1
             ) sc ON TRUE
 
-            LEFT JOIN mlb_player_season_advanced fg
-                ON fg.player_id = bgs.player_id
-               AND fg.season = bgs.season
-               AND fg.player_type = 'batter'
-
             LEFT JOIN mlb_park_factors pf
                 ON pf.venue_id = gs.venue_id
                AND pf.season = gs.season
@@ -905,7 +881,11 @@ class MLBBatterFeatureStore:
                       AND game_id = bgs.game_id
                       AND market_key = :market_key
                       AND bookmaker IN ('pinnacle', 'draftkings')
-                    ORDER BY market_key, snapshot_time DESC NULLS LAST
+                      AND (
+                          :as_of_time IS NULL
+                          OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                      )
+                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
                 LIMIT 1
             ) props ON TRUE
@@ -925,7 +905,11 @@ class MLBBatterFeatureStore:
 
         with self.engine.connect() as conn:
             conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
-            df = pd.read_sql(query, conn, params={"game_date": game_date, "market_key": market_key})
+            df = pd.read_sql(
+                query,
+                conn,
+                params={"game_date": game_date, "market_key": market_key, "as_of_time": as_of_time},
+            )
 
         if df.empty:
             return df
@@ -1063,35 +1047,6 @@ class MLBBatterFeatureStore:
             "batter_gb_pct_l10": float(row.avg_gb_pct_l10 or 0),
         }
 
-    def _get_batter_fangraphs_stats(self, player_id: int, season: int) -> dict:
-        """Fetch FanGraphs season-level batter stats."""
-        query = text("""
-            SELECT wrc_plus, woba, iso, bb_pct, k_pct, hard_pct, babip
-            FROM mlb_player_season_advanced
-            WHERE player_id = :player_id
-              AND season = :season
-              AND player_type = 'batter'
-        """)
-        with self.engine.connect() as conn:
-            row = conn.execute(query, {"player_id": player_id, "season": season}).fetchone()
-
-        if row is None:
-            return {
-                "batter_wrc_plus_szn": 0, "batter_woba_szn": 0, "batter_iso_szn": 0,
-                "batter_bb_pct_szn": 0, "batter_k_pct_szn": 0, "batter_hard_pct_szn": 0,
-                "batter_babip_szn": 0,
-            }
-
-        return {
-            "batter_wrc_plus_szn": float(row.wrc_plus or 0),
-            "batter_woba_szn": float(row.woba or 0),
-            "batter_iso_szn": float(row.iso or 0),
-            "batter_bb_pct_szn": float(row.bb_pct or 0),
-            "batter_k_pct_szn": float(row.k_pct or 0),
-            "batter_hard_pct_szn": float(row.hard_pct or 0),
-            "batter_babip_szn": float(row.babip or 0),
-        }
-
     def _get_park_factors(
         self,
         venue_id: int,
@@ -1196,8 +1151,19 @@ class MLBBatterFeatureStore:
             row = conn.execute(query, {"game_id": game_id}).fetchone()
         return float(row.game_total) if row and row.game_total else 0
 
-    def _get_prop_line(self, player_id: int, game_id: int, market_key: str) -> float:
-        """Fetch batter prop line (latest snapshot)."""
+    def _get_prop_line(
+        self,
+        player_id: int,
+        game_id: int,
+        market_key: str,
+        as_of_time: datetime | None = None,
+    ) -> float:
+        """Fetch batter prop line at or before ``as_of_time``.
+
+        Historical backtests must not see odds snapshots captured after the
+        simulated inference/bet time. ``inserted_at`` is a fallback for legacy
+        rows missing ``snapshot_time``.
+        """
         query = text("""
             SELECT line
             FROM mlb_raw_player_props
@@ -1205,14 +1171,28 @@ class MLBBatterFeatureStore:
               AND game_id = :game_id
               AND market_key = :market_key
               AND bookmaker IN ('pinnacle', 'draftkings')
-            ORDER BY snapshot_time DESC NULLS LAST
+              AND (
+                  :as_of_time IS NULL
+                  OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+              )
+            ORDER BY COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
             LIMIT 1
         """)
         with self.engine.connect() as conn:
-            row = conn.execute(
-                query, {"player_id": player_id, "game_id": game_id, "market_key": market_key}
-            ).fetchone()
-        return float(row.line) if row and row.line else 0
+            df = pd.read_sql(
+                query,
+                conn,
+                params={
+                    "player_id": player_id,
+                    "game_id": game_id,
+                    "market_key": market_key,
+                    "as_of_time": as_of_time,
+                },
+            )
+        if df.empty:
+            return 0
+        line = df.iloc[0].line
+        return float(line) if line else 0
 
     def _get_platoon_features(self, player_id: int, opp_pitcher_id: int, game_date: str) -> dict:
         """Fetch platoon split features for a single batter."""

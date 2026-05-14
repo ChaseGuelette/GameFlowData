@@ -4,7 +4,6 @@ Mirrors the pattern from src/models/feature_store.py (NBA) but adapted for MLB:
 - No minutes decomposition (MLB stats predicted directly)
 - Pitcher rolling averages from mlb_player_average_pitching
 - Statcast features from mlb_player_average_statcast_pitching
-- FanGraphs season stats from mlb_player_season_advanced
 - Park factors from mlb_park_factors
 - Opposing team batting from mlb_player_game_stats_batting (aggregated)
 - Prop/game lines from mlb_raw_player_props and mlb_raw_game_lines
@@ -14,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -77,12 +77,21 @@ PITCHER_K_FEATURES: list[str] = [
     "pitcher_days_rest",
     "pitcher_pitch_count_last_start",
     "pitcher_starts_szn",
-    "team_bullpen_ip_last_3d",
-    "team_bullpen_pitches_last_3d",
 
-    # FanGraphs season-level (from mlb_player_season_advanced)
-    "pitcher_fip_szn",
-    "pitcher_k_pct_szn",
+    # Phase 3B: pitcher-side downside / short-outing risk only.
+    "manager_starter_short_hook_rate_l30",
+    "pitcher_pct_starts_under_5_ip_l10",
+    "pitcher_fastball_velo_delta_l3_vs_szn",
+    "team_bullpen_pitches_last_3d",
+    "pitcher_left_last_start_early_flag",
+
+    # Existing bullpen context retained for compatibility / derived fatigue pressure.
+    "team_bullpen_ip_last_3d",
+
+    # NOTE: pitcher_fip_szn / pitcher_k_pct_szn removed — mlb_player_season_advanced
+    # has no temporal stamp and the rows hold end-of-season values, which leaked
+    # the target into past-season backtests. Restore only after rebuilding the
+    # table as point-in-time snapshots with an as_of_date column.
 
     # Opposing team batting context
     "opp_team_avg_so_l10",
@@ -143,6 +152,44 @@ PITCHER_K_FEATURES: list[str] = [
     # Umpire tendency
     "umpire_avg_k_per_game_l20",
 ]
+
+
+# Feature 3 uses the existing mlb_player_average_statcast_pitching rolling
+# population: avg_avg_fastball_velo_l3 - avg_avg_fastball_velo_szn. This keeps
+# Phase 3B cheap and aligned with current pitcher-K Statcast feature sourcing.
+PITCHER_K_PHASE3B_ADDED_FEATURES: list[str] = [
+    "manager_starter_short_hook_rate_l30",
+    "pitcher_pct_starts_under_5_ip_l10",
+    "pitcher_fastball_velo_delta_l3_vs_szn",
+    "team_bullpen_pitches_last_3d",
+    "pitcher_left_last_start_early_flag",
+]
+
+# Phase 3A lineup/contact features were evaluated and rejected: they compressed
+# the Phase 2 contrarian-under edge. Keep them computable/returnable for
+# backwards compatibility with old artifacts, but do not let new training runs
+# select them unless this constant is deliberately changed in a future phase.
+PITCHER_K_PHASE3A_REJECTED_FEATURES: set[str] = {
+    "projected_lineup_k_pct",
+    "projected_lineup_whiff_pct",
+    "projected_lineup_chase_pct",
+    "projected_lineup_contact_rate",
+    "projected_lineup_same_hand_k_pct",
+    "projected_lineup_opposite_hand_k_pct",
+    "projected_lineup_hand_k_delta",
+    "projected_lineup_top3_k_pct",
+    "projected_lineup_mid3_k_pct",
+    "projected_lineup_bot3_k_pct",
+    "projected_lineup_k_concentration",
+    "pct_opp_lineup_same_hand",
+    "umpire_avg_k_per_game_l20",
+}
+
+PITCHER_K_TRAINING_FEATURES: list[str] = [
+    feature for feature in PITCHER_K_FEATURES
+    if feature not in PITCHER_K_PHASE3A_REJECTED_FEATURES
+]
+PITCHER_K_EXCLUDED_TRAINING_FEATURES = PITCHER_K_PHASE3A_REJECTED_FEATURES
 
 
 LINEUP_FEATURE_DEFAULTS: dict[str, float] = {
@@ -251,6 +298,8 @@ class MLBFeatureStore:
                 COALESCE(ip_ctx.median_ip_l5, COALESCE(p_avg.avg_ip_l5, 0)) AS pitcher_median_ip_l5,
                 COALESCE(ip_ctx.ip_range_l5, 0) AS pitcher_ip_range_l5,
                 COALESCE(ip_ctx.short_start_rate_l5, 0) AS pitcher_short_start_rate_l5,
+                COALESCE(ip_ctx.pct_starts_under_5_ip_l10, 0) AS pitcher_pct_starts_under_5_ip_l10,
+                COALESCE(ip_ctx.left_last_start_early_flag, 0) AS pitcher_left_last_start_early_flag,
                 COALESCE(ip_ctx.start_stability_l5, 0) AS pitcher_start_stability_l5,
                 COALESCE(ip_ctx.avg_batters_faced_l5, COALESCE((3 * p_avg.avg_ip_l5 + p_avg.avg_h_allowed_l5 + p_avg.avg_bb_l5), 0)) AS pitcher_avg_batters_faced_l5,
                 COALESCE((3 * p_avg.avg_ip_szn + p_avg.avg_h_allowed_l5 + p_avg.avg_bb_l5), 0) AS pitcher_avg_batters_faced_szn,
@@ -273,14 +322,11 @@ class MLBFeatureStore:
                 COALESCE(sc_avg.avg_chase_pct_l5, 0) AS pitcher_avg_chase_pct_l5,
                 COALESCE(sc_avg.avg_zone_pct_l5, 0) AS pitcher_avg_zone_pct_l5,
                 COALESCE(sc_avg.avg_avg_fastball_velo_l5, 0) AS pitcher_avg_fastball_velo_l5,
+                COALESCE(sc_avg.avg_avg_fastball_velo_l3 - sc_avg.avg_avg_fastball_velo_szn, 0) AS pitcher_fastball_velo_delta_l3_vs_szn,
                 COALESCE(sc_avg.std_whiff_pct_l3, 0) AS pitcher_std_whiff_pct_l3,
                 COALESCE(sc_avg.avg_fastball_pct_l5, 0) AS pitcher_fastball_pct_l5,
                 COALESCE(sc_avg.avg_breaking_pct_l5, 0) AS pitcher_breaking_pct_l5,
                 COALESCE(sc_avg.avg_offspeed_pct_l5, 0) AS pitcher_offspeed_pct_l5,
-
-                -- FanGraphs season-level
-                COALESCE(fg.fip, 0) AS pitcher_fip_szn,
-                COALESCE(fg.k_pct, 0) AS pitcher_k_pct_szn,
 
                 -- Park factor
                 COALESCE(pf.so_factor, 1.0) AS park_so_factor,
@@ -299,6 +345,7 @@ class MLBFeatureStore:
                 COALESCE(team_leash.avg_pitches_thrown_l10, 0) AS team_starter_avg_pitches_l10,
                 COALESCE(team_leash.avg_ip_l30, 0) AS team_starter_avg_ip_l30,
                 COALESCE(team_leash.short_hook_rate_l30, 0) AS team_starter_short_hook_rate_l30,
+                COALESCE(team_leash.manager_short_hook_rate_l30, 0) AS manager_starter_short_hook_rate_l30,
                 COALESCE(team_leash.deep_start_rate_l30, 0) AS team_starter_deep_start_rate_l30,
 
                 -- Game lines (total)
@@ -357,25 +404,50 @@ class MLBFeatureStore:
                       AND did_not_play = FALSE
                       AND game_date < pgs.game_date
                     ORDER BY game_date DESC
-                    LIMIT 5
+                    LIMIT 10
+                ),
+                previous_start AS (
+                    SELECT ip, game_date
+                    FROM recent_pitcher_starts
+                    WHERE rn = 1
+                ),
+                prior_to_previous_start AS (
+                    SELECT AVG(prev.ip) AS avg_ip_before_previous_start
+                    FROM mlb_player_game_stats_pitching prev
+                    JOIN previous_start ps ON TRUE
+                    WHERE prev.player_id = pgs.player_id
+                      AND prev.season = pgs.season
+                      AND prev.is_starter = TRUE
+                      AND prev.did_not_play = FALSE
+                      AND prev.game_date < ps.game_date
                 )
                 SELECT
-                    MIN(ip) AS min_ip_l5,
-                    MAX(ip) AS max_ip_l5,
-                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ip) AS median_ip_l5,
-                    MAX(ip) - MIN(ip) AS ip_range_l5,
-                    SUM(CASE WHEN ip < 4.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS short_start_rate_l5,
-                    COUNT(*)::float / 5.0 AS start_stability_l5,
-                    AVG(COALESCE(outs_recorded, 0) + COALESCE(h_allowed, 0) + COALESCE(bb, 0))::float AS avg_batters_faced_l5,
-                    AVG(COALESCE(outs_recorded, 0) + COALESCE(h_allowed, 0) + COALESCE(bb, 0))::float AS avg_batters_faced_szn,
-                    AVG(COALESCE(pitches_thrown, 0)) AS avg_pitches_thrown_l5,
-                    COALESCE(AVG(CASE WHEN rn = 1 THEN COALESCE(pitches_thrown, 0) END), 0)
-                        / NULLIF(AVG(COALESCE(pitches_thrown, 0)), 0) AS workload_spike_ratio,
-                    AVG(CASE WHEN rn <= 3 THEN COALESCE(pitches_thrown, 0) END)
-                        / NULLIF(AVG(COALESCE(pitches_thrown, 0)), 0) AS recent_pitch_count_trend,
+                    MIN(CASE WHEN rps.rn <= 5 THEN rps.ip END) AS min_ip_l5,
+                    MAX(CASE WHEN rps.rn <= 5 THEN rps.ip END) AS max_ip_l5,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY rps.ip) FILTER (WHERE rps.rn <= 5) AS median_ip_l5,
+                    MAX(CASE WHEN rps.rn <= 5 THEN rps.ip END) - MIN(CASE WHEN rps.rn <= 5 THEN rps.ip END) AS ip_range_l5,
+                    SUM(CASE WHEN rps.rn <= 5 AND rps.ip < 4.0 THEN 1 ELSE 0 END)::float
+                        / NULLIF(SUM(CASE WHEN rps.rn <= 5 THEN 1 ELSE 0 END), 0) AS short_start_rate_l5,
+                    SUM(CASE WHEN rps.ip < 5.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS pct_starts_under_5_ip_l10,
+                    CASE
+                        WHEN MAX(ps.ip) IS NOT NULL
+                             AND MAX(prior.avg_ip_before_previous_start) IS NOT NULL
+                             AND MAX(ps.ip) <= MAX(prior.avg_ip_before_previous_start) - 1.5
+                        THEN 1 ELSE 0
+                    END AS left_last_start_early_flag,
+                    SUM(CASE WHEN rps.rn <= 5 THEN 1 ELSE 0 END)::float / 5.0 AS start_stability_l5,
+                    AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.outs_recorded, 0) + COALESCE(rps.h_allowed, 0) + COALESCE(rps.bb, 0) END)::float AS avg_batters_faced_l5,
+                    AVG(COALESCE(rps.outs_recorded, 0) + COALESCE(rps.h_allowed, 0) + COALESCE(rps.bb, 0))::float AS avg_batters_faced_szn,
+                    AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.pitches_thrown, 0) END) AS avg_pitches_thrown_l5,
+                    COALESCE(MAX(CASE WHEN rps.rn = 1 THEN COALESCE(rps.pitches_thrown, 0) END), 0)
+                        / NULLIF(AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.pitches_thrown, 0) END), 0) AS workload_spike_ratio,
+                    AVG(CASE WHEN rps.rn <= 3 THEN COALESCE(rps.pitches_thrown, 0) END)
+                        / NULLIF(AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.pitches_thrown, 0) END), 0) AS recent_pitch_count_trend,
                     (LEAST(COALESCE(p_avg.days_rest, 5), 14) / 5.0)
                         * (COALESCE(p_avg.pitch_count_last_start, 0) / 100.0) AS rest_after_high_pitch_count
-                FROM recent_pitcher_starts
+                FROM recent_pitcher_starts rps
+                LEFT JOIN previous_start ps ON TRUE
+                LEFT JOIN prior_to_previous_start prior ON TRUE
             ) ip_ctx ON TRUE
 
             -- Team starter leash context (previous 30 team starts; L10 is a prefix subset)
@@ -401,6 +473,8 @@ class MLBFeatureStore:
                     AVG(CASE WHEN rn <= 10 THEN COALESCE(pitches_thrown, 0) END) AS avg_pitches_thrown_l10,
                     AVG(ip) AS avg_ip_l30,
                     SUM(CASE WHEN ip < 4.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS short_hook_rate_l30,
+                    SUM(CASE WHEN ip < 5.0 AND COALESCE(pitches_thrown, 0) < 80 THEN 1 ELSE 0 END)::float
+                        / NULLIF(COUNT(*), 0) AS manager_short_hook_rate_l30,
                     SUM(CASE WHEN ip >= 6.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS deep_start_rate_l30
                 FROM recent_team_starts
             ) team_leash ON TRUE
@@ -409,7 +483,7 @@ class MLBFeatureStore:
             LEFT JOIN LATERAL (
                 SELECT avg_whiff_pct_l5, avg_csw_pct_l5,
                        avg_chase_pct_l5, avg_zone_pct_l5,
-                       avg_avg_fastball_velo_l5,
+                       avg_avg_fastball_velo_l3, avg_avg_fastball_velo_l5, avg_avg_fastball_velo_szn,
                        std_whiff_pct_l3,
                        avg_fastball_pct_l5, avg_breaking_pct_l5, avg_offspeed_pct_l5
                 FROM mlb_player_average_statcast_pitching sc
@@ -417,12 +491,6 @@ class MLBFeatureStore:
                   AND sc.game_date <= pgs.game_date
                 ORDER BY sc.game_date DESC LIMIT 1
             ) sc_avg ON TRUE
-
-            -- FanGraphs season advanced (pitcher rows)
-            LEFT JOIN mlb_player_season_advanced fg
-                ON fg.player_id = pgs.player_id
-               AND fg.season = pgs.season
-               AND fg.player_type = 'pitcher'
 
             -- Park factors (join on venue)
             LEFT JOIN mlb_park_factors pf
@@ -446,7 +514,7 @@ class MLBFeatureStore:
                   AND bookmaker IN ('pinnacle', 'draftkings')
             ) lines ON TRUE
 
-            -- Pitcher strikeout prop line (latest snapshot)
+            -- Pitcher strikeout prop line (latest point-in-time snapshot)
             LEFT JOIN LATERAL (
                 SELECT sub.line AS prop_line
                 FROM (
@@ -456,7 +524,11 @@ class MLBFeatureStore:
                       AND game_id = pgs.game_id
                       AND market_key = 'pitcher_strikeouts'
                       AND bookmaker IN ('pinnacle', 'draftkings')
-                    ORDER BY market_key, snapshot_time DESC NULLS LAST
+                      AND (
+                          :as_of_time IS NULL
+                          OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                      )
+                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
                 LIMIT 1
             ) props ON TRUE
@@ -528,6 +600,8 @@ class MLBFeatureStore:
             "pitcher_days_rest", "pitcher_starts_szn", "team_bullpen_ip_last_3d",
             "team_bullpen_pitches_last_3d", "opp_team_whiff_pct_l10",
             "pitcher_fastball_pct_l5", "pitcher_breaking_pct_l5", "pitcher_offspeed_pct_l5",
+            "pitcher_pct_starts_under_5_ip_l10", "pitcher_fastball_velo_delta_l3_vs_szn",
+            "pitcher_left_last_start_early_flag", "manager_starter_short_hook_rate_l30",
         ]:
             ensure_col(col, 0.0)
 
@@ -591,6 +665,7 @@ class MLBFeatureStore:
             "team_starter_avg_pitches_l10",
             "team_starter_avg_ip_l30",
             "team_starter_short_hook_rate_l30",
+            "manager_starter_short_hook_rate_l30",
             "team_starter_deep_start_rate_l30",
         ]:
             ensure_col(col, 0.0)
@@ -733,6 +808,7 @@ class MLBFeatureStore:
         venue_id: int,
         season: int,
         is_home: bool,
+        as_of_time: datetime | None = None,
     ) -> dict:
         """Assemble features for a single pitcher for inference.
 
@@ -747,10 +823,6 @@ class MLBFeatureStore:
         # 2. Statcast averages
         statcast_avgs = self._get_statcast_stats(player_id, game_date)
         features.update(statcast_avgs)
-
-        # 3. FanGraphs season stats
-        fangraphs = self._get_fangraphs_stats(player_id, season)
-        features.update(fangraphs)
 
         # 4. Park factor
         features["park_so_factor"] = self._get_park_factor(venue_id, season)
@@ -768,7 +840,11 @@ class MLBFeatureStore:
         features["line_total"] = self._get_game_total(game_id)
 
         # 7. Prop line
-        features["prop_line_pitcher_strikeouts"] = self._get_prop_line(player_id, game_id)
+        features["prop_line_pitcher_strikeouts"] = self._get_prop_line(
+            player_id,
+            game_id,
+            as_of_time=as_of_time,
+        )
 
         # 8. Opposing team batting
         from src.processing.mlb.mlb_matchup_features import (
@@ -858,7 +934,7 @@ class MLBFeatureStore:
     # Batch inference (backtesting)
     # ------------------------------------------------------------------
 
-    def get_features_for_date(self, game_date: str) -> pd.DataFrame:
+    def get_features_for_date(self, game_date: str, as_of_time: datetime | None = None) -> pd.DataFrame:
         """Get features for all starting pitchers on a given date.
 
         Uses the same SQL pattern as training but filtered to a single date.
@@ -896,6 +972,8 @@ class MLBFeatureStore:
                 COALESCE(ip_ctx.median_ip_l5, COALESCE(p_avg.avg_ip_l5, 0)) AS pitcher_median_ip_l5,
                 COALESCE(ip_ctx.ip_range_l5, 0) AS pitcher_ip_range_l5,
                 COALESCE(ip_ctx.short_start_rate_l5, 0) AS pitcher_short_start_rate_l5,
+                COALESCE(ip_ctx.pct_starts_under_5_ip_l10, 0) AS pitcher_pct_starts_under_5_ip_l10,
+                COALESCE(ip_ctx.left_last_start_early_flag, 0) AS pitcher_left_last_start_early_flag,
                 COALESCE(ip_ctx.start_stability_l5, 0) AS pitcher_start_stability_l5,
                 COALESCE(ip_ctx.avg_batters_faced_l5, COALESCE((3 * p_avg.avg_ip_l5 + p_avg.avg_h_allowed_l5 + p_avg.avg_bb_l5), 0)) AS pitcher_avg_batters_faced_l5,
                 COALESCE((3 * p_avg.avg_ip_szn + p_avg.avg_h_allowed_l5 + p_avg.avg_bb_l5), 0) AS pitcher_avg_batters_faced_szn,
@@ -918,14 +996,11 @@ class MLBFeatureStore:
                 COALESCE(sc_avg.avg_chase_pct_l5, 0) AS pitcher_avg_chase_pct_l5,
                 COALESCE(sc_avg.avg_zone_pct_l5, 0) AS pitcher_avg_zone_pct_l5,
                 COALESCE(sc_avg.avg_avg_fastball_velo_l5, 0) AS pitcher_avg_fastball_velo_l5,
+                COALESCE(sc_avg.avg_avg_fastball_velo_l3 - sc_avg.avg_avg_fastball_velo_szn, 0) AS pitcher_fastball_velo_delta_l3_vs_szn,
                 COALESCE(sc_avg.std_whiff_pct_l3, 0) AS pitcher_std_whiff_pct_l3,
                 COALESCE(sc_avg.avg_fastball_pct_l5, 0) AS pitcher_fastball_pct_l5,
                 COALESCE(sc_avg.avg_breaking_pct_l5, 0) AS pitcher_breaking_pct_l5,
                 COALESCE(sc_avg.avg_offspeed_pct_l5, 0) AS pitcher_offspeed_pct_l5,
-
-                -- FanGraphs
-                COALESCE(fg.fip, 0) AS pitcher_fip_szn,
-                COALESCE(fg.k_pct, 0) AS pitcher_k_pct_szn,
 
                 -- Park factor
                 COALESCE(pf.so_factor, 1.0) AS park_so_factor,
@@ -944,6 +1019,7 @@ class MLBFeatureStore:
                 COALESCE(team_leash.avg_pitches_thrown_l10, 0) AS team_starter_avg_pitches_l10,
                 COALESCE(team_leash.avg_ip_l30, 0) AS team_starter_avg_ip_l30,
                 COALESCE(team_leash.short_hook_rate_l30, 0) AS team_starter_short_hook_rate_l30,
+                COALESCE(team_leash.manager_short_hook_rate_l30, 0) AS manager_starter_short_hook_rate_l30,
                 COALESCE(team_leash.deep_start_rate_l30, 0) AS team_starter_deep_start_rate_l30,
 
                 -- Game lines (total)
@@ -999,25 +1075,50 @@ class MLBFeatureStore:
                       AND did_not_play = FALSE
                       AND game_date < pgs.game_date
                     ORDER BY game_date DESC
-                    LIMIT 5
+                    LIMIT 10
+                ),
+                previous_start AS (
+                    SELECT ip, game_date
+                    FROM recent_pitcher_starts
+                    WHERE rn = 1
+                ),
+                prior_to_previous_start AS (
+                    SELECT AVG(prev.ip) AS avg_ip_before_previous_start
+                    FROM mlb_player_game_stats_pitching prev
+                    JOIN previous_start ps ON TRUE
+                    WHERE prev.player_id = pgs.player_id
+                      AND prev.season = pgs.season
+                      AND prev.is_starter = TRUE
+                      AND prev.did_not_play = FALSE
+                      AND prev.game_date < ps.game_date
                 )
                 SELECT
-                    MIN(ip) AS min_ip_l5,
-                    MAX(ip) AS max_ip_l5,
-                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ip) AS median_ip_l5,
-                    MAX(ip) - MIN(ip) AS ip_range_l5,
-                    SUM(CASE WHEN ip < 4.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS short_start_rate_l5,
-                    COUNT(*)::float / 5.0 AS start_stability_l5,
-                    AVG(COALESCE(outs_recorded, 0) + COALESCE(h_allowed, 0) + COALESCE(bb, 0))::float AS avg_batters_faced_l5,
-                    AVG(COALESCE(outs_recorded, 0) + COALESCE(h_allowed, 0) + COALESCE(bb, 0))::float AS avg_batters_faced_szn,
-                    AVG(COALESCE(pitches_thrown, 0)) AS avg_pitches_thrown_l5,
-                    COALESCE(AVG(CASE WHEN rn = 1 THEN COALESCE(pitches_thrown, 0) END), 0)
-                        / NULLIF(AVG(COALESCE(pitches_thrown, 0)), 0) AS workload_spike_ratio,
-                    AVG(CASE WHEN rn <= 3 THEN COALESCE(pitches_thrown, 0) END)
-                        / NULLIF(AVG(COALESCE(pitches_thrown, 0)), 0) AS recent_pitch_count_trend,
+                    MIN(CASE WHEN rps.rn <= 5 THEN rps.ip END) AS min_ip_l5,
+                    MAX(CASE WHEN rps.rn <= 5 THEN rps.ip END) AS max_ip_l5,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY rps.ip) FILTER (WHERE rps.rn <= 5) AS median_ip_l5,
+                    MAX(CASE WHEN rps.rn <= 5 THEN rps.ip END) - MIN(CASE WHEN rps.rn <= 5 THEN rps.ip END) AS ip_range_l5,
+                    SUM(CASE WHEN rps.rn <= 5 AND rps.ip < 4.0 THEN 1 ELSE 0 END)::float
+                        / NULLIF(SUM(CASE WHEN rps.rn <= 5 THEN 1 ELSE 0 END), 0) AS short_start_rate_l5,
+                    SUM(CASE WHEN rps.ip < 5.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS pct_starts_under_5_ip_l10,
+                    CASE
+                        WHEN MAX(ps.ip) IS NOT NULL
+                             AND MAX(prior.avg_ip_before_previous_start) IS NOT NULL
+                             AND MAX(ps.ip) <= MAX(prior.avg_ip_before_previous_start) - 1.5
+                        THEN 1 ELSE 0
+                    END AS left_last_start_early_flag,
+                    SUM(CASE WHEN rps.rn <= 5 THEN 1 ELSE 0 END)::float / 5.0 AS start_stability_l5,
+                    AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.outs_recorded, 0) + COALESCE(rps.h_allowed, 0) + COALESCE(rps.bb, 0) END)::float AS avg_batters_faced_l5,
+                    AVG(COALESCE(rps.outs_recorded, 0) + COALESCE(rps.h_allowed, 0) + COALESCE(rps.bb, 0))::float AS avg_batters_faced_szn,
+                    AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.pitches_thrown, 0) END) AS avg_pitches_thrown_l5,
+                    COALESCE(MAX(CASE WHEN rps.rn = 1 THEN COALESCE(rps.pitches_thrown, 0) END), 0)
+                        / NULLIF(AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.pitches_thrown, 0) END), 0) AS workload_spike_ratio,
+                    AVG(CASE WHEN rps.rn <= 3 THEN COALESCE(rps.pitches_thrown, 0) END)
+                        / NULLIF(AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.pitches_thrown, 0) END), 0) AS recent_pitch_count_trend,
                     (LEAST(COALESCE(p_avg.days_rest, 5), 14) / 5.0)
                         * (COALESCE(p_avg.pitch_count_last_start, 0) / 100.0) AS rest_after_high_pitch_count
-                FROM recent_pitcher_starts
+                FROM recent_pitcher_starts rps
+                LEFT JOIN previous_start ps ON TRUE
+                LEFT JOIN prior_to_previous_start prior ON TRUE
             ) ip_ctx ON TRUE
 
             -- Team starter leash context (previous 30 team starts; L10 is a prefix subset)
@@ -1043,6 +1144,8 @@ class MLBFeatureStore:
                     AVG(CASE WHEN rn <= 10 THEN COALESCE(pitches_thrown, 0) END) AS avg_pitches_thrown_l10,
                     AVG(ip) AS avg_ip_l30,
                     SUM(CASE WHEN ip < 4.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS short_hook_rate_l30,
+                    SUM(CASE WHEN ip < 5.0 AND COALESCE(pitches_thrown, 0) < 80 THEN 1 ELSE 0 END)::float
+                        / NULLIF(COUNT(*), 0) AS manager_short_hook_rate_l30,
                     SUM(CASE WHEN ip >= 6.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS deep_start_rate_l30
                 FROM recent_team_starts
             ) team_leash ON TRUE
@@ -1051,7 +1154,7 @@ class MLBFeatureStore:
             LEFT JOIN LATERAL (
                 SELECT avg_whiff_pct_l5, avg_csw_pct_l5,
                        avg_chase_pct_l5, avg_zone_pct_l5,
-                       avg_avg_fastball_velo_l5,
+                       avg_avg_fastball_velo_l3, avg_avg_fastball_velo_l5, avg_avg_fastball_velo_szn,
                        std_whiff_pct_l3,
                        avg_fastball_pct_l5, avg_breaking_pct_l5, avg_offspeed_pct_l5
                 FROM mlb_player_average_statcast_pitching sc
@@ -1059,12 +1162,6 @@ class MLBFeatureStore:
                   AND sc.game_date <= pgs.game_date
                 ORDER BY sc.game_date DESC LIMIT 1
             ) sc_avg ON TRUE
-
-            -- FanGraphs season advanced (pitcher rows)
-            LEFT JOIN mlb_player_season_advanced fg
-                ON fg.player_id = pgs.player_id
-               AND fg.season = pgs.season
-               AND fg.player_type = 'pitcher'
 
             -- Park factors (join on venue)
             LEFT JOIN mlb_park_factors pf
@@ -1088,7 +1185,7 @@ class MLBFeatureStore:
                   AND bookmaker IN ('pinnacle', 'draftkings')
             ) lines ON TRUE
 
-            -- Pitcher strikeout prop line (latest snapshot)
+            -- Pitcher strikeout prop line (latest point-in-time snapshot)
             LEFT JOIN LATERAL (
                 SELECT sub.line AS prop_line
                 FROM (
@@ -1098,7 +1195,11 @@ class MLBFeatureStore:
                       AND game_id = pgs.game_id
                       AND market_key = 'pitcher_strikeouts'
                       AND bookmaker IN ('pinnacle', 'draftkings')
-                    ORDER BY market_key, snapshot_time DESC NULLS LAST
+                      AND (
+                          :as_of_time IS NULL
+                          OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                      )
+                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
                 LIMIT 1
             ) props ON TRUE
@@ -1151,7 +1252,7 @@ class MLBFeatureStore:
         """)
 
         with self.engine.connect() as conn:
-            df = pd.read_sql(query, conn, params={"game_date": game_date})
+            df = pd.read_sql(query, conn, params={"game_date": game_date, "as_of_time": as_of_time})
 
         if df.empty:
             return df
@@ -1262,7 +1363,7 @@ class MLBFeatureStore:
         days_rest: int,
         pitch_count_last_start: int,
     ) -> dict:
-        """Fetch pitcher IP-context features from last 5 starts for inference."""
+        """Fetch pitcher IP-context features from prior starts for inference."""
         query = text("""
             WITH recent_pitcher_starts AS (
                 SELECT
@@ -1271,6 +1372,7 @@ class MLBFeatureStore:
                     h_allowed,
                     bb,
                     pitches_thrown,
+                    game_date,
                     ROW_NUMBER() OVER (ORDER BY game_date DESC) AS rn
                 FROM mlb_player_game_stats_pitching
                 WHERE player_id = :player_id
@@ -1279,26 +1381,45 @@ class MLBFeatureStore:
                   AND did_not_play = FALSE
                   AND game_date < :game_date
                 ORDER BY game_date DESC
-                LIMIT 5
+                LIMIT 10
+            ),
+            previous_start AS (
+                SELECT ip, game_date
+                FROM recent_pitcher_starts
+                WHERE rn = 1
+            ),
+            prior_to_previous_start AS (
+                SELECT AVG(prev.ip) AS avg_ip_before_previous_start
+                FROM mlb_player_game_stats_pitching prev
+                JOIN previous_start ps ON TRUE
+                WHERE prev.player_id = :player_id
+                  AND prev.season = :season
+                  AND prev.is_starter = TRUE
+                  AND prev.did_not_play = FALSE
+                  AND prev.game_date < ps.game_date
             )
             SELECT
-                MIN(ip) AS min_ip_l5,
-                MAX(ip) AS max_ip_l5,
-                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ip) AS median_ip_l5,
-                MAX(ip) - MIN(ip) AS ip_range_l5,
-                SUM(CASE WHEN ip < 4.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS short_start_rate_l5,
-                COUNT(*)::float / 5.0 AS start_stability_l5,
-                AVG(COALESCE(outs_recorded, 0) + COALESCE(h_allowed, 0) + COALESCE(bb, 0))::float AS avg_batters_faced_l5,
-                AVG(COALESCE(pitches_thrown, 0)) AS avg_pitches_thrown_l5,
-                MAX(CASE WHEN rn = 1 THEN COALESCE(pitches_thrown, 0) END) AS latest_start_pitch_count,
+                MIN(CASE WHEN rps.rn <= 5 THEN rps.ip END) AS min_ip_l5,
+                MAX(CASE WHEN rps.rn <= 5 THEN rps.ip END) AS max_ip_l5,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY rps.ip) FILTER (WHERE rps.rn <= 5) AS median_ip_l5,
+                MAX(CASE WHEN rps.rn <= 5 THEN rps.ip END) - MIN(CASE WHEN rps.rn <= 5 THEN rps.ip END) AS ip_range_l5,
+                SUM(CASE WHEN rps.rn <= 5 AND rps.ip < 4.0 THEN 1 ELSE 0 END)::float
+                    / NULLIF(SUM(CASE WHEN rps.rn <= 5 THEN 1 ELSE 0 END), 0) AS short_start_rate_l5,
+                SUM(CASE WHEN rps.ip < 5.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS pct_starts_under_5_ip_l10,
                 CASE
-                    WHEN SUM(CASE WHEN rn <= 3 THEN COALESCE(pitches_thrown, 0) END) IS NOT NULL
-                         AND SUM(CASE WHEN rn <= 3 THEN 1 ELSE 0 END) > 0
-                    THEN SUM(CASE WHEN rn <= 3 THEN COALESCE(pitches_thrown, 0) END)::float
-                         / NULLIF(SUM(CASE WHEN rn <= 3 THEN 1 ELSE 0 END), 0)
-                    ELSE NULL
-                END AS recent_avg_pitch_count
-            FROM recent_pitcher_starts
+                    WHEN MAX(ps.ip) IS NOT NULL
+                         AND MAX(prior.avg_ip_before_previous_start) IS NOT NULL
+                         AND MAX(ps.ip) <= MAX(prior.avg_ip_before_previous_start) - 1.5
+                    THEN 1 ELSE 0
+                END AS left_last_start_early_flag,
+                SUM(CASE WHEN rps.rn <= 5 THEN 1 ELSE 0 END)::float / 5.0 AS start_stability_l5,
+                AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.outs_recorded, 0) + COALESCE(rps.h_allowed, 0) + COALESCE(rps.bb, 0) END)::float AS avg_batters_faced_l5,
+                AVG(CASE WHEN rps.rn <= 5 THEN COALESCE(rps.pitches_thrown, 0) END) AS avg_pitches_thrown_l5,
+                MAX(CASE WHEN rps.rn = 1 THEN COALESCE(rps.pitches_thrown, 0) END) AS latest_start_pitch_count,
+                AVG(CASE WHEN rps.rn <= 3 THEN COALESCE(rps.pitches_thrown, 0) END) AS recent_avg_pitch_count
+            FROM recent_pitcher_starts rps
+            LEFT JOIN previous_start ps ON TRUE
+            LEFT JOIN prior_to_previous_start prior ON TRUE
         """)
         with self.engine.connect() as conn:
             row = conn.execute(
@@ -1316,6 +1437,8 @@ class MLBFeatureStore:
                 "pitcher_median_ip_l5": 0,
                 "pitcher_ip_range_l5": 0,
                 "pitcher_short_start_rate_l5": 0,
+                "pitcher_pct_starts_under_5_ip_l10": 0,
+                "pitcher_left_last_start_early_flag": 0,
                 "pitcher_start_stability_l5": 0,
                 "pitcher_avg_batters_faced_l5": 0,
                 "pitcher_avg_pitches_per_start_l5": 0,
@@ -1342,6 +1465,8 @@ class MLBFeatureStore:
             "pitcher_median_ip_l5": float(row.median_ip_l5 or 0),
             "pitcher_ip_range_l5": float(row.ip_range_l5 or 0),
             "pitcher_short_start_rate_l5": float(row.short_start_rate_l5 or 0),
+            "pitcher_pct_starts_under_5_ip_l10": float(row.pct_starts_under_5_ip_l10 or 0),
+            "pitcher_left_last_start_early_flag": int(row.left_last_start_early_flag or 0),
             "pitcher_start_stability_l5": float(row.start_stability_l5 or 0),
             "pitcher_avg_batters_faced_l5": float(row.avg_batters_faced_l5 or 0),
             "pitcher_avg_batters_faced_szn": float(row.avg_batters_faced_l5 or 0),
@@ -1375,6 +1500,8 @@ class MLBFeatureStore:
                 AVG(CASE WHEN rn <= 10 THEN COALESCE(pitches_thrown, 0) END) AS avg_pitches_thrown_l10,
                 AVG(ip) AS avg_ip_l30,
                 SUM(CASE WHEN ip < 4.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS short_hook_rate_l30,
+                SUM(CASE WHEN ip < 5.0 AND COALESCE(pitches_thrown, 0) < 80 THEN 1 ELSE 0 END)::float
+                    / NULLIF(COUNT(*), 0) AS manager_short_hook_rate_l30,
                 SUM(CASE WHEN ip >= 6.0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0) AS deep_start_rate_l30
             FROM recent_team_starts
         """)
@@ -1395,6 +1522,7 @@ class MLBFeatureStore:
                 "team_starter_avg_pitches_l10": 0.0,
                 "team_starter_avg_ip_l30": 0.0,
                 "team_starter_short_hook_rate_l30": 0.0,
+                "manager_starter_short_hook_rate_l30": 0.0,
                 "team_starter_deep_start_rate_l30": 0.0,
             }
 
@@ -1404,6 +1532,7 @@ class MLBFeatureStore:
             "team_starter_avg_pitches_l10": float(row.avg_pitches_thrown_l10 or 0),
             "team_starter_avg_ip_l30": float(row.avg_ip_l30 or 0),
             "team_starter_short_hook_rate_l30": float(row.short_hook_rate_l30 or 0),
+            "manager_starter_short_hook_rate_l30": float(row.manager_short_hook_rate_l30 or 0),
             "team_starter_deep_start_rate_l30": float(row.deep_start_rate_l30 or 0),
         }
 
@@ -1412,7 +1541,7 @@ class MLBFeatureStore:
         query = text("""
             SELECT avg_whiff_pct_l5, avg_csw_pct_l5,
                    avg_chase_pct_l5, avg_zone_pct_l5,
-                   avg_avg_fastball_velo_l5,
+                   avg_avg_fastball_velo_l3, avg_avg_fastball_velo_l5, avg_avg_fastball_velo_szn,
                    std_whiff_pct_l3,
                    avg_fastball_pct_l5, avg_breaking_pct_l5, avg_offspeed_pct_l5
             FROM mlb_player_average_statcast_pitching
@@ -1430,6 +1559,7 @@ class MLBFeatureStore:
                 "pitcher_avg_chase_pct_l5": 0,
                 "pitcher_avg_zone_pct_l5": 0,
                 "pitcher_avg_fastball_velo_l5": 0,
+                "pitcher_fastball_velo_delta_l3_vs_szn": 0,
                 "pitcher_std_whiff_pct_l3": 0,
                 "pitcher_fastball_pct_l5": 0,
                 "pitcher_breaking_pct_l5": 0,
@@ -1442,30 +1572,13 @@ class MLBFeatureStore:
             "pitcher_avg_chase_pct_l5": float(row.avg_chase_pct_l5 or 0),
             "pitcher_avg_zone_pct_l5": float(row.avg_zone_pct_l5 or 0),
             "pitcher_avg_fastball_velo_l5": float(row.avg_avg_fastball_velo_l5 or 0),
+            "pitcher_fastball_velo_delta_l3_vs_szn": float(
+                (row.avg_avg_fastball_velo_l3 or 0) - (row.avg_avg_fastball_velo_szn or 0)
+            ),
             "pitcher_std_whiff_pct_l3": float(row.std_whiff_pct_l3 or 0),
             "pitcher_fastball_pct_l5": float(row.avg_fastball_pct_l5 or 0),
             "pitcher_breaking_pct_l5": float(row.avg_breaking_pct_l5 or 0),
             "pitcher_offspeed_pct_l5": float(row.avg_offspeed_pct_l5 or 0),
-        }
-
-    def _get_fangraphs_stats(self, player_id: int, season: int) -> dict:
-        """Fetch FanGraphs season-level pitcher stats."""
-        query = text("""
-            SELECT fip, k_pct
-            FROM mlb_player_season_advanced
-            WHERE player_id = :player_id
-              AND season = :season
-              AND player_type = 'pitcher'
-        """)
-        with self.engine.connect() as conn:
-            row = conn.execute(query, {"player_id": player_id, "season": season}).fetchone()
-
-        if row is None:
-            return {"pitcher_fip_szn": 0, "pitcher_k_pct_szn": 0}
-
-        return {
-            "pitcher_fip_szn": float(row.fip or 0),
-            "pitcher_k_pct_szn": float(row.k_pct or 0),
         }
 
     def _get_park_factor(self, venue_id: int, season: int) -> float:
@@ -1526,8 +1639,13 @@ class MLBFeatureStore:
             row = conn.execute(query, {"game_id": game_id}).fetchone()
         return float(row.game_total) if row and row.game_total else 0
 
-    def _get_prop_line(self, player_id: int, game_id: int) -> float:
-        """Fetch pitcher strikeout prop line (latest snapshot)."""
+    def _get_prop_line(self, player_id: int, game_id: int, as_of_time: datetime | None = None) -> float:
+        """Fetch pitcher strikeout prop line at or before ``as_of_time``.
+
+        Historical backtests must not see odds snapshots captured after the
+        simulated inference/bet time. ``inserted_at`` is a fallback for legacy
+        rows missing ``snapshot_time``.
+        """
         query = text("""
             SELECT line
             FROM mlb_raw_player_props
@@ -1535,12 +1653,23 @@ class MLBFeatureStore:
               AND game_id = :game_id
               AND market_key = 'pitcher_strikeouts'
               AND bookmaker IN ('pinnacle', 'draftkings')
-            ORDER BY snapshot_time DESC NULLS LAST
+              AND (
+                  :as_of_time IS NULL
+                  OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+              )
+            ORDER BY COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
             LIMIT 1
         """)
         with self.engine.connect() as conn:
-            row = conn.execute(query, {"player_id": player_id, "game_id": game_id}).fetchone()
-        return float(row.line) if row and row.line else 0
+            df = pd.read_sql(
+                query,
+                conn,
+                params={"player_id": player_id, "game_id": game_id, "as_of_time": as_of_time},
+            )
+        if df.empty:
+            return 0
+        line = df.iloc[0].line
+        return float(line) if line else 0
 
     def _get_inning_fatigue_stats(self, player_id: int, game_date: str) -> dict:
         """Fetch inning-level fatigue features from L5 starts."""

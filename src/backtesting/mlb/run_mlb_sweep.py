@@ -333,6 +333,10 @@ def _process_date_shared(
                     "season": game.get("season", game_date.year),
                 })
 
+    quote_clean_cutoff_ts = None
+    if quote_clean_cutoff_time_et is not None:
+        quote_clean_cutoff_ts = _build_quote_clean_cutoff_ts(game_date, quote_clean_cutoff_time_et)
+
     # Generate predictions
     predictions = []
 
@@ -351,6 +355,7 @@ def _process_date_shared(
                     venue_id=pitcher.get("venue_id", 0),
                     season=pitcher["season"],
                     is_home=pitcher["is_home"],
+                    as_of_time=quote_clean_cutoff_ts,
                 )
                 if features is None:
                     continue
@@ -394,8 +399,10 @@ def _process_date_shared(
 
             try:
                 features_df = batter_feature_store.get_features_for_date(
-                    str(game_date), stat=short_stat,
+                    str(game_date),
+                    stat=short_stat,
                     matchup_cache=matchup_cache,
+                    as_of_time=quote_clean_cutoff_ts,
                 )
             except Exception as e:
                 logger.warning(f"Error loading batter features for {batter_stat} on {game_date}: {e}")
@@ -437,9 +444,6 @@ def _process_date_shared(
     # Fetch lines for all players on this date
     game_ids = [g["game_id"] for g in games]
     market_keys = [s for s in stats if s in STAT_ACTUALS]
-    quote_clean_cutoff_ts = None
-    if quote_clean_cutoff_time_et is not None:
-        quote_clean_cutoff_ts = _build_quote_clean_cutoff_ts(game_date, quote_clean_cutoff_time_et)
     lines_df = _fetch_lines_for_date(
         engine,
         game_ids,
@@ -514,16 +518,17 @@ def _fetch_lines_for_date(
                     outcome_label,
                     odds_american,
                     snapshot_time,
+                    COALESCE(snapshot_time, inserted_at) AS effective_snapshot_time,
                     ROW_NUMBER() OVER (
                         PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
-                        ORDER BY snapshot_time DESC NULLS LAST
+                        ORDER BY COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                     ) AS rn
                 FROM mlb_raw_player_props
                 WHERE game_id IN ({game_id_placeholders})
                   AND market_key IN ({market_placeholders})
                   AND bookmaker NOT IN ({excl_placeholders})
                   AND player_id IS NOT NULL
-                  AND snapshot_time <= :quote_clean_cutoff_ts
+                  AND COALESCE(snapshot_time, inserted_at) <= :quote_clean_cutoff_ts
             )
             SELECT
                 player_id,
@@ -533,11 +538,11 @@ def _fetch_lines_for_date(
                 line,
                 MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
                 MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds,
-                MAX(CASE WHEN outcome_label = 'Over' THEN snapshot_time END) AS over_snapshot_time,
-                MAX(CASE WHEN outcome_label = 'Under' THEN snapshot_time END) AS under_snapshot_time,
+                MAX(CASE WHEN outcome_label = 'Over' THEN effective_snapshot_time END) AS over_snapshot_time,
+                MAX(CASE WHEN outcome_label = 'Under' THEN effective_snapshot_time END) AS under_snapshot_time,
                 GREATEST(
-                    MAX(CASE WHEN outcome_label = 'Over' THEN snapshot_time END),
-                    MAX(CASE WHEN outcome_label = 'Under' THEN snapshot_time END)
+                    MAX(CASE WHEN outcome_label = 'Over' THEN effective_snapshot_time END),
+                    MAX(CASE WHEN outcome_label = 'Under' THEN effective_snapshot_time END)
                 ) AS selected_snapshot_time
             FROM ranked_lines
             WHERE rn = 1
