@@ -55,7 +55,15 @@ Missing:
 Existing CLV script:
 - `scripts/analyze_mlb_batter_hits_clv.py`
   - computes CLV matches, summary, plus-odds bands, edge bins, bookmaker splits, timing stability, and phase1b decision
+  - supports assumed bet time via `--assume-bet-time-et 13:30`, which is valid for quote-clean replay when the replay explicitly used the same cutoff
   - does not produce a clean failure-mode diagnosis report
+
+CLV bet-time metadata decision:
+- For current quote-clean CLV runs, either:
+  - use `--assume-bet-time-et 13:30`, which is valid for quote-clean replay, or
+  - merge `bets.csv` to `predictions.csv` to attach `selected_snapshot_time`.
+- The existing CLV script supports assumed bet time, so diagnostics can proceed without blocking on backtest output changes.
+- Longer-term, patch saved `bets.csv` to carry quote snapshot metadata, especially `selected_snapshot_time`, so CLV can use exact selected quote timing without relying on an assumed cutoff.
 
 Missing:
 - A post-CLV classifier script, preferably `scripts/diagnose_mlb_clv_failure_modes.py`, that consumes CLV output files and explains which failure mode occurred without changing CLV math.
