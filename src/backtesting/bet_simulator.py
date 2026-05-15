@@ -53,6 +53,9 @@ class Bet:
 
     # Line shopping info
     bookmaker: str | None = None  # Bookmaker offering the best line
+    selected_snapshot_time: object | None = None
+    over_snapshot_time: object | None = None
+    under_snapshot_time: object | None = None
 
     # BL diagnostic (optional)
     posterior_prob: float | None = None  # BL-blended probability (when BL is enabled)
@@ -214,6 +217,9 @@ class BetSimulator:
         implied_prob: float,
         stake: float | None = None,
         sizing_prob: float | None = None,
+        selected_snapshot_time: object | None = None,
+        over_snapshot_time: object | None = None,
+        under_snapshot_time: object | None = None,
     ) -> Bet:
         """Create and record a bet.
 
@@ -246,6 +252,9 @@ class BetSimulator:
             model_prob=model_prob,
             implied_prob=implied_prob,
             edge=model_prob - implied_prob,
+            selected_snapshot_time=selected_snapshot_time,
+            over_snapshot_time=over_snapshot_time,
+            under_snapshot_time=under_snapshot_time,
         )
         self.bets.append(bet)
         return bet
@@ -306,6 +315,9 @@ class BetSimulator:
                         model_prob=row["over_prob"],
                         implied_prob=row["implied_over"],
                         sizing_prob=sizing_prob,
+                        selected_snapshot_time=row.get("selected_snapshot_time"),
+                        over_snapshot_time=row.get("over_snapshot_time"),
+                        under_snapshot_time=row.get("under_snapshot_time"),
                     )
                     # Store bookmaker if available (line shopping)
                     if "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
@@ -344,6 +356,9 @@ class BetSimulator:
                         model_prob=row["under_prob"],
                         implied_prob=row["implied_under"],
                         sizing_prob=sizing_prob,
+                        selected_snapshot_time=row.get("selected_snapshot_time"),
+                        over_snapshot_time=row.get("over_snapshot_time"),
+                        under_snapshot_time=row.get("under_snapshot_time"),
                     )
                     # Store bookmaker if available (line shopping)
                     if "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
@@ -426,6 +441,9 @@ class BetSimulator:
                     "odds": bet.odds,
                     "stake": bet.stake,
                     "bookmaker": bet.bookmaker,
+                    "selected_snapshot_time": bet.selected_snapshot_time,
+                    "over_snapshot_time": bet.over_snapshot_time,
+                    "under_snapshot_time": bet.under_snapshot_time,
                     "model_prob": bet.model_prob,
                     "implied_prob": bet.implied_prob,
                     "edge": bet.edge,

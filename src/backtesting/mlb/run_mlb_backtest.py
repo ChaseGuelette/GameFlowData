@@ -31,6 +31,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MLBBacktestRunner")
 
+LEGACY_DEPRECATION_MESSAGE = """
+run_mlb_backtest.py is legacy/debug-only and is not promotion-grade evidence.
+Use src/backtesting/mlb/run_mlb_sweep.py --quote-clean --quote-cutoff-time-et <HH:MM>
+for MLB promotion validation. Re-run this legacy harness only with --allow-legacy
+for one-off debugging, never for production promotion decisions.
+""".strip()
+
 
 def parse_date(s: str) -> date:
     try:
@@ -69,6 +76,11 @@ def main():
     parser.add_argument("--start", type=parse_date, required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=parse_date, required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument(
+        "--allow-legacy",
+        action="store_true",
+        help="Allow this legacy/debug-only harness to run. Do not use as promotion evidence.",
+    )
+    parser.add_argument(
         "--model-dir", type=str, default="src/models/mlb/artifacts",
         help="Path to MLB model artifacts",
     )
@@ -90,6 +102,10 @@ def main():
     parser.add_argument("--bl-tau", type=float, default=None, help="Black-Litterman tau (None = no BL)")
 
     args = parser.parse_args()
+
+    if not args.allow_legacy:
+        print(LEGACY_DEPRECATION_MESSAGE, file=sys.stderr)
+        raise SystemExit(2)
 
     # Find model artifacts
     model_path = find_latest_model_dir(args.model_dir)

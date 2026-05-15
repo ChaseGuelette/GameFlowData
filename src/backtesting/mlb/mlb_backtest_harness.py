@@ -13,9 +13,11 @@ Adapted from src/backtesting/backtest_harness.py with MLB-specific:
 
 Reuses sport-agnostic: BetSimulator, MetricsCalculator, BlackLittermanBlender
 
-ARCHITECTURE NOTE: `run_mlb_sweep.py` is the canonical production-validation
-entry point. This harness is retained for single-config/legacy runs and must
-share line-selection code with the sweep path; do not add raw odds SQL here.
+ARCHITECTURE NOTE: `run_mlb_sweep.py --quote-clean` is the only canonical
+production-validation entry point. This harness is retained for single-config
+legacy/debug runs only; outputs from this harness must not be used as promotion
+evidence. It must share line-selection code with the sweep path; do not add raw
+odds SQL here.
 """
 
 from __future__ import annotations
@@ -109,6 +111,10 @@ class MLBBacktestHarness:
     _metrics_calc: MetricsCalculator = field(init=False)
 
     def __post_init__(self):
+        logger.warning(
+            "MLBBacktestHarness is legacy/debug-only. Use run_mlb_sweep.py --quote-clean "
+            "for promotion-grade MLB backtest evidence."
+        )
         self._simulator = BetSimulator(
             edge_threshold=self.edge_threshold,
             starting_bankroll=self.starting_bankroll,
