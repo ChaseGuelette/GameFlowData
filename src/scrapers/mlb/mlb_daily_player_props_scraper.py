@@ -19,7 +19,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -200,11 +200,54 @@ class MLBDailyPropsScraper:
             conn.close()
 
 
-def run_live_scrape(scraper, target_table="mlb_raw_player_props"):
-    """Scrape live MLB props."""
+def _parse_iso_utc(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _is_in_pregame_window(event, minutes_before: int | None, tolerance_minutes: int) -> bool:
+    if minutes_before is None:
+        return True
+    commence = _parse_iso_utc(event.get("commence_time"))
+    if commence is None:
+        return False
+    minutes_until = (commence - datetime.now(timezone.utc)).total_seconds() / 60.0
+    return abs(minutes_until - minutes_before) <= tolerance_minutes
+
+
+def run_live_scrape(
+    scraper,
+    target_table="mlb_raw_player_props",
+    pregame_minutes: int | None = None,
+    pregame_tolerance_minutes: int = 5,
+):
+    """Scrape live MLB props.
+
+    If ``pregame_minutes`` is set, only scrape games whose commence_time is within
+    ``pregame_tolerance_minutes`` of that pregame offset. This supports a
+    forward-looking close snapshot near commence_time - 30 minutes.
+    """
     logger.info(f"Running LIVE MLB Player Props Scrape -> {target_table}...")
     events = scraper.get_live_events()
     logger.info(f"Found {len(events)} live/upcoming MLB events.")
+
+    if pregame_minutes is not None:
+        before = len(events)
+        events = [
+            event for event in events
+            if _is_in_pregame_window(event, pregame_minutes, pregame_tolerance_minutes)
+        ]
+        logger.info(
+            "Pregame window: kept %d/%d events within %d±%d minutes of commence.",
+            len(events),
+            before,
+            pregame_minutes,
+            pregame_tolerance_minutes,
+        )
 
     total_creds = 0
     total_rows = 0
@@ -278,6 +321,8 @@ if __name__ == "__main__":
     market_group.add_argument("--markets", nargs="+", default=None, help="Explicit market list")
 
     parser.add_argument("--target-table", type=str, default=None, help="Override target table")
+    parser.add_argument("--pregame-minutes", type=int, default=None, help="Live mode only: scrape only games about this many minutes before commence_time, e.g. 30")
+    parser.add_argument("--pregame-tolerance-minutes", type=int, default=5, help="Tolerance around --pregame-minutes")
 
     args = parser.parse_args()
 
@@ -294,7 +339,12 @@ if __name__ == "__main__":
 
     if args.live:
         table = args.target_table or "mlb_raw_player_props"
-        run_live_scrape(scraper, target_table=table)
+        run_live_scrape(
+            scraper,
+            target_table=table,
+            pregame_minutes=args.pregame_minutes,
+            pregame_tolerance_minutes=args.pregame_tolerance_minutes,
+        )
 
     if args.date:
         run_historical_scrape(scraper, args.date)

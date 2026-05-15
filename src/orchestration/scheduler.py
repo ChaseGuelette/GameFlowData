@@ -567,6 +567,15 @@ def run_mlb_lines_props_only():
     run_job("mlb_lines_job.py", extra_args="--live --props-only --extended", silent_on_success=True)
 
 
+def run_mlb_pregame_30min_props():
+    """Capture close-ish MLB props near commence_time - 30 minutes."""
+    run_job(
+        "mlb_lines_job.py",
+        extra_args="--live --props-only --extended --pregame-minutes 30 --pregame-tolerance-minutes 5 --skip-linker",
+        silent_on_success=True,
+    )
+
+
 def run_mlb_lineup_scraper():
     """Scrape confirmed MLB batting lineups from the MLB Stats API."""
     run_job("mlb_lineup_scraper_job.py")
@@ -996,6 +1005,15 @@ def main():
         CronTrigger(hour=18, minute=30, timezone=ET),
         id="mlb_inference_6pm",
         name="MLB Inference (6:30 PM ET)",
+    )
+
+    # Every 10 min, 10 AM - 11 PM ET — capture games near commence_time -30m.
+    # The scraper filters by each event's commence_time, so this covers staggered night starts.
+    scheduler.add_job(
+        run_mlb_pregame_30min_props,
+        CronTrigger(hour='10-23', minute='0,10,20,30,40,50', timezone=ET),
+        id="mlb_pregame_30min_props",
+        name="MLB Props Close Snapshot (~30m pre-commence)",
     )
 
     # 4:30 PM ET - MLB edge refresh (after 5 PM lines, before evening games)

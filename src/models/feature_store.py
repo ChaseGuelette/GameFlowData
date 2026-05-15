@@ -553,7 +553,9 @@ class FeatureStore:
                     WHERE player_id = pgs.player_id
                       AND game_id = pgs.game_id
                       AND bookmaker IN ('pinnacle', 'draftkings')
-                    ORDER BY market_key, snapshot_time DESC NULLS LAST
+                      AND COALESCE(snapshot_time, inserted_at)::date <= pgs.game_date
+                      AND (commence_time IS NULL OR COALESCE(snapshot_time, inserted_at) < commence_time)
+                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
             ) prop_lines ON TRUE
 
@@ -848,6 +850,8 @@ class FeatureStore:
                     FROM raw_game_lines_staging
                     WHERE nba_game_id = pgs.game_id
                       AND bookmaker IN ('pinnacle', 'draftkings')
+                      AND COALESCE(snapshot_time, inserted_at)::date <= pgs.game_date
+                      AND (commence_time IS NULL OR COALESCE(snapshot_time, inserted_at) < commence_time)
                 ) lines ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT
@@ -861,7 +865,9 @@ class FeatureStore:
                         WHERE player_id = pgs.player_id
                           AND game_id = pgs.game_id
                           AND bookmaker IN ('pinnacle', 'draftkings')
-                        ORDER BY market_key, snapshot_time DESC NULLS LAST
+                          AND COALESCE(snapshot_time, inserted_at)::date <= pgs.game_date
+                          AND (commence_time IS NULL OR COALESCE(snapshot_time, inserted_at) < commence_time)
+                        ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                     ) sub
                 ) prop_lines ON TRUE
                 -- Team Injury Context: game stats (OUT players on this team)
@@ -1364,7 +1370,9 @@ class FeatureStore:
                     WHERE player_id = pgs.player_id
                       AND game_id = pgs.game_id
                       AND bookmaker IN ('pinnacle', 'draftkings')
-                    ORDER BY market_key, snapshot_time DESC NULLS LAST
+                      AND COALESCE(snapshot_time, inserted_at)::date <= pgs.game_date
+                      AND (commence_time IS NULL OR COALESCE(snapshot_time, inserted_at) < commence_time)
+                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
             ) prop_lines ON TRUE
 
@@ -1678,8 +1686,8 @@ class FeatureStore:
             }
         return {f"opp_pos_{k}": v if v is not None else opp_pos_defaults.get(k, 0) for k, v in result._mapping.items()}
 
-    def _get_game_lines(self, conn, game_id):
-        """Fetch spread/total from betting lines. Returns 0 if not found."""
+    def _get_game_lines(self, conn, game_id, as_of_date=None):
+        """Fetch spread/total from betting lines using only as-of, pregame quotes."""
         query = text("""
             SELECT
                 MAX(CASE WHEN market_key = 'spreads' THEN line END) as spread,
@@ -1687,16 +1695,21 @@ class FeatureStore:
             FROM raw_game_lines_staging
             WHERE nba_game_id = :game_id
               AND bookmaker IN ('pinnacle', 'draftkings')
+              AND (
+                  :as_of_date IS NULL
+                  OR COALESCE(snapshot_time, inserted_at)::date <= :as_of_date
+              )
+              AND (commence_time IS NULL OR COALESCE(snapshot_time, inserted_at) < commence_time)
         """)
-        result = conn.execute(query, {"game_id": game_id}).fetchone()
+        result = conn.execute(query, {"game_id": game_id, "as_of_date": as_of_date}).fetchone()
 
         return {
             "line_spread_raw": result.spread if result and result.spread else 0,
             "line_total": result.total if result and result.total else 0,
         }
 
-    def _get_player_prop_lines(self, conn, player_id, game_id):
-        """Fetch per-stat prop lines for a single player-game. Returns 0 if not found."""
+    def _get_player_prop_lines(self, conn, player_id, game_id, as_of_date=None):
+        """Fetch per-stat prop lines using only as-of, pregame quotes. Returns 0 if not found."""
         query = text("""
             SELECT
                 MAX(CASE WHEN sub.market_key = 'player_points' THEN sub.line END) as prop_line_pts,
@@ -1709,10 +1722,15 @@ class FeatureStore:
                 WHERE player_id = :player_id
                   AND game_id = :game_id
                   AND bookmaker IN ('pinnacle', 'draftkings')
-                ORDER BY market_key, snapshot_time DESC NULLS LAST
+                  AND (
+                      :as_of_date IS NULL
+                      OR COALESCE(snapshot_time, inserted_at)::date <= :as_of_date
+                  )
+                  AND (commence_time IS NULL OR COALESCE(snapshot_time, inserted_at) < commence_time)
+                ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
             ) sub
         """)
-        result = conn.execute(query, {"player_id": player_id, "game_id": game_id}).fetchone()
+        result = conn.execute(query, {"player_id": player_id, "game_id": game_id, "as_of_date": as_of_date}).fetchone()
 
         if result is None:
             return {

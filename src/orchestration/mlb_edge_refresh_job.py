@@ -22,7 +22,6 @@ import time
 from datetime import date, datetime
 
 import pandas as pd
-from sqlalchemy import text
 
 from src.discord_bot.alerts import send_predictions_alert_sync
 
@@ -71,6 +70,7 @@ def main():
     logger.info("=" * 60)
 
     try:
+        from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
         from src.db.client import get_engine
         from src.models.black_litterman import BlackLittermanBlender
         from src.models.daily_runner import should_skip_recommendation
@@ -98,41 +98,18 @@ def main():
 
         # Step 3 — Fetch fresh prop lines
         logger.info("Fetching fresh prop lines...")
-        fresh_query = text("""
-            WITH ranked_lines AS (
-                SELECT
-                    player_id,
-                    bookmaker,
-                    market_key,
-                    line,
-                    outcome_label,
-                    odds_american,
-                    snapshot_time,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY player_id, market_key, bookmaker, line, outcome_label
-                        ORDER BY snapshot_time DESC
-                    ) AS rn
-                FROM mlb_raw_player_props
-                WHERE game_date = :target_date
-                  AND player_id IS NOT NULL
-            )
-            SELECT
-                player_id,
-                market_key AS stat,
-                line,
-                bookmaker,
-                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
-                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds
-            FROM ranked_lines
-            WHERE rn = 1
-            GROUP BY player_id, market_key, line, bookmaker
-            HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
-               AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
-        """)
-
-        with engine.connect() as conn:
-            result = conn.execute(fresh_query.bindparams(target_date=target_date))
-            fresh_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        game_ids = sorted(int(g) for g in preds_df["game_id"].dropna().unique())
+        markets = sorted(str(s) for s in preds_df["stat"].dropna().unique())
+        fresh_df = fetch_lines_at_decision_time(
+            engine,
+            game_ids=game_ids,
+            market_keys=markets,
+            as_of_time=None,
+            allow_latest_without_as_of=True,
+            bookmakers=None,
+        )
+        if not fresh_df.empty:
+            fresh_df = fresh_df.rename(columns={"market_key": "stat"})
 
         fresh_lines = {}
         for _, row in fresh_df.iterrows():

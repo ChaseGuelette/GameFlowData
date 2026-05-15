@@ -145,6 +145,148 @@ def test_plus_15_requires_bet_timestamp_and_scores_when_available():
     assert row["plus15_clv_implied_prob"] > 0
 
 
+def test_close_before_bet_time_is_dropped_not_scored():
+    m = load_module()
+    bets = pd.DataFrame(
+        {
+            "bet_id": [0],
+            "game_date": ["2026-04-13"],
+            "player_id": [10],
+            "game_id": [100],
+            "stat": ["batter_hits"],
+            "side": ["under"],
+            "line": [0.5],
+            "odds": [150],
+            "bookmaker": ["draftkings"],
+            "edge": [0.20],
+            "bet_snapshot_time": pd.to_datetime(["2026-04-13T22:00:00Z"]),
+        }
+    )
+    snapshots = pd.DataFrame(
+        {
+            "player_id": [10],
+            "game_id": [100],
+            "market_key": ["batter_hits"],
+            "bookmaker": ["draftkings"],
+            "line": [0.5],
+            "outcome_label": ["Under"],
+            "odds_american": [120],
+            "snapshot_time": pd.to_datetime(["2026-04-13T21:55:00Z"]),
+            "commence_time": pd.to_datetime(["2026-04-13T23:05:00Z"]),
+        }
+    )
+
+    out = m.build_clv_matches(bets, snapshots)
+    row = out.iloc[0]
+
+    assert row["clv_source"] == "unmatched"
+    assert row["unmatched_reason"] == "no_close_match"
+    assert pd.isna(row["clv_implied_prob"])
+
+
+def test_bet_at_or_after_commence_is_dropped():
+    m = load_module()
+    bets = pd.DataFrame(
+        {
+            "bet_id": [0],
+            "game_date": ["2026-04-13"],
+            "player_id": [10],
+            "game_id": [100],
+            "stat": ["batter_hits"],
+            "side": ["under"],
+            "line": [0.5],
+            "odds": [150],
+            "bookmaker": ["draftkings"],
+            "edge": [0.20],
+            "bet_snapshot_time": pd.to_datetime(["2026-04-13T23:05:00Z"]),
+        }
+    )
+    snapshots = pd.DataFrame(
+        {
+            "player_id": [10],
+            "game_id": [100],
+            "market_key": ["batter_hits"],
+            "bookmaker": ["draftkings"],
+            "line": [0.5],
+            "outcome_label": ["Under"],
+            "odds_american": [120],
+            "snapshot_time": pd.to_datetime(["2026-04-13T23:04:00Z"]),
+            "commence_time": pd.to_datetime(["2026-04-13T23:05:00Z"]),
+        }
+    )
+
+    out = m.build_clv_matches(bets, snapshots)
+    row = out.iloc[0]
+
+    assert row["clv_source"] == "unmatched"
+    assert row["unmatched_reason"] == "bet_time_at_or_after_commence"
+    assert pd.isna(row["clv_implied_prob"])
+
+
+def test_normalize_snapshots_uses_effective_snapshot_time_fallback():
+    m = load_module()
+    snapshots = pd.DataFrame(
+        {
+            "player_id": [10],
+            "game_id": [100],
+            "market_key": ["batter_hits"],
+            "bookmaker": ["draftkings"],
+            "line": [0.5],
+            "outcome_label": ["Under"],
+            "odds_american": [120],
+            "snapshot_time": [pd.NaT],
+            "inserted_at": pd.to_datetime(["2026-04-13T22:55:00Z"]),
+            "commence_time": pd.to_datetime(["2026-04-13T23:05:00Z"]),
+        }
+    )
+
+    out = m.normalize_snapshots(snapshots)
+
+    assert out.loc[0, "snapshot_time"] == pd.Timestamp("2026-04-13T22:55:00Z")
+
+
+def test_fetch_snapshots_query_selects_effective_snapshot_time(monkeypatch):
+    m = load_module()
+    captured = {}
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def execute(self, *args, **kwargs):
+            return None
+
+    class FakeEngine:
+        def connect(self):
+            return FakeConn()
+
+    def fake_get_engine(local=False):
+        return FakeEngine()
+
+    def fake_read_sql(query, conn, params):
+        captured["sql"] = str(query)
+        captured["params"] = params
+        return pd.DataFrame()
+
+    monkeypatch.setitem(sys.modules, "src.db.client", type("M", (), {"get_engine": fake_get_engine}))
+    monkeypatch.setattr(pd, "read_sql", fake_read_sql)
+
+    bets = pd.DataFrame({
+        "game_id": [100],
+        "player_id": [10],
+        "stat": ["batter_hits"],
+        "side": ["under"],
+        "line": [0.5],
+        "odds": [150],
+        "bookmaker": ["draftkings"],
+    })
+    m.fetch_snapshots_for_bets(bets)
+
+    assert "COALESCE(p.snapshot_time, p.inserted_at) AS snapshot_time" in captured["sql"]
+    assert "COALESCE(p.snapshot_time, p.inserted_at) IS NOT NULL" in captured["sql"]
+
+
 def test_phase1b_decision_rules_stop_restrict_confirm():
     m = load_module()
     stop = m.decide_phase1b(

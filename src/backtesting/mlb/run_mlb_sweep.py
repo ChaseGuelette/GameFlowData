@@ -33,6 +33,7 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from src.backtesting.bet_simulator import BetSimulator
+from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
 from src.backtesting.mlb.mlb_backtest_harness import STAT_ACTUALS
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
 from src.db.client import get_engine
@@ -488,96 +489,14 @@ def _fetch_lines_for_date(
     if not game_ids or not market_keys:
         return pd.DataFrame()
 
-    # Translate internal stat names to sportsbook market_key values where they differ
-    db_keys = [STAT_TO_MARKET_KEY.get(k, k) for k in market_keys]
-    reverse_map = {v: k for k, v in STAT_TO_MARKET_KEY.items()}
-
-    # Build parameterized query
-    game_id_placeholders = ", ".join(f":gid_{i}" for i in range(len(game_ids)))
-    market_placeholders = ", ".join(f":mk_{i}" for i in range(len(db_keys)))
-    excl_placeholders = ", ".join(f":excl_{i}" for i in range(len(EXCLUDED_BOOKMAKERS)))
-
-    params: dict = {}
-    for i, gid in enumerate(game_ids):
-        params[f"gid_{i}"] = gid
-    for i, mk in enumerate(db_keys):
-        params[f"mk_{i}"] = mk
-    for i, bk in enumerate(EXCLUDED_BOOKMAKERS):
-        params[f"excl_{i}"] = bk
-
-    if quote_clean_cutoff_ts is not None:
-        params["quote_clean_cutoff_ts"] = quote_clean_cutoff_ts
-        query = text(f"""
-            WITH ranked_lines AS (
-                SELECT
-                    player_id,
-                    game_id,
-                    bookmaker,
-                    market_key,
-                    line,
-                    outcome_label,
-                    odds_american,
-                    snapshot_time,
-                    COALESCE(snapshot_time, inserted_at) AS effective_snapshot_time,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
-                        ORDER BY COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
-                    ) AS rn
-                FROM mlb_raw_player_props
-                WHERE game_id IN ({game_id_placeholders})
-                  AND market_key IN ({market_placeholders})
-                  AND bookmaker NOT IN ({excl_placeholders})
-                  AND player_id IS NOT NULL
-                  AND COALESCE(snapshot_time, inserted_at) <= :quote_clean_cutoff_ts
-            )
-            SELECT
-                player_id,
-                game_id,
-                bookmaker,
-                market_key,
-                line,
-                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
-                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds,
-                MAX(CASE WHEN outcome_label = 'Over' THEN effective_snapshot_time END) AS over_snapshot_time,
-                MAX(CASE WHEN outcome_label = 'Under' THEN effective_snapshot_time END) AS under_snapshot_time,
-                GREATEST(
-                    MAX(CASE WHEN outcome_label = 'Over' THEN effective_snapshot_time END),
-                    MAX(CASE WHEN outcome_label = 'Under' THEN effective_snapshot_time END)
-                ) AS selected_snapshot_time
-            FROM ranked_lines
-            WHERE rn = 1
-            GROUP BY player_id, game_id, bookmaker, market_key, line
-            HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
-               AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
-        """)
-    else:
-        query = text(f"""
-            WITH ranked AS (
-                SELECT
-                    player_id, game_id, bookmaker, market_key, line,
-                    MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
-                    MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
-                FROM mlb_raw_player_props
-                WHERE game_id IN ({game_id_placeholders})
-                  AND market_key IN ({market_placeholders})
-                  AND bookmaker NOT IN ({excl_placeholders})
-                  AND player_id IS NOT NULL
-                GROUP BY player_id, game_id, bookmaker, market_key, line
-                HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
-                   AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
-            )
-            SELECT * FROM ranked
-        """)
-
-    with engine.connect() as conn:
-        conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
-        df = pd.read_sql(query, conn, params=params)
-
-    # Remap sportsbook market_key back to internal stat names so edge calc can match by pred.stat
-    if reverse_map and not df.empty and "market_key" in df.columns:
-        df["market_key"] = df["market_key"].replace(reverse_map)
-
-    return df
+    return fetch_lines_at_decision_time(
+        engine,
+        game_ids=game_ids,
+        market_keys=market_keys,
+        as_of_time=quote_clean_cutoff_ts,
+        allow_latest_without_as_of=quote_clean_cutoff_ts is None,
+        bookmakers=None,
+    )
 
 
 # ---------------------------------------------------------------------------

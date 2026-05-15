@@ -3,6 +3,7 @@
 Mirrors MLBFeatureStore (pitcher) but adapted for batter targets:
 - Batter rolling averages from mlb_player_average_batting
 - Batter Statcast features from mlb_player_average_statcast_batting
+- FanGraphs season-to-date snapshots from mlb_player_season_advanced_history (date-guarded)
 - Opposing starting pitcher stats
 - Platoon splits (batter vs pitcher handedness)
 - Park factors (hits, HR, runs)
@@ -72,10 +73,12 @@ BATTER_BASE_FEATURES: list[str] = [
     "batter_xba_l5", "batter_xba_l10",
     "batter_xslg_l5", "batter_xwoba_l5",
     "batter_zone_pct_l5", "batter_chase_pct_l5", "batter_whiff_pct_l5",
-    # NOTE: batter_wrc_plus_szn / woba_szn / iso_szn / bb_pct_szn / k_pct_szn /
-    # hard_pct_szn / babip_szn removed — mlb_player_season_advanced has no
-    # temporal stamp and stores end-of-season values, leaking the target into
-    # past-season backtests. Restore only after rebuilding as point-in-time.
+    # FanGraphs season-to-date snapshots (point-in-time via _history table,
+    # joined with `as_of_date < game_date`). BR backfill populates k_pct,
+    # bb_pct, iso, babip, avg/obp/slg/ops; FG-only columns (wrc_plus, woba,
+    # hard_pct) are NULL for pre-2026 dates and FG-populated for 2026+ daily.
+    "batter_wrc_plus_szn", "batter_woba_szn", "batter_iso_szn",
+    "batter_bb_pct_szn", "batter_k_pct_szn", "batter_hard_pct_szn", "batter_babip_szn",
     # Lineup
     "lineup_position",
     # Opposing starter pitcher
@@ -113,10 +116,7 @@ BATTER_HITS_FEATURES: list[str] = BATTER_BASE_FEATURES + [
     "park_hits_factor", "prop_line_batter_hits",
     "projected_ab",
     "batter_gb_pct_l10", "batter_fb_pct_l10",
-    # NOTE: batter_babip_opp_babip_interaction removed — depended on the leaky
-    # batter_babip_szn feature. Re-add once batter_babip_szn is rebuilt as
-    # point-in-time.
-    "projected_ab_x_recent_form",
+    "batter_babip_opp_babip_interaction", "projected_ab_x_recent_form",
 ]
 BATTER_HR_FEATURES: list[str] = BATTER_BASE_FEATURES + [
     "park_hr_factor", "batter_avg_hr_vs_hand_l20",
@@ -185,18 +185,30 @@ class MLBBatterFeatureStore:
     # Training data
     # ------------------------------------------------------------------
 
-    def get_training_dataset(self, seasons: list[int], stat: str = "hits") -> pd.DataFrame:
+    def get_training_dataset(
+        self,
+        seasons: list[int],
+        stat: str = "hits",
+        as_of_time: datetime | None = None,
+    ) -> pd.DataFrame:
         """Load training features for one or more seasons.
 
         Returns DataFrame with batter feature columns plus identifiers
-        and the target column 'actual_{stat}'.
+        and the target column 'actual_{stat}'. Prop-line selection is point-in-time:
+        if ``as_of_time`` is supplied, market updates after that timestamp are
+        excluded; post-commence prop snapshots are always excluded.
         """
         target_col = BATTER_STAT_TARGET[stat]
         market_key = BATTER_STAT_MARKET_KEY[stat]
         frames = []
         for season in seasons:
             logger.info("Loading MLB batter training data for season %d, stat=%s...", season, stat)
-            df = self._load_single_season_training(season, target_col, market_key)
+            df = self._load_single_season_training(
+                season,
+                target_col,
+                market_key,
+                as_of_time=as_of_time,
+            )
             logger.info("  Season %d: %d rows", season, len(df))
             frames.append(df)
 
@@ -308,7 +320,13 @@ class MLBBatterFeatureStore:
 
         return df
 
-    def _load_single_season_training(self, season: int, target_col: str, market_key: str) -> pd.DataFrame:
+    def _load_single_season_training(
+        self,
+        season: int,
+        target_col: str,
+        market_key: str,
+        as_of_time: datetime | None = None,
+    ) -> pd.DataFrame:
         """Load training features for a single MLB season via SQL joins."""
         query = text("""
             SELECT
@@ -383,6 +401,15 @@ class MLBBatterFeatureStore:
                 COALESCE(sc.avg_zone_pct_l5, 0) AS batter_zone_pct_l5,
                 COALESCE(sc.avg_chase_pct_l5, 0) AS batter_chase_pct_l5,
                 COALESCE(sc.avg_whiff_pct_l5, 0) AS batter_whiff_pct_l5,
+
+                -- FanGraphs season-to-date (point-in-time; LATERAL strict as_of_date < game_date)
+                COALESCE(fg.wrc_plus, 0) AS batter_wrc_plus_szn,
+                COALESCE(fg.woba, 0)     AS batter_woba_szn,
+                COALESCE(fg.iso, 0)      AS batter_iso_szn,
+                COALESCE(fg.bb_pct, 0)   AS batter_bb_pct_szn,
+                COALESCE(fg.k_pct, 0)    AS batter_k_pct_szn,
+                COALESCE(fg.hard_pct, 0) AS batter_hard_pct_szn,
+                COALESCE(fg.babip, 0)    AS batter_babip_szn,
                 -- HR-specific statcast
                 COALESCE(sc.avg_fb_pct_l10, 0) AS batter_fb_pct_l10,
                 COALESCE(sc.avg_gb_pct_l10, 0) AS batter_gb_pct_l10,
@@ -461,6 +488,18 @@ class MLBBatterFeatureStore:
             ) sc ON TRUE
 
             -- Park factors (join on venue)
+            -- FanGraphs season-to-date snapshot (LATERAL, strict as_of_date < game_date)
+            LEFT JOIN LATERAL (
+                SELECT wrc_plus, woba, iso, bb_pct, k_pct, hard_pct, babip
+                FROM mlb_player_season_advanced_history h
+                WHERE h.player_id = bgs.player_id
+                  AND h.player_type = 'batter'
+                  AND h.season = bgs.season
+                  AND h.as_of_date < bgs.game_date
+                ORDER BY h.as_of_date DESC
+                LIMIT 1
+            ) fg ON TRUE
+
             LEFT JOIN mlb_park_factors pf
                 ON pf.venue_id = gs.venue_id
                AND pf.season = gs.season
@@ -492,9 +531,18 @@ class MLBBatterFeatureStore:
                       AND bookmaker IN ('pinnacle', 'draftkings')
                       AND (
                           :as_of_time IS NULL
-                          OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                          OR market_last_update <= :as_of_time
                       )
-                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+                      AND (
+                          commence_time IS NULL
+                          OR market_last_update IS NULL
+                          OR market_last_update < commence_time
+                      )
+                      AND (
+                          commence_time IS NULL
+                          OR COALESCE(snapshot_time, inserted_at) < commence_time
+                      )
+                    ORDER BY market_key, market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
                 LIMIT 1
             ) props ON TRUE
@@ -514,7 +562,11 @@ class MLBBatterFeatureStore:
 
         with self.engine.connect() as conn:
             conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
-            df = pd.read_sql(query, conn, params={"season": season, "market_key": market_key})
+            df = pd.read_sql(
+                query,
+                conn,
+                params={"season": season, "market_key": market_key, "as_of_time": as_of_time},
+            )
 
         # Rename prop_line to stat-specific name
         prop_col = f"prop_line_{market_key}"
@@ -551,6 +603,10 @@ class MLBBatterFeatureStore:
 
     def _add_batter_interaction_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Compute batter interaction features that depend on matchup data."""
+        df["batter_babip_opp_babip_interaction"] = (
+            df["batter_babip_szn"].fillna(0.300)
+            * df["opp_pitcher_babip_against_l5"].fillna(0.300)
+        )
         df["projected_ab_x_recent_form"] = (
             df["projected_ab"].fillna(0) * df["batter_avg_h_l10"].fillna(0)
         )
@@ -610,6 +666,9 @@ class MLBBatterFeatureStore:
 
         # 2. Statcast averages
         features.update(self._get_batter_statcast_stats(player_id, game_date))
+
+        # 3. FanGraphs season-to-date snapshot (history table, date-guarded)
+        features.update(self._get_batter_fangraphs_stats(player_id, season, game_date))
 
         # 4. Park factors (handedness-stratified)
         bats, opp_throws = self._get_batter_handedness(player_id, opp_pitcher_id)
@@ -683,6 +742,10 @@ class MLBBatterFeatureStore:
             features["projected_ab"] = max(avg_ab_l5, 1.0)
 
         # 10. Batter interaction features
+        features["batter_babip_opp_babip_interaction"] = (
+            features.get("batter_babip_szn", 0.300)
+            * features.get("opp_pitcher_babip_against_l5", 0.300)
+        )
         features["projected_ab_x_recent_form"] = (
             features.get("projected_ab", 0) * features.get("batter_avg_h_l10", 0)
         )
@@ -782,6 +845,15 @@ class MLBBatterFeatureStore:
                 COALESCE(sc.avg_zone_pct_l5, 0) AS batter_zone_pct_l5,
                 COALESCE(sc.avg_chase_pct_l5, 0) AS batter_chase_pct_l5,
                 COALESCE(sc.avg_whiff_pct_l5, 0) AS batter_whiff_pct_l5,
+
+                -- FanGraphs season-to-date (point-in-time; LATERAL strict as_of_date < game_date)
+                COALESCE(fg.wrc_plus, 0) AS batter_wrc_plus_szn,
+                COALESCE(fg.woba, 0)     AS batter_woba_szn,
+                COALESCE(fg.iso, 0)      AS batter_iso_szn,
+                COALESCE(fg.bb_pct, 0)   AS batter_bb_pct_szn,
+                COALESCE(fg.k_pct, 0)    AS batter_k_pct_szn,
+                COALESCE(fg.hard_pct, 0) AS batter_hard_pct_szn,
+                COALESCE(fg.babip, 0)    AS batter_babip_szn,
                 COALESCE(sc.avg_fb_pct_l10, 0) AS batter_fb_pct_l10,
                 COALESCE(sc.avg_gb_pct_l10, 0) AS batter_gb_pct_l10,
 
@@ -857,6 +929,18 @@ class MLBBatterFeatureStore:
                 ORDER BY sc2.game_date DESC LIMIT 1
             ) sc ON TRUE
 
+            -- FanGraphs season-to-date snapshot (LATERAL, strict as_of_date < game_date)
+            LEFT JOIN LATERAL (
+                SELECT wrc_plus, woba, iso, bb_pct, k_pct, hard_pct, babip
+                FROM mlb_player_season_advanced_history h
+                WHERE h.player_id = bgs.player_id
+                  AND h.player_type = 'batter'
+                  AND h.season = bgs.season
+                  AND h.as_of_date < bgs.game_date
+                ORDER BY h.as_of_date DESC
+                LIMIT 1
+            ) fg ON TRUE
+
             LEFT JOIN mlb_park_factors pf
                 ON pf.venue_id = gs.venue_id
                AND pf.season = gs.season
@@ -883,9 +967,18 @@ class MLBBatterFeatureStore:
                       AND bookmaker IN ('pinnacle', 'draftkings')
                       AND (
                           :as_of_time IS NULL
-                          OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                          OR market_last_update <= :as_of_time
                       )
-                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+                      AND (
+                          commence_time IS NULL
+                          OR market_last_update IS NULL
+                          OR market_last_update < commence_time
+                      )
+                      AND (
+                          commence_time IS NULL
+                          OR COALESCE(snapshot_time, inserted_at) < commence_time
+                      )
+                    ORDER BY market_key, market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
                 LIMIT 1
             ) props ON TRUE
@@ -1047,6 +1140,45 @@ class MLBBatterFeatureStore:
             "batter_gb_pct_l10": float(row.avg_gb_pct_l10 or 0),
         }
 
+    def _get_batter_fangraphs_stats(self, player_id: int, season: int, game_date) -> dict:
+        """Fetch most-recent FG season-to-date snapshot strictly before game_date.
+
+        Joins mlb_player_season_advanced_history with as_of_date < game_date.
+        Returns zeros if no snapshot exists yet for the player/season.
+        """
+        query = text("""
+            SELECT wrc_plus, woba, iso, bb_pct, k_pct, hard_pct, babip
+            FROM mlb_player_season_advanced_history
+            WHERE player_id = :player_id
+              AND season = :season
+              AND player_type = 'batter'
+              AND as_of_date < :game_date
+            ORDER BY as_of_date DESC
+            LIMIT 1
+        """)
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                query,
+                {"player_id": player_id, "season": season, "game_date": game_date},
+            ).fetchone()
+
+        if row is None:
+            return {
+                "batter_wrc_plus_szn": 0, "batter_woba_szn": 0, "batter_iso_szn": 0,
+                "batter_bb_pct_szn": 0, "batter_k_pct_szn": 0, "batter_hard_pct_szn": 0,
+                "batter_babip_szn": 0,
+            }
+
+        return {
+            "batter_wrc_plus_szn": float(row.wrc_plus or 0),
+            "batter_woba_szn": float(row.woba or 0),
+            "batter_iso_szn": float(row.iso or 0),
+            "batter_bb_pct_szn": float(row.bb_pct or 0),
+            "batter_k_pct_szn": float(row.k_pct or 0),
+            "batter_hard_pct_szn": float(row.hard_pct or 0),
+            "batter_babip_szn": float(row.babip or 0),
+        }
+
     def _get_park_factors(
         self,
         venue_id: int,
@@ -1173,9 +1305,18 @@ class MLBBatterFeatureStore:
               AND bookmaker IN ('pinnacle', 'draftkings')
               AND (
                   :as_of_time IS NULL
-                  OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                  OR market_last_update <= :as_of_time
               )
-            ORDER BY COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+              AND (
+                  commence_time IS NULL
+                  OR market_last_update IS NULL
+                  OR market_last_update < commence_time
+              )
+              AND (
+                  commence_time IS NULL
+                  OR COALESCE(snapshot_time, inserted_at) < commence_time
+              )
+            ORDER BY market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
             LIMIT 1
         """)
         with self.engine.connect() as conn:

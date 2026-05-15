@@ -145,6 +145,8 @@ def main():
     parser.add_argument("--parallel", action="store_true", help="Run game lines and props concurrently")
     parser.add_argument("--skip-linker", action="store_true", help="Skip incremental linker")
     parser.add_argument("--extended", action="store_true", help="Include extended prop markets")
+    parser.add_argument("--pregame-minutes", type=int, default=None, help="Live props only: scrape games about N minutes before commence_time")
+    parser.add_argument("--pregame-tolerance-minutes", type=int, default=5, help="Tolerance around --pregame-minutes")
     args = parser.parse_args()
 
     python = sys.executable
@@ -160,6 +162,8 @@ def main():
         props_cmd = f"{python} -m src.scrapers.mlb.mlb_daily_player_props_scraper --live"
         if args.extended:
             props_cmd += " --extended"
+        if args.pregame_minutes is not None:
+            props_cmd += f" --pregame-minutes {args.pregame_minutes} --pregame-tolerance-minutes {args.pregame_tolerance_minutes}"
 
         # Game lines command
         game_lines_cmd = f"{python} -m src.scrapers.mlb.mlb_daily_game_lines_scraper --live"

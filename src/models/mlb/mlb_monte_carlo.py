@@ -11,6 +11,7 @@ All produce PropPrediction objects compatible with the backtest harness.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,13 @@ from src.models.negbin_model import NegBinModel
 from .mlb_quantile_trainer import MLBPitcherKPipeline
 
 logger = logging.getLogger(__name__)
+
+
+def _seed_for_prediction(base_seed: int, stat: str, player_id: int, game_id: int) -> int:
+    """Stable per-player/game/stat seed for order-invariant MC samples."""
+    key = f"{int(base_seed)}|{stat}|{int(player_id)}|{int(game_id)}"
+    digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big", signed=False) % (2**32 - 1)
 
 
 @dataclass
@@ -57,6 +65,7 @@ class MLBMonteCarloPredictor:
     ):
         self.pipeline = pipeline
         self.n_samples = n_samples
+        self.random_state = random_state
         self.rng = np.random.default_rng(random_state)
         self.tail_config = tail_config or MLBTailConfig()
         self.quantile_probs = np.array(
@@ -331,6 +340,7 @@ class MLBPitcherKCopulaPredictor:
         self.krate_pipeline = krate_pipeline
         self.copula_rho = copula_rho
         self.n_samples = n_samples
+        self.random_state = random_state
         self.rng = np.random.default_rng(random_state)
         self.tail_config = tail_config or MLBTailConfig()
 
@@ -475,6 +485,7 @@ class MLBNegBinPredictor:
         self.model = model
         self.stat = stat
         self.n_samples = n_samples
+        self.random_state = random_state
         self.rng = np.random.RandomState(random_state)
 
     # ------------------------------------------------------------------
@@ -518,8 +529,11 @@ class MLBNegBinPredictor:
         exposure_val = self._extract_exposure(features)
         X = self._prepare_features(features)
         exp_arr = np.array([exposure_val]) if exposure_val is not None else None
+        rng = np.random.RandomState(
+            _seed_for_prediction(self.random_state, self.stat, player_id, game_id)
+        )
         samples = self.model.sample(
-            X, n_samples=self.n_samples, rng=self.rng, exposure=exp_arr,
+            X, n_samples=self.n_samples, rng=rng, exposure=exp_arr,
         ).flatten()
 
         return PropPrediction(
@@ -579,6 +593,7 @@ class MLBBinomialPredictor:
         self.model = model
         self.stat = stat
         self.n_samples = n_samples
+        self.random_state = random_state
         self.rng = np.random.RandomState(random_state)
         self.at_bats_feature = at_bats_feature
 
@@ -605,7 +620,10 @@ class MLBBinomialPredictor:
         X = self._prepare_features(features)
         at_bats = np.array([max(features.get(self.at_bats_feature, 3.5), 1.0)])
 
-        samples = self.model.sample(X, at_bats, n_samples=self.n_samples, rng=self.rng).flatten()
+        rng = np.random.RandomState(
+            _seed_for_prediction(self.random_state, self.stat, player_id, game_id)
+        )
+        samples = self.model.sample(X, at_bats, n_samples=self.n_samples, rng=rng).flatten()
 
         return PropPrediction(
             player_id=player_id,
@@ -665,6 +683,7 @@ class MLBCompoundBinomialPredictor:
         self.hit_model = hit_model
         self.stat = stat
         self.n_samples = n_samples
+        self.random_state = random_state
         self.rng = np.random.RandomState(random_state)
 
     @classmethod
@@ -697,8 +716,11 @@ class MLBCompoundBinomialPredictor:
 
         # 1. Draw AB samples from NegBin
         X_ab = self._prepare_features_ab(features)
+        rng = np.random.RandomState(
+            _seed_for_prediction(self.random_state, self.stat, player_id, game_id)
+        )
         ab_samples = self.ab_model.sample(
-            X_ab, n_samples=self.n_samples, rng=self.rng
+            X_ab, n_samples=self.n_samples, rng=rng
         ).flatten()
         ab_samples = np.maximum(ab_samples, 1).astype(int)  # At least 1 AB
 
@@ -710,7 +732,7 @@ class MLBCompoundBinomialPredictor:
         p_hit = float(np.clip(p_pred[0], 0.01, 0.99))
 
         # 3. Compound sampling: for each AB draw, sample hits ~ Binom(AB, p)
-        hit_samples = sp_binom.rvs(n=ab_samples, p=p_hit, random_state=self.rng)
+        hit_samples = sp_binom.rvs(n=ab_samples, p=p_hit, random_state=rng)
         hit_samples = hit_samples.astype(float)
 
         return PropPrediction(

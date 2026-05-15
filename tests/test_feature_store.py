@@ -372,6 +372,53 @@ def test_get_player_game_features_combines_outputs():
     assert result["opp_rest_days"] == 0
 
 
+def test_nba_single_player_lines_and_props_use_as_of_cutoffs():
+    store = FeatureStore(engine=Mock())
+    conn = Mock()
+    row = FakeRow({"spread": -4.0, "total": 219.5, "prop_line_pts": 20.5, "prop_line_reb": None, "prop_line_ast": None, "prop_line_threes": None})
+    conn.execute.return_value = FakeResult(row)
+
+    store._get_game_lines(conn, "g1", date(2025, 1, 1))
+    game_lines_sql = str(conn.execute.call_args_list[-1].args[0])
+    assert "COALESCE(snapshot_time, inserted_at)" in game_lines_sql
+    assert "<= :as_of_date" in game_lines_sql
+    assert "< commence_time" in game_lines_sql
+
+    store._get_player_prop_lines(conn, 10, "g1", date(2025, 1, 1))
+    props_sql = str(conn.execute.call_args_list[-1].args[0])
+    assert "COALESCE(snapshot_time, inserted_at)" in props_sql
+    assert "<= :as_of_date" in props_sql
+    assert "< commence_time" in props_sql
+    assert "ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST" in props_sql
+
+
+def test_nba_training_prop_lines_use_game_date_and_pregame_cutoffs(monkeypatch):
+    engine = Mock()
+    conn = Mock()
+    connect_cm = MagicMock()
+    connect_cm.__enter__.return_value = conn
+    connect_cm.__exit__.return_value = False
+    engine.connect.return_value = connect_cm
+    store = FeatureStore(engine=engine)
+    captured = {}
+
+    def fake_read_sql(query, conn, params=None):
+        captured["sql"] = str(query)
+        captured["params"] = params
+        return pd.DataFrame()
+
+    monkeypatch.setattr(pd, "read_sql", fake_read_sql)
+
+    store._load_single_season_training("22024")
+
+    sql = captured["sql"]
+    assert "raw_game_lines_staging" in sql
+    assert "raw_player_props_combined" in sql
+    assert "COALESCE(snapshot_time, inserted_at)::date <= pgs.game_date" in sql
+    assert "COALESCE(snapshot_time, inserted_at) < commence_time" in sql
+    assert "ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST" in sql
+
+
 def test_get_training_dataset_raises_on_small_dataset():
     engine = Mock()
     conn = Mock()

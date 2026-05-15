@@ -17,7 +17,7 @@ Usage:
 import argparse
 import logging
 import sys
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -56,13 +56,26 @@ class MLBFanGraphsScraper:
                 self._player_cache[row[1].lower()] = row[0]
         logger.info(f"Loaded {len(self._player_cache)} players into cache.")
 
-    def scrape_season_batting(self, season: int) -> int:
+    def scrape_season_batting(self, season: int, as_of_date: date | None = None) -> int:
         """Fetch and upsert FanGraphs batting stats for a season.
+
+        Writes to legacy mlb_player_season_advanced (UPSERT, latest wins) AND to
+        mlb_player_season_advanced_history (INSERT with as_of_date, idempotent
+        per snapshot date). The history table is the safe one — feature stores
+        join with `as_of_date < game_date` to avoid the season-only leak.
+
+        Args:
+            season: Season year (e.g. 2025).
+            as_of_date: Snapshot date for the history row. Defaults to yesterday
+                so the snapshot represents stats through end of yesterday and is
+                safe to use for any game on today or later (strict `<` semantics).
 
         Returns:
             Number of rows upserted.
         """
-        logger.info(f"Fetching FanGraphs batting stats for {season}...")
+        if as_of_date is None:
+            as_of_date = date.today() - timedelta(days=1)
+        logger.info(f"Fetching FanGraphs batting stats for {season} (as_of {as_of_date})...")
 
         try:
             df = batting_stats(season, qual=MIN_PA)
@@ -90,6 +103,25 @@ class MLBFanGraphsScraper:
                     continue
 
                 self._ensure_player(conn, player_id, name)
+                params = {
+                    "player_id": player_id,
+                    "season": season,
+                    "as_of_date": as_of_date,
+                    "war": _safe_float(row.get("WAR")),
+                    "babip": _safe_float(row.get("BABIP")),
+                    "wrc_plus": _safe_float(row.get("wRC+")),
+                    "woba": _safe_float(row.get("wOBA")),
+                    "iso": _safe_float(row.get("ISO")),
+                    "bb_pct": _pct_to_float(row.get("BB%")),
+                    "k_pct": _pct_to_float(row.get("K%")),
+                    "hard_pct": _pct_to_float(row.get("Hard%")),
+                    "avg": _safe_float(row.get("AVG")),
+                    "obp": _safe_float(row.get("OBP")),
+                    "slg": _safe_float(row.get("SLG")),
+                    "ops": _safe_float(row.get("OPS")),
+                    "pa": _safe_int(row.get("PA")),
+                    "fangraphs_id": _safe_int(fg_id),
+                }
                 conn.execute(
                     text("""
                         INSERT INTO mlb_player_season_advanced
@@ -118,24 +150,23 @@ class MLBFanGraphsScraper:
                              pa = EXCLUDED.pa,
                              fangraphs_id = EXCLUDED.fangraphs_id
                     """),
-                    {
-                        "player_id": player_id,
-                        "season": season,
-                        "war": _safe_float(row.get("WAR")),
-                        "babip": _safe_float(row.get("BABIP")),
-                        "wrc_plus": _safe_float(row.get("wRC+")),
-                        "woba": _safe_float(row.get("wOBA")),
-                        "iso": _safe_float(row.get("ISO")),
-                        "bb_pct": _pct_to_float(row.get("BB%")),
-                        "k_pct": _pct_to_float(row.get("K%")),
-                        "hard_pct": _pct_to_float(row.get("Hard%")),
-                        "avg": _safe_float(row.get("AVG")),
-                        "obp": _safe_float(row.get("OBP")),
-                        "slg": _safe_float(row.get("SLG")),
-                        "ops": _safe_float(row.get("OPS")),
-                        "pa": _safe_int(row.get("PA")),
-                        "fangraphs_id": _safe_int(fg_id),
-                    },
+                    params,
+                )
+                conn.execute(
+                    text("""
+                        INSERT INTO mlb_player_season_advanced_history
+                            (player_id, season, player_type, as_of_date,
+                             war, babip, wrc_plus, woba, iso,
+                             bb_pct, k_pct, hard_pct,
+                             avg, obp, slg, ops, pa, fangraphs_id)
+                        VALUES
+                            (:player_id, :season, 'batter', :as_of_date,
+                             :war, :babip, :wrc_plus, :woba, :iso,
+                             :bb_pct, :k_pct, :hard_pct,
+                             :avg, :obp, :slg, :ops, :pa, :fangraphs_id)
+                        ON CONFLICT (player_id, season, player_type, as_of_date) DO NOTHING
+                    """),
+                    params,
                 )
                 count += 1
 
@@ -145,13 +176,19 @@ class MLBFanGraphsScraper:
         logger.info(f"  Upserted {count} batting rows for {season}.")
         return count
 
-    def scrape_season_pitching(self, season: int) -> int:
+    def scrape_season_pitching(self, season: int, as_of_date: date | None = None) -> int:
         """Fetch and upsert FanGraphs pitching stats for a season.
+
+        Writes to legacy mlb_player_season_advanced (UPSERT, latest wins) AND to
+        mlb_player_season_advanced_history (INSERT with as_of_date). See
+        scrape_season_batting for the as_of_date semantics.
 
         Returns:
             Number of rows upserted.
         """
-        logger.info(f"Fetching FanGraphs pitching stats for {season}...")
+        if as_of_date is None:
+            as_of_date = date.today() - timedelta(days=1)
+        logger.info(f"Fetching FanGraphs pitching stats for {season} (as_of {as_of_date})...")
 
         try:
             df = pitching_stats(season, qual=MIN_IP)
@@ -179,6 +216,27 @@ class MLBFanGraphsScraper:
                     continue
 
                 self._ensure_player(conn, player_id, name)
+                params = {
+                    "player_id": player_id,
+                    "season": season,
+                    "as_of_date": as_of_date,
+                    "war": _safe_float(row.get("WAR")),
+                    "babip": _safe_float(row.get("BABIP")),
+                    "fip": _safe_float(row.get("FIP")),
+                    "xfip": _safe_float(row.get("xFIP")),
+                    "xera": _safe_float(row.get("xERA")),
+                    "siera": _safe_float(row.get("SIERA")),
+                    "era": _safe_float(row.get("ERA")),
+                    "lob_pct": _pct_to_float(row.get("LOB%")),
+                    "gb_pct": _pct_to_float(row.get("GB%")),
+                    "k_per_9": _safe_float(row.get("K/9")),
+                    "bb_per_9": _safe_float(row.get("BB/9")),
+                    "hr_per_9": _safe_float(row.get("HR/9")),
+                    "ip": _safe_float(row.get("IP")),
+                    "fangraphs_id": _safe_int(fg_id),
+                    "k_pct": _pct_to_float(row.get("K%")),
+                    "bb_pct": _pct_to_float(row.get("BB%")),
+                }
                 conn.execute(
                     text("""
                         INSERT INTO mlb_player_season_advanced
@@ -207,24 +265,23 @@ class MLBFanGraphsScraper:
                              ip = EXCLUDED.ip,
                              fangraphs_id = EXCLUDED.fangraphs_id
                     """),
-                    {
-                        "player_id": player_id,
-                        "season": season,
-                        "war": _safe_float(row.get("WAR")),
-                        "babip": _safe_float(row.get("BABIP")),
-                        "fip": _safe_float(row.get("FIP")),
-                        "xfip": _safe_float(row.get("xFIP")),
-                        "xera": _safe_float(row.get("xERA")),
-                        "siera": _safe_float(row.get("SIERA")),
-                        "era": _safe_float(row.get("ERA")),
-                        "lob_pct": _pct_to_float(row.get("LOB%")),
-                        "gb_pct": _pct_to_float(row.get("GB%")),
-                        "k_per_9": _safe_float(row.get("K/9")),
-                        "bb_per_9": _safe_float(row.get("BB/9")),
-                        "hr_per_9": _safe_float(row.get("HR/9")),
-                        "ip": _safe_float(row.get("IP")),
-                        "fangraphs_id": _safe_int(fg_id),
-                    },
+                    params,
+                )
+                conn.execute(
+                    text("""
+                        INSERT INTO mlb_player_season_advanced_history
+                            (player_id, season, player_type, as_of_date,
+                             war, babip, fip, xfip, xera, siera, era,
+                             lob_pct, gb_pct, k_per_9, k_pct, bb_per_9, bb_pct,
+                             hr_per_9, ip, fangraphs_id)
+                        VALUES
+                            (:player_id, :season, 'pitcher', :as_of_date,
+                             :war, :babip, :fip, :xfip, :xera, :siera, :era,
+                             :lob_pct, :gb_pct, :k_per_9, :k_pct, :bb_per_9, :bb_pct,
+                             :hr_per_9, :ip, :fangraphs_id)
+                        ON CONFLICT (player_id, season, player_type, as_of_date) DO NOTHING
+                    """),
+                    params,
                 )
                 count += 1
 
@@ -359,8 +416,18 @@ def main():
                         help=f"Scrape all seasons ({DEFAULT_SEASONS})")
     parser.add_argument("--batting-only", action="store_true", help="Only scrape batting stats")
     parser.add_argument("--pitching-only", action="store_true", help="Only scrape pitching stats")
+    parser.add_argument(
+        "--as-of-date",
+        type=str,
+        default=None,
+        help="YYYY-MM-DD snapshot date for the history table row. Defaults to yesterday.",
+    )
 
     args = parser.parse_args()
+
+    as_of_date = None
+    if args.as_of_date:
+        as_of_date = datetime.strptime(args.as_of_date, "%Y-%m-%d").date()
 
     if not args.season and not args.all_seasons:
         print("ERROR: Specify --season YYYY or --all-seasons")
@@ -384,12 +451,12 @@ def main():
         print(f"\n--- Season {season} ---")
 
         if not args.pitching_only:
-            batting = scraper.scrape_season_batting(season)
+            batting = scraper.scrape_season_batting(season, as_of_date=as_of_date)
             total_batting += batting
             print(f"  Batting: {batting} rows")
 
         if not args.batting_only:
-            pitching = scraper.scrape_season_pitching(season)
+            pitching = scraper.scrape_season_pitching(season, as_of_date=as_of_date)
             total_pitching += pitching
             print(f"  Pitching: {pitching} rows")
 

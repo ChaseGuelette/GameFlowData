@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
 
+from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
 from src.models.black_litterman import BlackLittermanBlender
 from src.models.daily_runner import should_skip_recommendation
 from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL_CONFIGS
@@ -682,12 +683,28 @@ class MLBDailyPredictionRunner:
 
         query = text(f"""
             SELECT DISTINCT ON (player_id, game_id, market_key)
-                player_id, game_id, market_key, line
+                player_id,
+                game_id,
+                market_key,
+                line,
+                COALESCE(snapshot_time, inserted_at) AS effective_snapshot_time
             FROM mlb_raw_player_props
             WHERE (player_id, game_id) IN ({pg_placeholders})
               AND market_key IN ({mk_placeholders})
               AND bookmaker IN ('pinnacle', 'draftkings')
-            ORDER BY player_id, game_id, market_key, snapshot_time DESC NULLS LAST
+              AND COALESCE(snapshot_time, inserted_at) IS NOT NULL
+              AND (
+                  commence_time IS NULL
+                  OR market_last_update IS NULL
+                  OR market_last_update < commence_time
+              )
+              AND (
+                  commence_time IS NULL
+                  OR COALESCE(snapshot_time, inserted_at) < commence_time
+              )
+            ORDER BY player_id, game_id, market_key,
+                     market_last_update DESC NULLS LAST,
+                     COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
         """)
 
         lookup: dict[tuple[int, int, str], float] = {}
@@ -724,54 +741,14 @@ class MLBDailyPredictionRunner:
 
         start_time = time.perf_counter()
 
-        query = text("""
-            WITH ranked_lines AS (
-                SELECT
-                    player_id,
-                    game_id,
-                    bookmaker,
-                    market_key,
-                    line,
-                    outcome_label,
-                    odds_american,
-                    snapshot_time,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
-                        ORDER BY snapshot_time DESC
-                    ) as rn
-                FROM mlb_raw_player_props
-                WHERE game_id IN :game_ids
-                  AND market_key IN :markets
-                  AND bookmaker NOT IN :excluded_bookmakers
-                  AND player_id IS NOT NULL
-            )
-            SELECT
-                player_id,
-                game_id,
-                bookmaker,
-                market_key,
-                line,
-                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
-                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
-            FROM ranked_lines
-            WHERE rn = 1
-            GROUP BY player_id, game_id, bookmaker, market_key, line
-            HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
-               AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
-        """).bindparams(
-            bindparam("game_ids", expanding=True),
-            bindparam("markets", expanding=True),
-            bindparam("excluded_bookmakers", expanding=True),
+        all_lines = fetch_lines_at_decision_time(
+            self.engine,
+            game_ids=game_ids,
+            market_keys=markets,
+            as_of_time=None,
+            allow_latest_without_as_of=True,
+            bookmakers=None,
         )
-
-        with self.engine.connect() as conn:
-            all_lines = pd.read_sql(
-                query, conn, params={
-                    "game_ids": game_ids,
-                    "markets": markets,
-                    "excluded_bookmakers": list(_EXCLUDED_BOOKMAKERS),
-                }
-            )
 
         elapsed = time.perf_counter() - start_time
         logger.info(f"Fetched {len(all_lines)} MLB prop lines in {elapsed:.1f}s")

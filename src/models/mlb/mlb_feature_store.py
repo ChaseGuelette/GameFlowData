@@ -88,10 +88,10 @@ PITCHER_K_FEATURES: list[str] = [
     # Existing bullpen context retained for compatibility / derived fatigue pressure.
     "team_bullpen_ip_last_3d",
 
-    # NOTE: pitcher_fip_szn / pitcher_k_pct_szn removed — mlb_player_season_advanced
-    # has no temporal stamp and the rows hold end-of-season values, which leaked
-    # the target into past-season backtests. Restore only after rebuilding the
-    # table as point-in-time snapshots with an as_of_date column.
+    # FanGraphs season-to-date snapshots from mlb_player_season_advanced_history.
+    # Joined with `as_of_date < game_date` (strict) — point-in-time, no leak.
+    "pitcher_fip_szn",
+    "pitcher_k_pct_szn",
 
     # Opposing team batting context
     "opp_team_avg_so_l10",
@@ -328,6 +328,10 @@ class MLBFeatureStore:
                 COALESCE(sc_avg.avg_breaking_pct_l5, 0) AS pitcher_breaking_pct_l5,
                 COALESCE(sc_avg.avg_offspeed_pct_l5, 0) AS pitcher_offspeed_pct_l5,
 
+                -- FanGraphs season-to-date (point-in-time; LATERAL strict as_of_date < game_date)
+                COALESCE(fg.fip, 0) AS pitcher_fip_szn,
+                COALESCE(fg.k_pct, 0) AS pitcher_k_pct_szn,
+
                 -- Park factor
                 COALESCE(pf.so_factor, 1.0) AS park_so_factor,
 
@@ -492,6 +496,18 @@ class MLBFeatureStore:
                 ORDER BY sc.game_date DESC LIMIT 1
             ) sc_avg ON TRUE
 
+            -- FanGraphs season-to-date snapshot (LATERAL, strict as_of_date < game_date)
+            LEFT JOIN LATERAL (
+                SELECT fip, k_pct
+                FROM mlb_player_season_advanced_history h
+                WHERE h.player_id = pgs.player_id
+                  AND h.player_type = 'pitcher'
+                  AND h.season = pgs.season
+                  AND h.as_of_date < pgs.game_date
+                ORDER BY h.as_of_date DESC
+                LIMIT 1
+            ) fg ON TRUE
+
             -- Park factors (join on venue)
             LEFT JOIN mlb_park_factors pf
                 ON pf.venue_id = gs.venue_id
@@ -526,9 +542,18 @@ class MLBFeatureStore:
                       AND bookmaker IN ('pinnacle', 'draftkings')
                       AND (
                           :as_of_time IS NULL
-                          OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                          OR market_last_update <= :as_of_time
                       )
-                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+                      AND (
+                          commence_time IS NULL
+                          OR market_last_update IS NULL
+                          OR market_last_update < commence_time
+                      )
+                      AND (
+                          commence_time IS NULL
+                          OR COALESCE(snapshot_time, inserted_at) < commence_time
+                      )
+                    ORDER BY market_key, market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
                 LIMIT 1
             ) props ON TRUE
@@ -581,7 +606,7 @@ class MLBFeatureStore:
         """)
 
         with self.engine.connect() as conn:
-            df = pd.read_sql(query, conn, params={"season": season})
+            df = pd.read_sql(query, conn, params={"season": season, "as_of_time": None})
 
         return df
 
@@ -824,6 +849,9 @@ class MLBFeatureStore:
         statcast_avgs = self._get_statcast_stats(player_id, game_date)
         features.update(statcast_avgs)
 
+        # 3. FanGraphs season-to-date snapshot (history table, date-guarded)
+        features.update(self._get_fangraphs_stats(player_id, season, game_date))
+
         # 4. Park factor
         features["park_so_factor"] = self._get_park_factor(venue_id, season)
 
@@ -1002,6 +1030,10 @@ class MLBFeatureStore:
                 COALESCE(sc_avg.avg_breaking_pct_l5, 0) AS pitcher_breaking_pct_l5,
                 COALESCE(sc_avg.avg_offspeed_pct_l5, 0) AS pitcher_offspeed_pct_l5,
 
+                -- FanGraphs season-to-date (point-in-time; LATERAL strict as_of_date < game_date)
+                COALESCE(fg.fip, 0) AS pitcher_fip_szn,
+                COALESCE(fg.k_pct, 0) AS pitcher_k_pct_szn,
+
                 -- Park factor
                 COALESCE(pf.so_factor, 1.0) AS park_so_factor,
 
@@ -1163,6 +1195,18 @@ class MLBFeatureStore:
                 ORDER BY sc.game_date DESC LIMIT 1
             ) sc_avg ON TRUE
 
+            -- FanGraphs season-to-date snapshot (LATERAL, strict as_of_date < game_date)
+            LEFT JOIN LATERAL (
+                SELECT fip, k_pct
+                FROM mlb_player_season_advanced_history h
+                WHERE h.player_id = pgs.player_id
+                  AND h.player_type = 'pitcher'
+                  AND h.season = pgs.season
+                  AND h.as_of_date < pgs.game_date
+                ORDER BY h.as_of_date DESC
+                LIMIT 1
+            ) fg ON TRUE
+
             -- Park factors (join on venue)
             LEFT JOIN mlb_park_factors pf
                 ON pf.venue_id = gs.venue_id
@@ -1197,9 +1241,18 @@ class MLBFeatureStore:
                       AND bookmaker IN ('pinnacle', 'draftkings')
                       AND (
                           :as_of_time IS NULL
-                          OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                          OR market_last_update <= :as_of_time
                       )
-                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+                      AND (
+                          commence_time IS NULL
+                          OR market_last_update IS NULL
+                          OR market_last_update < commence_time
+                      )
+                      AND (
+                          commence_time IS NULL
+                          OR COALESCE(snapshot_time, inserted_at) < commence_time
+                      )
+                    ORDER BY market_key, market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
                 ) sub
                 LIMIT 1
             ) props ON TRUE
@@ -1581,6 +1634,36 @@ class MLBFeatureStore:
             "pitcher_offspeed_pct_l5": float(row.avg_offspeed_pct_l5 or 0),
         }
 
+    def _get_fangraphs_stats(self, player_id: int, season: int, game_date) -> dict:
+        """Fetch most-recent FG season-to-date snapshot strictly before game_date.
+
+        Joins mlb_player_season_advanced_history with as_of_date < game_date.
+        Returns zeros if no snapshot exists yet for the player/season.
+        """
+        query = text("""
+            SELECT fip, k_pct
+            FROM mlb_player_season_advanced_history
+            WHERE player_id = :player_id
+              AND season = :season
+              AND player_type = 'pitcher'
+              AND as_of_date < :game_date
+            ORDER BY as_of_date DESC
+            LIMIT 1
+        """)
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                query,
+                {"player_id": player_id, "season": season, "game_date": game_date},
+            ).fetchone()
+
+        if row is None:
+            return {"pitcher_fip_szn": 0, "pitcher_k_pct_szn": 0}
+
+        return {
+            "pitcher_fip_szn": float(row.fip or 0),
+            "pitcher_k_pct_szn": float(row.k_pct or 0),
+        }
+
     def _get_park_factor(self, venue_id: int, season: int) -> float:
         """Fetch park K factor for venue."""
         query = text("""
@@ -1655,9 +1738,18 @@ class MLBFeatureStore:
               AND bookmaker IN ('pinnacle', 'draftkings')
               AND (
                   :as_of_time IS NULL
-                  OR COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                  OR market_last_update <= :as_of_time
               )
-            ORDER BY COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+              AND (
+                  commence_time IS NULL
+                  OR market_last_update IS NULL
+                  OR market_last_update < commence_time
+              )
+              AND (
+                  commence_time IS NULL
+                  OR COALESCE(snapshot_time, inserted_at) < commence_time
+              )
+            ORDER BY market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
             LIMIT 1
         """)
         with self.engine.connect() as conn:

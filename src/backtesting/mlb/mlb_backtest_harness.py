@@ -12,6 +12,10 @@ Adapted from src/backtesting/backtest_harness.py with MLB-specific:
 - Game schedule from mlb_game_schedule
 
 Reuses sport-agnostic: BetSimulator, MetricsCalculator, BlackLittermanBlender
+
+ARCHITECTURE NOTE: `run_mlb_sweep.py` is the canonical production-validation
+entry point. This harness is retained for single-config/legacy runs and must
+share line-selection code with the sweep path; do not add raw odds SQL here.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.backtesting.bet_simulator import BetSimulator
+from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
 from src.models.black_litterman import BlackLittermanBlender
 
@@ -381,34 +386,32 @@ class MLBBacktestHarness:
         }
 
     def _get_lines_for_player(
-        self, player_id: int, game_id: int, market_key: str, game_date: date
+        self,
+        player_id: int,
+        game_id: int,
+        market_key: str,
+        game_date: date | None = None,
+        as_of_time: datetime | None = None,
     ) -> list[dict]:
-        """Get prop lines for a player/game/market from all bookmakers."""
-        query = text("""
-            WITH ranked AS (
-                SELECT
-                    player_id, game_id, bookmaker, market_key, line,
-                    MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
-                    MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds,
-                    MAX(snapshot_time) as latest_snapshot
-                FROM mlb_raw_player_props
-                WHERE player_id = :player_id
-                  AND game_id = :game_id
-                  AND market_key = :market_key
-                GROUP BY player_id, game_id, bookmaker, market_key, line
-                HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
-                   AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
-            )
-            SELECT * FROM ranked
-        """)
+        """Get quote-clean prop lines for a player/game/market.
 
-        with self.engine.connect() as conn:
-            result = conn.execute(query, {
-                "player_id": player_id,
-                "game_id": game_id,
-                "market_key": market_key,
-            })
-            return [dict(row._mapping) for row in result]
+        This legacy single-config harness intentionally routes through the same
+        shared line-selection helper as ``run_mlb_sweep.py``. If ``as_of_time``
+        is omitted we allow the explicit legacy latest-without-as-of mode, but
+        post-commence rows are still excluded by the helper.
+        """
+        lines = fetch_lines_at_decision_time(
+            self.engine,
+            game_ids=[game_id],
+            market_keys=[market_key],
+            as_of_time=as_of_time,
+            allow_latest_without_as_of=as_of_time is None,
+            bookmakers=self.bookmakers,
+        )
+        if lines.empty:
+            return []
+        player_lines = lines[lines["player_id"].astype("Int64") == int(player_id)]
+        return player_lines.to_dict("records")
 
     def _add_edges(self, pred: dict, lines: list[dict]) -> dict:
         """Calculate edges using MC samples and best line."""

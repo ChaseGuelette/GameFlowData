@@ -65,6 +65,7 @@ class MLBBatterTrainingOrchestrator:
         tuning_trials: int = 50,
         feature_tolerance: float = 0.02,
         local: bool = False,
+        exclude_prop_line: bool = False,
     ):
         if stat not in BATTER_FEATURE_MAP:
             raise ValueError(f"Unknown stat: {stat}. Valid: {list(BATTER_FEATURE_MAP.keys())}")
@@ -75,16 +76,40 @@ class MLBBatterTrainingOrchestrator:
         self.feature_tolerance = feature_tolerance
         self.tune_hyperparams = tune_hyperparams
         self.tuning_trials = tuning_trials
+        self.exclude_prop_line = exclude_prop_line
         self.is_binary = stat == "home_runs"
 
         # Create timestamped run directory
         self.timestamp = datetime.now()
         timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
-        self._final_run_dir_name = f"mlb_run_batter_{stat}_{timestamp_str}"
-        self.run_dir = Path(base_artifacts_dir) / f"mlb_run_batter_{stat}_{timestamp_str}_incomplete"
+        self._final_run_dir_name = f"mlb_run_batter_{stat}_{timestamp_str}{'_no_prop_line' if exclude_prop_line else ''}"
+        self.run_dir = Path(base_artifacts_dir) / f"{self._final_run_dir_name}_incomplete"
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("Initialized MLB Batter Training Run: %s, stat=%s", timestamp_str, stat)
+
+    def _numeric_model_feature_candidates(
+        self,
+        dtypes,
+        extra_excluded: set[str] | None = None,
+    ) -> list[str]:
+        """Return numeric model feature candidates for the current retrain variant."""
+        excluded = {
+            "game_id", "player_id", "game_date", "season", "team_id",
+            "opp_team_id", "actual", "player_name", "actual_at_bats",
+        }
+        if extra_excluded:
+            excluded.update(extra_excluded)
+
+        items = dtypes.items() if hasattr(dtypes, "items") else []
+        if self.exclude_prop_line:
+            excluded.update({c for c, _ in items if str(c).startswith("prop_line_")})
+            items = dtypes.items() if hasattr(dtypes, "items") else []
+
+        return [
+            c for c, dtype in items
+            if c not in excluded and dtype in ("float64", "float32", "int64", "int32")
+        ]
 
     def run(
         self,
@@ -148,8 +173,7 @@ class MLBBatterTrainingOrchestrator:
         valid_df = train_df[train_df["actual"].notna()].copy()
         valid_df["target_binary"] = (valid_df["actual"] >= 1).astype(int)
 
-        candidates = [c for c in available if c in valid_df.columns
-                      and valid_df[c].dtype in ("float64", "float32", "int64", "int32")]
+        candidates = [c for c in self._numeric_model_feature_candidates(valid_df.dtypes) if c in available]
         # Use all numeric candidates for binary
         selected = candidates
         logger.info("Using %d features for HR binary model", len(selected))
@@ -221,14 +245,7 @@ class MLBBatterTrainingOrchestrator:
 
         # Step 3: Feature selection — binomial NLL-based
         logger.info("Step 3: Running binomial NLL-based feature selection...")
-        excluded = {
-            "game_id", "player_id", "game_date", "season", "team_id",
-            "opp_team_id", "actual", "player_name", "actual_at_bats",
-        }
-        candidates = [
-            c for c in train_df.columns
-            if c not in excluded and train_df[c].dtype in ("float64", "float32", "int64", "int32")
-        ]
+        candidates = self._numeric_model_feature_candidates(train_df.dtypes)
 
         valid_df = train_df[
             train_df["actual"].notna() & (train_df["actual"] >= 0) & (train_df["actual_at_bats"] > 0)
@@ -246,15 +263,10 @@ class MLBBatterTrainingOrchestrator:
         logger.info("Step 3b: Training AB NegBin model...")
         from src.models.negbin_model import NegBinConfig, NegBinModel
 
-        ab_excluded = {
-            "game_id", "player_id", "game_date", "season", "team_id",
-            "opp_team_id", "actual", "player_name", "actual_at_bats",
-            "projected_ab",
-        }
-        ab_candidates = [
-            c for c in train_df.columns
-            if c not in ab_excluded and train_df[c].dtype in ("float64", "float32", "int64", "int32")
-        ]
+        ab_candidates = self._numeric_model_feature_candidates(
+            train_df.dtypes,
+            extra_excluded={"projected_ab"},
+        )
 
         ab_valid_df = valid_df[valid_df["actual_at_bats"] > 0].copy()
         ab_selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
@@ -553,19 +565,16 @@ class MLBBatterTrainingOrchestrator:
 
         # Step 3: Feature selection — NLL-based (single feature set for NegBin)
         logger.info("Step 3: Running NLL-based feature selection for NegBin model...")
-        excluded = {
-            "game_id", "player_id", "game_date", "season", "team_id",
-            "opp_team_id", "actual", "player_name", "actual_at_bats",
-        }
         # If using exposure, exclude projected_ab from features (it's structural, not learned)
+        extra_excluded = set()
         if use_exposure:
-            excluded.add("projected_ab")
+            extra_excluded.add("projected_ab")
             logger.info("Using projected_ab as exposure/offset (excluded from features)")
 
-        candidates = [
-            c for c in train_df.columns
-            if c not in excluded and train_df[c].dtype in ("float64", "float32", "int64", "int32")
-        ]
+        candidates = self._numeric_model_feature_candidates(
+            train_df.dtypes,
+            extra_excluded=extra_excluded,
+        )
 
         valid_df = train_df[train_df["actual"].notna() & (train_df["actual"] >= 0)].fillna(0)
 
@@ -858,6 +867,13 @@ class MLBBatterTrainingOrchestrator:
             "timestamp": self.timestamp.isoformat(),
             "tune_hyperparams": self.tune_hyperparams,
             "feature_tolerance": self.feature_tolerance,
+            "exclude_prop_line": self.exclude_prop_line,
+            "variant": "no_prop_line" if self.exclude_prop_line else "with_prop_line",
+            "pre_registered_comparison_rule": (
+                "Compare clean with_prop_line vs no_prop_line variants only after quote_clean_replay "
+                "and rewritten CLV diagnostics pass timing gates. Primary winner uses CLV/edge rank "
+                "validation before ROI; do not promote from raw backtest ROI alone."
+            ),
         }
         with open(self.run_dir / "run_config.json", "w") as f:
             json.dump(config, f, indent=4)
@@ -883,6 +899,8 @@ class MLBBatterTrainingOrchestrator:
             "feature_count": len(get_features_for_stat(self.stat)),
             "timestamp": self.timestamp.isoformat(),
             "git_hash": git_hash,
+            "exclude_prop_line": self.exclude_prop_line,
+            "variant": "no_prop_line" if self.exclude_prop_line else "with_prop_line",
         }
         with open(self.run_dir / "training_metadata.json", "w") as f:
             json.dump(metadata, f, indent=4)
@@ -913,6 +931,8 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", type=str, default="src/models/mlb/artifacts")
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
+    parser.add_argument("--exclude-prop-line", action="store_true",
+                        help="Train the preregistered clean variant with all prop_line_* features excluded")
 
     args = parser.parse_args()
 
@@ -923,6 +943,7 @@ if __name__ == "__main__":
         tuning_trials=args.tuning_trials,
         feature_tolerance=args.feature_tolerance,
         local=args.local,
+        exclude_prop_line=args.exclude_prop_line,
     )
 
     orchestrator.run(

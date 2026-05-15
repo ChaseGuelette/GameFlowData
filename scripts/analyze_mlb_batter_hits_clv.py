@@ -124,23 +124,36 @@ def normalize_snapshots(snapshots: pd.DataFrame) -> pd.DataFrame:
         out[col] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
     for col in ["line", "odds_american"]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
-    for col in ["snapshot_time", "commence_time", "game_time_utc"]:
+    for col in ["snapshot_time", "inserted_at", "commence_time", "game_time_utc"]:
         if col in out.columns:
             out[col] = pd.to_datetime(out[col], utc=True, errors="coerce")
+    if "inserted_at" in out.columns:
+        out["snapshot_time"] = out["snapshot_time"].fillna(out["inserted_at"])
     if "commence_time" not in out.columns and "game_time_utc" in out.columns:
         out["commence_time"] = out["game_time_utc"]
     return out
 
 
-def _latest_before(df: pd.DataFrame, cutoff) -> pd.Series | None:
-    if df.empty:
+def _latest_between(
+    pool: pd.DataFrame,
+    after: pd.Timestamp | None,
+    cutoff: pd.Timestamp | None,
+) -> pd.Series | None:
+    """Return latest quote strictly after bet time and no later than cutoff."""
+    if pool.empty:
         return None
-    x = df.copy()
+    tmp = pool.copy()
+    if after is not None and not pd.isna(after):
+        tmp = tmp[tmp["snapshot_time"] > after]
     if cutoff is not None and not pd.isna(cutoff):
-        x = x[x["snapshot_time"] <= cutoff]
-    if x.empty:
+        tmp = tmp[tmp["snapshot_time"] <= cutoff]
+    if tmp.empty:
         return None
-    return x.sort_values("snapshot_time").iloc[-1]
+    return tmp.sort_values("snapshot_time").iloc[-1]
+
+
+def _latest_before(pool: pd.DataFrame, cutoff: pd.Timestamp | None) -> pd.Series | None:
+    return _latest_between(pool, after=None, cutoff=cutoff)
 
 
 def _snapshot_near_plus15(df: pd.DataFrame, bet_time) -> pd.Series | None:
@@ -233,19 +246,26 @@ def build_clv_matches(bets: pd.DataFrame, snapshots: pd.DataFrame) -> pd.DataFra
         commence = pool["commence_time"].dropna().min() if "commence_time" in pool.columns else pd.NaT
         cutoff = commence if not pd.isna(commence) else None
 
+        bet_time = bet.get("bet_snapshot_time") if "bet_snapshot_time" in bet.index else pd.NaT
+        if pd.notna(bet_time) and cutoff is not None and not pd.isna(cutoff) and bet_time >= cutoff:
+            rows.append(_base_unmatched_row(bet, "bet_time_at_or_after_commence"))
+            continue
+
         same_book = pool[pool["bookmaker"] == bet["bookmaker"]]
         same_book_same_line = same_book[np.isclose(same_book["line"].astype(float), float(bet["line"]))]
-        close = _latest_before(same_book_same_line, cutoff)
+        close = _latest_between(same_book_same_line, bet_time, cutoff)
         clv_source = "same_book_close" if close is not None else None
 
         # If same book exists but not same line at close, preserve line movement class but do not score odds CLV.
         if close is None:
-            same_book_any_line = _latest_before(same_book, cutoff)
+            same_book_any_line = _latest_between(same_book, bet_time, cutoff)
             if same_book_any_line is not None:
                 close = same_book_any_line
                 clv_source = "same_book_close"
             else:
                 same_line_pool = pool[np.isclose(pool["line"].astype(float), float(bet["line"]))]
+                if pd.notna(bet_time):
+                    same_line_pool = same_line_pool[same_line_pool["snapshot_time"] > bet_time]
                 if cutoff is not None:
                     same_line_pool = same_line_pool[same_line_pool["snapshot_time"] <= cutoff]
                 consensus = _consensus_row(same_line_pool)
@@ -381,8 +401,20 @@ def summarize_by(df: pd.DataFrame, column: str, n_resamples: int, ci_level: floa
     return pd.DataFrame(rows)
 
 
-def decide_phase1b(mean_clv_ci_low: float, mean_clv: float, edge_corr_ci_low: float, edge_corr: float, failing_bands: list[str]) -> dict:
-    mean_confirmed = pd.notna(mean_clv) and pd.notna(mean_clv_ci_low) and mean_clv > 0 and mean_clv_ci_low > 0
+def decide_phase1b(
+    mean_clv_ci_low: float,
+    mean_clv: float,
+    edge_corr_ci_low: float,
+    edge_corr: float,
+    failing_bands: list[str],
+    min_mean_clv: float = 0.015,
+) -> dict:
+    mean_confirmed = (
+        pd.notna(mean_clv)
+        and pd.notna(mean_clv_ci_low)
+        and mean_clv >= min_mean_clv
+        and mean_clv_ci_low > 0
+    )
     corr_confirmed = pd.notna(edge_corr) and pd.notna(edge_corr_ci_low) and edge_corr > 0 and edge_corr_ci_low > 0
     if failing_bands:
         return {
@@ -408,7 +440,7 @@ def decide_phase1b(mean_clv_ci_low: float, mean_clv: float, edge_corr_ci_low: fl
     return {
         "decision": "stop_feature_expansion",
         "phase2_allowed": False,
-        "reason": "Mean CLV and/or edge-to-CLV correlation is non-positive or statistically inconclusive.",
+        "reason": f"Mean CLV is below the required {min_mean_clv:.1%} DK/consensus proxy threshold and/or edge-to-CLV correlation is non-positive or statistically inconclusive.",
         "next_step": "Treat ROI as unconfirmed variance/market-selection artifact; collect +200 under-only bets or +30 calendar days, then rerun Phase 1B.",
     }
 
@@ -445,7 +477,8 @@ def fetch_snapshots_for_bets(bets: pd.DataFrame, local: bool = False, batch_size
                 p.line,
                 p.outcome_label,
                 p.odds_american,
-                p.snapshot_time,
+                COALESCE(p.snapshot_time, p.inserted_at) AS snapshot_time,
+                p.inserted_at,
                 p.commence_time,
                 s.game_time_utc
             FROM mlb_raw_player_props p
@@ -455,7 +488,7 @@ def fetch_snapshots_for_bets(bets: pd.DataFrame, local: bool = False, batch_size
               AND p.market_key IN ({mk_ph})
               AND p.bookmaker NOT IN ({ex_ph})
               AND p.player_id IS NOT NULL
-              AND p.snapshot_time IS NOT NULL
+              AND COALESCE(p.snapshot_time, p.inserted_at) IS NOT NULL
         """)
         with engine.connect() as conn:
             conn.execute(text("SET statement_timeout = '180000'"))
@@ -554,6 +587,7 @@ def run(args: argparse.Namespace) -> dict:
         mean_clv=overall.get("mean_clv_implied_prob", np.nan),
         edge_corr_ci_low=overall.get("edge_clv_ci_low", np.nan),
         edge_corr=overall.get("edge_clv_spearman", np.nan),
+        min_mean_clv=overall.get("min_mean_clv", args.min_mean_clv),
         failing_bands=failing_bands,
     )
     pd.DataFrame([decision]).to_csv(output_dir / "phase1b_decision.csv", index=False)
@@ -577,6 +611,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ci-level", type=float, default=0.95)
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--assume-bet-time-et", default=None, help="Optional HH:MM ET bet-time assumption for quote-clean replay, e.g. 13:30")
+    parser.add_argument("--min-mean-clv", type=float, default=0.015, help="Minimum mean implied-prob CLV required for DK/consensus proxy validation")
     return parser.parse_args()
 
 
