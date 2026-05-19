@@ -15,6 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from datetime import UTC
 
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+
+from src.scrapers.kalshi.kalshi_client import KalshiClient
+from src.trading.kalshi.reconciliation_service import KalshiReconciliationService
 
 load_dotenv()
 
@@ -43,8 +47,6 @@ def main():
         logger.error("DATABASE_URL not set")
         return
 
-    from sqlalchemy import create_engine, text
-
     engine = create_engine(database_url)
 
     with engine.connect() as conn:
@@ -58,10 +60,8 @@ def main():
 
     logger.info(f"Found {pending_count} pending order(s) — polling Kalshi API")
 
-    from src.paper_trading.kalshi_live_trader import KalshiLiveTrader
-
-    trader = KalshiLiveTrader(resolve_only=True)
-    result = trader.reconcile_fills()
+    client = KalshiClient()
+    result = KalshiReconciliationService(engine=engine, client=client).reconcile_fills()
     reconciled = result.get("reconciled", 0) if isinstance(result, dict) else 0
     logger.info(f"Reconciled {reconciled} pending order(s) to filled")
 

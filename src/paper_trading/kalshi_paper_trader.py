@@ -33,12 +33,15 @@ from src.db.client import get_engine
 from src.models.daily_runner import should_skip_recommendation
 from src.paper_trading.mlb_paper_trader import MLB_STAT_RESOLUTION
 from src.scrapers.kalshi.kalshi_utils import fee_adjusted_edge, kalshi_taker_fee
+from src.trading.kalshi.live_trading_config import (
+    SPORTSBOOK_LINE_FALLBACK_GAP,
+    SUPPORTED_STATS,
+)
 
 logger = logging.getLogger(__name__)
 
-# When a non-sportsbook-aligned Kalshi line beats the aligned line by more
-# than this gap, allow the override.  Otherwise prefer the aligned line.
-_SPORTSBOOK_LINE_FALLBACK_GAP = 0.08  # 8 percentage points
+# Backward-compatible module name for existing paper-trader references.
+_SPORTSBOOK_LINE_FALLBACK_GAP = SPORTSBOOK_LINE_FALLBACK_GAP
 
 # NBA stat resolution: stat_type -> (table, [columns to sum])
 NBA_STAT_RESOLUTION: dict[str, tuple[str, list[str]]] = {
@@ -65,12 +68,6 @@ def _get_env_float(name: str, default: float) -> float:
         logger.warning(f"Invalid {name}={val}, using default {default}")
         return default
 
-
-# Supported stat types per sport (skip markets without trained models)
-SUPPORTED_STATS: dict[str, set[str]] = {
-    "nba": {"pts", "reb", "ast", "pra", "pr", "pa", "ra", "stl", "blk", "3pm"},
-    "mlb": {"pitcher_strikeouts", "batter_hits", "batter_hrr"},
-}
 
 DEFAULT_BANKROLL = _get_env_float("KALSHI_PAPER_TRADING_BANKROLL", 100.0)
 DEFAULT_KELLY_FRACTION = _get_env_float("KALSHI_PAPER_TRADING_KELLY_FRACTION", 0.125)

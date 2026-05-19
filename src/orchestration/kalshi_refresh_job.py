@@ -30,6 +30,24 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from dotenv import load_dotenv
 
+from src.db.client import get_engine
+from src.scrapers.kalshi.kalshi_client import KalshiClient
+from src.trading.kalshi.actuals_adapter import KalshiActualsAdapter
+from src.trading.kalshi.alert_adapter import KalshiAlertAdapter
+from src.trading.kalshi.daily_ledger_service import KalshiDailyLedgerService
+from src.trading.kalshi.events import CircuitBreakerTripped, HighEdgeMarketsFound, OrderResolved, TradeApprovalNeeded, TradeApprovalReminder
+from src.trading.kalshi.live_trading_config import (
+    SPORTSBOOK_LINE_FALLBACK_GAP,
+    SUPPORTED_STATS,
+    get_game_start_time,
+)
+from src.trading.kalshi.queue_service import KalshiQueueService
+from src.trading.kalshi.reconciliation_service import KalshiReconciliationService
+from src.trading.kalshi.risk_service import KalshiRiskService
+from src.trading.kalshi.selection_loader import KalshiSelectionInputLoader
+from src.trading.kalshi.settlement_service import KalshiSettlementService
+from src.trading.kalshi.strategy import select_trade_intents
+
 load_dotenv()
 
 logging.basicConfig(
@@ -38,6 +56,160 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("KalshiRefreshJob")
+
+def _env_float(name: str, default: float) -> float:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except ValueError:
+        logger.warning(f"Invalid {name}={val}, using default {default}")
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        logger.warning(f"Invalid {name}={val}, using default {default}")
+        return default
+
+
+def _send_resolution_alert(order, status: str, actual: float | None, pnl: float, balance: float) -> None:
+    KalshiAlertAdapter().send(OrderResolved(
+        order=order,
+        status=status,
+        actual=actual,
+        pnl=pnl,
+        balance=balance,
+    ))
+
+
+def _send_circuit_breaker_alert(reason: str, balance: float, action: str) -> None:
+    KalshiAlertAdapter().send(CircuitBreakerTripped(
+        reason=reason,
+        balance=balance,
+        action=action,
+        dedupe=True,
+    ))
+
+
+def _build_risk_service(engine, client) -> KalshiRiskService:
+    return KalshiRiskService(
+        engine=engine,
+        client=client,
+        starting_bankroll=_env_float("KALSHI_LIVE_STARTING_BANKROLL", 100.0),
+        drawdown_limit=_env_float("KALSHI_LIVE_DRAWDOWN_LIMIT", 0.30),
+        daily_loss_limit=_env_float("KALSHI_LIVE_DAILY_LOSS_LIMIT", 15.0),
+        consec_loss_limit=_env_int("KALSHI_LIVE_CONSEC_LOSS_LIMIT", 5),
+        send_circuit_breaker_alert=_send_circuit_breaker_alert,
+        force_resume=os.getenv("KALSHI_LIVE_FORCE_RESUME", "").lower() == "true",
+    )
+
+
+def _run_live_resolution(target_date: date | None = None) -> dict:
+    engine = get_engine()
+    client = KalshiClient()
+
+    reconciliation_service = KalshiReconciliationService(engine=engine, client=client)
+    reconciliation_service.reconcile_fills(target_date)
+
+    actuals_adapter = KalshiActualsAdapter(engine)
+    ledger_service = KalshiDailyLedgerService(
+        engine=engine,
+        starting_bankroll=_env_float("KALSHI_LIVE_STARTING_BANKROLL", 100.0),
+    )
+    risk_service = _build_risk_service(engine, client)
+    settlement_service = KalshiSettlementService(
+        engine=engine,
+        client=client,
+        fetch_actuals=actuals_adapter.fetch_actuals,
+        send_resolution_alert=_send_resolution_alert,
+        update_daily_log=ledger_service.update_daily_log,
+        get_consecutive_losses=risk_service.get_consecutive_losses,
+        update_streak=risk_service.update_streak,
+    )
+    return settlement_service.resolve_settled()
+
+
+def _select_live_trades(engine, client, target_date: date, sport: str) -> list[dict]:
+    inputs = KalshiSelectionInputLoader(
+        engine=engine,
+        client=client,
+        supported_stats=SUPPORTED_STATS,
+        get_game_start_time=get_game_start_time,
+        sportsbook_line_fallback_gap=SPORTSBOOK_LINE_FALLBACK_GAP,
+    ).load_inputs(
+        target_date,
+        sport=sport,
+        prior_exposure=0.0,
+        strategy_knobs={
+            "min_edge": _env_float("KALSHI_LIVE_MIN_EDGE", 0.15),
+            "min_price": _env_int("KALSHI_LIVE_MIN_PRICE", 5),
+            "max_contracts": _env_int("KALSHI_LIVE_MAX_CONTRACTS", 50),
+            "kelly_fraction": _env_float("KALSHI_LIVE_KELLY_FRACTION", 0.125),
+        },
+    )
+    if inputs is None:
+        return []
+
+    intents = select_trade_intents(
+        inputs.candidates,
+        config=inputs.config,
+        existing_player_stats=inputs.existing_player_stats,
+        queued_player_stats=inputs.queued_player_stats,
+        held_positions=inputs.held_positions,
+    )
+    trades = [intent.as_legacy_dict() for intent in intents]
+    total_exposure = inputs.config.prior_exposure + sum(float(trade["expected_cost"]) for trade in trades)
+    logger.info(
+        f"Selected {len(trades)} Kalshi live trades [{inputs.mode_str}] for {target_date} "
+        f"(exposure: ${total_exposure:.2f}/${inputs.effective_daily_exposure_cap:.2f} cap)"
+    )
+    return trades
+
+
+def _run_live_trading(target_date: date, sport: str) -> dict:
+    engine = get_engine()
+    client = KalshiClient()
+    if not getattr(client, "is_authenticated", False):
+        raise RuntimeError("Kalshi API credentials not configured for live trading")
+
+    risk_service = _build_risk_service(engine, client)
+    risk_service.ensure_config()
+
+    can_trade, reason = risk_service.check_circuit_breakers()
+    if not can_trade:
+        logger.warning(f"Live trading halted: {reason}")
+        return {"halted": True, "reason": reason}
+
+    sport_gate_var = f"{sport.upper()}_TRADING_ENABLED"
+    sport_enabled = os.getenv(sport_gate_var, "false").lower() == "true"
+    if not sport_enabled:
+        logger.info(f"Step 4.5b: Live trading disabled for {sport} ({sport_gate_var}!=true) — skipping")
+        return {"selected": 0, "proposed": 0, "renewed": 0}
+
+    queue_service = KalshiQueueService(engine)
+    renewed = queue_service.renew_expired_pending_trades(target_date, sport)
+    if renewed > 0:
+        logger.info(f"Renewed {renewed} expired pending trades for {sport.upper()} (markets still open)")
+
+    already_pending = queue_service.fetch_pending_approval_trades(target_date, sport)
+    trades = _select_live_trades(engine, client, target_date, sport)
+    if trades:
+        proposed = queue_service.propose_trades(trades)
+        if proposed:
+            logger.info(f"Proposed {proposed} trades to approval queue")
+        _send_trade_approval_alert(trades, sport, already_pending=len(already_pending))
+        return {"selected": len(trades), "proposed": proposed, "renewed": renewed}
+
+    if already_pending:
+        _send_reminder_alert(already_pending, sport)
+    return {"selected": 0, "proposed": 0, "renewed": renewed}
 
 
 def run(
@@ -68,11 +240,7 @@ def run(
     if resolve_only:
         logger.info("Resolve-only mode: resolving/reconciling live orders only")
         try:
-            from src.paper_trading.kalshi_live_trader import KalshiLiveTrader
-
-            resolver = KalshiLiveTrader(resolve_only=True)
-            resolver.reconcile_fills()
-            resolve_result = resolver.resolve_settled()
+            resolve_result = _run_live_resolution()
             summary["live_resolution"] = resolve_result
             logger.info(f"Resolve-only result: {resolve_result}")
         except Exception as e:
@@ -148,11 +316,7 @@ def run(
     if not dry_run and not mock:
         logger.info("Step 4.5a: Resolving/reconciling live orders...")
         try:
-            from src.paper_trading.kalshi_live_trader import KalshiLiveTrader
-
-            resolver = KalshiLiveTrader(resolve_only=True)
-            resolver.reconcile_fills(target_date)
-            resolve_result = resolver.resolve_settled()
+            resolve_result = _run_live_resolution(target_date)
             summary["live_resolution"] = resolve_result
             logger.info(f"Live resolution: {resolve_result}")
         except Exception as e:
@@ -167,44 +331,7 @@ def run(
         if live_enabled:
             logger.info("Step 4.5b: Live trading...")
             try:
-                from src.paper_trading.kalshi_live_trader import KalshiLiveTrader
-
-                trader = KalshiLiveTrader()
-
-                # Check circuit breakers first
-                can_trade, reason = trader.check_circuit_breakers()
-                if not can_trade:
-                    logger.warning(f"Live trading halted: {reason}")
-                    summary["live_trading"] = {"halted": True, "reason": reason}
-                else:
-                    # Per-sport gate: skip all queue operations if sport is disabled.
-                    # Also controls renew — otherwise disabled-sport trades renew forever.
-                    sport_gate_var = f"{sport.upper()}_TRADING_ENABLED"
-                    sport_enabled = os.getenv(sport_gate_var, "false").lower() == "true"
-
-                    if not sport_enabled:
-                        logger.info(f"Step 4.5b: Live trading disabled for {sport} ({sport_gate_var}!=true) — skipping")
-                        summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": 0}
-                    else:
-                        # Carry forward any trades that expired without action
-                        # (silently extends their timer if markets are still open)
-                        renewed = trader.renew_expired_queue_trades(target_date, sport=sport)
-
-                        already_pending = _get_pending_queue_trades(trader.engine, target_date, sport)
-
-                        trades = trader.select_trades(target_date, sport=sport)
-                        if trades:
-                            proposed = trader.propose_trades(trades)
-                            _send_trade_approval_alert(trades, sport, already_pending=len(already_pending))
-                            summary["live_trading"] = {
-                                "selected": len(trades),
-                                "proposed": proposed,
-                                "renewed": renewed,
-                            }
-                        else:
-                            if already_pending:
-                                _send_reminder_alert(already_pending, sport)
-                            summary["live_trading"] = {"selected": 0, "proposed": 0, "renewed": renewed}
+                summary["live_trading"] = _run_live_trading(target_date, sport)
             except RuntimeError as e:
                 logger.warning(f"Live trading not available: {e}")
                 summary["live_trading"] = {"error": str(e)}
@@ -251,61 +378,20 @@ def _get_pending_queue_trades(engine, target_date, sport: str) -> list[dict]:
 
 
 def _send_trade_approval_alert(trades: list, sport: str, already_pending: int = 0) -> None:
-    """Send Discord notification that trades are pending approval."""
-    try:
-        from src.discord_bot.alerts import send_kalshi_trade_alert_sync
-
-        total_exposure = sum(t.get("expected_cost", 0) for t in trades)
-        edges = [t.get("fee_adjusted_edge", 0) for t in trades if t.get("fee_adjusted_edge")]
-        edge_range = f"{min(edges):.0%}-{max(edges):.0%}" if edges else "N/A"
-
-        send_kalshi_trade_alert_sync("approval_needed", {
-            "sport": sport.upper(),
-            "count": len(trades),
-            "total_exposure": total_exposure,
-            "edge_range": edge_range,
-            "already_pending": already_pending,
-            "trades": [
-                {
-                    "player_name": t.get("player_name", "Unknown"),
-                    "stat_type": t["stat_type"],
-                    "side": t["side"],
-                    "contracts": t["contracts"],
-                    "expected_cost": t["expected_cost"],
-                    "fee_adjusted_edge": t.get("fee_adjusted_edge", 0),
-                }
-                for t in trades[:10]
-            ],
-        })
-    except Exception as e:
-        logger.warning(f"Failed to send trade approval alert: {e}")
+    """Emit a notification that trades are pending approval."""
+    KalshiAlertAdapter().send(TradeApprovalNeeded(
+        trades=trades,
+        sport=sport,
+        already_pending=already_pending,
+    ))
 
 
 def _send_reminder_alert(pending_trades: list, sport: str) -> None:
-    try:
-        from src.discord_bot.alerts import send_kalshi_trade_alert_sync
-        total_exposure = sum(t.get("expected_cost", 0) for t in pending_trades)
-        edges = [t.get("fee_adjusted_edge", 0) for t in pending_trades if t.get("fee_adjusted_edge")]
-        edge_range = f"{min(edges):.0%}-{max(edges):.0%}" if edges else "N/A"
-        send_kalshi_trade_alert_sync("approval_reminder", {
-            "sport": sport.upper(),
-            "count": len(pending_trades),
-            "total_exposure": total_exposure,
-            "edge_range": edge_range,
-            "trades": [
-                {
-                    "player_name": t.get("player_name", "Unknown"),
-                    "stat_type": t.get("stat_type", ""),
-                    "side": t.get("side", "yes"),
-                    "contracts": t.get("contracts", 0),
-                    "expected_cost": t.get("expected_cost", 0),
-                    "fee_adjusted_edge": t.get("fee_adjusted_edge", 0),
-                }
-                for t in pending_trades[:10]
-            ],
-        })
-    except Exception as e:
-        logger.warning(f"Failed to send reminder alert: {e}")
+    """Emit a notification that trades are still pending approval."""
+    KalshiAlertAdapter().send(TradeApprovalReminder(
+        pending_trades=pending_trades,
+        sport=sport,
+    ))
 
 
 def _fetch_orderbooks(target_date: date, sport: str) -> int:
@@ -447,17 +533,11 @@ def _send_high_edge_alerts(target_date: date, sport: str, min_edge: float = 0.05
 
     logger.info(f"Found {len(rows)} Kalshi markets with edge >= {min_edge:.0%}")
 
-    try:
-        from src.discord_bot.alerts import send_kalshi_alert_sync
-
-        return send_kalshi_alert_sync(
-            markets=[dict(row._mapping) for row in rows],
-            target_date=target_date,
-            sport=sport,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to send Kalshi Discord alert: {e}")
-        return False
+    return KalshiAlertAdapter().send(HighEdgeMarketsFound(
+        markets=[dict(row._mapping) for row in rows],
+        target_date=target_date,
+        sport=sport,
+    ))
 
 
 # ---------------------------------------------------------------------------
