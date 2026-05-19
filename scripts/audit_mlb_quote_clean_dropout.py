@@ -339,6 +339,58 @@ def fetch_raw_props_for_predictions(engine, predictions: pd.DataFrame, batch_siz
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
 
+def fetch_props_for_predictions(
+    engine,
+    predictions: pd.DataFrame,
+    *,
+    batch_size: int = 50,
+    source_table: str = "mlb_raw_player_props",
+) -> pd.DataFrame:
+    if source_table == "mlb_raw_player_props":
+        return fetch_raw_props_for_predictions(engine, predictions, batch_size=batch_size)
+    if source_table != "mlb_player_props_clv_snapshots":
+        raise ValueError(f"Unsupported audit prop source table: {source_table}")
+    if predictions.empty:
+        return pd.DataFrame()
+    game_ids = [int(x) for x in sorted(predictions["game_id"].dropna().unique())]
+    player_ids = [int(x) for x in sorted(predictions["player_id"].dropna().unique())]
+    market_keys = sorted(predictions["market_key"].dropna().unique())
+    rows = []
+    for start in range(0, len(game_ids), batch_size):
+        gid_batch = game_ids[start : start + batch_size]
+        params: dict[str, object] = {}
+        gid_ph = []
+        for i, gid in enumerate(gid_batch):
+            params[f"gid_{i}"] = gid
+            gid_ph.append(f":gid_{i}")
+        pid_ph = []
+        for i, pid in enumerate(player_ids):
+            params[f"pid_{i}"] = pid
+            pid_ph.append(f":pid_{i}")
+        mk_ph = []
+        for i, mk in enumerate(market_keys):
+            params[f"mk_{i}"] = mk
+            mk_ph.append(f":mk_{i}")
+        sql = text(
+            f"""
+            SELECT
+                player_id, game_id, bookmaker, market_key, line, outcome_label,
+                odds_american, snapshot_time, NULL::timestamptz AS inserted_at,
+                market_last_update, commence_time
+            FROM mlb_player_props_clv_snapshots
+            WHERE game_id IN ({', '.join(gid_ph)})
+              AND player_id IN ({', '.join(pid_ph)})
+              AND market_key IN ({', '.join(mk_ph)})
+              AND game_id IS NOT NULL
+              AND player_id IS NOT NULL
+            """
+        )
+        with engine.connect() as conn:
+            conn.execute(text("SET statement_timeout = '300000'"))
+            rows.append(pd.read_sql(sql, conn, params=params))
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
 def build_dropout_rows(
     predictions: pd.DataFrame,
     raw_props: pd.DataFrame,
@@ -484,10 +536,13 @@ def run_audit(args: argparse.Namespace) -> dict:
         end_date=parse_date(args.end),
         stats=stats,
         quote_clean_cutoff_time_et=args.quote_cutoff_time_et,
+        quote_decision_policy=args.quote_decision_policy,
+        quote_relative_minutes=args.quote_relative_minutes,
+        line_source=args.line_source,
     )
     predictions = flatten_date_predictions(date_predictions)
     clean_quotes = flatten_date_lines(date_lines)
-    raw_props = fetch_raw_props_for_predictions(engine, predictions, batch_size=args.batch_size)
+    raw_props = fetch_props_for_predictions(engine, predictions, batch_size=args.batch_size, source_table=args.line_source)
     sweep_dir = Path(args.sweep_output_dir) if args.sweep_output_dir else None
     validate_sweep_outputs(sweep_dir)
     placed_keys = collect_saved_bet_keys(sweep_dir)
@@ -511,6 +566,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--z-max", type=float, default=None, help="Optional BL z_max metadata")
     parser.add_argument("--max-weight", type=float, default=None, help="Optional BL max_weight metadata")
     parser.add_argument("--batch-size", type=int, default=50, help="game_id chunk size for raw prop queries")
+    parser.add_argument(
+        "--line-source",
+        choices=["mlb_raw_player_props", "mlb_player_props_clv_snapshots"],
+        default="mlb_raw_player_props",
+        help="Odds table for quote-clean audit rebuild. Dense table requires linked game_id/player_id.",
+    )
+    parser.add_argument(
+        "--quote-decision-policy",
+        choices=["fixed_et", "skip_early_fixed_et", "relative_to_commence", "slate_or_tminus"],
+        default="fixed_et",
+        help="Decision-time policy used by the audited sweep.",
+    )
+    parser.add_argument("--quote-relative-minutes", type=int, default=60)
     return parser
 
 

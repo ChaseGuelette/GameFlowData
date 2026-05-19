@@ -44,6 +44,8 @@ EXCLUDED_BOOKMAKERS = (
     "underdog",
 )
 
+TIMING_HORIZONS_MINUTES = (15, 30, 60)
+
 
 def american_to_implied_prob(odds: float) -> float:
     if pd.isna(odds):
@@ -72,6 +74,22 @@ def plus_odds_band(odds: float) -> str:
     return "+150_plus"
 
 
+def _is_missing_value(value) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return isinstance(value, str) and value.strip().lower() in {"", "nan", "none", "nat", "<na>"}
+
+
+def _clean_bookmaker_series(series: pd.Series) -> pd.Series:
+    cleaned = series.astype("string").str.strip().str.lower()
+    return cleaned.mask(cleaned.isin(["", "nan", "none", "nat", "<na>"]))
+
+
 def normalize_bets(bets: pd.DataFrame) -> pd.DataFrame:
     out = bets.copy().reset_index(drop=True)
     if "bet_id" not in out.columns:
@@ -80,38 +98,82 @@ def normalize_bets(bets: pd.DataFrame) -> pd.DataFrame:
         out["game_date"] = pd.to_datetime(out["game_date"]).dt.date.astype(str)
     for col in ["player_id", "game_id"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
-    for col in ["line", "odds", "edge", "model_prob", "implied_prob"]:
+    for col in ["line", "odds", "edge", "model_prob", "implied_prob", "selected_line", "selected_price"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     out["side"] = out["side"].astype(str).str.lower()
-    out["bookmaker"] = out["bookmaker"].astype(str).str.lower()
+    if "bookmaker" in out.columns:
+        out["bookmaker"] = _clean_bookmaker_series(out["bookmaker"])
+    else:
+        out["bookmaker"] = pd.Series(pd.NA, index=out.index, dtype="string")
+    if "selected_bookmaker" in out.columns:
+        out["selected_bookmaker"] = _clean_bookmaker_series(out["selected_bookmaker"])
+        out["bookmaker"] = out["bookmaker"].fillna(out["selected_bookmaker"])
     out["market_key"] = out["stat"].map(STAT_TO_MARKET_KEY).fillna(out["stat"])
-    if "bet_snapshot_time" not in out.columns:
-        for candidate in ["selected_snapshot_time", "under_snapshot_time", "over_snapshot_time", "snapshot_time"]:
-            if candidate in out.columns:
-                out["bet_snapshot_time"] = out[candidate]
-                break
+
     if "bet_snapshot_time" in out.columns:
         out["bet_snapshot_time"] = pd.to_datetime(out["bet_snapshot_time"], utc=True, errors="coerce")
+    else:
+        out["bet_snapshot_time"] = pd.to_datetime(pd.Series(pd.NaT, index=out.index), utc=True)
+
+    def candidate_time(row: pd.Series):
+        # Future/current artifacts should treat the model/job run time as the
+        # bet decision time. The selected quote snapshot can be earlier than the
+        # job run and is kept separately for auditability.
+        candidates = ["selected_decision_time", "bet_decision_time", "selected_snapshot_time"]
+        if row.get("side") == "under":
+            candidates.extend(["under_snapshot_time", "over_snapshot_time"])
+        else:
+            candidates.extend(["over_snapshot_time", "under_snapshot_time"])
+        candidates.append("snapshot_time")
+        for candidate in candidates:
+            if candidate in row.index and not _is_missing_value(row.get(candidate)):
+                return row.get(candidate)
+        return pd.NaT
+
+    missing_bet_time = out["bet_snapshot_time"].isna()
+    if missing_bet_time.any():
+        out.loc[missing_bet_time, "bet_snapshot_time"] = pd.to_datetime(
+            out.loc[missing_bet_time].apply(candidate_time, axis=1), utc=True, errors="coerce"
+        )
+
+    if "bet_time_source" in out.columns:
+        default_source = pd.Series(np.where(out["bet_snapshot_time"].notna(), "artifact", "missing"), index=out.index)
+        out["bet_time_source"] = out["bet_time_source"].fillna(default_source)
+        out.loc[out["bet_snapshot_time"].isna(), "bet_time_source"] = "missing"
+    else:
+        out["bet_time_source"] = np.where(out["bet_snapshot_time"].notna(), "artifact", "missing")
     return out
 
 
 def apply_assumed_bet_time_et(bets: pd.DataFrame, cutoff_time_et: str | None) -> pd.DataFrame:
+    out = bets.copy()
+    if "bet_snapshot_time" in out.columns:
+        out["bet_snapshot_time"] = pd.to_datetime(out["bet_snapshot_time"], utc=True, errors="coerce")
+    else:
+        out["bet_snapshot_time"] = pd.to_datetime(pd.Series(pd.NaT, index=out.index), utc=True)
+    if "bet_time_source" not in out.columns:
+        out["bet_time_source"] = np.where(out["bet_snapshot_time"].notna(), "artifact", "missing")
     if not cutoff_time_et:
-        return bets
+        out.loc[out["bet_snapshot_time"].isna(), "bet_time_source"] = "missing"
+        return out
     try:
         hour_s, minute_s = cutoff_time_et.split(":", 1)
         cutoff_t = datetime_time(hour=int(hour_s), minute=int(minute_s))
     except Exception as exc:
         raise ValueError(f"Invalid assumed bet time {cutoff_time_et!r}; expected HH:MM") from exc
-    out = bets.copy()
-    out["bet_snapshot_time"] = [
-        datetime.combine(pd.to_datetime(gd).date(), cutoff_t, tzinfo=ZoneInfo("America/New_York"))
-        for gd in out["game_date"]
-    ]
-    out["bet_snapshot_time"] = pd.to_datetime(out["bet_snapshot_time"], utc=True)
-    return out
 
+    missing = out["bet_snapshot_time"].isna()
+    if missing.any():
+        assumed = [
+            datetime.combine(pd.to_datetime(gd).date(), cutoff_t, tzinfo=ZoneInfo("America/New_York"))
+            for gd in out.loc[missing, "game_date"]
+        ]
+        out.loc[missing, "bet_snapshot_time"] = pd.to_datetime(assumed, utc=True)
+        out.loc[missing, "bet_time_source"] = "assumed"
+    out.loc[out["bet_snapshot_time"].notna() & (out["bet_time_source"] != "assumed"), "bet_time_source"] = "artifact"
+    out.loc[out["bet_snapshot_time"].isna(), "bet_time_source"] = "missing"
+    return out
 
 def normalize_snapshots(snapshots: pd.DataFrame) -> pd.DataFrame:
     out = snapshots.copy()
@@ -156,14 +218,38 @@ def _latest_before(pool: pd.DataFrame, cutoff: pd.Timestamp | None) -> pd.Series
     return _latest_between(pool, after=None, cutoff=cutoff)
 
 
-def _snapshot_near_plus15(df: pd.DataFrame, bet_time) -> pd.Series | None:
-    if df.empty or pd.isna(bet_time):
-        return None
-    target = bet_time + pd.Timedelta(minutes=15)
-    x = df[(df["snapshot_time"] >= bet_time) & (df["snapshot_time"] <= target)]
+def _snapshot_near_horizon(df: pd.DataFrame, bet_time, commence, minutes: int) -> tuple[pd.Series | None, str]:
+    if pd.isna(bet_time):
+        return None, "missing_bet_time"
+    if commence is not None and not pd.isna(commence) and bet_time >= commence:
+        return None, "past_commence"
+    if df.empty:
+        return None, "no_same_book_same_line_match"
+    target = bet_time + pd.Timedelta(minutes=minutes)
+    cutoff = target
+    if commence is not None and not pd.isna(commence):
+        if bet_time >= commence:
+            return None, "past_commence"
+        cutoff = min(target, commence)
+    x = df[(df["snapshot_time"] >= bet_time) & (df["snapshot_time"] <= cutoff)]
     if x.empty:
-        return None
-    return x.sort_values("snapshot_time").iloc[-1]
+        return None, "no_same_book_same_line_match"
+    return x.sort_values("snapshot_time").iloc[-1], "same_book_same_line"
+
+
+def _timing_horizon_columns() -> dict:
+    cols = {}
+    for minutes in TIMING_HORIZONS_MINUTES:
+        prefix = f"plus{minutes}"
+        cols.update(
+            {
+                f"{prefix}_odds": np.nan,
+                f"{prefix}_snapshot_time": pd.NaT,
+                f"{prefix}_clv_implied_prob": np.nan,
+                f"{prefix}_match_source": "unavailable",
+            }
+        )
+    return cols
 
 
 def _line_movement_class(side: str, bet_line: float, close_line: float) -> str:
@@ -196,9 +282,7 @@ def _base_unmatched_row(bet: pd.Series, reason: str) -> dict:
             "line_movement_class": "unmatched",
             "same_book_clv_cents": np.nan,
             "clv_implied_prob": np.nan,
-            "plus15_odds": np.nan,
-            "plus15_snapshot_time": pd.NaT,
-            "plus15_clv_implied_prob": np.nan,
+            **_timing_horizon_columns(),
             "plus_odds_band": plus_odds_band(bet.get("odds")),
         }
     )
@@ -247,8 +331,13 @@ def build_clv_matches(bets: pd.DataFrame, snapshots: pd.DataFrame) -> pd.DataFra
         cutoff = commence if not pd.isna(commence) else None
 
         bet_time = bet.get("bet_snapshot_time") if "bet_snapshot_time" in bet.index else pd.NaT
+        bet_time_source = bet.get("bet_time_source", "artifact")
+        if pd.isna(bet_time):
+            rows.append(_base_unmatched_row(bet, "missing_bet_snapshot_time"))
+            continue
         if pd.notna(bet_time) and cutoff is not None and not pd.isna(cutoff) and bet_time >= cutoff:
-            rows.append(_base_unmatched_row(bet, "bet_time_at_or_after_commence"))
+            reason = "invalid_assumed_time_early_game" if bet_time_source == "assumed" else "bet_time_at_or_after_commence"
+            rows.append(_base_unmatched_row(bet, reason))
             continue
 
         same_book = pool[pool["bookmaker"] == bet["bookmaker"]]
@@ -290,10 +379,17 @@ def build_clv_matches(bets: pd.DataFrame, snapshots: pd.DataFrame) -> pd.DataFra
         if not open_pool.empty:
             open_row = open_pool.sort_values("snapshot_time").iloc[0]
 
-        plus15_row = None
-        if "bet_snapshot_time" in bets_n.columns and not pd.isna(bet.get("bet_snapshot_time")):
-            plus15_pool = same_book_same_line if not same_book_same_line.empty else pd.DataFrame()
-            plus15_row = _snapshot_near_plus15(plus15_pool, bet.get("bet_snapshot_time"))
+        horizon_values = _timing_horizon_columns()
+        horizon_pool = same_book_same_line if not same_book_same_line.empty else pd.DataFrame()
+        for minutes in TIMING_HORIZONS_MINUTES:
+            prefix = f"plus{minutes}"
+            horizon_row, match_source = _snapshot_near_horizon(horizon_pool, bet_time, commence, minutes)
+            horizon_values[f"{prefix}_match_source"] = match_source
+            if horizon_row is not None:
+                horizon_odds = float(horizon_row["odds_american"])
+                horizon_values[f"{prefix}_odds"] = horizon_odds
+                horizon_values[f"{prefix}_snapshot_time"] = horizon_row["snapshot_time"]
+                horizon_values[f"{prefix}_clv_implied_prob"] = american_to_implied_prob(horizon_odds) - bet_imp
 
         out = bet.to_dict()
         out.update(
@@ -314,9 +410,7 @@ def build_clv_matches(bets: pd.DataFrame, snapshots: pd.DataFrame) -> pd.DataFra
                 "line_movement_class": movement,
                 "same_book_clv_cents": (bet_odds - close_odds) if same_line and clv_source == "same_book_close" else np.nan,
                 "clv_implied_prob": (close_imp - bet_imp) if same_line else np.nan,
-                "plus15_odds": float(plus15_row["odds_american"]) if plus15_row is not None else np.nan,
-                "plus15_snapshot_time": plus15_row["snapshot_time"] if plus15_row is not None else pd.NaT,
-                "plus15_clv_implied_prob": (american_to_implied_prob(float(plus15_row["odds_american"])) - bet_imp) if plus15_row is not None else np.nan,
+                **horizon_values,
                 "plus_odds_band": plus_odds_band(bet_odds),
             }
         )
@@ -445,7 +539,12 @@ def decide_phase1b(
     }
 
 
-def fetch_snapshots_for_bets(bets: pd.DataFrame, local: bool = False, batch_size: int = 50) -> pd.DataFrame:
+def fetch_snapshots_for_bets(
+    bets: pd.DataFrame,
+    local: bool = False,
+    batch_size: int = 50,
+    source_table: str = "mlb_raw_player_props",
+) -> pd.DataFrame:
     from src.db.client import get_engine
 
     bets_n = normalize_bets(bets)
@@ -468,27 +567,46 @@ def fetch_snapshots_for_bets(bets: pd.DataFrame, local: bool = False, batch_size
         pid_ph = ", ".join(f":pid_{j}" for j in range(len(player_ids)))
         mk_ph = ", ".join(f":mk_{j}" for j in range(len(market_keys)))
         ex_ph = ", ".join(f":ex_{j}" for j in range(len(excluded)))
+        if source_table == "mlb_player_props_clv_snapshots":
+            table_sql = "mlb_player_props_clv_snapshots"
+            game_col = "game_id"
+            odds_col = "odds_american"
+            snapshot_expr = "p.snapshot_time"
+            extra_select = "p.requested_snapshot_time, p.scrape_reason, p.target_offset_minutes,"
+            extra_where = "AND p.game_id IS NOT NULL AND p.player_id IS NOT NULL"
+            commence_expr = "p.commence_time"
+        else:
+            table_sql = "mlb_raw_player_props"
+            game_col = "game_id"
+            odds_col = "odds_american"
+            snapshot_expr = "COALESCE(p.snapshot_time, p.inserted_at)"
+            extra_select = "NULL::timestamptz AS requested_snapshot_time, NULL::text AS scrape_reason, NULL::integer AS target_offset_minutes,"
+            extra_where = ""
+            commence_expr = "p.commence_time"
+
         sql = text(f"""
             SELECT
                 p.player_id,
-                p.game_id,
+                p.{game_col} AS game_id,
                 p.bookmaker,
                 p.market_key,
                 p.line,
                 p.outcome_label,
-                p.odds_american,
-                COALESCE(p.snapshot_time, p.inserted_at) AS snapshot_time,
+                p.{odds_col} AS odds_american,
+                {snapshot_expr} AS snapshot_time,
+                {extra_select}
                 p.inserted_at,
-                p.commence_time,
+                {commence_expr} AS commence_time,
                 s.game_time_utc
-            FROM mlb_raw_player_props p
-            LEFT JOIN mlb_game_schedule s ON s.game_id = p.game_id
-            WHERE p.game_id IN ({gid_ph})
+            FROM {table_sql} p
+            LEFT JOIN mlb_game_schedule s ON s.game_id = p.{game_col}
+            WHERE p.{game_col} IN ({gid_ph})
               AND p.player_id IN ({pid_ph})
               AND p.market_key IN ({mk_ph})
               AND p.bookmaker NOT IN ({ex_ph})
               AND p.player_id IS NOT NULL
-              AND COALESCE(p.snapshot_time, p.inserted_at) IS NOT NULL
+              AND {snapshot_expr} IS NOT NULL
+              {extra_where}
         """)
         with engine.connect() as conn:
             conn.execute(text("SET statement_timeout = '180000'"))
@@ -497,7 +615,62 @@ def fetch_snapshots_for_bets(bets: pd.DataFrame, local: bool = False, batch_size
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
 
-def write_markdown_summary(path: Path, summary: pd.DataFrame, band_summary: pd.DataFrame, decision: dict, plus15_available: bool) -> None:
+def unmatched_reason_summary(matches: pd.DataFrame) -> pd.DataFrame:
+    if matches.empty or "unmatched_reason" not in matches.columns:
+        return pd.DataFrame(columns=["unmatched_reason", "count", "pct"])
+    reasons = matches["unmatched_reason"].replace("", pd.NA).dropna()
+    counts = reasons.value_counts().rename_axis("unmatched_reason").reset_index(name="count")
+    denom = max(len(matches), 1)
+    counts["pct"] = counts["count"] / denom
+    return counts
+
+
+def timing_horizon_availability(matches: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    denom = max(len(matches), 1)
+    for minutes in TIMING_HORIZONS_MINUTES:
+        prefix = f"plus{minutes}"
+        prob_col = f"{prefix}_clv_implied_prob"
+        source_col = f"{prefix}_match_source"
+        available = int(matches[prob_col].notna().sum()) if prob_col in matches.columns else 0
+        row = {"horizon": f"+{minutes}m", "n_available": available, "pct_available": available / denom}
+        if source_col in matches.columns:
+            row["match_sources"] = matches[source_col].fillna("unavailable").value_counts().to_dict()
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def build_timing_stability(matches: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    base_cols = ["bet_id", "game_date", "player_id", "game_id", "bookmaker_at_bet", "line_at_bet", "odds_at_bet"]
+    for _, row in matches.iterrows():
+        base = {col: row.get(col) for col in base_cols}
+        for minutes in TIMING_HORIZONS_MINUTES:
+            prefix = f"plus{minutes}"
+            out = dict(base)
+            out.update(
+                {
+                    "horizon": f"+{minutes}m",
+                    "horizon_odds": row.get(f"{prefix}_odds"),
+                    "horizon_snapshot_time": row.get(f"{prefix}_snapshot_time"),
+                    "horizon_clv_implied_prob": row.get(f"{prefix}_clv_implied_prob"),
+                    "horizon_match_source": row.get(f"{prefix}_match_source", "unavailable"),
+                    "final_clv_implied_prob": row.get("clv_implied_prob"),
+                }
+            )
+            rows.append(out)
+    return pd.DataFrame(rows)
+
+
+def write_markdown_summary(
+    path: Path,
+    summary: pd.DataFrame,
+    band_summary: pd.DataFrame,
+    decision: dict,
+    timing_availability: pd.DataFrame,
+    unmatched_reasons: pd.DataFrame,
+    bet_time_source_counts: dict | None = None,
+) -> None:
     overall = summary.iloc[0].to_dict() if not summary.empty else {}
     lines = [
         "# MLB Batter Hits Phase 1B CLV Summary",
@@ -527,12 +700,22 @@ def write_markdown_summary(path: Path, summary: pd.DataFrame, band_summary: pd.D
         lines.append("```text")
         lines.append(band_summary[available_cols].to_string(index=False))
         lines.append("```")
+    if not unmatched_reasons.empty:
+        lines.extend(["", "## Unmatched reasons", "", "```text"])
+        lines.append(unmatched_reasons.to_string(index=False))
+        lines.append("```")
+    if bet_time_source_counts:
+        lines.extend(["", "## Bet timestamp source", ""])
+        lines.append(f"- Bet time sources: {bet_time_source_counts}")
+    lines.extend(["", "## Timing stability", ""])
+    if timing_availability.empty:
+        lines.append("- No timing horizon availability summary available.")
+    else:
+        lines.append("```text")
+        lines.append(timing_availability.to_string(index=False))
+        lines.append("```")
     lines.extend(
         [
-            "",
-            "## Timing stability",
-            "",
-            "- +15 minute CLV was computed." if plus15_available else "- +15 minute CLV was not decision-grade because saved bets lacked bet/selected snapshot timestamps or no +15 snapshots were matchable.",
             "",
             "## Relevant prior lessons/invariants",
             "",
@@ -554,7 +737,7 @@ def run(args: argparse.Namespace) -> dict:
     if args.snapshots_csv:
         snapshots = pd.read_csv(args.snapshots_csv)
     else:
-        snapshots = fetch_snapshots_for_bets(bets, local=args.local, batch_size=args.batch_size)
+        snapshots = fetch_snapshots_for_bets(bets, local=args.local, batch_size=args.batch_size, source_table=args.snapshots_table)
         snapshots.to_csv(output_dir / "raw_snapshots_used.csv", index=False)
 
     matches = build_clv_matches(bets, snapshots)
@@ -572,7 +755,13 @@ def run(args: argparse.Namespace) -> dict:
     summarize_by(edge_df, "edge_bin", args.bootstrap_samples, args.ci_level).to_csv(output_dir / "clv_by_edge_bin.csv", index=False)
     summarize_by(matches, "bookmaker_at_bet", args.bootstrap_samples, args.ci_level).to_csv(output_dir / "clv_by_bookmaker.csv", index=False)
 
-    timing = matches[["bet_id", "game_date", "player_id", "game_id", "bookmaker_at_bet", "line_at_bet", "odds_at_bet", "plus15_odds", "plus15_snapshot_time", "plus15_clv_implied_prob", "clv_implied_prob"]].copy()
+    unmatched_reasons = unmatched_reason_summary(matches)
+    unmatched_reasons.to_csv(output_dir / "clv_unmatched_reasons.csv", index=False)
+
+    timing_availability = timing_horizon_availability(matches)
+    timing_availability.to_csv(output_dir / "clv_timing_horizon_availability.csv", index=False)
+
+    timing = build_timing_stability(matches)
     timing.to_csv(output_dir / "clv_timing_stability.csv", index=False)
 
     failing_bands = []
@@ -596,7 +785,9 @@ def run(args: argparse.Namespace) -> dict:
         summary,
         band_summary,
         decision,
-        plus15_available=bool(matches["plus15_clv_implied_prob"].notna().any()),
+        timing_availability=timing_availability,
+        unmatched_reasons=unmatched_reasons,
+        bet_time_source_counts=matches["bet_time_source"].value_counts(dropna=False).to_dict() if "bet_time_source" in matches.columns else None,
     )
     return {"output_dir": str(output_dir), "decision": decision}
 
@@ -610,6 +801,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bootstrap-samples", type=int, default=1000)
     parser.add_argument("--ci-level", type=float, default=0.95)
     parser.add_argument("--batch-size", type=int, default=50)
+    parser.add_argument(
+        "--snapshots-table",
+        choices=["mlb_raw_player_props", "mlb_player_props_clv_snapshots"],
+        default="mlb_raw_player_props",
+        help="DB table to fetch CLV snapshots from when --snapshots-csv is not provided.",
+    )
     parser.add_argument("--assume-bet-time-et", default=None, help="Optional HH:MM ET bet-time assumption for quote-clean replay, e.g. 13:30")
     parser.add_argument("--min-mean-clv", type=float, default=0.015, help="Minimum mean implied-prob CLV required for DK/consensus proxy validation")
     return parser.parse_args()

@@ -22,7 +22,7 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, time as datetime_time
+from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -192,6 +192,9 @@ def run_shared_phases(
     end_date: date,
     stats: list[str],
     quote_clean_cutoff_time_et: str | None = None,
+    quote_decision_policy: str = "fixed_et",
+    quote_relative_minutes: int = 60,
+    line_source: str = "mlb_raw_player_props",
 ) -> tuple[
     list[date],
     dict[date, list[DatePrediction]],
@@ -274,6 +277,9 @@ def run_shared_phases(
                 engine, pitcher_feature_store, batter_feature_store, suite,
                 game_date, stats, matchup_cache=matchup_cache,
                 quote_clean_cutoff_time_et=quote_clean_cutoff_time_et,
+                quote_decision_policy=quote_decision_policy,
+                quote_relative_minutes=quote_relative_minutes,
+                line_source=line_source,
             )
             if preds:
                 date_predictions[game_date] = preds
@@ -300,13 +306,16 @@ def _process_date_shared(
     stats: list[str],
     matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None,
     quote_clean_cutoff_time_et: str | None = None,
+    quote_decision_policy: str = "fixed_et",
+    quote_relative_minutes: int = 60,
+    line_source: str = "mlb_raw_player_props",
 ) -> tuple[list[DatePrediction], pd.DataFrame | None]:
     """Generate predictions + fetch lines for a single date."""
     # Get games
     query = text("""
         SELECT s.game_id, s.home_team_id, s.away_team_id,
                s.probable_pitcher_home_id, s.probable_pitcher_away_id,
-               s.venue_id, s.season
+               s.venue_id, s.season, s.game_time_utc
         FROM mlb_game_schedule s
         WHERE s.game_date = :game_date
           AND s.status != 'Cancelled'
@@ -447,9 +456,13 @@ def _process_date_shared(
     market_keys = [s for s in stats if s in STAT_ACTUALS]
     lines_df = _fetch_lines_for_date(
         engine,
-        game_ids,
+        games,
         market_keys,
         quote_clean_cutoff_ts=quote_clean_cutoff_ts,
+        quote_clean_cutoff_time_et=quote_clean_cutoff_time_et,
+        quote_decision_policy=quote_decision_policy,
+        quote_relative_minutes=quote_relative_minutes,
+        line_source=line_source,
     )
 
     return predictions, lines_df
@@ -474,29 +487,111 @@ def _build_quote_clean_cutoff_ts(game_date: date, cutoff_time_et: str) -> dateti
     return datetime.combine(game_date, cutoff_t, tzinfo=ZoneInfo("America/New_York"))
 
 
+def _build_slate_decision_ts(commence_ts: datetime, fallback_relative_minutes: int = 60) -> datetime:
+    """Slate policy with game-relative fallback for early starts."""
+    commence_et = pd.Timestamp(commence_ts).to_pydatetime().astimezone(ZoneInfo("America/New_York"))
+    game_day = commence_et.date()
+    if commence_et.time() < datetime_time(15, 0):
+        candidate = datetime.combine(game_day, datetime_time(9, 30), tzinfo=ZoneInfo("America/New_York"))
+    elif commence_et.time() < datetime_time(19, 0):
+        candidate = datetime.combine(game_day, datetime_time(13, 30), tzinfo=ZoneInfo("America/New_York"))
+    else:
+        candidate = datetime.combine(game_day, datetime_time(17, 30), tzinfo=ZoneInfo("America/New_York"))
+    if candidate >= commence_et:
+        candidate = commence_et - timedelta(minutes=fallback_relative_minutes)
+    return candidate
+
+
+def _game_decision_time(
+    game: dict,
+    *,
+    policy: str,
+    fixed_cutoff_ts: datetime | None,
+    relative_minutes: int,
+) -> datetime | None:
+    commence = game.get("game_time_utc")
+    commence_ts = pd.to_datetime(commence, utc=True, errors="coerce") if commence is not None else pd.NaT
+    if policy == "fixed_et":
+        return fixed_cutoff_ts
+    if policy == "skip_early_fixed_et":
+        if pd.notna(commence_ts) and fixed_cutoff_ts is not None and fixed_cutoff_ts >= commence_ts.to_pydatetime():
+            return None
+        return fixed_cutoff_ts
+    if pd.isna(commence_ts):
+        return fixed_cutoff_ts
+    commence_dt = commence_ts.to_pydatetime()
+    if policy == "relative_to_commence":
+        return commence_dt - timedelta(minutes=relative_minutes)
+    if policy == "slate_or_tminus":
+        return _build_slate_decision_ts(commence_dt, fallback_relative_minutes=relative_minutes)
+    return fixed_cutoff_ts
+
+
 def _fetch_lines_for_date(
     engine,
-    game_ids: list[int],
-    market_keys: list[str],
+    games: list[dict] | None = None,
+    market_keys: list[str] | None = None,
     quote_clean_cutoff_ts: datetime | None = None,
+    quote_clean_cutoff_time_et: str | None = None,
+    quote_decision_policy: str = "fixed_et",
+    quote_relative_minutes: int = 60,
+    line_source: str = "mlb_raw_player_props",
+    *,
+    game_ids: list[int] | None = None,
 ) -> pd.DataFrame:
-    """Fetch all prop lines for a set of games, excluding invalid bookmakers.
+    """Fetch quote-clean prop lines for a set of games.
 
-    Uses EXCLUDED_BOOKMAKERS to filter out books the user cannot bet at
-    (novig, betonlineag) and DFS platforms with non-sportsbook pricing.
-    Matches production logic in mlb_daily_runner._get_current_lines().
+    Fixed mode uses one date-level decision timestamp. Per-game modes compute a
+    decision timestamp per game so early starts are handled explicitly.
     """
-    if not game_ids or not market_keys:
+    if games is None and game_ids is not None:
+        games = [{"game_id": int(game_id)} for game_id in game_ids]
+    if not games or not market_keys:
         return pd.DataFrame()
 
-    return fetch_lines_at_decision_time(
+    game_ids = [int(g["game_id"]) for g in games]
+
+    if quote_clean_cutoff_ts is not None and quote_decision_policy != "fixed_et":
+        parts = []
+        for game in games:
+            decision_ts = _game_decision_time(
+                game,
+                policy=quote_decision_policy,
+                fixed_cutoff_ts=quote_clean_cutoff_ts,
+                relative_minutes=quote_relative_minutes,
+            )
+            if decision_ts is None:
+                continue
+            part = fetch_lines_at_decision_time(
+                engine,
+                game_ids=[int(game["game_id"])],
+                market_keys=market_keys,
+                as_of_time=decision_ts,
+                allow_latest_without_as_of=False,
+                bookmakers=None,
+                source_table=line_source,
+            )
+            if not part.empty:
+                part = part.copy()
+                part["selected_decision_time"] = decision_ts
+                part["quote_decision_policy"] = quote_decision_policy
+                parts.append(part)
+        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+    out = fetch_lines_at_decision_time(
         engine,
         game_ids=game_ids,
         market_keys=market_keys,
         as_of_time=quote_clean_cutoff_ts,
         allow_latest_without_as_of=quote_clean_cutoff_ts is None,
         bookmakers=None,
+        source_table=line_source,
     )
+    if not out.empty and quote_clean_cutoff_ts is not None:
+        out = out.copy()
+        out["selected_decision_time"] = quote_clean_cutoff_ts
+        out["quote_decision_policy"] = quote_decision_policy
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +642,8 @@ def _select_sharpest_line(
                 "selected_snapshot_time": row.get("selected_snapshot_time"),
                 "over_snapshot_time": row.get("over_snapshot_time"),
                 "under_snapshot_time": row.get("under_snapshot_time"),
+                "selected_decision_time": row.get("selected_decision_time"),
+                "quote_decision_policy": row.get("quote_decision_policy"),
             }
 
     return best_line
@@ -636,6 +733,8 @@ def compute_edges_for_config(
         row["selected_snapshot_time"] = line_info.get("selected_snapshot_time")
         row["over_snapshot_time"] = line_info.get("over_snapshot_time")
         row["under_snapshot_time"] = line_info.get("under_snapshot_time")
+        row["selected_decision_time"] = line_info.get("selected_decision_time")
+        row["quote_decision_policy"] = line_info.get("quote_decision_policy")
         row["over_prob"] = over_prob
         row["under_prob"] = under_prob
         row["implied_over"] = implied_over
@@ -737,6 +836,8 @@ def precompute_mlb_base_probs(
                 "selected_snapshot_time": bl_row.get("selected_snapshot_time"),
                 "over_snapshot_time": bl_row.get("over_snapshot_time"),
                 "under_snapshot_time": bl_row.get("under_snapshot_time"),
+                "selected_decision_time": bl_row.get("selected_decision_time"),
+                "quote_decision_policy": bl_row.get("quote_decision_policy"),
                 "model_over": model_over,
                 "market_over": market_over,
                 "market_under": 1.0 - market_over,
@@ -1311,6 +1412,28 @@ def main():
         default="13:30",
         help="ET cutoff time for --quote-clean historical replay (HH:MM, default 13:30).",
     )
+    parser.add_argument(
+        "--quote-decision-policy",
+        choices=["fixed_et", "skip_early_fixed_et", "relative_to_commence", "slate_or_tminus"],
+        default="fixed_et",
+        help=(
+            "How --quote-clean chooses decision time. fixed_et preserves legacy one-time-per-day behavior; "
+            "skip_early_fixed_et drops games already started by the fixed time; relative_to_commence uses "
+            "T-minus per game; slate_or_tminus uses 09:30/13:30/17:30 ET slates with T-minus fallback."
+        ),
+    )
+    parser.add_argument(
+        "--quote-relative-minutes",
+        type=int,
+        default=60,
+        help="Minutes before commence for relative_to_commence and fallback in slate_or_tminus.",
+    )
+    parser.add_argument(
+        "--line-source",
+        choices=["mlb_raw_player_props", "mlb_player_props_clv_snapshots"],
+        default="mlb_raw_player_props",
+        help="Odds table for quote-clean line selection. Dense CLV table requires linked game_id/player_id.",
+    )
 
     args = parser.parse_args()
 
@@ -1383,6 +1506,9 @@ def main():
         end_date=end_date,
         stats=args.stats,
         quote_clean_cutoff_time_et=args.quote_cutoff_time_et if args.quote_clean else None,
+        quote_decision_policy=args.quote_decision_policy if args.quote_clean else "fixed_et",
+        quote_relative_minutes=args.quote_relative_minutes,
+        line_source=args.line_source if args.quote_clean else "mlb_raw_player_props",
     )
 
     phase01_time = time.time() - t_shared

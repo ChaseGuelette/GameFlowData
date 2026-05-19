@@ -130,6 +130,33 @@ def run_parallel_groups(groups: list[list[tuple[str, str]]], dry_run: bool = Fal
     return all(results)
 
 
+def get_table_max_id(table_name: str, dry_run: bool = False) -> int:
+    """Return current MAX(id) for a table, used to bound dense-linker passes."""
+    if dry_run:
+        return 0
+    from sqlalchemy import text
+
+    from src.db.client import get_engine
+
+    with get_engine().connect() as conn:
+        return int(conn.execute(text(f"SELECT COALESCE(MAX(id), 0) FROM {table_name}")).scalar() or 0)  # nosec
+
+
+def run_dense_clv_linkers(start_id: int, dry_run: bool = False) -> bool:
+    """Link newly inserted dense CLV rows only, using bounded id windows."""
+    steps = [
+        (
+            f"{sys.executable} scripts/link_mlb_clv_snapshots.py --execute --max-batches 20 --batch-size 10000 --start-id {start_id} --only-games --second-pass-games --skip-report",
+            "Dense CLV game linker for new rows",
+        ),
+        (
+            f"{sys.executable} scripts/link_mlb_clv_snapshots.py --execute --max-batches 20 --batch-size 10000 --start-id {start_id} --only-players --skip-report",
+            "Dense CLV player linker for new rows",
+        ),
+    ]
+    return run_step_group(steps, dry_run)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="MLB Lines Job - Player Props & Game Lines Scraping",
@@ -147,6 +174,11 @@ def main():
     parser.add_argument("--extended", action="store_true", help="Include extended prop markets")
     parser.add_argument("--pregame-minutes", type=int, default=None, help="Live props only: scrape games about N minutes before commence_time")
     parser.add_argument("--pregame-tolerance-minutes", type=int, default=5, help="Tolerance around --pregame-minutes")
+    parser.add_argument(
+        "--dense-clv-close",
+        action="store_true",
+        help="Live props only: write pregame close snapshots to mlb_player_props_clv_snapshots and link new rows.",
+    )
     args = parser.parse_args()
 
     python = sys.executable
@@ -158,12 +190,19 @@ def main():
     logger.info("=" * 60)
 
     if args.live:
+        dense_start_id = 0
+        if args.dense_clv_close:
+            dense_start_id = get_table_max_id("mlb_player_props_clv_snapshots", args.dry_run)
+            logger.info("Dense CLV close mode: existing max id=%d", dense_start_id)
+
         # Build props command
         props_cmd = f"{python} -m src.scrapers.mlb.mlb_daily_player_props_scraper --live"
         if args.extended:
             props_cmd += " --extended"
         if args.pregame_minutes is not None:
             props_cmd += f" --pregame-minutes {args.pregame_minutes} --pregame-tolerance-minutes {args.pregame_tolerance_minutes}"
+        if args.dense_clv_close:
+            props_cmd += " --target-table mlb_player_props_clv_snapshots"
 
         # Game lines command
         game_lines_cmd = f"{python} -m src.scrapers.mlb.mlb_daily_game_lines_scraper --live"
@@ -176,9 +215,11 @@ def main():
             steps = [
                 (props_cmd, "MLB player props scrape (live)"),
             ]
-            if not args.skip_linker:
-                steps.append((linker_cmd, "MLB incremental linker"))
             run_step_group(steps, args.dry_run)
+            if args.dense_clv_close and not args.skip_linker:
+                run_dense_clv_linkers(dense_start_id, args.dry_run)
+            elif not args.skip_linker:
+                run_command(linker_cmd, "MLB incremental linker", args.dry_run)
 
         elif args.parallel:
             # Game lines and props run concurrently, then linker
@@ -189,7 +230,9 @@ def main():
             run_parallel_groups([group_lines, group_props], args.dry_run)
 
             # Linker after both complete
-            if not args.skip_linker:
+            if args.dense_clv_close and not args.skip_linker:
+                run_dense_clv_linkers(dense_start_id, args.dry_run)
+            elif not args.skip_linker:
                 run_command(linker_cmd, "MLB incremental linker", args.dry_run)
         else:
             # Sequential: game lines -> props -> linker
@@ -197,9 +240,11 @@ def main():
                 (game_lines_cmd, "MLB game lines scrape (live)"),
                 (props_cmd, "MLB player props scrape (live)"),
             ]
-            if not args.skip_linker:
-                steps.append((linker_cmd, "MLB incremental linker"))
             run_step_group(steps, args.dry_run)
+            if args.dense_clv_close and not args.skip_linker:
+                run_dense_clv_linkers(dense_start_id, args.dry_run)
+            elif not args.skip_linker:
+                run_command(linker_cmd, "MLB incremental linker", args.dry_run)
     else:
         # Historical mode
         target_date = args.date

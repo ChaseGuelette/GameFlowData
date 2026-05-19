@@ -307,6 +307,60 @@ class TestBetSimulator:
         assert "side" in df.columns
         assert df.iloc[0]["side"] == "over"
 
+    def test_evaluate_predictions_propagates_selected_quote_metadata(self):
+        simulator = BetSimulator(edge_threshold=0.05, allowed_bets={("batter_hits", "under")})
+        predictions_df = pd.DataFrame([
+            {
+                "player_id": 1,
+                "game_id": "001",
+                "stat": "batter_hits",
+                "line": 0.5,
+                "over_odds": -140,
+                "under_odds": 150,
+                "over_prob": 0.40,
+                "under_prob": 0.52,
+                "implied_over": 0.58,
+                "implied_under": 0.40,
+                "bookmaker": "draftkings",
+                "under_bookmaker": "fanduel",
+                "over_bookmaker": "draftkings",
+                "selected_snapshot_time": "2026-04-13T20:00:00Z",
+                "under_snapshot_time": "2026-04-13T20:01:00Z",
+                "over_snapshot_time": "2026-04-13T20:02:00Z",
+                "under_market_last_update": "2026-04-13T19:59:00Z",
+                "under_bookmaker_last_update": "2026-04-13T19:58:00Z",
+            }
+        ])
+
+        bets = simulator.evaluate_predictions(predictions_df, date(2026, 4, 13))
+        assert len(bets) == 1
+        bet = bets[0]
+        assert bet.side == BetSide.UNDER
+        assert bet.bookmaker == "fanduel"
+        assert bet.selected_bookmaker == "fanduel"
+        assert bet.selected_side == "under"
+        assert bet.selected_price == 150
+        assert bet.selected_line == 0.5
+        assert bet.selected_market_last_update == "2026-04-13T19:59:00Z"
+        assert bet.selected_bookmaker_last_update == "2026-04-13T19:58:00Z"
+
+        df = simulator.to_dataframe()
+        for col in [
+            "selected_market_last_update",
+            "selected_bookmaker_last_update",
+            "selected_line",
+            "selected_price",
+            "selected_side",
+            "selected_bookmaker",
+            "over_market_last_update",
+            "under_market_last_update",
+            "over_bookmaker_last_update",
+            "under_bookmaker_last_update",
+            "over_bookmaker",
+            "under_bookmaker",
+        ]:
+            assert col in df.columns
+
     def test_get_summary(self):
         """Test getting summary statistics."""
         simulator = BetSimulator()

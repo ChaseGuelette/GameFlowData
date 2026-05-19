@@ -92,6 +92,23 @@ def _horizons_present(timing: pd.DataFrame) -> set[str]:
     return set()
 
 
+def _timing_horizon_coverage(timing: pd.DataFrame) -> dict[str, float]:
+    if timing.empty or "horizon" not in timing.columns:
+        return {}
+    value_col = "horizon_clv_implied_prob" if "horizon_clv_implied_prob" in timing.columns else None
+    if value_col is None:
+        for prefix in ["plus15", "plus30", "plus60"]:
+            col = f"{prefix}_clv_implied_prob"
+            if col in timing.columns:
+                value_col = col
+                break
+    coverage = {}
+    for horizon, group in timing.groupby("horizon"):
+        key = str(horizon)
+        coverage[key] = float(group[value_col].notna().mean()) if value_col else 0.0
+    return coverage
+
+
 def _line_movement_mismatch(matches: pd.DataFrame) -> bool:
     if matches.empty or "line_movement_class" not in matches.columns:
         return False
@@ -180,6 +197,16 @@ def _write_outputs(output_dir: Path, result: dict) -> None:
         lines.extend(f"- {reason}" for reason in result["reasons"])
     else:
         lines.append("- CLV outputs satisfy the configured promotion diagnostics.")
+    if result.get("timing_horizon_coverage_pct"):
+        lines.extend(["", "## Timing horizon coverage", ""])
+        lines.extend(f"- {horizon}: {pct:.1f}%" for horizon, pct in result["timing_horizon_coverage_pct"].items())
+    if result.get("top_unmatched_reasons"):
+        lines.extend(["", "## Top unmatched reasons", ""])
+        for row in result["top_unmatched_reasons"]:
+            reason = row.get("unmatched_reason", "unknown")
+            count = row.get("count", "")
+            pct = row.get("pct", "")
+            lines.append(f"- {reason}: {count} ({pct})")
     lines.extend(
         [
             "",
@@ -239,6 +266,7 @@ def diagnose_clv_failure_modes(clv_output_dir: str | Path, output_dir: str | Pat
     timing = _read_csv(clv_output_dir / "clv_timing_stability.csv")
     matches = _read_csv(clv_output_dir / "clv_matches.csv")
     phase1b = _read_csv(clv_output_dir / "phase1b_decision.csv")
+    unmatched_reasons_df = _read_csv(clv_output_dir / "clv_unmatched_reasons.csv") if (clv_output_dir / "clv_unmatched_reasons.csv").exists() else pd.DataFrame()
 
     mean = _float(overall, "mean_clv_implied_prob")
     mean_low = _float(overall, "mean_clv_ci_low")
@@ -275,7 +303,7 @@ def diagnose_clv_failure_modes(clv_output_dir: str | Path, output_dir: str | Pat
         reasons.append(f"Same-book coverage is weak or consensus fallback is high: same_book={same_book / n:.1%}, consensus={consensus / n:.1%}.")
 
     horizons = _horizons_present(timing)
-    required_horizons = {"+15m", "+30m", "+60m", "15m", "30m", "60m"}
+    timing_coverage = _timing_horizon_coverage(timing)
     has_15 = bool(horizons & {"+15m", "15m", "+15", "15"})
     has_30 = bool(horizons & {"+30m", "30m", "+30", "30"})
     has_60 = bool(horizons & {"+60m", "60m", "+60", "60"})
@@ -300,9 +328,9 @@ def diagnose_clv_failure_modes(clv_output_dir: str | Path, output_dir: str | Pat
     # De-duplicate while preserving order.
     failure_modes = list(dict.fromkeys(failure_modes))
 
-    data_failures = {"data_quality_failure", "same_book_coverage_failure"}
+    data_failures = {"data_quality_failure", "same_book_coverage_failure", "timing_stability_missing"}
     model_failures = {"negative_mean_clv", "edge_ranking_failure", "bookmaker_cluster_failure", "odds_band_failure", "line_movement_mismatch"}
-    inconclusive_only = {"underpowered_or_inconclusive", "timing_stability_missing"}
+    inconclusive_only = {"underpowered_or_inconclusive"}
 
     if any(mode in data_failures for mode in failure_modes):
         decision = DECISION_DATA
@@ -333,6 +361,8 @@ def diagnose_clv_failure_modes(clv_output_dir: str | Path, output_dir: str | Pat
         "phase1b_decision": phase1b.to_dict("records")[:3],
         "edge_bins_present": not edge_bins.empty,
         "timing_horizons_present": sorted(horizons),
+        "timing_horizon_coverage_pct": {k: v * 100.0 for k, v in timing_coverage.items()},
+        "top_unmatched_reasons": unmatched_reasons_df.head(10).to_dict("records") if not unmatched_reasons_df.empty else [],
     }
     _write_outputs(output_dir, result)
     return result

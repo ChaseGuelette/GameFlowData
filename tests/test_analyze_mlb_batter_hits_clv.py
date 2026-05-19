@@ -41,6 +41,7 @@ def test_same_book_close_primary_and_consensus_fallback():
             "odds": [150, 130],
             "bookmaker": ["draftkings", "fanduel"],
             "edge": [0.20, 0.16],
+            "bet_snapshot_time": pd.to_datetime(["2026-04-13T22:00:00Z", "2026-04-13T22:00:00Z"]),
         }
     )
     snapshots = pd.DataFrame(
@@ -85,6 +86,7 @@ def test_changed_line_is_classified_and_odds_clv_not_scored():
             "odds": [150],
             "bookmaker": ["draftkings"],
             "edge": [0.20],
+            "bet_snapshot_time": pd.to_datetime(["2026-04-13T22:00:00Z"]),
         }
     )
     snapshots = pd.DataFrame(
@@ -287,6 +289,49 @@ def test_fetch_snapshots_query_selects_effective_snapshot_time(monkeypatch):
     assert "COALESCE(p.snapshot_time, p.inserted_at) IS NOT NULL" in captured["sql"]
 
 
+def test_fetch_snapshots_can_use_dense_clv_snapshot_table(monkeypatch):
+    m = load_module()
+    captured = {}
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def execute(self, *args, **kwargs):
+            return None
+
+    class FakeEngine:
+        def connect(self):
+            return FakeConn()
+
+    def fake_get_engine(local=False):
+        return FakeEngine()
+
+    def fake_read_sql(query, conn, params):
+        captured["sql"] = str(query)
+        captured["params"] = params
+        return pd.DataFrame()
+
+    monkeypatch.setitem(sys.modules, "src.db.client", type("M", (), {"get_engine": fake_get_engine}))
+    monkeypatch.setattr(pd, "read_sql", fake_read_sql)
+
+    bets = pd.DataFrame({
+        "game_id": [100],
+        "player_id": [10],
+        "stat": ["batter_hits"],
+        "side": ["under"],
+        "line": [0.5],
+        "odds": [150],
+        "bookmaker": ["draftkings"],
+    })
+    m.fetch_snapshots_for_bets(bets, source_table="mlb_player_props_clv_snapshots")
+
+    assert "FROM mlb_player_props_clv_snapshots p" in captured["sql"]
+    assert "p.snapshot_time AS snapshot_time" in captured["sql"]
+    assert "p.game_id IS NOT NULL AND p.player_id IS NOT NULL" in captured["sql"]
+
+
 def test_phase1b_decision_rules_stop_restrict_confirm():
     m = load_module()
     stop = m.decide_phase1b(
@@ -315,3 +360,128 @@ def test_phase1b_decision_rules_stop_restrict_confirm():
         failing_bands=[],
     )
     assert confirmed["decision"] == "phase2_allowed"
+
+
+
+def test_assumed_bet_time_fills_missing_only():
+    m = load_module()
+    bets = pd.DataFrame(
+        {
+            "game_date": ["2026-04-13", "2026-04-13"],
+            "bet_snapshot_time": ["2026-04-13T20:00:00Z", pd.NaT],
+        }
+    )
+    out = m.apply_assumed_bet_time_et(bets, "13:30")
+    assert out.loc[0, "bet_snapshot_time"] == pd.Timestamp("2026-04-13T20:00:00Z")
+    assert out.loc[0, "bet_time_source"] == "artifact"
+    assert out.loc[1, "bet_snapshot_time"] == pd.Timestamp("2026-04-13T17:30:00Z")
+    assert out.loc[1, "bet_time_source"] == "assumed"
+
+
+def test_plus_15_30_60_horizon_columns_are_populated():
+    m = load_module()
+    bets = pd.DataFrame(
+        {
+            "bet_id": [0],
+            "game_date": ["2026-04-13"],
+            "player_id": [10],
+            "game_id": [100],
+            "stat": ["batter_hits"],
+            "side": ["under"],
+            "line": [0.5],
+            "odds": [150],
+            "bookmaker": ["draftkings"],
+            "edge": [0.20],
+            "bet_snapshot_time": pd.to_datetime(["2026-04-13T20:00:00Z"]),
+        }
+    )
+    snapshots = pd.DataFrame(
+        {
+            "player_id": [10, 10, 10, 10],
+            "game_id": [100, 100, 100, 100],
+            "market_key": ["batter_hits"] * 4,
+            "bookmaker": ["draftkings"] * 4,
+            "line": [0.5] * 4,
+            "outcome_label": ["Under"] * 4,
+            "odds_american": [145, 140, 135, 120],
+            "snapshot_time": pd.to_datetime([
+                "2026-04-13T20:15:00Z",
+                "2026-04-13T20:30:00Z",
+                "2026-04-13T21:00:00Z",
+                "2026-04-13T22:55:00Z",
+            ]),
+            "commence_time": pd.to_datetime(["2026-04-13T23:05:00Z"] * 4),
+        }
+    )
+    row = m.build_clv_matches(bets, snapshots).iloc[0]
+    assert row["plus15_odds"] == 145
+    assert row["plus30_odds"] == 140
+    assert row["plus60_odds"] == 135
+    assert row["plus15_match_source"] == "same_book_same_line"
+    assert row["plus30_match_source"] == "same_book_same_line"
+    assert row["plus60_match_source"] == "same_book_same_line"
+
+
+def test_assumption_caused_early_game_invalid_reason():
+    m = load_module()
+    bets = pd.DataFrame(
+        {
+            "bet_id": [0],
+            "game_date": ["2026-04-13"],
+            "player_id": [10],
+            "game_id": [100],
+            "stat": ["batter_hits"],
+            "side": ["under"],
+            "line": [0.5],
+            "odds": [150],
+            "bookmaker": ["draftkings"],
+            "edge": [0.20],
+        }
+    )
+    bets = m.apply_assumed_bet_time_et(m.normalize_bets(bets), "19:30")
+    snapshots = pd.DataFrame(
+        {
+            "player_id": [10],
+            "game_id": [100],
+            "market_key": ["batter_hits"],
+            "bookmaker": ["draftkings"],
+            "line": [0.5],
+            "outcome_label": ["Under"],
+            "odds_american": [120],
+            "snapshot_time": pd.to_datetime(["2026-04-13T23:00:00Z"]),
+            "commence_time": pd.to_datetime(["2026-04-13T23:05:00Z"]),
+        }
+    )
+    row = m.build_clv_matches(bets, snapshots).iloc[0]
+    assert row["unmatched_reason"] == "invalid_assumed_time_early_game"
+
+
+def test_timing_stability_long_rows_include_all_horizons():
+    m = load_module()
+    matches = pd.DataFrame([
+        {
+            "bet_id": 0,
+            "game_date": "2026-04-13",
+            "player_id": 10,
+            "game_id": 100,
+            "bookmaker_at_bet": "draftkings",
+            "line_at_bet": 0.5,
+            "odds_at_bet": 150,
+            "plus15_odds": 145,
+            "plus15_snapshot_time": "2026-04-13T20:15:00Z",
+            "plus15_clv_implied_prob": 0.01,
+            "plus15_match_source": "same_book_same_line",
+            "plus30_odds": 140,
+            "plus30_snapshot_time": "2026-04-13T20:30:00Z",
+            "plus30_clv_implied_prob": 0.02,
+            "plus30_match_source": "same_book_same_line",
+            "plus60_odds": 135,
+            "plus60_snapshot_time": "2026-04-13T21:00:00Z",
+            "plus60_clv_implied_prob": 0.03,
+            "plus60_match_source": "same_book_same_line",
+            "clv_implied_prob": 0.04,
+        }
+    ])
+    timing = m.build_timing_stability(matches)
+    assert set(timing["horizon"]) == {"+15m", "+30m", "+60m"}
+    assert "horizon_clv_implied_prob" in timing.columns

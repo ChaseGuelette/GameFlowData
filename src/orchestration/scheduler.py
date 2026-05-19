@@ -571,7 +571,7 @@ def run_mlb_pregame_30min_props():
     """Capture close-ish MLB props near commence_time - 30 minutes."""
     run_job(
         "mlb_lines_job.py",
-        extra_args="--live --props-only --extended --pregame-minutes 30 --pregame-tolerance-minutes 5 --skip-linker",
+        extra_args="--live --props-only --extended --pregame-minutes 30 --pregame-tolerance-minutes 5 --dense-clv-close",
         silent_on_success=True,
     )
 

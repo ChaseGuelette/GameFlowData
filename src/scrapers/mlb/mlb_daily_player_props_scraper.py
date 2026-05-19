@@ -140,7 +140,14 @@ class MLBDailyPropsScraper:
             logger.error(f"Error fetching props for {event_id}: {e}")
         return None, 0
 
-    def parse_and_store(self, data, snapshot_ts, table_name="mlb_raw_player_props"):
+    def parse_and_store(
+        self,
+        data,
+        snapshot_ts,
+        table_name="mlb_raw_player_props",
+        scrape_reason="manual",
+        target_offset_minutes=None,
+    ):
         """Parse props and insert into specified table."""
         if not data or "bookmakers" not in data:
             return 0
@@ -179,7 +186,10 @@ class MLBDailyPropsScraper:
                     ))
 
         if rows:
-            self._batch_insert(rows, table_name)
+            if table_name == "mlb_player_props_clv_snapshots":
+                self._batch_insert_clv(rows, table_name, snapshot_ts, scrape_reason, target_offset_minutes)
+            else:
+                self._batch_insert(rows, table_name)
         return len(rows)
 
     def _batch_insert(self, rows, table_name):
@@ -195,6 +205,65 @@ class MLBDailyPropsScraper:
                     VALUES %s
                 """  # nosec
                 extras.execute_values(cur, query, rows)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _batch_insert_clv(self, rows, table_name, snapshot_ts, scrape_reason, target_offset_minutes):
+        """Insert live props into the dense CLV snapshot schema."""
+        clv_rows = [
+            (
+                api_game_id,
+                api_game_id,  # live endpoint id is the Odds API event id
+                None,
+                api_player_name,
+                bookmaker,
+                bookmaker_name,
+                market_key,
+                outcome_label,
+                line,
+                odds_american,
+                commence_time,
+                home_team,
+                away_team,
+                snapshot_ts,
+                snapshot_ts,
+                market_last_update,
+                bookmaker_last_update,
+                scrape_reason,
+                target_offset_minutes,
+            )
+            for (
+                api_game_id,
+                api_player_name,
+                bookmaker,
+                market_key,
+                outcome_label,
+                line,
+                odds_american,
+                commence_time,
+                home_team,
+                away_team,
+                _snapshot_time,
+                market_last_update,
+                bookmaker_last_update,
+                bookmaker_name,
+            ) in rows
+        ]
+        conn = self.engine.raw_connection()
+        try:
+            with conn.cursor() as cur:
+                query = f"""
+                    INSERT INTO {table_name}
+                    (api_game_id, odds_api_event_id, player_id, api_player_name,
+                     bookmaker, bookmaker_name, market_key, outcome_label, line,
+                     odds_american, commence_time, home_team, away_team,
+                     snapshot_time, requested_snapshot_time, market_last_update,
+                     bookmaker_last_update, scrape_reason, target_offset_minutes)
+                    VALUES %s
+                    ON CONFLICT DO NOTHING
+                """  # nosec
+                extras.execute_values(cur, query, clv_rows)
             conn.commit()
         finally:
             conn.close()
@@ -261,7 +330,16 @@ def run_live_scrape(
         total_creds += cost
 
         if data:
-            rows = scraper.parse_and_store(data, snapshot_ts, target_table)
+            scrape_reason = "manual"
+            if target_table == "mlb_player_props_clv_snapshots" and pregame_minutes is not None:
+                scrape_reason = f"close_t_minus_{pregame_minutes}"
+            rows = scraper.parse_and_store(
+                data,
+                snapshot_ts,
+                target_table,
+                scrape_reason=scrape_reason,
+                target_offset_minutes=pregame_minutes if target_table == "mlb_player_props_clv_snapshots" else None,
+            )
             total_rows += rows
             logger.info(f"  Saved {rows} props.")
 

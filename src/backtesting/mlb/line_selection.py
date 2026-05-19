@@ -37,6 +37,7 @@ def fetch_lines_at_decision_time(
     as_of_time: datetime | None,
     allow_latest_without_as_of: bool = False,
     bookmakers: Iterable[str] | None = None,
+    source_table: str = "mlb_raw_player_props",
 ) -> pd.DataFrame:
     """Fetch same-book, same-snapshot over/under MLB prop lines.
 
@@ -96,15 +97,26 @@ def fetch_lines_at_decision_time(
         for i, book in enumerate(DEFAULT_EXCLUDED_BOOKMAKERS):
             params[f"excl_{i}"] = book
 
+    if source_table == "mlb_player_props_clv_snapshots":
+        table_sql = "mlb_player_props_clv_snapshots"
+        effective_snapshot_sql = "snapshot_time"
+        linked_where_sql = "AND game_id IS NOT NULL AND player_id IS NOT NULL"
+    elif source_table == "mlb_raw_player_props":
+        table_sql = "mlb_raw_player_props"
+        effective_snapshot_sql = "COALESCE(snapshot_time, inserted_at)"
+        linked_where_sql = ""
+    else:
+        raise ValueError(f"Unsupported MLB line source table: {source_table}")
+
     as_of_sql = "/* latest-without-as-of is legacy/backfill only */"
     if as_of_time is not None:
         params["as_of_time"] = as_of_time
-        as_of_sql = """
+        as_of_sql = f"""
                   AND (
                       market_last_update IS NULL
                       OR market_last_update <= :as_of_time
                   )
-                  AND COALESCE(snapshot_time, inserted_at) <= :as_of_time
+                  AND {effective_snapshot_sql} <= :as_of_time
         """
 
     query = text(f"""
@@ -118,18 +130,19 @@ def fetch_lines_at_decision_time(
                 outcome_label,
                 odds_american,
                 market_last_update,
-                COALESCE(snapshot_time, inserted_at) AS effective_snapshot_time,
+                {effective_snapshot_sql} AS effective_snapshot_time,
                 ROW_NUMBER() OVER (
                     PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
                     ORDER BY market_last_update DESC NULLS LAST,
-                             COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+                             {effective_snapshot_sql} DESC NULLS LAST
                 ) AS rn
-            FROM mlb_raw_player_props
+            FROM {table_sql}
             WHERE game_id IN ({game_id_placeholders})
               AND market_key IN ({market_placeholders})
               {book_filter_sql}
               AND player_id IS NOT NULL
-              AND COALESCE(snapshot_time, inserted_at) IS NOT NULL
+              {linked_where_sql}
+              AND {effective_snapshot_sql} IS NOT NULL
               {as_of_sql}
               AND (
                   commence_time IS NULL
@@ -138,7 +151,7 @@ def fetch_lines_at_decision_time(
               )
               AND (
                   commence_time IS NULL
-                  OR COALESCE(snapshot_time, inserted_at) < commence_time
+                  OR {effective_snapshot_sql} < commence_time
               )
         )
         SELECT

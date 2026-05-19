@@ -15,6 +15,21 @@ if TYPE_CHECKING:
     from src.config.stat_config import StatConfigSet
 
 
+def _present(value: object) -> bool:
+    """Return True for non-null scalar row values."""
+    try:
+        return not pd.isna(value)
+    except (TypeError, ValueError):
+        return value is not None
+
+
+def _row_get(row: pd.Series, key: str, default: object = None) -> object:
+    if key not in row.index:
+        return default
+    value = row.get(key)
+    return value if _present(value) else default
+
+
 class BetSide(Enum):
     """Bet direction."""
 
@@ -56,6 +71,19 @@ class Bet:
     selected_snapshot_time: object | None = None
     over_snapshot_time: object | None = None
     under_snapshot_time: object | None = None
+    selected_market_last_update: object | None = None
+    selected_bookmaker_last_update: object | None = None
+    selected_decision_time: object | None = None
+    selected_line: float | None = None
+    selected_price: int | None = None
+    selected_side: str | None = None
+    selected_bookmaker: str | None = None
+    over_market_last_update: object | None = None
+    under_market_last_update: object | None = None
+    over_bookmaker_last_update: object | None = None
+    under_bookmaker_last_update: object | None = None
+    over_bookmaker: str | None = None
+    under_bookmaker: str | None = None
 
     # BL diagnostic (optional)
     posterior_prob: float | None = None  # BL-blended probability (when BL is enabled)
@@ -220,6 +248,19 @@ class BetSimulator:
         selected_snapshot_time: object | None = None,
         over_snapshot_time: object | None = None,
         under_snapshot_time: object | None = None,
+        selected_market_last_update: object | None = None,
+        selected_bookmaker_last_update: object | None = None,
+        selected_decision_time: object | None = None,
+        selected_line: float | None = None,
+        selected_price: int | None = None,
+        selected_side: str | None = None,
+        selected_bookmaker: str | None = None,
+        over_market_last_update: object | None = None,
+        under_market_last_update: object | None = None,
+        over_bookmaker_last_update: object | None = None,
+        under_bookmaker_last_update: object | None = None,
+        over_bookmaker: str | None = None,
+        under_bookmaker: str | None = None,
     ) -> Bet:
         """Create and record a bet.
 
@@ -255,6 +296,19 @@ class BetSimulator:
             selected_snapshot_time=selected_snapshot_time,
             over_snapshot_time=over_snapshot_time,
             under_snapshot_time=under_snapshot_time,
+            selected_market_last_update=selected_market_last_update,
+            selected_bookmaker_last_update=selected_bookmaker_last_update,
+            selected_decision_time=selected_decision_time,
+            selected_line=selected_line,
+            selected_price=selected_price,
+            selected_side=selected_side,
+            selected_bookmaker=selected_bookmaker,
+            over_market_last_update=over_market_last_update,
+            under_market_last_update=under_market_last_update,
+            over_bookmaker_last_update=over_bookmaker_last_update,
+            under_bookmaker_last_update=under_bookmaker_last_update,
+            over_bookmaker=over_bookmaker,
+            under_bookmaker=under_bookmaker,
         )
         self.bets.append(bet)
         return bet
@@ -315,12 +369,27 @@ class BetSimulator:
                         model_prob=row["over_prob"],
                         implied_prob=row["implied_over"],
                         sizing_prob=sizing_prob,
-                        selected_snapshot_time=row.get("selected_snapshot_time"),
-                        over_snapshot_time=row.get("over_snapshot_time"),
-                        under_snapshot_time=row.get("under_snapshot_time"),
+                        selected_snapshot_time=_row_get(row, "selected_snapshot_time"),
+                        over_snapshot_time=_row_get(row, "over_snapshot_time"),
+                        under_snapshot_time=_row_get(row, "under_snapshot_time"),
+                        selected_market_last_update=_row_get(row, "selected_market_last_update", _row_get(row, "over_market_last_update")),
+                        selected_bookmaker_last_update=_row_get(row, "selected_bookmaker_last_update", _row_get(row, "over_bookmaker_last_update")),
+                        selected_decision_time=_row_get(row, "selected_decision_time", _row_get(row, "bet_decision_time")),
+                        selected_line=_row_get(row, "selected_line", row["line"]),
+                        selected_price=_row_get(row, "selected_price", row["over_odds"]),
+                        selected_side=_row_get(row, "selected_side", "over"),
+                        selected_bookmaker=_row_get(row, "selected_bookmaker", _row_get(row, "over_bookmaker", _row_get(row, "bookmaker"))),
+                        over_market_last_update=_row_get(row, "over_market_last_update"),
+                        under_market_last_update=_row_get(row, "under_market_last_update"),
+                        over_bookmaker_last_update=_row_get(row, "over_bookmaker_last_update"),
+                        under_bookmaker_last_update=_row_get(row, "under_bookmaker_last_update"),
+                        over_bookmaker=_row_get(row, "over_bookmaker"),
+                        under_bookmaker=_row_get(row, "under_bookmaker"),
                     )
                     # Store bookmaker if available (line shopping)
-                    if "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
+                    if bet.selected_bookmaker is not None:
+                        bet.bookmaker = bet.selected_bookmaker
+                    elif "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
                         bet.bookmaker = row["bookmaker"]
                     # Store BL posterior if available
                     if "posterior_over" in row.index and not pd.isna(row.get("posterior_over")):
@@ -356,12 +425,27 @@ class BetSimulator:
                         model_prob=row["under_prob"],
                         implied_prob=row["implied_under"],
                         sizing_prob=sizing_prob,
-                        selected_snapshot_time=row.get("selected_snapshot_time"),
-                        over_snapshot_time=row.get("over_snapshot_time"),
-                        under_snapshot_time=row.get("under_snapshot_time"),
+                        selected_snapshot_time=_row_get(row, "selected_snapshot_time"),
+                        over_snapshot_time=_row_get(row, "over_snapshot_time"),
+                        under_snapshot_time=_row_get(row, "under_snapshot_time"),
+                        selected_market_last_update=_row_get(row, "selected_market_last_update", _row_get(row, "under_market_last_update")),
+                        selected_bookmaker_last_update=_row_get(row, "selected_bookmaker_last_update", _row_get(row, "under_bookmaker_last_update")),
+                        selected_decision_time=_row_get(row, "selected_decision_time", _row_get(row, "bet_decision_time")),
+                        selected_line=_row_get(row, "selected_line", row["line"]),
+                        selected_price=_row_get(row, "selected_price", row["under_odds"]),
+                        selected_side=_row_get(row, "selected_side", "under"),
+                        selected_bookmaker=_row_get(row, "selected_bookmaker", _row_get(row, "under_bookmaker", _row_get(row, "bookmaker"))),
+                        over_market_last_update=_row_get(row, "over_market_last_update"),
+                        under_market_last_update=_row_get(row, "under_market_last_update"),
+                        over_bookmaker_last_update=_row_get(row, "over_bookmaker_last_update"),
+                        under_bookmaker_last_update=_row_get(row, "under_bookmaker_last_update"),
+                        over_bookmaker=_row_get(row, "over_bookmaker"),
+                        under_bookmaker=_row_get(row, "under_bookmaker"),
                     )
                     # Store bookmaker if available (line shopping)
-                    if "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
+                    if bet.selected_bookmaker is not None:
+                        bet.bookmaker = bet.selected_bookmaker
+                    elif "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
                         bet.bookmaker = row["bookmaker"]
                     # Store BL posterior if available
                     if "posterior_under" in row.index and not pd.isna(row.get("posterior_under")):
@@ -444,6 +528,19 @@ class BetSimulator:
                     "selected_snapshot_time": bet.selected_snapshot_time,
                     "over_snapshot_time": bet.over_snapshot_time,
                     "under_snapshot_time": bet.under_snapshot_time,
+                    "selected_market_last_update": bet.selected_market_last_update,
+                    "selected_bookmaker_last_update": bet.selected_bookmaker_last_update,
+                    "selected_decision_time": bet.selected_decision_time,
+                    "selected_line": bet.selected_line,
+                    "selected_price": bet.selected_price,
+                    "selected_side": bet.selected_side,
+                    "selected_bookmaker": bet.selected_bookmaker,
+                    "over_market_last_update": bet.over_market_last_update,
+                    "under_market_last_update": bet.under_market_last_update,
+                    "over_bookmaker_last_update": bet.over_bookmaker_last_update,
+                    "under_bookmaker_last_update": bet.under_bookmaker_last_update,
+                    "over_bookmaker": bet.over_bookmaker,
+                    "under_bookmaker": bet.under_bookmaker,
                     "model_prob": bet.model_prob,
                     "implied_prob": bet.implied_prob,
                     "edge": bet.edge,

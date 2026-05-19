@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
 from src.backtesting.mlb.mlb_backtest_harness import MLBBacktestHarness
+from src.backtesting.mlb.run_mlb_sweep import _game_decision_time
 
 
 class _FakeConnect:
@@ -54,6 +55,31 @@ def test_shared_line_selection_query_enforces_decision_and_commence_cutoffs(monk
     assert "over_snapshot_time" in sql
     assert "under_snapshot_time" in sql
     assert captured["params"]["as_of_time"] == as_of
+
+
+def test_shared_line_selection_can_use_dense_clv_snapshot_table(monkeypatch):
+    captured = {}
+
+    def fake_read_sql(query, conn, params):
+        captured["sql"] = str(query)
+        captured["params"] = params
+        return pd.DataFrame()
+
+    monkeypatch.setattr(pd, "read_sql", fake_read_sql)
+    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=timezone.utc)
+
+    fetch_lines_at_decision_time(
+        _FakeEngine(),
+        game_ids=[1001],
+        market_keys=["batter_hits"],
+        as_of_time=as_of,
+        source_table="mlb_player_props_clv_snapshots",
+    )
+
+    sql = captured["sql"]
+    assert "FROM mlb_player_props_clv_snapshots" in sql
+    assert "snapshot_time AS effective_snapshot_time" in sql
+    assert "AND game_id IS NOT NULL AND player_id IS NOT NULL" in sql
 
 
 def test_legacy_latest_line_selection_is_explicit_and_still_excludes_post_commence(monkeypatch):
@@ -128,3 +154,24 @@ def test_core_mlb_backtest_harness_uses_shared_quote_clean_line_selection(monkey
             "bookmakers": harness.bookmakers,
         }
     ]
+
+
+def test_slate_or_tminus_policy_uses_slate_and_fallback_for_early_games():
+    main_slate_game = {"game_id": 1, "game_time_utc": pd.Timestamp("2026-04-13T23:05:00Z")}
+    early_game = {"game_id": 2, "game_time_utc": pd.Timestamp("2026-04-13T13:05:00Z")}
+
+    main_decision = _game_decision_time(
+        main_slate_game,
+        policy="slate_or_tminus",
+        fixed_cutoff_ts=None,
+        relative_minutes=60,
+    )
+    early_decision = _game_decision_time(
+        early_game,
+        policy="slate_or_tminus",
+        fixed_cutoff_ts=None,
+        relative_minutes=60,
+    )
+
+    assert main_decision == pd.Timestamp("2026-04-13T17:30:00-04:00").to_pydatetime()
+    assert early_decision == pd.Timestamp("2026-04-13T08:05:00-04:00").to_pydatetime()
