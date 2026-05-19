@@ -522,8 +522,19 @@ def run_audit(args: argparse.Namespace) -> dict:
     from src.models.mlb.mlb_model_suite import MLBModelSuite
 
     engine = get_engine(local=args.local)
-    suite = MLBModelSuite.from_directory(Path(args.model_dir))
+    model_dir = Path(args.model_dir)
+    suite = MLBModelSuite.from_directory(model_dir)
     stats = args.stats
+    missing_stats = [str(s) for s in stats if not suite.has_stat(s)]
+    if missing_stats:
+        production_hint = model_dir / "production"
+        hint = ""
+        if production_hint.exists():
+            hint = f" Did you mean --model-dir {production_hint}?"
+        raise ValueError(
+            "MLB quote-clean dropout audit could not load required models "
+            f"for stats={missing_stats} from --model-dir {model_dir}.{hint}"
+        )
     has_batter_stats = any(str(s).startswith("batter_") and suite.has_stat(s) for s in stats)
     batter_feature_store = MLBBatterFeatureStore(engine) if has_batter_stats else None
     pitcher_feature_store = MLBFeatureStore(engine)
@@ -542,6 +553,11 @@ def run_audit(args: argparse.Namespace) -> dict:
         line_source=args.line_source,
     )
     predictions = flatten_date_predictions(date_predictions)
+    if predictions.empty:
+        raise ValueError(
+            "MLB quote-clean dropout audit generated zero predictions. "
+            "Check --model-dir, --stats, date range, and local DB coverage before interpreting dropout results."
+        )
     clean_quotes = flatten_date_lines(date_lines)
     raw_props = fetch_props_for_predictions(engine, predictions, batch_size=args.batch_size, source_table=args.line_source)
     sweep_dir = Path(args.sweep_output_dir) if args.sweep_output_dir else None
