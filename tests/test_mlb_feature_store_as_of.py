@@ -1,6 +1,6 @@
 """Regression tests for point-in-time MLB prop-line feature selection."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -36,7 +36,7 @@ def test_pitcher_feature_store_prop_line_query_applies_as_of_cutoff(monkeypatch)
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
 
     store = MLBFeatureStore(_FakeEngine())
-    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=UTC)
 
     line = store._get_prop_line(player_id=123, game_id=456, as_of_time=as_of)
 
@@ -58,7 +58,7 @@ def test_batter_feature_store_prop_line_query_applies_as_of_cutoff(monkeypatch):
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
 
     store = MLBBatterFeatureStore(_FakeEngine())
-    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=UTC)
 
     line = store._get_prop_line(
         player_id=123,
@@ -85,7 +85,7 @@ def test_pitcher_batch_feature_query_applies_as_of_cutoff(monkeypatch):
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
 
     store = MLBFeatureStore(_FakeEngine())
-    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=UTC)
 
     result = store.get_features_for_date("2026-05-10", as_of_time=as_of)
 
@@ -107,7 +107,7 @@ def test_batter_batch_feature_query_applies_as_of_cutoff(monkeypatch):
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
 
     store = MLBBatterFeatureStore(_FakeEngine())
-    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=UTC)
 
     result = store.get_features_for_date("2026-05-10", stat="hits", as_of_time=as_of)
 
@@ -129,7 +129,7 @@ def test_batter_training_feature_query_binds_as_of_cutoff_and_post_commence_guar
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
 
     store = MLBBatterFeatureStore(_FakeEngine())
-    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=UTC)
 
     result = store.get_training_dataset([2026], stat="hits", as_of_time=as_of)
 
@@ -150,7 +150,7 @@ def test_quote_clean_line_fetch_uses_effective_timestamp_fallback(monkeypatch):
 
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
 
-    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=UTC)
     result = _fetch_lines_for_date(
         _FakeEngine(),
         game_ids=[456],

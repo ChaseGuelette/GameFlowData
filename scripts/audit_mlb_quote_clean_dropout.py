@@ -13,7 +13,8 @@ import argparse
 import json
 import sys
 from collections.abc import Iterable
-from datetime import date, datetime, time as datetime_time
+from datetime import date, datetime
+from datetime import time as datetime_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 

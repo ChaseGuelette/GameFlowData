@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -36,7 +36,7 @@ def test_shared_line_selection_query_enforces_decision_and_commence_cutoffs(monk
         return pd.DataFrame()
 
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
-    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=UTC)
 
     out = fetch_lines_at_decision_time(
         _FakeEngine(),
@@ -66,7 +66,7 @@ def test_shared_line_selection_can_use_dense_clv_snapshot_table(monkeypatch):
         return pd.DataFrame()
 
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
-    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 10, 17, 30, tzinfo=UTC)
 
     fetch_lines_at_decision_time(
         _FakeEngine(),

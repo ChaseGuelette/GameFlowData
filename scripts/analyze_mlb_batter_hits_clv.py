@@ -11,9 +11,10 @@ from __future__ import annotations
 import argparse
 import math
 import sys
-from datetime import datetime, time as datetime_time
+from collections.abc import Callable
+from datetime import datetime
+from datetime import time as datetime_time
 from pathlib import Path
-from typing import Callable
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -743,7 +744,6 @@ def run(args: argparse.Namespace) -> dict:
     matches = build_clv_matches(bets, snapshots)
     matches.to_csv(output_dir / "clv_matches.csv", index=False)
 
-    scored = matches[matches["clv_implied_prob"].notna()].copy()
     summary = pd.DataFrame([summarize_group(matches, "overall", args.bootstrap_samples, args.ci_level)])
     summary.to_csv(output_dir / "clv_summary.csv", index=False)
 

@@ -38,11 +38,11 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 from src.db.client import get_engine
 from src.models.hyperparameter_tuner import QuantileHyperparameterTuner
 from src.models.mlb.mlb_feature_store import (
-    MLBFeatureStore,
     PITCHER_K_EXCLUDED_TRAINING_FEATURES,
     PITCHER_K_FEATURES,
     PITCHER_K_PHASE3B_ADDED_FEATURES,
     PITCHER_K_TRAINING_FEATURES,
+    MLBFeatureStore,
 )
 from src.models.mlb.mlb_monte_carlo import MLBMonteCarloPredictor
 from src.models.mlb.mlb_quantile_trainer import (
@@ -582,10 +582,6 @@ class MLBTrainingOrchestrator:
             tolerance=self.feature_tolerance,
         )
 
-        excluded = {
-            "game_id", "player_id", "game_date", "season", "team_id",
-            "opp_team_id", "actual_so", "actual_ip", "actual_krate", "player_name",
-        }
         candidates = [
             c
             for c in PITCHER_K_TRAINING_FEATURES

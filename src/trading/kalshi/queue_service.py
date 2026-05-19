@@ -12,8 +12,6 @@ from typing import Any
 
 from sqlalchemy import text
 
-from src.trading.kalshi.statuses import TradeQueueStatus
-
 
 def _row_mapping(row: Any) -> dict[str, Any]:
     return dict(row._mapping) if hasattr(row, "_mapping") else dict(row)

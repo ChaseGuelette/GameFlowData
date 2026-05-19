@@ -299,7 +299,7 @@ def run(seasons: list[int], local: bool, sleep_s: float) -> None:
     else:
         engine = get_engine()
 
-    from pybaseball import pitching_stats_range, batting_stats_range  # type: ignore
+    from pybaseball import batting_stats_range, pitching_stats_range  # type: ignore
 
     for season in seasons:
         season_start = date(season, *SEASON_START_MONTHDAY)

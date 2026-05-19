@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import text

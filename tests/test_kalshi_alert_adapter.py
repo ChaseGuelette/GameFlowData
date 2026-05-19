@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, UTC
+from datetime import UTC, date, datetime
 
 from src.trading.kalshi.alert_adapter import KalshiAlertAdapter
 from src.trading.kalshi.events import (

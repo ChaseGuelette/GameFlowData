@@ -1,7 +1,6 @@
 """Regression tests for order-invariant MLB Monte Carlo sampling."""
 
 import numpy as np
-import pandas as pd
 
 from src.models.mlb.mlb_monte_carlo import MLBNegBinPredictor
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OLD_TRADER_PATH = PROJECT_ROOT / "src" / "paper_trading" / "kalshi_live_trader.py"
 

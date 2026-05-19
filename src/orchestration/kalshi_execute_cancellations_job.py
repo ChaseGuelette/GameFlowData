@@ -20,9 +20,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.db.client import get_engine
-from src.scrapers.kalshi.kalshi_client import KalshiClient
-from src.trading.kalshi.cancellation_service import KalshiCancellationService
+from src.db.client import get_engine  # noqa: E402
+from src.scrapers.kalshi.kalshi_client import KalshiClient  # noqa: E402
+from src.trading.kalshi.cancellation_service import KalshiCancellationService  # noqa: E402
 
 LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 LOG_DIR.mkdir(exist_ok=True)

@@ -19,7 +19,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import requests
@@ -273,7 +273,7 @@ def _parse_iso_utc(value):
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
     except ValueError:
         return None
 
@@ -284,7 +284,7 @@ def _is_in_pregame_window(event, minutes_before: int | None, tolerance_minutes: 
     commence = _parse_iso_utc(event.get("commence_time"))
     if commence is None:
         return False
-    minutes_until = (commence - datetime.now(timezone.utc)).total_seconds() / 60.0
+    minutes_until = (commence - datetime.now(UTC)).total_seconds() / 60.0
     return abs(minutes_until - minutes_before) <= tolerance_minutes
 
 

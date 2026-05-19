@@ -1,12 +1,12 @@
 """Tests for MLB daily props scraper timing filters."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from src.scrapers.mlb.mlb_daily_player_props_scraper import _is_in_pregame_window
 
 
 def _event(minutes_until: int):
-    commence = datetime.now(timezone.utc) + timedelta(minutes=minutes_until)
+    commence = datetime.now(UTC) + timedelta(minutes=minutes_until)
     return {"commence_time": commence.isoformat().replace("+00:00", "Z")}
 
 

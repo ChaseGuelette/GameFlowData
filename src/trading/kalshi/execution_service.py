@@ -10,8 +10,9 @@ from __future__ import annotations
 import logging
 import math
 import os
+from collections.abc import Callable
 from datetime import UTC, date, datetime
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy import text
 

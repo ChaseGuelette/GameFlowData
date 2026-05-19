@@ -10,7 +10,6 @@ import json
 import math
 import sys
 import traceback
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -198,10 +197,11 @@ def try_regenerate_quantiles_and_features(keys_df: pd.DataFrame, artifacts: dict
     """
     try:
         from sqlalchemy import text
+
+        from src.backtesting.mlb.run_mlb_sweep import run_shared_phases
         from src.db.client import get_engine
         from src.models.mlb.mlb_feature_store import MLBFeatureStore
         from src.models.mlb.mlb_model_suite import MLBModelSuite
-        from src.backtesting.mlb.run_mlb_sweep import run_shared_phases
 
         engine = get_engine(local=use_local)
         fs = MLBFeatureStore(engine)
@@ -396,7 +396,9 @@ def make_plots(primary: pd.DataFrame) -> list[str]:
                 ax.set_ylabel(f"Phase 3A tuned {q.upper()}")
                 ax.set_title(f"Phase 2 BL bets: Phase 3A vs Phase 2 {q.upper()}")
                 path = PLOTS / f"{q}_phase3a_vs_phase2_scatter.png"
-                fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
+                fig.tight_layout()
+                fig.savefig(path, dpi=150)
+                plt.close(fig)
                 made.append(str(path.relative_to(REPO)))
 
                 shift_col = f"{q}_shift_toward_line"
@@ -407,7 +409,9 @@ def make_plots(primary: pd.DataFrame) -> list[str]:
                     ax.set_xlabel("positive = Phase 3A moved closer to line")
                     ax.set_title(f"{q.upper()} shift toward market line")
                     path = PLOTS / f"{q}_shift_toward_line_hist.png"
-                    fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
+                    fig.tight_layout()
+                    fig.savefig(path, dpi=150)
+                    plt.close(fig)
                     made.append(str(path.relative_to(REPO)))
         if "edge_drop" in primary.columns:
             fig, ax = plt.subplots(figsize=(7, 4))
@@ -416,9 +420,11 @@ def make_plots(primary: pd.DataFrame) -> list[str]:
             ax.set_xlabel("Phase 2 under edge - Phase 3A under edge")
             ax.set_title("Edge compression on Phase 2 BL bets")
             path = PLOTS / "edge_drop_hist.png"
-            fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
+            fig.tight_layout()
+            fig.savefig(path, dpi=150)
+            plt.close(fig)
             made.append(str(path.relative_to(REPO)))
-    except Exception as e:
+    except Exception:
         (OUT / "plot_error.txt").write_text(traceback.format_exc())
     return made
 

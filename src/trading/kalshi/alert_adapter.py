@@ -8,8 +8,9 @@ those events to the existing Discord alert functions.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text

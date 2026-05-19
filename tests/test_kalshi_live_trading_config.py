@@ -11,7 +11,6 @@ from src.trading.kalshi.live_trading_config import (
     parse_game_time_from_ticker,
 )
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

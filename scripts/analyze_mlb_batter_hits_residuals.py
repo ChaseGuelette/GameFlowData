@@ -15,10 +15,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable
 
 import numpy as np
 import pandas as pd
@@ -578,7 +578,6 @@ def direction_summary(label: str, runs: list[ConfigRun], direction: str, flat_st
 
 def write_summary(out_path: Path, artifacts: dict, drifts: list[dict], clv_available: bool, material_tests: pd.DataFrame, bookmaker_flags: pd.DataFrame, direction_df: pd.DataFrame | None = None) -> None:
     decay = any(d.get("decay_detected") for d in drifts)
-    watchlist = any(d.get("decay_watchlist") for d in drifts)
     material_any = (not material_tests.empty) and bool(material_tests["material"].fillna(False).any())
     fragility_any = (not bookmaker_flags.empty) and bool(bookmaker_flags.get("fragility_flag", pd.Series(dtype=bool)).fillna(False).any())
     if not clv_available:

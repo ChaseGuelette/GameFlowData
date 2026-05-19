@@ -21,11 +21,12 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, datetime, time as dtime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as dtime
 from pathlib import Path
-from typing import Iterable
 from zoneinfo import ZoneInfo
 
 import requests
@@ -79,14 +80,14 @@ class SnapshotTask:
 
 
 def iso_z(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return dt.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def parse_iso_utc(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
     except ValueError:
         return None
 
@@ -176,7 +177,7 @@ class MLBCLVSnapshotScraper:
         # then filter by ET commence date below.
         for day in iter_dates(start_date, end_date):
             for hour in discovery_hours_et:
-                snapshot = datetime.combine(day, dtime(hour, 0, tzinfo=ET)).astimezone(timezone.utc)
+                snapshot = datetime.combine(day, dtime(hour, 0, tzinfo=ET)).astimezone(UTC)
                 try:
                     for event in self.get_events_at_snapshot(snapshot):
                         event_et_date = event.commence_time.astimezone(ET).date()
@@ -339,7 +340,7 @@ class MLBCLVSnapshotScraper:
         """)
         with self.engine.connect() as conn:
             rows = conn.execute(query, params).fetchall()
-        return {(str(row[0]), row[1].astimezone(timezone.utc)) for row in rows}
+        return {(str(row[0]), row[1].astimezone(UTC)) for row in rows}
 
     def scrape_one_task(self, task: SnapshotTask) -> tuple[int, int]:
         data, credits = self.fetch_event_odds(task)
@@ -435,7 +436,7 @@ def build_tasks(
         # times at/after commence; those are invalid for pregame CLV selection.
         game_day_et = event.commence_time.astimezone(ET).date()
         for label, hhmm in parsed_fixed:
-            requested = datetime.combine(game_day_et, hhmm).astimezone(timezone.utc)
+            requested = datetime.combine(game_day_et, hhmm).astimezone(UTC)
             if requested >= event.commence_time:
                 continue
             reason = reason_for_fixed_time(label)
@@ -515,7 +516,7 @@ def main() -> int:
         before = len(tasks)
         tasks = [
             task for task in tasks
-            if (task.event.event_id, task.requested_snapshot_time.astimezone(timezone.utc)) not in existing
+            if (task.event.event_id, task.requested_snapshot_time.astimezone(UTC)) not in existing
         ]
         logger.info("Resume filter: skipped %d/%d already-present event/snapshot tasks", before - len(tasks), before)
         logger.info("Remaining tasks after resume filter: %d", len(tasks))

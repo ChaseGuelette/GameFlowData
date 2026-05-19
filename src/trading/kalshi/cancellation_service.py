@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text

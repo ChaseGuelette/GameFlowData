@@ -35,7 +35,13 @@ from src.scrapers.kalshi.kalshi_client import KalshiClient
 from src.trading.kalshi.actuals_adapter import KalshiActualsAdapter
 from src.trading.kalshi.alert_adapter import KalshiAlertAdapter
 from src.trading.kalshi.daily_ledger_service import KalshiDailyLedgerService
-from src.trading.kalshi.events import CircuitBreakerTripped, HighEdgeMarketsFound, OrderResolved, TradeApprovalNeeded, TradeApprovalReminder
+from src.trading.kalshi.events import (
+    CircuitBreakerTripped,
+    HighEdgeMarketsFound,
+    OrderResolved,
+    TradeApprovalNeeded,
+    TradeApprovalReminder,
+)
 from src.trading.kalshi.live_trading_config import (
     SPORTSBOOK_LINE_FALLBACK_GAP,
     SUPPORTED_STATS,

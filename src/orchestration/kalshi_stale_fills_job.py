@@ -17,8 +17,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.db.client import get_engine
-from src.trading.kalshi.cancellation_service import KalshiCancellationService
+from src.db.client import get_engine  # noqa: E402
+from src.trading.kalshi.cancellation_service import KalshiCancellationService  # noqa: E402
 
 log_dir = Path(__file__).resolve().parents[2] / "logs"
 log_dir.mkdir(exist_ok=True)

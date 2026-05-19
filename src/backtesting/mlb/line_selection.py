@@ -7,8 +7,8 @@ must use this helper so quote-clean/as-of leakage fixes live in one place.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable
 
 import pandas as pd
 from sqlalchemy import text

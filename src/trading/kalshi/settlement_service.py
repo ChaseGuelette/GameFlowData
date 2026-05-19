@@ -9,8 +9,9 @@ behavior.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import date
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import text

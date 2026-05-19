@@ -1,13 +1,10 @@
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from src.trading.kalshi.cancellation_service import (
     KalshiCancellationService,
     parse_game_time_from_ticker,
 )
-
 
 ET = ZoneInfo("America/New_York")
 

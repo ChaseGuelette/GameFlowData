@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -25,7 +25,6 @@ from src.backtesting.mlb.run_mlb_sweep import (  # noqa: E402
     run_single_config_fast_mlb,
 )
 from src.db.client import get_engine  # noqa: E402
-from src.models.mlb.mlb_batter_feature_store import MLBBatterFeatureStore  # noqa: E402
 from src.models.mlb.mlb_feature_store import MLBFeatureStore  # noqa: E402
 from src.models.mlb.mlb_model_suite import MLBModelSuite  # noqa: E402
 

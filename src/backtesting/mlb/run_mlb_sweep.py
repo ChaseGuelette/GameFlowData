@@ -22,7 +22,8 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, time as datetime_time, timedelta
+from datetime import date, datetime, timedelta
+from datetime import time as datetime_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -452,7 +453,6 @@ def _process_date_shared(
                     )
 
     # Fetch lines for all players on this date
-    game_ids = [g["game_id"] for g in games]
     market_keys = [s for s in stats if s in STAT_ACTUALS]
     lines_df = _fetch_lines_for_date(
         engine,
