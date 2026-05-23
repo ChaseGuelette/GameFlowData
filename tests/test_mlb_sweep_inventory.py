@@ -15,6 +15,7 @@ import pytest
 RUNNER_PATH = Path("src/backtesting/mlb/run_mlb_sweep.py")
 QUOTE_POLICY_PATH = Path("src/backtesting/mlb/quote_decision_policy.py")
 QUOTE_LINE_SERVICE_PATH = Path("src/backtesting/mlb/quote_clean_line_service.py")
+DATA_LOADER_PATH = Path("src/backtesting/mlb/backtest_data_loader.py")
 
 
 def _source(path: Path) -> str:
@@ -93,6 +94,22 @@ def test_run_mlb_sweep_uses_typed_cli_config_after_parse_boundary():
 
     assert "parse_sweep_cli_config(args)" in source
     assert "args." not in source
+
+
+def test_backtest_data_loader_owns_schedule_and_actuals_sql_boundaries():
+    runner_source = _source(RUNNER_PATH)
+    loader_source = _source(DATA_LOADER_PATH)
+
+    assert "fetch_game_dates" in runner_source
+    assert "fetch_actuals_by_date" in runner_source
+    assert "fetch_games_for_date" in runner_source
+    assert "from sqlalchemy import text" not in runner_source
+    assert "FROM mlb_game_schedule" not in runner_source
+    assert "did_not_play IS NOT TRUE" not in runner_source
+
+    assert "from sqlalchemy import text" in loader_source
+    assert "FROM mlb_game_schedule" in loader_source
+    assert "did_not_play IS NOT TRUE" in loader_source
 
 
 @pytest.mark.xfail(reason="Final thin-runner target; enable after later extraction phases remove remaining responsibilities.")

@@ -25,12 +25,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.mlb.mlb_backtest_harness import STAT_ACTUALS
+from src.backtesting.mlb.backtest_data_loader import (
+    fetch_actuals_by_date,
+    fetch_game_dates,
+    fetch_games_for_date,
+)
 from src.backtesting.mlb.quote_decision_policy import (
     build_fixed_cutoff_ts,
     build_slate_decision_ts,
@@ -161,37 +165,12 @@ def run_shared_phases(
     """
     # Phase 0a: Get game dates
     logger.info("Phase 0: Fetching game dates...")
-    query = text("""
-        SELECT DISTINCT game_date
-        FROM mlb_game_schedule
-        WHERE game_date BETWEEN :start_date AND :end_date
-          AND status != 'Cancelled'
-        ORDER BY game_date
-    """)
-    with engine.connect() as conn:
-        result = conn.execute(query, {"start_date": start_date, "end_date": end_date})
-        game_dates = [row[0] for row in result]
+    game_dates = fetch_game_dates(engine, start_date, end_date)
     logger.info(f"  Found {len(game_dates)} dates with games")
 
     # Phase 0b: Prefetch all actuals
     logger.info("Phase 0: Fetching actuals...")
-    date_actuals: dict[date, dict[tuple[int, str], float]] = {}
-    for stat, (table, column) in STAT_ACTUALS.items():
-        if stat not in stats:
-            continue
-        q = text(f"""
-            SELECT game_date, player_id, {column} as actual_value
-            FROM {table}
-            WHERE game_date BETWEEN :start_date AND :end_date
-              AND did_not_play IS NOT TRUE
-              AND {column} IS NOT NULL
-        """)
-        with engine.connect() as conn:
-            for row in conn.execute(q, {"start_date": start_date, "end_date": end_date}):
-                gd = row[0]
-                if gd not in date_actuals:
-                    date_actuals[gd] = {}
-                date_actuals[gd][(int(row[1]), stat)] = float(row[2])
+    date_actuals = fetch_actuals_by_date(engine, start_date, end_date, stats)
     total_actuals = sum(len(v) for v in date_actuals.values())
     logger.info(f"  Prefetched {total_actuals} actuals across {len(date_actuals)} dates")
 
@@ -262,17 +241,7 @@ def _process_date_shared(
 ) -> tuple[list[DatePrediction], pd.DataFrame | None]:
     """Generate predictions + fetch lines for a single date."""
     # Get games
-    query = text("""
-        SELECT s.game_id, s.home_team_id, s.away_team_id,
-               s.probable_pitcher_home_id, s.probable_pitcher_away_id,
-               s.venue_id, s.season, s.game_time_utc
-        FROM mlb_game_schedule s
-        WHERE s.game_date = :game_date
-          AND s.status != 'Cancelled'
-    """)
-    with engine.connect() as conn:
-        result = conn.execute(query, {"game_date": game_date})
-        games = [dict(row._mapping) for row in result]
+    games = fetch_games_for_date(engine, game_date)
 
     if not games:
         return [], None
