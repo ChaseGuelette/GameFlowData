@@ -39,6 +39,7 @@ from src.backtesting.mlb.edge_engine import (
     precompute_mlb_base_probs,
     select_sharpest_line,
 )
+from src.backtesting.mlb.matchup_cache import build_matchup_cache
 from src.backtesting.mlb.prediction_cache import DatePrediction, build_predictions_for_date
 from src.backtesting.mlb.quote_decision_policy import (
     build_fixed_cutoff_ts,
@@ -132,24 +133,11 @@ def run_shared_phases(
     logger.info(f"  Prefetched {total_actuals} actuals across {len(date_actuals)} dates")
 
     # Phase 0c: Precompute matchup features once per season (avoids re-querying per date)
-    matchup_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] | None = None
-    if batter_feature_store is not None:
-        from src.processing.mlb.mlb_batter_matchup_features import (
-            compute_opposing_starter_bulk,
-            compute_platoon_splits_bulk,
-        )
-
-        seasons = {gd.year for gd in game_dates}
-        matchup_cache = {}
-        for season in seasons:
-            logger.info(f"  Precomputing matchup features for season {season}...")
-            t_mc = time.time()
-            opp_df = compute_opposing_starter_bulk(engine, season)
-            logger.info(f"    Opposing starter features: {len(opp_df)} rows ({time.time() - t_mc:.1f}s)")
-            t_mc = time.time()
-            plat_df = compute_platoon_splits_bulk(engine, season)
-            logger.info(f"    Platoon splits: {len(plat_df)} rows ({time.time() - t_mc:.1f}s)")
-            matchup_cache[season] = (opp_df, plat_df)
+    matchup_cache = build_matchup_cache(
+        engine=engine,
+        game_dates=game_dates,
+        enabled=batter_feature_store is not None,
+    )
 
     # Phase 1: Generate predictions date-by-date
     logger.info("Phase 1: Generating predictions...")

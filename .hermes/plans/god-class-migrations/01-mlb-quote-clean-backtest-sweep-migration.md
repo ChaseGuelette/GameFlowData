@@ -1034,6 +1034,34 @@ Behavior-preservation notes:
 - `_odds_to_prob(...)` and `_select_sharpest_line(...)` remain as temporary compatibility wrappers in the runner for hidden/private imports; public `compute_edges_for_config(...)` and `precompute_mlb_base_probs(...)` are imported from the new module.
 - No DB queries, model artifacts, long sweeps, line fetching, prediction generation, bet simulation, metrics calculation, or result serialization changed.
 
+### 2026-05-23 slice 04C — matchup-cache precompute extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/matchup_cache.py`.
+- Created `tests/test_mlb_matchup_cache.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so season-level opposing-starter/platoon precompute delegates to `build_matchup_cache(...)`.
+- Modified `tests/test_mlb_sweep_inventory.py` so matchup-cache precompute ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_matchup_cache.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.matchup_cache'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_matchup_cache.py -q` passed: 3 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_matchup_cache.py tests/test_mlb_sweep_inventory.py -q` passed: 13 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_matchup_cache.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 52 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/matchup_cache.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/matchup_cache.py tests/test_mlb_matchup_cache.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Matchup cache remains disabled when `batter_feature_store is None` and precomputes once per unique season when enabled.
+- Opposing-starter bulk and platoon-splits bulk calls are still lazy-imported from `src.processing.mlb.mlb_batter_matchup_features`, but now inside the matchup-cache seam.
+- The runner still owns date orchestration and passes the cache to prediction construction; this slice only moved season-level matchup-cache precompute.
+- No DB queries were run manually, no model artifacts or long sweeps were touched, and no prediction, line, edge, simulator, metrics, or serialization behavior changed.
+
 ### 2026-05-23 slice 02B — runner uses typed config after parse boundary
 
 Files changed:

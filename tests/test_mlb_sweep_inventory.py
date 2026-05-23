@@ -19,6 +19,7 @@ DATA_LOADER_PATH = Path("src/backtesting/mlb/backtest_data_loader.py")
 PREDICTION_CACHE_PATH = Path("src/backtesting/mlb/prediction_cache.py")
 SWEEP_RESULTS_PATH = Path("src/backtesting/mlb/sweep_results.py")
 EDGE_ENGINE_PATH = Path("src/backtesting/mlb/edge_engine.py")
+MATCHUP_CACHE_PATH = Path("src/backtesting/mlb/matchup_cache.py")
 
 
 def _source(path: Path) -> str:
@@ -169,6 +170,21 @@ def test_edge_engine_owns_edge_and_base_probability_calculation():
     assert "posterior_logit" in edge_source
     assert "norm.cdf" not in edge_source
     assert "scipy.stats" not in edge_source
+
+
+def test_matchup_cache_owns_season_level_precompute():
+    runner_source = _source(RUNNER_PATH)
+    matchup_source = _source(MATCHUP_CACHE_PATH)
+
+    assert "build_matchup_cache" in runner_source
+    assert "compute_opposing_starter_bulk" not in runner_source
+    assert "compute_platoon_splits_bulk" not in runner_source
+    assert "Precomputing matchup features" not in runner_source
+
+    assert "def build_matchup_cache" in matchup_source
+    assert "compute_opposing_starter_bulk" in matchup_source
+    assert "compute_platoon_splits_bulk" in matchup_source
+    assert "Precomputing matchup features" in matchup_source
 
 
 @pytest.mark.xfail(reason="Final thin-runner target; enable after later extraction phases remove remaining responsibilities.")
