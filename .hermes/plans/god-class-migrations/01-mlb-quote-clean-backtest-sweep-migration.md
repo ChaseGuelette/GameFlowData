@@ -896,7 +896,31 @@ Behavior-preservation notes:
 Expansion checkpoint status:
 
 - No additional production entrypoint was discovered during this slice.
-- Inventory/removal guard is still pending; this slice focused on defining and wiring the first pure seam.
+- Inventory/removal guard is now started in `tests/test_mlb_sweep_inventory.py`; final thin-runner threshold remains `xfail` until later extraction phases make it realistic.
+
+### 2026-05-23 slice 01B — structural inventory harness
+
+Files changed:
+
+- Created `tests/test_mlb_sweep_inventory.py`.
+
+Harness coverage:
+
+- Verifies `quote_decision_policy.py` owns the expected public helper functions.
+- Verifies runner quote-decision helper names are only compatibility wrappers and do not re-own `pd.to_datetime`, `ZoneInfo`, or `datetime_time` implementation details.
+- Verifies `run_mlb_sweep.py` no longer imports quote-policy implementation dependencies directly.
+- Verifies the sweep path still references the shared `line_selection.fetch_lines_at_decision_time` seam.
+- Adds an `xfail` final-shape guard for the eventual thin-runner target: non-comment LOC below 450 and no raw SQL/`pd.read_sql`/`sqlalchemy.text` ownership in `run_mlb_sweep.py`.
+
+Validation:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 19 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py` passed.
+
+Behavior-preservation notes:
+
+- Test-only slice; no production code changed.
+- The final shape guard is intentionally marked `xfail` because the migration is not done yet. It documents the destination without blocking current work.
 
 ### 2026-05-19 initial migration documentation
 

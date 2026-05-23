@@ -54,7 +54,7 @@
   <section class="card">
     <h2>Purpose</h2>
     <p>This document tracks working notes for <code>01-mlb-quote-clean-backtest-sweep-migration.md</code>: discoveries from current code/tests, decisions made while slicing the migration, risks found during implementation, and validation outcomes. The main migration plan remains the canonical scope/phase document; this file is the scratchpad and decision journal.</p>
-    <p><span class="pill">Created: 2026-05-23 12:41 EDT</span><span class="pill">Lane: 01 / highest priority</span><span class="pill">Status: slice 01A green</span></p>
+    <p><span class="pill">Created: 2026-05-23 12:41 EDT</span><span class="pill">Lane: 01 / highest priority</span><span class="pill">Status: slice 01B inventory green</span></p>
   </section>
 
   <section class="card">
@@ -169,11 +169,25 @@
   </section>
 
   <section class="card">
+    <h2>Slice 01B implementation result — structural inventory harness</h2>
+    <div class="decision">
+      <p><strong>Decision implemented:</strong> added <code>tests/test_mlb_sweep_inventory.py</code> as a migration-ownership harness.</p>
+      <p><strong>Purpose:</strong> these tests catch responsibility drift, not betting correctness. They prove that quote-decision ownership is actually moving out of the sweep runner and record the final thin-runner target.</p>
+      <p><strong>Final-shape guard:</strong> the test for <code>run_mlb_sweep.py</code> below 450 non-comment LOC with no raw SQL ownership is marked <code>xfail</code> until later extraction phases make it realistic.</p>
+    </div>
+    <h3>Validation result</h3>
+    <pre>venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q
+# 19 passed, 1 xfailed, 1 pytest-asyncio deprecation warning</pre>
+    <pre>venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py
+# passed</pre>
+  </section>
+
+  <section class="card">
     <h2>Open decisions / next questions for Chase</h2>
     <ol>
-      <li>Should the next slice be the tiny inventory/removal-guard baseline, or should we move directly into Phase 2 <code>sweep_config.py</code> extraction?</li>
+      <li>Next default: move into Phase 2 <code>sweep_config.py</code> extraction now that the first structural harness is in place.</li>
       <li>When the wrappers are removed later, what final non-comment LOC threshold should guard <code>run_mlb_sweep.py</code>? The migration plan suggests 450.</li>
-      <li>Should this companion HTML log be committed alongside the migration docs, or remain a local planning artifact?</li>
+      <li>Should this companion HTML log continue to be committed alongside the migration docs? Current branch includes it.</li>
     </ol>
   </section>
 </main>
