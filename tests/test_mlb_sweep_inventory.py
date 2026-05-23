@@ -17,6 +17,7 @@ QUOTE_POLICY_PATH = Path("src/backtesting/mlb/quote_decision_policy.py")
 QUOTE_LINE_SERVICE_PATH = Path("src/backtesting/mlb/quote_clean_line_service.py")
 DATA_LOADER_PATH = Path("src/backtesting/mlb/backtest_data_loader.py")
 PREDICTION_CACHE_PATH = Path("src/backtesting/mlb/prediction_cache.py")
+SWEEP_RESULTS_PATH = Path("src/backtesting/mlb/sweep_results.py")
 
 
 def _source(path: Path) -> str:
@@ -127,6 +128,25 @@ def test_prediction_cache_owns_date_prediction_and_feature_store_prediction_loop
     assert "BATTER_STAT_FS_MAP" in cache_source
     assert "get_player_game_features" in cache_source
     assert "get_features_for_date" in cache_source
+
+
+def test_sweep_results_owns_output_serialization_and_comparison_table():
+    runner_source = _source(RUNNER_PATH)
+    results_source = _source(SWEEP_RESULTS_PATH)
+
+    assert "save_results(" in runner_source
+    assert "print_comparison_table(" in runner_source
+    assert "class SweepResult" not in runner_source
+    assert "sweep_results.json" not in runner_source
+    assert "sweep_summary.csv" not in runner_source
+    assert "bets.csv" not in runner_source
+    assert "predictions.csv" not in runner_source
+
+    assert "class SweepResult" in results_source
+    assert "def save_results" in results_source
+    assert "def print_comparison_table" in results_source
+    assert "sweep_results.json" in results_source
+    assert "sweep_summary.csv" in results_source
 
 
 @pytest.mark.xfail(reason="Final thin-runner target; enable after later extraction phases remove remaining responsibilities.")

@@ -981,6 +981,32 @@ Behavior-preservation notes:
 - `run_shared_phases(...)` still owns per-date orchestration, matchup-cache precomputation, line fetching, and date-level cache assembly.
 - No DB queries, model artifacts, long sweeps, edge math, probability semantics, line selection, or result serialization changed.
 
+### 2026-05-23 slice 05A — sweep result serialization extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/sweep_results.py`.
+- Created `tests/test_mlb_sweep_results.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so `SweepResult`, `print_comparison_table(...)`, and `save_results(...)` delegate to the new result-output seam.
+- Modified `tests/test_mlb_sweep_inventory.py` so output serialization ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_results.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.sweep_results'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_results.py -q` passed: 2 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 42 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_results.py tests/test_mlb_sweep_results.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Serialization preserves summary JSON metadata, per-config metrics JSON, conditional `bets.csv` / `predictions.csv` writes, config directory naming, CSV rounding, per-stat columns, and comparison-table formatting.
+- `run_mlb_sweep.py` imports `SweepResult`, `print_comparison_table`, and `save_results` from the new module so existing runner behavior stays wired.
+- No DB queries, model artifacts, long sweeps, edge math, probability semantics, line selection, prediction generation, or metrics calculation changed.
+
 ### 2026-05-23 slice 02B — runner uses typed config after parse boundary
 
 Files changed:
