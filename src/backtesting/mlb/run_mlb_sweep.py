@@ -15,8 +15,6 @@ Usage:
         --tau none 0.05 0.10 --edge 0.05 0.08 0.10 --kelly 0.10 0.125 0.15
 """
 
-import argparse
-import itertools
 import json
 import logging
 import sys
@@ -38,6 +36,12 @@ from src.backtesting.mlb.quote_decision_policy import (
     build_fixed_cutoff_ts,
     build_slate_decision_ts,
     decision_time_for_game,
+)
+from src.backtesting.mlb.sweep_config import (
+    SweepConfig,
+    build_arg_parser,
+    build_sweep_grid,
+    parse_sweep_cli_config,
 )
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
 from src.db.client import get_engine
@@ -90,36 +94,6 @@ EXCLUDED_BOOKMAKERS: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 @dataclass
-class SweepConfig:
-    """One point in the parameter sweep grid."""
-
-    tau: float | None  # None = no BL blending (baseline)
-    edge_threshold: float
-    kelly_fraction: float
-    z_max: float = 1.0
-    max_weight: float = 0.50
-    flat_bet_size: float | None = None
-
-    @property
-    def label(self) -> str:
-        sizing = f"flat=${self.flat_bet_size:g}" if self.flat_bet_size is not None else f"kelly={self.kelly_fraction}"
-        if self.tau is None:
-            return f"no_BL | edge={self.edge_threshold} | {sizing}"
-        mw = f" mw={self.max_weight}" if self.max_weight != 0.50 else ""
-        return f"tau={self.tau} z_max={self.z_max}{mw} | edge={self.edge_threshold} | {sizing}"
-
-    def to_dict(self) -> dict:
-        return {
-            "tau": self.tau,
-            "z_max": self.z_max,
-            "max_weight": self.max_weight,
-            "edge_threshold": self.edge_threshold,
-            "kelly_fraction": self.kelly_fraction,
-            "flat_bet_size": self.flat_bet_size,
-        }
-
-
-@dataclass
 class SweepResult:
     """Results for a single sweep configuration."""
 
@@ -128,34 +102,6 @@ class SweepResult:
     bets_df: pd.DataFrame
     predictions_df: pd.DataFrame
     elapsed_seconds: float
-
-
-# ---------------------------------------------------------------------------
-# Grid builder
-# ---------------------------------------------------------------------------
-
-def build_sweep_grid(
-    tau_values: list[float | None],
-    edge_thresholds: list[float],
-    kelly_fractions: list[float],
-    z_max_values: list[float] | None = None,
-    max_weight_values: list[float] | None = None,
-) -> list[SweepConfig]:
-    if z_max_values is None:
-        z_max_values = [1.0]
-    if max_weight_values is None:
-        max_weight_values = [0.50]
-
-    configs = []
-    for tau, edge, kelly, z_max, mw in itertools.product(
-        tau_values, edge_thresholds, kelly_fractions, z_max_values, max_weight_values,
-    ):
-        if tau is None and (z_max != z_max_values[0] or mw != max_weight_values[0]):
-            continue
-        configs.append(SweepConfig(
-            tau=tau, edge_threshold=edge, kelly_fraction=kelly, z_max=z_max, max_weight=mw,
-        ))
-    return configs
 
 
 # ---------------------------------------------------------------------------
@@ -1323,114 +1269,18 @@ def find_latest_model_dir(base_dir: str) -> Path:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="MLB Backtest Parameter Sweep",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-
-    parser.add_argument("--start", type=str, required=True, help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end", type=str, required=True, help="End date (YYYY-MM-DD)")
-
-    # Sweep grid
-    parser.add_argument(
-        "--tau", type=str, nargs="+",
-        default=["none", "0.03", "0.05", "0.10", "0.25"],
-        help="BL tau values. Use 'none' for no-BL baseline.",
-    )
-    parser.add_argument("--edge", type=float, nargs="+", default=[0.05, 0.08, 0.10])
-    parser.add_argument("--kelly", type=float, nargs="+", default=[0.125])
-    parser.add_argument("--z-max", type=float, nargs="+", default=[1.0])
-    parser.add_argument("--max-weight", type=float, nargs="+", default=[0.50],
-                        help="BL max blending weight (0.50=default, higher=more model influence)")
-
-    # Model / data
-    parser.add_argument("--model-dir", type=str, default="src/models/mlb/artifacts")
-    parser.add_argument("--n-samples", type=int, default=5000, help="Monte Carlo samples")
-    parser.add_argument("--stats", nargs="+",
-                        default=["pitcher_strikeouts", "batter_hits", "batter_rbis"])
-    parser.add_argument("--starting-bankroll", type=float, default=10000.0)
-    parser.add_argument("--max-bet-pct", type=float, default=None)
-    parser.add_argument(
-        "--flat", "--flat-bet",
-        dest="flat_bet",
-        type=float,
-        default=None,
-        help="Use fixed dollar stake per bet instead of Kelly sizing (e.g. --flat 100).",
-    )
-    parser.add_argument("--output-dir", type=str, default=None)
-    parser.add_argument("--local", action="store_true",
-                        help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
-    parser.add_argument("--combined", action="store_true",
-                        help="Run combined backtest using per-stat optimal BL configs from mlb_stat_config.py. "
-                             "Ignores --tau, --edge, --z-max, --max-weight when set.")
-    parser.add_argument("--direction", choices=["over", "under", "both"], default="both",
-                        help="Restrict bet direction for all stats (default: both). "
-                             "In --combined mode, per-stat allowed_directions from mlb_stat_config.py "
-                             "are also applied on top of this filter.")
-    parser.add_argument(
-        "--quote-clean",
-        action="store_true",
-        help=(
-            "Use production-equivalent quote selection: latest snapshot at/before "
-            "--quote-cutoff-time-et per book/line/outcome, then lowest-vig line. "
-            "Without this flag, preserves legacy optimistic line aggregation."
-        ),
-    )
-    parser.add_argument(
-        "--quote-cutoff-time-et",
-        type=str,
-        default="13:30",
-        help="ET cutoff time for --quote-clean historical replay (HH:MM, default 13:30).",
-    )
-    parser.add_argument(
-        "--quote-decision-policy",
-        choices=["fixed_et", "skip_early_fixed_et", "relative_to_commence", "slate_or_tminus"],
-        default="fixed_et",
-        help=(
-            "How --quote-clean chooses decision time. fixed_et preserves legacy one-time-per-day behavior; "
-            "skip_early_fixed_et drops games already started by the fixed time; relative_to_commence uses "
-            "T-minus per game; slate_or_tminus uses 09:30/13:30/17:30 ET slates with T-minus fallback."
-        ),
-    )
-    parser.add_argument(
-        "--quote-relative-minutes",
-        type=int,
-        default=60,
-        help="Minutes before commence for relative_to_commence and fallback in slate_or_tminus.",
-    )
-    parser.add_argument(
-        "--line-source",
-        choices=["mlb_raw_player_props", "mlb_player_props_clv_snapshots"],
-        default="mlb_raw_player_props",
-        help="Odds table for quote-clean line selection. Dense CLV table requires linked game_id/player_id.",
-    )
-
+    parser = build_arg_parser()
     args = parser.parse_args()
+    cli_config = parse_sweep_cli_config(args)
 
-    # Parse tau values
-    tau_values: list[float | None] = []
-    for v in args.tau:
-        if v.lower() == "none":
-            tau_values.append(None)
-        else:
-            tau_values.append(float(v))
-
-    start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
-    end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
-
-    # Build allowed_bets set from --direction + --stats flags
-    if args.direction == "both":
-        cli_allowed_bets: set[tuple[str, str]] | None = None
-    else:
-        cli_allowed_bets = {(stat, args.direction) for stat in args.stats}
-
-    configs = build_sweep_grid(tau_values, args.edge, args.kelly, args.z_max, args.max_weight)
-    for config in configs:
-        config.flat_bet_size = args.flat_bet
+    start_date = cli_config.start_date
+    end_date = cli_config.end_date
+    cli_allowed_bets = cli_config.cli_allowed_bets
+    configs = cli_config.sweep_grid
     logger.info(f"Sweep grid: {len(configs)} configurations")
 
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
+    if cli_config.output_dir:
+        output_dir = cli_config.output_dir
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = Path("backtest_results") / f"mlb_sweep_{timestamp}"

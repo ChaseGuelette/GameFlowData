@@ -898,6 +898,34 @@ Expansion checkpoint status:
 - No additional production entrypoint was discovered during this slice.
 - Inventory/removal guard is now started in `tests/test_mlb_sweep_inventory.py`; final thin-runner threshold remains `xfail` until later extraction phases make it realistic.
 
+### 2026-05-23 slice 02A — typed sweep config and CLI parser extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/sweep_config.py`.
+- Created `tests/test_mlb_sweep_config.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` to delegate parser construction, tau parsing, sweep-grid construction, date parsing, quote-clean config capture, output-dir parsing, and CLI direction filter construction to the new module.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_config.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.sweep_config'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_config.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 25 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py` passed.
+
+Behavior-preservation notes:
+
+- Parser flags, defaults, and argparse `choices` are preserved in `build_arg_parser()`.
+- `SweepConfig` and `build_sweep_grid` are imported back into `run_mlb_sweep.py` so existing private imports like `from run_mlb_sweep import SweepConfig` keep working during migration.
+- `parse_sweep_cli_config(...)` is parse-only; it does not construct engines, feature stores, model suites, or touch DB/model state.
+- `run_mlb_sweep.py` still uses `args` for downstream orchestration fields in this slice; the next runner/config slice can replace those references with the typed config once behavior is fully characterized.
+
+Expansion checkpoint status:
+
+- No behavior-changing validation was added beyond existing argparse `choices`; promotion-grade enforcement remains deferred to `promotion_contracts.py`.
+
 ### 2026-05-23 slice 01B — structural inventory harness
 
 Files changed:
