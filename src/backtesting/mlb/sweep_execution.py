@@ -13,12 +13,12 @@ from datetime import date
 import pandas as pd
 
 from src.backtesting.bet_simulator import BetSimulator
-from src.backtesting.mlb.edge_engine import build_config_edge_frame, compute_edges_for_config
+from src.backtesting.mlb.edge_engine import apply_book_routing_policy, build_config_edge_frame, compute_edges_for_config
 from src.backtesting.mlb.prediction_cache import DatePrediction
 from src.backtesting.mlb.sweep_config import SweepConfig
 from src.backtesting.mlb.sweep_results import SweepResult
 from src.backtesting.performance_metrics import MetricsCalculator
-from src.models.black_litterman import BLConfig, BlackLittermanBlender
+from src.models.black_litterman import BlackLittermanBlender, BLConfig
 
 
 def run_single_config_fast_mlb(
@@ -40,10 +40,17 @@ def run_single_config_fast_mlb(
             metrics=empty_metrics,
             bets_df=pd.DataFrame(),
             predictions_df=pd.DataFrame(),
+            all_edges_df=pd.DataFrame(),
             elapsed_seconds=time.time() - t0,
         )
 
-    df = build_config_edge_frame(config, precomputed_df)
+    candidate_df = build_config_edge_frame(config, precomputed_df)
+    df, all_edges_df = apply_book_routing_policy(
+        candidate_df,
+        edge_threshold=config.edge_threshold,
+        book_routing_policy=config.book_routing_policy,
+        allowed_bets=allowed_bets,
+    )
 
     actuals_mask = df["actual"].notna()
     actuals_sub = df.loc[actuals_mask, ["player_id", "game_id", "stat", "actual"]]
@@ -72,6 +79,19 @@ def run_single_config_fast_mlb(
 
     predictions_df = pd.concat(all_pred_dfs, ignore_index=True) if all_pred_dfs else pd.DataFrame()
     bets_df = simulator.to_dataframe()
+    if not bets_df.empty and not df.empty:
+        meta_cols = [
+            "player_id", "game_id", "stat", "line", "selected_bookmaker",
+            "book_routing_policy", "preferred_book_selected", "selected_reason",
+            "selected_candidate_rank", "candidate_best_edge", "candidate_best_side",
+        ]
+        available_meta_cols = [c for c in meta_cols if c in df.columns]
+        bet_meta = df[available_meta_cols].drop_duplicates(subset=["player_id", "game_id", "stat", "line", "selected_bookmaker"])
+        bets_df = bets_df.merge(
+            bet_meta,
+            on=["player_id", "game_id", "stat", "line", "selected_bookmaker"],
+            how="left",
+        )
     metrics = MetricsCalculator().calculate(predictions_df, bets_df, starting_bankroll=starting_bankroll)
 
     elapsed = time.time() - t0
@@ -80,6 +100,7 @@ def run_single_config_fast_mlb(
         metrics=metrics,
         bets_df=bets_df,
         predictions_df=predictions_df,
+        all_edges_df=all_edges_df,
         elapsed_seconds=elapsed,
     )
 
@@ -156,6 +177,7 @@ def run_single_config(
         metrics=metrics,
         bets_df=bets_df,
         predictions_df=predictions_df,
+        all_edges_df=predictions_df.copy(),
         elapsed_seconds=elapsed,
     )
 
@@ -248,5 +270,6 @@ def run_combined_config(
         metrics=metrics,
         bets_df=bets_df,
         predictions_df=predictions_df,
+        all_edges_df=predictions_df.copy(),
         elapsed_seconds=elapsed,
     )

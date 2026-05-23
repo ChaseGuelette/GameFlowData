@@ -78,6 +78,7 @@ class Bet:
     selected_price: int | None = None
     selected_side: str | None = None
     selected_bookmaker: str | None = None
+    quote_decision_policy: object | None = None
     over_market_last_update: object | None = None
     under_market_last_update: object | None = None
     over_bookmaker_last_update: object | None = None
@@ -255,6 +256,7 @@ class BetSimulator:
         selected_price: int | None = None,
         selected_side: str | None = None,
         selected_bookmaker: str | None = None,
+        quote_decision_policy: object | None = None,
         over_market_last_update: object | None = None,
         under_market_last_update: object | None = None,
         over_bookmaker_last_update: object | None = None,
@@ -303,6 +305,7 @@ class BetSimulator:
             selected_price=selected_price,
             selected_side=selected_side,
             selected_bookmaker=selected_bookmaker,
+            quote_decision_policy=quote_decision_policy,
             over_market_last_update=over_market_last_update,
             under_market_last_update=under_market_last_update,
             over_bookmaker_last_update=over_bookmaker_last_update,
@@ -379,6 +382,7 @@ class BetSimulator:
                         selected_price=_row_get(row, "selected_price", row["over_odds"]),
                         selected_side=_row_get(row, "selected_side", "over"),
                         selected_bookmaker=_row_get(row, "selected_bookmaker", _row_get(row, "over_bookmaker", _row_get(row, "bookmaker"))),
+                        quote_decision_policy=_row_get(row, "quote_decision_policy"),
                         over_market_last_update=_row_get(row, "over_market_last_update"),
                         under_market_last_update=_row_get(row, "under_market_last_update"),
                         over_bookmaker_last_update=_row_get(row, "over_bookmaker_last_update"),
@@ -435,6 +439,7 @@ class BetSimulator:
                         selected_price=_row_get(row, "selected_price", row["under_odds"]),
                         selected_side=_row_get(row, "selected_side", "under"),
                         selected_bookmaker=_row_get(row, "selected_bookmaker", _row_get(row, "under_bookmaker", _row_get(row, "bookmaker"))),
+                        quote_decision_policy=_row_get(row, "quote_decision_policy"),
                         over_market_last_update=_row_get(row, "over_market_last_update"),
                         under_market_last_update=_row_get(row, "under_market_last_update"),
                         over_bookmaker_last_update=_row_get(row, "over_bookmaker_last_update"),
@@ -535,6 +540,7 @@ class BetSimulator:
                     "selected_price": bet.selected_price,
                     "selected_side": bet.selected_side,
                     "selected_bookmaker": bet.selected_bookmaker,
+                    "quote_decision_policy": bet.quote_decision_policy,
                     "over_market_last_update": bet.over_market_last_update,
                     "under_market_last_update": bet.under_market_last_update,
                     "over_bookmaker_last_update": bet.over_bookmaker_last_update,

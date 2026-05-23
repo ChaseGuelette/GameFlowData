@@ -8,7 +8,10 @@ import pytest
 from scripts.audit_mlb_quote_clean_dropout import (
     REQUIRED_SAVED_PREDICTION_COLUMNS,
     classify_prediction_dropout,
+    count_selected_quote_timing_violations,
     find_atomic_clean_quotes,
+    resolve_model_dir,
+    summarize_and_write_outputs,
     validate_saved_predictions_columns,
 )
 
@@ -43,6 +46,14 @@ def _prediction() -> pd.Series:
             "game_date": "2026-04-13",
         }
     )
+
+
+def test_resolve_model_dir_accepts_artifacts_parent_with_production_child(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    production = artifacts / "production"
+    production.mkdir(parents=True)
+
+    assert resolve_model_dir(artifacts) == production
 
 
 def test_atomic_pairing_requires_same_snapshot_for_over_and_under() -> None:
@@ -133,3 +144,80 @@ def test_saved_output_validator_fails_when_required_quote_columns_missing(tmp_pa
 
     with pytest.raises(ValueError, match="selected_snapshot_time"):
         validate_saved_predictions_columns(path)
+
+
+def test_slate_or_tminus_missing_decision_time_warns_not_fixed_cutoff_fail(tmp_path: Path) -> None:
+    dropout_rows = pd.DataFrame(
+        [
+            {
+                "player_id": 10,
+                "game_id": 1001,
+                "stat": "batter_hits",
+                "game_date": "2026-04-13",
+                "dropout_bucket": "clean_quote_exists_below_edge",
+            }
+        ]
+    )
+    clean_quotes = pd.DataFrame(
+        [
+            {
+                "selected_snapshot_time": "2026-04-13T20:00:00Z",
+                "game_date": "2026-04-13",
+                "commence_time": "2026-04-13T23:00:00Z",
+                "bookmaker": "draftkings",
+            }
+        ]
+    )
+
+    timing = count_selected_quote_timing_violations(
+        clean_quotes,
+        quote_decision_policy="slate_or_tminus",
+        cutoff_time_et="13:30",
+    )
+    assert timing["cutoff_violations"] == 0
+    assert timing["decision_time_missing"] == 1
+    assert timing["commence_violations"] == 0
+
+    summary = summarize_and_write_outputs(
+        dropout_rows,
+        clean_quotes,
+        tmp_path,
+        "13:30",
+        quote_decision_policy="slate_or_tminus",
+    )
+    assert summary["decision"] == "WARN"
+    assert "row-level decision time" in summary["reason"]
+
+
+def test_slate_or_tminus_fails_when_selected_snapshot_after_decision_time(tmp_path: Path) -> None:
+    dropout_rows = pd.DataFrame(
+        [
+            {
+                "player_id": 10,
+                "game_id": 1001,
+                "stat": "batter_hits",
+                "game_date": "2026-04-13",
+                "dropout_bucket": "clean_quote_available",
+            }
+        ]
+    )
+    clean_quotes = pd.DataFrame(
+        [
+            {
+                "selected_snapshot_time": "2026-04-13T20:00:00Z",
+                "decision_time": "2026-04-13T19:59:00Z",
+                "commence_time": "2026-04-13T23:00:00Z",
+                "bookmaker": "draftkings",
+            }
+        ]
+    )
+
+    summary = summarize_and_write_outputs(
+        dropout_rows,
+        clean_quotes,
+        tmp_path,
+        "13:30",
+        quote_decision_policy="slate_or_tminus",
+    )
+    assert summary["decision"] == "FAIL"
+    assert summary["decision_time_violations"] == 1

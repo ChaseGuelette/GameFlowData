@@ -7,8 +7,8 @@ from datetime import date
 
 import pandas as pd
 
-from src.backtesting.performance_metrics import PerformanceMetrics
 from src.backtesting.mlb.sweep_config import SweepConfig
+from src.backtesting.performance_metrics import PerformanceMetrics
 
 
 def _metrics() -> PerformanceMetrics:
@@ -100,6 +100,54 @@ def test_save_results_writes_summary_json_and_per_config_artifacts(tmp_path):
     metrics_json = json.loads((config_dir / "metrics.json").read_text())
     assert metrics_json["config"]["edge_threshold"] == 0.08
     assert metrics_json["betting"]["total_bets"] == 12
+
+
+def test_save_results_writes_bets_and_predictions_verbatim_for_cli_audits(tmp_path):
+    from src.backtesting.mlb.sweep_results import SweepResult, save_results
+
+    result = SweepResult(
+        config=SweepConfig(tau=None, edge_threshold=0.08, kelly_fraction=0.125),
+        metrics=_metrics(),
+        bets_df=pd.DataFrame([{
+            "player_id": 1,
+            "bookmaker": "LowVigBook",
+            "selected_snapshot_time": "2025-07-01T16:04:00Z",
+            "selected_decision_time": "2025-07-01T16:03:00Z",
+            "quote_decision_policy": "slate_or_tminus:20:00ET:-120m",
+            "stake": 25.0,
+            "profit": 22.7,
+        }]),
+        predictions_df=pd.DataFrame([{
+            "player_id": 1,
+            "bookmaker": "LowVigBook",
+            "selected_snapshot_time": "2025-07-01T16:04:00Z",
+            "selected_decision_time": "2025-07-01T16:03:00Z",
+            "quote_decision_policy": "slate_or_tminus:20:00ET:-120m",
+            "pred_q50": 6.0,
+            "actual": 7.0,
+        }]),
+        elapsed_seconds=3.456,
+    )
+
+    save_results(
+        [result],
+        output_dir=tmp_path,
+        start_date=date(2025, 7, 1),
+        end_date=date(2025, 7, 2),
+        phase01_time=12.34,
+        total_predictions=99,
+        total_dates=2,
+    )
+
+    config_dir = tmp_path / "config_01_no_BL_edge0.08_kelly0.125"
+    bets = pd.read_csv(config_dir / "bets.csv")
+    predictions = pd.read_csv(config_dir / "predictions.csv")
+
+    for output in [bets, predictions]:
+        assert output.loc[0, "bookmaker"] == "LowVigBook"
+        assert output.loc[0, "selected_snapshot_time"] == "2025-07-01T16:04:00Z"
+        assert output.loc[0, "selected_decision_time"] == "2025-07-01T16:03:00Z"
+        assert output.loc[0, "quote_decision_policy"] == "slate_or_tminus:20:00ET:-120m"
 
 
 def test_save_results_skips_empty_bets_and_predictions_files_but_writes_metrics(tmp_path):

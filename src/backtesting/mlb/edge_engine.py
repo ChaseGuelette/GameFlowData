@@ -19,6 +19,18 @@ from src.backtesting.mlb.prediction_cache import DatePrediction
 _MIN_PROB: float = 1e-6
 _MAX_PROB: float = 1.0 - 1e-6
 
+PREFERRED_BOOK_ROUTING_BOOKS: tuple[str, ...] = (
+    "draftkings",
+    "fanduel",
+    "betmgm",
+    "caesars",
+    "williamhill_us",
+    "betrivers",
+    "fanatics",
+    "hardrockbet",
+    "hardrockbet_oh",
+)
+
 
 def odds_to_prob(odds: float) -> float:
     """Convert American odds to raw implied probability."""
@@ -205,6 +217,82 @@ def build_config_edge_frame(config: Any, precomputed_df: pd.DataFrame) -> pd.Dat
     )
 
 
+def _allowed_side_mask(df: pd.DataFrame, allowed_bets: set[tuple[str, str]] | None, side: str) -> pd.Series:
+    if allowed_bets is None:
+        return pd.Series(True, index=df.index)
+    allowed_stats = {stat for stat, allowed_side in allowed_bets if allowed_side == side}
+    return df["stat"].isin(allowed_stats)
+
+
+def apply_book_routing_policy(
+    df: pd.DataFrame,
+    *,
+    edge_threshold: float,
+    book_routing_policy: str = "lowest_vig",
+    allowed_bets: set[tuple[str, str]] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Select one routed candidate row per player/game/stat for simulation.
+
+    Returns `(selected_rows, candidate_rows)`. Candidate rows keep all bookmaker
+    quotes and include edge-threshold/routing diagnostics for audit output.
+    """
+    if df.empty:
+        return df.copy(), df.copy()
+
+    candidates = df.copy()
+    candidates["book_routing_policy"] = book_routing_policy
+    if "candidate_booksum" not in candidates.columns:
+        candidates["candidate_booksum"] = candidates["implied_over"] + candidates["implied_under"]
+    if "preferred_book_candidate" not in candidates.columns:
+        candidates["preferred_book_candidate"] = candidates["bookmaker"].astype(str).str.lower().isin(PREFERRED_BOOK_ROUTING_BOOKS)
+
+    over_allowed = _allowed_side_mask(candidates, allowed_bets, "over")
+    under_allowed = _allowed_side_mask(candidates, allowed_bets, "under")
+    candidates["over_clears_edge_threshold"] = over_allowed & (candidates["over_edge"] >= edge_threshold)
+    candidates["under_clears_edge_threshold"] = under_allowed & (candidates["under_edge"] >= edge_threshold)
+    candidates["clears_edge_threshold"] = candidates["over_clears_edge_threshold"] | candidates["under_clears_edge_threshold"]
+
+    over_edge = candidates["over_edge"].where(over_allowed, -np.inf)
+    under_edge = candidates["under_edge"].where(under_allowed, -np.inf)
+    candidates["candidate_best_edge"] = np.maximum(over_edge, under_edge)
+    candidates["candidate_best_side"] = np.where(over_edge >= under_edge, "over", "under")
+    candidates.loc[~np.isfinite(candidates["candidate_best_edge"]), "candidate_best_side"] = None
+    candidates["selected_by_policy"] = False
+    candidates["selected_reason"] = None
+
+    selected_indices: list[int] = []
+    group_cols = ["game_date", "player_id", "game_id", "stat"]
+    for _, group in candidates.groupby(group_cols, dropna=False):
+        if book_routing_policy == "preferred_book_first":
+            preferred_clear = group[group["preferred_book_candidate"] & group["clears_edge_threshold"]]
+            if not preferred_clear.empty:
+                idx = preferred_clear.sort_values(["candidate_best_edge", "candidate_booksum"], ascending=[False, True]).index[0]
+                reason = "preferred_book_cleared_edge"
+            else:
+                fallback_clear = group[group["clears_edge_threshold"]]
+                if not fallback_clear.empty:
+                    idx = fallback_clear.sort_values(["candidate_best_edge", "candidate_booksum"], ascending=[False, True]).index[0]
+                    reason = "fallback_book_cleared_edge"
+                else:
+                    idx = group.sort_values("candidate_booksum", ascending=True).index[0]
+                    reason = "no_candidate_cleared_edge"
+        else:
+            idx = group.sort_values("candidate_booksum", ascending=True).index[0]
+            reason = "lowest_vig_candidate"
+        selected_indices.append(idx)
+        candidates.loc[idx, "selected_by_policy"] = True
+        candidates.loc[idx, "selected_reason"] = reason
+
+    candidates["selected_candidate_rank"] = candidates.groupby(group_cols)["candidate_best_edge"].rank(method="first", ascending=False)
+    selected = candidates.loc[selected_indices].copy()
+    selected["selected_bookmaker"] = selected["bookmaker"]
+    selected["selected_line"] = selected["line"]
+    selected["selected_side"] = selected["candidate_best_side"]
+    selected["selected_price"] = np.where(selected["selected_side"] == "over", selected["over_odds"], selected["under_odds"])
+    selected["preferred_book_selected"] = selected["preferred_book_candidate"]
+    return selected.reset_index(drop=True), candidates.reset_index(drop=True)
+
+
 def precompute_mlb_base_probs(
     game_dates: list[date],
     date_predictions: dict[date, list[DatePrediction]],
@@ -236,55 +324,65 @@ def precompute_mlb_base_probs(
         ldf["_raw_under"] = raw_under
         ldf["_booksum"] = raw_over + raw_under
 
-        best_idx = ldf.groupby(["player_id", "game_id", "market_key"])["_booksum"].idxmin()
-        best_lines = ldf.loc[best_idx.values].set_index(["player_id", "game_id", "market_key"])
-
         actuals_dict = date_actuals.get(gd, {})
 
         for pred in preds:
-            try:
-                bl_row = best_lines.loc[(pred.player_id, pred.game_id, pred.stat)]
-            except KeyError:
+            pred_lines = ldf[
+                (ldf["player_id"] == pred.player_id)
+                & (ldf["game_id"] == pred.game_id)
+                & (ldf["market_key"] == pred.stat)
+            ]
+            if pred_lines.empty:
                 continue
 
-            line_val = float(bl_row["line"])
-            over_odds = float(bl_row["over_odds"])
-            under_odds = float(bl_row["under_odds"])
-            raw_o = float(bl_row["_raw_over"])
-            raw_u = float(bl_row["_raw_under"])
-            booksum = raw_o + raw_u
-
-            model_over = float((pred.samples > line_val).mean())
-            model_over = min(max(model_over, _MIN_PROB), _MAX_PROB)
-            market_over = min(max(raw_o / booksum, _MIN_PROB), _MAX_PROB)
-
             s_std = float(pred.samples.std())
-            z_raw = abs(float(pred.samples.mean()) - line_val) / max(s_std, 1e-6)
+            actual = actuals_dict.get((pred.player_id, pred.stat))
+            for _, bl_row in pred_lines.iterrows():
+                line_val = float(bl_row["line"])
+                over_odds = float(bl_row["over_odds"])
+                under_odds = float(bl_row["under_odds"])
+                raw_o = float(bl_row["_raw_over"])
+                raw_u = float(bl_row["_raw_under"])
+                booksum = raw_o + raw_u
 
-            model_logit = float(np.log(model_over / (1.0 - model_over)))
-            market_logit = float(np.log(market_over / (1.0 - market_over)))
+                model_over = float((pred.samples > line_val).mean())
+                model_over = min(max(model_over, _MIN_PROB), _MAX_PROB)
+                market_over = min(max(raw_o / booksum, _MIN_PROB), _MAX_PROB)
 
-            rows.append({
-                "game_date": gd,
-                "player_id": pred.player_id,
-                "game_id": pred.game_id,
-                "stat": pred.stat,
-                "line": line_val,
-                "over_odds": over_odds,
-                "under_odds": under_odds,
-                "bookmaker": bl_row["bookmaker"],
-                "selected_snapshot_time": bl_row.get("selected_snapshot_time"),
-                "over_snapshot_time": bl_row.get("over_snapshot_time"),
-                "under_snapshot_time": bl_row.get("under_snapshot_time"),
-                "selected_decision_time": bl_row.get("selected_decision_time"),
-                "quote_decision_policy": bl_row.get("quote_decision_policy"),
-                "model_over": model_over,
-                "market_over": market_over,
-                "market_under": 1.0 - market_over,
-                "z_raw": z_raw,
-                "model_logit": model_logit,
-                "market_logit": market_logit,
-                "actual": actuals_dict.get((pred.player_id, pred.stat)),
-            })
+                z_raw = abs(float(pred.samples.mean()) - line_val) / max(s_std, 1e-6)
+
+                model_logit = float(np.log(model_over / (1.0 - model_over)))
+                market_logit = float(np.log(market_over / (1.0 - market_over)))
+
+                rows.append({
+                    "game_date": gd,
+                    "player_id": pred.player_id,
+                    "game_id": pred.game_id,
+                    "stat": pred.stat,
+                    "line": line_val,
+                    "over_odds": over_odds,
+                    "under_odds": under_odds,
+                    "bookmaker": bl_row["bookmaker"],
+                    "candidate_booksum": booksum,
+                    "preferred_book_candidate": str(bl_row["bookmaker"]).strip().lower() in PREFERRED_BOOK_ROUTING_BOOKS,
+                    "selected_snapshot_time": bl_row.get("selected_snapshot_time"),
+                    "over_snapshot_time": bl_row.get("over_snapshot_time"),
+                    "under_snapshot_time": bl_row.get("under_snapshot_time"),
+                    "selected_decision_time": bl_row.get("selected_decision_time"),
+                    "quote_decision_policy": bl_row.get("quote_decision_policy"),
+                    "over_market_last_update": bl_row.get("over_market_last_update"),
+                    "under_market_last_update": bl_row.get("under_market_last_update"),
+                    "over_bookmaker_last_update": bl_row.get("over_bookmaker_last_update"),
+                    "under_bookmaker_last_update": bl_row.get("under_bookmaker_last_update"),
+                    "over_bookmaker": bl_row.get("bookmaker"),
+                    "under_bookmaker": bl_row.get("bookmaker"),
+                    "model_over": model_over,
+                    "market_over": market_over,
+                    "market_under": 1.0 - market_over,
+                    "z_raw": z_raw,
+                    "model_logit": model_logit,
+                    "market_logit": market_logit,
+                    "actual": actual,
+                })
 
     return pd.DataFrame(rows)

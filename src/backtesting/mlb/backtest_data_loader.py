@@ -7,8 +7,8 @@ schedule/actuals records needed by the prediction cache phase.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
-from typing import Mapping
 
 from sqlalchemy import text
 

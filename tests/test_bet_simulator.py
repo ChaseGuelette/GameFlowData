@@ -329,6 +329,7 @@ class TestBetSimulator:
                 "over_snapshot_time": "2026-04-13T20:02:00Z",
                 "under_market_last_update": "2026-04-13T19:59:00Z",
                 "under_bookmaker_last_update": "2026-04-13T19:58:00Z",
+                "quote_decision_policy": "slate_or_tminus",
             }
         ])
 
@@ -343,6 +344,7 @@ class TestBetSimulator:
         assert bet.selected_line == 0.5
         assert bet.selected_market_last_update == "2026-04-13T19:59:00Z"
         assert bet.selected_bookmaker_last_update == "2026-04-13T19:58:00Z"
+        assert bet.quote_decision_policy == "slate_or_tminus"
 
         df = simulator.to_dataframe()
         for col in [
@@ -358,8 +360,10 @@ class TestBetSimulator:
             "under_bookmaker_last_update",
             "over_bookmaker",
             "under_bookmaker",
+            "quote_decision_policy",
         ]:
             assert col in df.columns
+        assert df.iloc[0]["quote_decision_policy"] == "slate_or_tminus"
 
     def test_get_summary(self):
         """Test getting summary statistics."""

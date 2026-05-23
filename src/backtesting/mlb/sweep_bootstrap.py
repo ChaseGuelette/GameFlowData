@@ -8,9 +8,10 @@ execute sweep configs, compute edges, or serialize results.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from src.db.client import get_engine
 from src.models.mlb.mlb_batter_feature_store import MLBBatterFeatureStore

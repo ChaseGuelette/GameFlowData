@@ -19,6 +19,7 @@ class SweepConfig:
     z_max: float = 1.0
     max_weight: float = 0.50
     flat_bet_size: float | None = None
+    book_routing_policy: str = "lowest_vig"
 
     @property
     def label(self) -> str:
@@ -36,6 +37,7 @@ class SweepConfig:
             "edge_threshold": self.edge_threshold,
             "kelly_fraction": self.kelly_fraction,
             "flat_bet_size": self.flat_bet_size,
+            "book_routing_policy": self.book_routing_policy,
         }
 
 
@@ -98,6 +100,7 @@ def build_sweep_grid(
     z_max_values: list[float] | None = None,
     max_weight_values: list[float] | None = None,
     flat_bet_size: float | None = None,
+    book_routing_policy: str = "lowest_vig",
 ) -> list[SweepConfig]:
     if z_max_values is None:
         z_max_values = [1.0]
@@ -122,6 +125,7 @@ def build_sweep_grid(
                 z_max=z_max,
                 max_weight=mw,
                 flat_bet_size=flat_bet_size,
+                book_routing_policy=book_routing_policy,
             )
         )
     return configs
@@ -234,6 +238,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="mlb_raw_player_props",
         help="Odds table for quote-clean line selection. Dense CLV table requires linked game_id/player_id.",
     )
+    parser.add_argument(
+        "--book-routing-policy",
+        choices=["lowest_vig", "preferred_book_first"],
+        default="lowest_vig",
+        help=(
+            "Book selection policy after candidate edge calculation. lowest_vig preserves legacy behavior; "
+            "preferred_book_first selects the best preferred/reference book that clears edge before fallback books."
+        ),
+    )
     return parser
 
 
@@ -255,6 +268,7 @@ def parse_sweep_cli_config(args: argparse.Namespace) -> SweepCliConfig:
         args.z_max,
         args.max_weight,
         flat_bet_size=args.flat_bet,
+        book_routing_policy=args.book_routing_policy,
     )
 
     output_dir = Path(args.output_dir) if args.output_dir else None

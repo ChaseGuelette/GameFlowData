@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
-from src.backtesting.performance_metrics import PerformanceMetrics
 from src.backtesting.mlb.sweep_config import SweepConfig
+from src.backtesting.performance_metrics import PerformanceMetrics
 
 logger = logging.getLogger("MLBBacktestSweep")
 
@@ -25,6 +25,7 @@ class SweepResult:
     bets_df: pd.DataFrame
     predictions_df: pd.DataFrame
     elapsed_seconds: float
+    all_edges_df: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def print_comparison_table(
@@ -189,6 +190,9 @@ def save_results(
             r.bets_df.to_csv(config_dir / "bets.csv", index=False)
         if not r.predictions_df.empty:
             r.predictions_df.to_csv(config_dir / "predictions.csv", index=False)
+        if not r.all_edges_df.empty:
+            r.all_edges_df.to_csv(config_dir / "bookmaker_candidate_edges.csv", index=False)
+            r.all_edges_df.to_csv(config_dir / "all_bookmaker_edges.csv", index=False)
 
         metrics_output = m.to_dict()
         metrics_output["config"] = r.config.to_dict()

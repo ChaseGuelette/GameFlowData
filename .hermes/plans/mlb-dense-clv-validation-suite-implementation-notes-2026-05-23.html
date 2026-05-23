@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>MLB Dense CLV Validation Suite Implementation Notes</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; max-width: 960px; margin: 32px auto; line-height: 1.45; }
+    code { background: #f4f4f4; padding: 0.1rem 0.25rem; border-radius: 4px; }
+    .warn { border-left: 4px solid #f59e0b; padding-left: 12px; }
+    .decision { border-left: 4px solid #2563eb; padding-left: 12px; }
+  </style>
+</head>
+<body>
+  <h1>MLB Dense CLV Validation Suite Implementation Notes</h1>
+  <p>Companion notes for the 2026-05-23 dense CLV validation-suite implementation. This records decisions/research/issues discovered during implementation that were not explicit in the architecture plan.</p>
+
+  <section class="decision">
+    <h2>Decision: dense CLV sync must be bounded unless explicitly overridden</h2>
+    <p><code>mlb_player_props_clv_snapshots</code> is now registered as an incremental MLB sync table on <code>snapshot_time</code>. An unbounded <code>--full</code> refresh of this table is blocked unless the caller supplies <code>--allow-large-full-refresh</code>. Date windows should be preferred for local dense CLV prep.</p>
+  </section>
+
+  <section class="decision">
+    <h2>Decision: slate_or_tminus missing decision metadata is WARN, not FAIL</h2>
+    <p>The existing dropout audit was falsely applying the fixed 13:30 ET cutoff to all selected clean quotes, which is invalid for dynamic policies such as <code>slate_or_tminus</code>. The audit now checks fixed cutoffs only for fixed policies, uses row-level decision-time columns when available, always checks commence-time violations, and returns WARN if dynamic-policy decision metadata is missing.</p>
+  </section>
+
+  <section class="decision">
+    <h2>Verified: current quote-clean artifacts carry selected_decision_time</h2>
+    <p>Follow-up inspection found <code>src/backtesting/mlb/quote_clean_line_service.py</code> adds <code>selected_decision_time</code> and <code>quote_decision_policy</code> to line-selection output. Existing dense slate artifacts under <code>backtest_results/mlb_batter_hits_dense_quote_clean_slate_tminus60_20260413_20260517</code> and <code>backtest_results/mlb_batter_hits_dense_slate_t60_promoted_20260413_20260517</code> also have <code>selected_decision_time</code> in <code>predictions.csv</code> and <code>bets.csv</code>. The WARN path remains only as a defensive guard for older/stale artifacts.</p>
+  </section>
+
+  <section class="decision">
+    <h2>Decision: suite_summary.md is now gate-oriented</h2>
+    <p>The suite manifest/summary now includes a validation gate report with ROI/bets/profit, CLV CI lows, edge-ranking CI low, bookmaker concentration/ESPNBet fields, dropout decision, and per-config gate status. This makes the output usable for Go/No-Go review without hand-reading every child artifact.</p>
+  </section>
+
+  <section class="decision">
+    <h2>Decision: duplicate only the CLI artifact contract into decomposed sweep tests</h2>
+    <p>The dense CLV/audit scripts should remain script-level responsibilities: local DB sync windowing, dropout reporting, CLV gate aggregation, failure-mode diagnosis, and bookmaker sensitivity are not duplicated into <code>run_mlb_sweep.py</code>. The necessary sweep-side behavior is the artifact contract consumed by CLI sweeps/audits: selected quote bookmaker, selected/over/under snapshot timestamps, row-level <code>selected_decision_time</code>, and <code>quote_decision_policy</code> must survive line selection, fast base-prob precompute, per-config edge building, and CSV serialization.</p>
+    <p>Regression coverage was added in <code>tests/test_mlb_sweep_edge_metadata_contract.py</code> and <code>tests/test_mlb_sweep_results.py</code>. The focused CLI-facing suite passed: <code>50 passed, 1 warning</code>.</p>
+  </section>
+
+  <section>
+    <h2>Ready-to-run audit command shape</h2>
+    <pre><code>python scripts/run_mlb_quote_clean_audit_suite.py \
+  --sweep-output-dir backtest_results/&lt;existing_sweep_dir&gt; \
+  --output-dir backtest_results/&lt;new_suite_dir&gt; \
+  --model-dir src/models/mlb/artifacts/production \
+  --start 2026-04-13 \
+  --end 2026-05-17 \
+  --stats batter_hits \
+  --quote-decision-policy slate_or_tminus \
+  --quote-relative-minutes 60 \
+  --line-source mlb_player_props_clv_snapshots \
+  --snapshots-table mlb_player_props_clv_snapshots \
+  --local</code></pre>
+  </section>
+</body>
+</html>

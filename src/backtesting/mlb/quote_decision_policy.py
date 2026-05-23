@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from datetime import time as datetime_time
-from zoneinfo import ZoneInfo
 from typing import cast
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
