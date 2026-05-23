@@ -898,6 +898,28 @@ Expansion checkpoint status:
 - No additional production entrypoint was discovered during this slice.
 - Inventory/removal guard is now started in `tests/test_mlb_sweep_inventory.py`; final thin-runner threshold remains `xfail` until later extraction phases make it realistic.
 
+### 2026-05-23 slice 02B — runner uses typed config after parse boundary
+
+Files changed:
+
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` to replace remaining downstream `args.*` reads with `cli_config.*` fields after the parse boundary.
+- Modified `tests/test_mlb_sweep_inventory.py` to guard that the runner calls `parse_sweep_cli_config(args)` and has no remaining `args.` reads.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_inventory.py::test_run_mlb_sweep_uses_typed_cli_config_after_parse_boundary -q` failed because `run_mlb_sweep.py` still contained downstream `args.*` references.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_config.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 26 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py` passed.
+
+Behavior-preservation notes:
+
+- This was a wiring-only follow-up: the runner still parses the same CLI args, but downstream orchestration now reads the typed config object.
+- No DB queries, model loading, feature-store behavior, edge math, quote-line selection, or result serialization changed.
+- The structural inventory harness now prevents `args.*` reads from creeping back into the runner after the parse boundary.
+
 ### 2026-05-23 slice 02A — typed sweep config and CLI parser extraction
 
 Files changed:

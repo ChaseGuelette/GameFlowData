@@ -1286,19 +1286,19 @@ def main():
         output_dir = Path("backtest_results") / f"mlb_sweep_{timestamp}"
 
     # Initialize
-    engine = get_engine(local=args.local)
-    if args.local:
+    engine = get_engine(local=cli_config.local)
+    if cli_config.local:
         logger.info("Using LOCAL database")
     pitcher_feature_store = MLBFeatureStore(engine)
 
-    model_path = find_latest_model_dir(args.model_dir)
+    model_path = find_latest_model_dir(cli_config.model_dir)
     logger.info(f"Using model directory: {model_path}")
 
-    suite = MLBModelSuite.from_directory(model_path, n_samples=args.n_samples)
+    suite = MLBModelSuite.from_directory(model_path, n_samples=cli_config.n_samples)
     logger.info(f"Suite loaded stats: {suite.available_stats}")
 
     # Only create batter feature store if we have batter stats to predict
-    has_batter_stats = any(s.startswith("batter_") and suite.has_stat(s) for s in args.stats)
+    has_batter_stats = any(s.startswith("batter_") and suite.has_stat(s) for s in cli_config.stats)
     batter_feature_store = MLBBatterFeatureStore(engine) if has_batter_stats else None
 
     # Phase 0 + 1
@@ -1308,10 +1308,10 @@ def main():
     t_shared = time.time()
 
     logger.info(f"Excluding bookmakers: {list(EXCLUDED_BOOKMAKERS)}")
-    if args.quote_clean:
+    if cli_config.quote_clean.enabled:
         logger.info(
             "Quote-clean line mode enabled: latest snapshots <= %s ET, then lowest-vig production line selection",
-            args.quote_cutoff_time_et,
+            cli_config.quote_clean.cutoff_time_et,
         )
     else:
         logger.warning(
@@ -1324,11 +1324,11 @@ def main():
         suite=suite,
         start_date=start_date,
         end_date=end_date,
-        stats=args.stats,
-        quote_clean_cutoff_time_et=args.quote_cutoff_time_et if args.quote_clean else None,
-        quote_decision_policy=args.quote_decision_policy if args.quote_clean else "fixed_et",
-        quote_relative_minutes=args.quote_relative_minutes,
-        line_source=args.line_source if args.quote_clean else "mlb_raw_player_props",
+        stats=cli_config.stats,
+        quote_clean_cutoff_time_et=cli_config.quote_clean.cutoff_time_et if cli_config.quote_clean.enabled else None,
+        quote_decision_policy=cli_config.quote_clean.decision_policy if cli_config.quote_clean.enabled else "fixed_et",
+        quote_relative_minutes=cli_config.quote_clean.relative_minutes,
+        line_source=cli_config.quote_clean.line_source if cli_config.quote_clean.enabled else "mlb_raw_player_props",
     )
 
     phase01_time = time.time() - t_shared
@@ -1342,14 +1342,14 @@ def main():
 
     results: list[SweepResult] = []
 
-    if args.combined:
+    if cli_config.combined:
         # Combined mode: use per-stat optimal configs from mlb_stat_config.py
         from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL_CONFIGS
 
         logger.info("=" * 60)
         logger.info("COMBINED MODE: Using per-stat optimal BL configs")
         for stat_key, bl_cfg in STAT_BL_CONFIGS.items():
-            if stat_key in args.stats:
+            if stat_key in cli_config.stats:
                 edge = MLB_STATS.get(stat_key, {}).get("edge_threshold", 0.08)
                 dirs = MLB_STATS.get(stat_key, {}).get("allowed_directions", ["over", "under"])
                 if bl_cfg is not None:
@@ -1359,12 +1359,12 @@ def main():
         logger.info("=" * 60)
 
         # Build per-stat BL configs and edge thresholds for requested stats
-        stat_bl = {s: STAT_BL_CONFIGS.get(s, DEFAULT_BL_CONFIG) for s in args.stats}
-        stat_edges = {s: MLB_STATS.get(s, {}).get("edge_threshold", 0.08) for s in args.stats}
+        stat_bl = {s: STAT_BL_CONFIGS.get(s, DEFAULT_BL_CONFIG) for s in cli_config.stats}
+        stat_edges = {s: MLB_STATS.get(s, {}).get("edge_threshold", 0.08) for s in cli_config.stats}
 
         # Build allowed_bets: intersect CLI direction filter with per-stat allowed_directions from config
         config_pairs: set[tuple[str, str]] = set()
-        for stat in args.stats:
+        for stat in cli_config.stats:
             per_stat_dirs = MLB_STATS.get(stat, {}).get("allowed_directions")
             dirs = per_stat_dirs if per_stat_dirs else ["over", "under"]
             for d in dirs:
@@ -1372,7 +1372,7 @@ def main():
         if cli_allowed_bets is not None:
             combined_allowed_bets: set[tuple[str, str]] | None = config_pairs & cli_allowed_bets
         else:
-            all_pairs = {(s, d) for s in args.stats for d in ("over", "under")}
+            all_pairs = {(s, d) for s in cli_config.stats for d in ("over", "under")}
             combined_allowed_bets = config_pairs if config_pairs != all_pairs else None
 
         result = run_combined_config(
@@ -1382,10 +1382,10 @@ def main():
             date_predictions=date_predictions,
             date_lines=date_lines,
             date_actuals=date_actuals,
-            starting_bankroll=args.starting_bankroll,
-            kelly_fraction=args.kelly[0],
-            max_bet_pct=args.max_bet_pct,
-            flat_bet_size=args.flat_bet,
+            starting_bankroll=cli_config.starting_bankroll,
+            kelly_fraction=cli_config.kelly_fractions[0],
+            max_bet_pct=cli_config.max_bet_pct,
+            flat_bet_size=cli_config.flat_bet,
             allowed_bets=combined_allowed_bets,
         )
 
@@ -1409,9 +1409,9 @@ def main():
                 config=config,
                 precomputed_df=precomputed_df,
                 game_dates=game_dates,
-                starting_bankroll=args.starting_bankroll,
-                max_bet_pct=args.max_bet_pct,
-                flat_bet_size=args.flat_bet,
+                starting_bankroll=cli_config.starting_bankroll,
+                max_bet_pct=cli_config.max_bet_pct,
+                flat_bet_size=cli_config.flat_bet,
                 allowed_bets=cli_allowed_bets,
             )
 
@@ -1431,7 +1431,7 @@ def main():
         phase01_time=phase01_time,
         total_predictions=total_predictions,
         total_dates=len(date_predictions),
-        starting_bankroll=args.starting_bankroll,
+        starting_bankroll=cli_config.starting_bankroll,
     )
 
     save_results(
@@ -1442,7 +1442,7 @@ def main():
         phase01_time=phase01_time,
         total_predictions=total_predictions,
         total_dates=len(date_predictions),
-        starting_bankroll=args.starting_bankroll,
+        starting_bankroll=cli_config.starting_bankroll,
     )
 
     total_time = phase01_time + sum(r.elapsed_seconds for r in results)

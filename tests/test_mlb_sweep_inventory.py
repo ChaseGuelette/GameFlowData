@@ -84,6 +84,13 @@ def test_run_mlb_sweep_still_uses_shared_line_selection_seam():
     assert "from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time" in source
 
 
+def test_run_mlb_sweep_uses_typed_cli_config_after_parse_boundary():
+    source = _source(RUNNER_PATH)
+
+    assert "parse_sweep_cli_config(args)" in source
+    assert "args." not in source
+
+
 @pytest.mark.xfail(reason="Final thin-runner target; enable after later extraction phases remove remaining responsibilities.")
 def test_final_run_mlb_sweep_runner_shape_target():
     source = _source(RUNNER_PATH)
