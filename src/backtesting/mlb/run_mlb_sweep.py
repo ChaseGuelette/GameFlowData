@@ -22,10 +22,8 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from datetime import time as datetime_time
+from datetime import date, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -36,6 +34,11 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
 from src.backtesting.mlb.mlb_backtest_harness import STAT_ACTUALS
+from src.backtesting.mlb.quote_decision_policy import (
+    build_fixed_cutoff_ts,
+    build_slate_decision_ts,
+    decision_time_for_game,
+)
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
 from src.db.client import get_engine
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
@@ -469,37 +472,13 @@ def _process_date_shared(
 
 
 def _build_quote_clean_cutoff_ts(game_date: date, cutoff_time_et: str) -> datetime:
-    """Build a timezone-aware ET cutoff timestamp for quote-clean line selection.
-
-    The production inference path effectively sees only rows already present in
-    `mlb_raw_player_props` when the job runs. For historical quote-clean replay,
-    this helper turns a fixed ET inference time (HH:MM) into a timestamp cutoff
-    that can be applied to `snapshot_time`.
-    """
-    try:
-        hour_s, minute_s = cutoff_time_et.split(":", 1)
-        cutoff_t = datetime_time(hour=int(hour_s), minute=int(minute_s))
-    except Exception as exc:
-        raise ValueError(
-            f"Invalid --quote-cutoff-time-et={cutoff_time_et!r}; expected HH:MM"
-        ) from exc
-
-    return datetime.combine(game_date, cutoff_t, tzinfo=ZoneInfo("America/New_York"))
+    """Compatibility wrapper for migrated quote decision policy helper."""
+    return build_fixed_cutoff_ts(game_date, cutoff_time_et)
 
 
 def _build_slate_decision_ts(commence_ts: datetime, fallback_relative_minutes: int = 60) -> datetime:
-    """Slate policy with game-relative fallback for early starts."""
-    commence_et = pd.Timestamp(commence_ts).to_pydatetime().astimezone(ZoneInfo("America/New_York"))
-    game_day = commence_et.date()
-    if commence_et.time() < datetime_time(15, 0):
-        candidate = datetime.combine(game_day, datetime_time(9, 30), tzinfo=ZoneInfo("America/New_York"))
-    elif commence_et.time() < datetime_time(19, 0):
-        candidate = datetime.combine(game_day, datetime_time(13, 30), tzinfo=ZoneInfo("America/New_York"))
-    else:
-        candidate = datetime.combine(game_day, datetime_time(17, 30), tzinfo=ZoneInfo("America/New_York"))
-    if candidate >= commence_et:
-        candidate = commence_et - timedelta(minutes=fallback_relative_minutes)
-    return candidate
+    """Compatibility wrapper for migrated quote decision policy helper."""
+    return build_slate_decision_ts(commence_ts, fallback_relative_minutes=fallback_relative_minutes)
 
 
 def _game_decision_time(
@@ -509,22 +488,13 @@ def _game_decision_time(
     fixed_cutoff_ts: datetime | None,
     relative_minutes: int,
 ) -> datetime | None:
-    commence = game.get("game_time_utc")
-    commence_ts = pd.to_datetime(commence, utc=True, errors="coerce") if commence is not None else pd.NaT
-    if policy == "fixed_et":
-        return fixed_cutoff_ts
-    if policy == "skip_early_fixed_et":
-        if pd.notna(commence_ts) and fixed_cutoff_ts is not None and fixed_cutoff_ts >= commence_ts.to_pydatetime():
-            return None
-        return fixed_cutoff_ts
-    if pd.isna(commence_ts):
-        return fixed_cutoff_ts
-    commence_dt = commence_ts.to_pydatetime()
-    if policy == "relative_to_commence":
-        return commence_dt - timedelta(minutes=relative_minutes)
-    if policy == "slate_or_tminus":
-        return _build_slate_decision_ts(commence_dt, fallback_relative_minutes=relative_minutes)
-    return fixed_cutoff_ts
+    """Compatibility wrapper for migrated quote decision policy helper."""
+    return decision_time_for_game(
+        game,
+        policy=policy,
+        fixed_cutoff_ts=fixed_cutoff_ts,
+        relative_minutes=relative_minutes,
+    )
 
 
 def _fetch_lines_for_date(

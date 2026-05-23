@@ -868,6 +868,36 @@ Expected commit shape:
 
 ## Progress log
 
+### 2026-05-23 slice 01A started — quote decision policy extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/quote_decision_policy.py`.
+- Created `tests/test_mlb_quote_decision_policy.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so private quote-decision helpers are compatibility wrappers around the new module.
+- Modified `tests/test_mlb_quote_clean_line_selection.py` to import the new `decision_time_for_game(...)` seam directly.
+- Created companion research log `01-mlb-quote-clean-backtest-sweep-research-log.html` for working decisions/findings that should not bloat this main plan.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_quote_decision_policy.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.quote_decision_policy'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 15 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py` passed.
+
+Behavior-preservation notes:
+
+- Unknown quote-decision policy still falls back to the fixed cutoff, matching the previous runner behavior. Hard validation is deferred to the later config/promotion-contract phase because it would be behavior-changing.
+- Temporary compatibility wrappers remain in `run_mlb_sweep.py` for `_build_quote_clean_cutoff_ts`, `_build_slate_decision_ts`, and `_game_decision_time` so any hidden private imports keep working during this first slice.
+- No DB queries, long backtests, feature-store changes, edge math changes, BL default changes, or result schema changes were introduced.
+
+Expansion checkpoint status:
+
+- No additional production entrypoint was discovered during this slice.
+- Inventory/removal guard is still pending; this slice focused on defining and wiring the first pure seam.
+
 ### 2026-05-19 initial migration documentation
 
 Created this plan from a bounded code/brain deep dive.
