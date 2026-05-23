@@ -1119,6 +1119,38 @@ Behavior-preservation notes:
 - The runner now has 377 non-comment LOC and 9 top-level functions.
 - No DB queries were run manually, no model artifacts or long sweeps were touched, and no shared-phase, line, prediction, edge, simulator, metrics, or serialization behavior changed.
 
+### 2026-05-23 slice 06C — compatibility-wrapper cleanup
+
+Files changed:
+
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` to remove remaining transitional compatibility wrappers:
+  - `_build_quote_clean_cutoff_ts(...)`
+  - `_build_slate_decision_ts(...)`
+  - `_game_decision_time(...)`
+  - `_fetch_lines_for_date(...)`
+  - `_odds_to_prob(...)`
+  - `_select_sharpest_line(...)`
+- Modified `_process_date_shared(...)` to call `build_fixed_cutoff_ts(...)` and `fetch_lines_for_date(...)` directly.
+- Modified `tests/test_mlb_sweep_inventory.py` so wrapper absence is now guarded.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_inventory.py -q` failed with the wrappers still present: 3 failed, 10 passed, 1 pytest-asyncio deprecation warning.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_inventory.py -q` passed: 13 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_bootstrap.py tests/test_mlb_sweep_execution.py tests/test_mlb_matchup_cache.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 61 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_bootstrap.py src/backtesting/mlb/sweep_execution.py src/backtesting/mlb/matchup_cache.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- The only callsite change was replacing wrapper calls with their delegated helpers directly.
+- No hidden/internal callsites were found in `src/`, `tests/`, or `scripts/` for the removed wrapper names before removal.
+- The runner now has 313 non-comment LOC and 3 top-level functions: `run_shared_phases`, `_process_date_shared`, and `main`.
+- No DB queries were run manually, no model artifacts or long sweeps were touched, and no shared-phase semantics, line selection, prediction generation, edge math, simulator policy, metrics math, or serialization behavior changed.
+
 ### 2026-05-23 slice 02B — runner uses typed config after parse boundary
 
 Files changed:

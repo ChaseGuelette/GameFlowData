@@ -31,19 +31,10 @@ from src.backtesting.mlb.backtest_data_loader import (
     fetch_game_dates,
     fetch_games_for_date,
 )
-from src.backtesting.mlb.edge_engine import (
-    compute_edges_for_config,
-    odds_to_prob,
-    precompute_mlb_base_probs,
-    select_sharpest_line,
-)
+from src.backtesting.mlb.edge_engine import precompute_mlb_base_probs
 from src.backtesting.mlb.matchup_cache import build_matchup_cache
 from src.backtesting.mlb.prediction_cache import DatePrediction, build_predictions_for_date
-from src.backtesting.mlb.quote_decision_policy import (
-    build_fixed_cutoff_ts,
-    build_slate_decision_ts,
-    decision_time_for_game,
-)
+from src.backtesting.mlb.quote_decision_policy import build_fixed_cutoff_ts
 from src.backtesting.mlb.quote_clean_line_service import fetch_lines_for_date
 from src.backtesting.mlb.sweep_bootstrap import find_latest_model_dir, initialize_sweep_runtime
 from src.backtesting.mlb.sweep_config import (
@@ -191,7 +182,7 @@ def _process_date_shared(
 
     quote_clean_cutoff_ts = None
     if quote_clean_cutoff_time_et is not None:
-        quote_clean_cutoff_ts = _build_quote_clean_cutoff_ts(game_date, quote_clean_cutoff_time_et)
+        quote_clean_cutoff_ts = build_fixed_cutoff_ts(game_date, quote_clean_cutoff_time_et)
 
     predictions = build_predictions_for_date(
         pitcher_feature_store=pitcher_feature_store,
@@ -206,7 +197,7 @@ def _process_date_shared(
 
     # Fetch lines for all players on this date
     market_keys = [s for s in stats if s in STAT_ACTUALS]
-    lines_df = _fetch_lines_for_date(
+    lines_df = fetch_lines_for_date(
         engine,
         games,
         market_keys,
@@ -218,77 +209,6 @@ def _process_date_shared(
     )
 
     return predictions, lines_df
-
-
-def _build_quote_clean_cutoff_ts(game_date: date, cutoff_time_et: str) -> datetime:
-    """Compatibility wrapper for migrated quote decision policy helper."""
-    return build_fixed_cutoff_ts(game_date, cutoff_time_et)
-
-
-def _build_slate_decision_ts(commence_ts: datetime, fallback_relative_minutes: int = 60) -> datetime:
-    """Compatibility wrapper for migrated quote decision policy helper."""
-    return build_slate_decision_ts(commence_ts, fallback_relative_minutes=fallback_relative_minutes)
-
-
-def _game_decision_time(
-    game: dict,
-    *,
-    policy: str,
-    fixed_cutoff_ts: datetime | None,
-    relative_minutes: int,
-) -> datetime | None:
-    """Compatibility wrapper for migrated quote decision policy helper."""
-    return decision_time_for_game(
-        game,
-        policy=policy,
-        fixed_cutoff_ts=fixed_cutoff_ts,
-        relative_minutes=relative_minutes,
-    )
-
-
-def _fetch_lines_for_date(
-    engine,
-    games: list[dict] | None = None,
-    market_keys: list[str] | None = None,
-    quote_clean_cutoff_ts: datetime | None = None,
-    quote_clean_cutoff_time_et: str | None = None,
-    quote_decision_policy: str = "fixed_et",
-    quote_relative_minutes: int = 60,
-    line_source: str = "mlb_raw_player_props",
-    *,
-    game_ids: list[int] | None = None,
-) -> pd.DataFrame:
-    """Compatibility wrapper for migrated quote-clean line service."""
-    return fetch_lines_for_date(
-        engine,
-        games=games,
-        market_keys=market_keys,
-        quote_clean_cutoff_ts=quote_clean_cutoff_ts,
-        quote_clean_cutoff_time_et=quote_clean_cutoff_time_et,
-        quote_decision_policy=quote_decision_policy,
-        quote_relative_minutes=quote_relative_minutes,
-        line_source=line_source,
-        game_ids=game_ids,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Edge calculation compatibility wrappers
-# ---------------------------------------------------------------------------
-
-def _odds_to_prob(odds: float) -> float:
-    """Compatibility wrapper for migrated edge helper."""
-    return odds_to_prob(odds)
-
-
-def _select_sharpest_line(
-    lines: pd.DataFrame,
-    player_id: int,
-    game_id: int,
-    market_key: str,
-) -> dict | None:
-    """Compatibility wrapper for migrated edge helper."""
-    return select_sharpest_line(lines, player_id, game_id, market_key)
 
 
 # ---------------------------------------------------------------------------

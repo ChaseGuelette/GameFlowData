@@ -57,20 +57,15 @@ def test_quote_decision_policy_module_owns_expected_public_helpers():
     }.issubset(functions)
 
 
-def test_run_mlb_sweep_quote_decision_helpers_are_only_compatibility_wrappers():
-    wrappers = {
-        "_build_quote_clean_cutoff_ts": "build_fixed_cutoff_ts",
-        "_build_slate_decision_ts": "build_slate_decision_ts",
-        "_game_decision_time": "decision_time_for_game",
-    }
+def test_run_mlb_sweep_no_longer_owns_quote_decision_compatibility_wrappers():
+    source = _source(RUNNER_PATH)
 
-    for wrapper_name, delegate_name in wrappers.items():
-        body = _function_source(RUNNER_PATH, wrapper_name)
-        assert delegate_name in body
-        assert "Compatibility wrapper" in body
-        assert "pd.to_datetime" not in body
-        assert "ZoneInfo" not in body
-        assert "datetime_time" not in body
+    assert "def _build_quote_clean_cutoff_ts" not in source
+    assert "def _build_slate_decision_ts" not in source
+    assert "def _game_decision_time" not in source
+    assert "build_fixed_cutoff_ts" in source
+    assert "build_slate_decision_ts" not in source
+    assert "decision_time_for_game" not in source
 
 
 def test_run_mlb_sweep_no_longer_imports_quote_policy_implementation_dependencies():
@@ -79,8 +74,8 @@ def test_run_mlb_sweep_no_longer_imports_quote_policy_implementation_dependencie
     assert "from zoneinfo import ZoneInfo" not in source
     assert "from datetime import time as datetime_time" not in source
     assert "build_fixed_cutoff_ts" in source
-    assert "build_slate_decision_ts" in source
-    assert "decision_time_for_game" in source
+    assert "build_slate_decision_ts" not in source
+    assert "decision_time_for_game" not in source
 
 
 def test_quote_clean_line_service_owns_shared_line_selection_seam():
@@ -88,6 +83,7 @@ def test_quote_clean_line_service_owns_shared_line_selection_seam():
     service_source = _source(QUOTE_LINE_SERVICE_PATH)
 
     assert "fetch_lines_for_date" in runner_source
+    assert "def _fetch_lines_for_date" not in runner_source
     assert "fetch_lines_at_decision_time" not in runner_source
     assert "fetch_lines_at_decision_time" in service_source
     assert "from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time" in service_source
@@ -155,8 +151,9 @@ def test_edge_engine_owns_edge_and_base_probability_calculation():
     runner_source = _source(RUNNER_PATH)
     edge_source = _source(EDGE_ENGINE_PATH)
 
-    assert "compute_edges_for_config" in runner_source
     assert "precompute_mlb_base_probs" in runner_source
+    assert "def _odds_to_prob" not in runner_source
+    assert "def _select_sharpest_line" not in runner_source
     assert "def compute_edges_for_config" not in runner_source
     assert "def precompute_mlb_base_probs" not in runner_source
     assert "float((samples > line_val).mean())" not in runner_source
