@@ -16,6 +16,7 @@ RUNNER_PATH = Path("src/backtesting/mlb/run_mlb_sweep.py")
 QUOTE_POLICY_PATH = Path("src/backtesting/mlb/quote_decision_policy.py")
 QUOTE_LINE_SERVICE_PATH = Path("src/backtesting/mlb/quote_clean_line_service.py")
 DATA_LOADER_PATH = Path("src/backtesting/mlb/backtest_data_loader.py")
+PREDICTION_CACHE_PATH = Path("src/backtesting/mlb/prediction_cache.py")
 
 
 def _source(path: Path) -> str:
@@ -110,6 +111,22 @@ def test_backtest_data_loader_owns_schedule_and_actuals_sql_boundaries():
     assert "from sqlalchemy import text" in loader_source
     assert "FROM mlb_game_schedule" in loader_source
     assert "did_not_play IS NOT TRUE" in loader_source
+
+
+def test_prediction_cache_owns_date_prediction_and_feature_store_prediction_loop():
+    runner_source = _source(RUNNER_PATH)
+    cache_source = _source(PREDICTION_CACHE_PATH)
+
+    assert "build_predictions_for_date" in runner_source
+    assert "class DatePrediction" not in runner_source
+    assert "BATTER_STAT_FS_MAP" not in runner_source
+    assert "get_player_game_features" not in runner_source
+    assert "get_features_for_date" not in runner_source
+
+    assert "class DatePrediction" in cache_source
+    assert "BATTER_STAT_FS_MAP" in cache_source
+    assert "get_player_game_features" in cache_source
+    assert "get_features_for_date" in cache_source
 
 
 @pytest.mark.xfail(reason="Final thin-runner target; enable after later extraction phases remove remaining responsibilities.")

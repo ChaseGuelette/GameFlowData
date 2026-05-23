@@ -955,6 +955,32 @@ Behavior-preservation notes:
 - `_process_date_shared(...)` still owns pitcher/batter feature generation and prediction loops; `prediction_cache.py` remains the next Phase 4 target.
 - No DB queries, model loading, long sweeps, edge math, probability semantics, line selection, or result serialization changed.
 
+### 2026-05-23 slice 04B — prediction-cache extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/prediction_cache.py`.
+- Created `tests/test_mlb_prediction_cache.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so `DatePrediction`, probable-pitcher extraction, pitcher feature-store prediction loops, and batter feature-store prediction loops delegate to the new prediction-cache seam.
+- Modified `tests/test_mlb_sweep_inventory.py` so prediction-cache ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_prediction_cache.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.prediction_cache'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_prediction_cache.py -q` passed: 3 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 39 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/prediction_cache.py tests/test_mlb_prediction_cache.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- The extracted seam preserves the existing pitcher feature-call kwargs, `as_of_time` threading, pitcher model type hardcoded to `quantile`, batter feature-store stat mapping, batter `suite.get_model_type(...)` behavior, and skip-on-missing/exception behavior.
+- `run_shared_phases(...)` still owns per-date orchestration, matchup-cache precomputation, line fetching, and date-level cache assembly.
+- No DB queries, model artifacts, long sweeps, edge math, probability semantics, line selection, or result serialization changed.
+
 ### 2026-05-23 slice 02B — runner uses typed config after parse boundary
 
 Files changed:
