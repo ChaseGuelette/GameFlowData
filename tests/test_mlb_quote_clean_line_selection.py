@@ -8,7 +8,7 @@ import pandas as pd
 
 from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
 from src.backtesting.mlb.mlb_backtest_harness import MLBBacktestHarness
-from src.backtesting.mlb.run_mlb_sweep import _game_decision_time
+from src.backtesting.mlb.quote_decision_policy import decision_time_for_game
 
 
 class _FakeConnect:
@@ -160,13 +160,13 @@ def test_slate_or_tminus_policy_uses_slate_and_fallback_for_early_games():
     main_slate_game = {"game_id": 1, "game_time_utc": pd.Timestamp("2026-04-13T23:05:00Z")}
     early_game = {"game_id": 2, "game_time_utc": pd.Timestamp("2026-04-13T13:05:00Z")}
 
-    main_decision = _game_decision_time(
+    main_decision = decision_time_for_game(
         main_slate_game,
         policy="slate_or_tminus",
         fixed_cutoff_ts=None,
         relative_minutes=60,
     )
-    early_decision = _game_decision_time(
+    early_decision = decision_time_for_game(
         early_game,
         policy="slate_or_tminus",
         fixed_cutoff_ts=None,

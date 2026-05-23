@@ -868,6 +868,363 @@ Expected commit shape:
 
 ## Progress log
 
+### 2026-05-23 slice 01A started — quote decision policy extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/quote_decision_policy.py`.
+- Created `tests/test_mlb_quote_decision_policy.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so private quote-decision helpers are compatibility wrappers around the new module.
+- Modified `tests/test_mlb_quote_clean_line_selection.py` to import the new `decision_time_for_game(...)` seam directly.
+- Created companion research log `01-mlb-quote-clean-backtest-sweep-research-log.html` for working decisions/findings that should not bloat this main plan.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_quote_decision_policy.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.quote_decision_policy'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 15 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py` passed.
+
+Behavior-preservation notes:
+
+- Unknown quote-decision policy still falls back to the fixed cutoff, matching the previous runner behavior. Hard validation is deferred to the later config/promotion-contract phase because it would be behavior-changing.
+- Temporary compatibility wrappers remain in `run_mlb_sweep.py` for `_build_quote_clean_cutoff_ts`, `_build_slate_decision_ts`, and `_game_decision_time` so any hidden private imports keep working during this first slice.
+- No DB queries, long backtests, feature-store changes, edge math changes, BL default changes, or result schema changes were introduced.
+
+Expansion checkpoint status:
+
+- No additional production entrypoint was discovered during this slice.
+- Inventory/removal guard is now started in `tests/test_mlb_sweep_inventory.py`; final thin-runner threshold remains `xfail` until later extraction phases make it realistic.
+
+### 2026-05-23 slice 03A — quote-clean line service extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/quote_clean_line_service.py`.
+- Created `tests/test_mlb_quote_clean_line_service.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so `_fetch_lines_for_date(...)` is now a compatibility wrapper around `fetch_lines_for_date(...)`.
+- Modified `tests/test_mlb_sweep_inventory.py` so line-selection ownership is checked at the new service seam, not in the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_quote_clean_line_service.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.quote_clean_line_service'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 31 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+
+Behavior-preservation notes:
+
+- The service preserves fixed-policy one-fetch behavior, per-game decision-time behavior, `skip_early_fixed_et` omission, legacy `game_ids=` / latest-without-as-of behavior, line-source passthrough, and metadata columns for quote-clean rows.
+- `_fetch_lines_for_date(...)` remains in `run_mlb_sweep.py` as a temporary compatibility wrapper for hidden/private imports.
+- Raw SQL still lives in `line_selection.py`; this slice only moved orchestration ownership.
+- No DB queries, model loading, feature-store behavior, edge math, or result serialization changed.
+
+Expansion checkpoint status:
+
+- The service accepts `quote_clean_cutoff_time_et` only for signature compatibility; timestamp construction still happens upstream before this service is called.
+- Final wrapper removal and stricter service config objects are deferred until more callsites are characterized.
+
+### 2026-05-23 slice 04A — backtest data-loader extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/backtest_data_loader.py`.
+- Created `tests/test_mlb_backtest_data_loader.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so schedule date discovery, per-date game loading, and actuals loading delegate to the new data-loader seam.
+- Modified `tests/test_mlb_sweep_inventory.py` so raw schedule/actuals SQL ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_backtest_data_loader.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.backtest_data_loader'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_backtest_data_loader.py -q` passed: 3 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 35 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/backtest_data_loader.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- This is a DB-boundary extraction only. The SQL text and row-shaping behavior were moved, not redesigned.
+- `run_shared_phases(...)` still owns orchestration order and matchup-cache precomputation.
+- `_process_date_shared(...)` still owns pitcher/batter feature generation and prediction loops; `prediction_cache.py` remains the next Phase 4 target.
+- No DB queries, model loading, long sweeps, edge math, probability semantics, line selection, or result serialization changed.
+
+### 2026-05-23 slice 04B — prediction-cache extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/prediction_cache.py`.
+- Created `tests/test_mlb_prediction_cache.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so `DatePrediction`, probable-pitcher extraction, pitcher feature-store prediction loops, and batter feature-store prediction loops delegate to the new prediction-cache seam.
+- Modified `tests/test_mlb_sweep_inventory.py` so prediction-cache ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_prediction_cache.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.prediction_cache'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_prediction_cache.py -q` passed: 3 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 39 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/prediction_cache.py tests/test_mlb_prediction_cache.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- The extracted seam preserves the existing pitcher feature-call kwargs, `as_of_time` threading, pitcher model type hardcoded to `quantile`, batter feature-store stat mapping, batter `suite.get_model_type(...)` behavior, and skip-on-missing/exception behavior.
+- `run_shared_phases(...)` still owns per-date orchestration, matchup-cache precomputation, line fetching, and date-level cache assembly.
+- No DB queries, model artifacts, long sweeps, edge math, probability semantics, line selection, or result serialization changed.
+
+### 2026-05-23 slice 05A — sweep result serialization extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/sweep_results.py`.
+- Created `tests/test_mlb_sweep_results.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so `SweepResult`, `print_comparison_table(...)`, and `save_results(...)` delegate to the new result-output seam.
+- Modified `tests/test_mlb_sweep_inventory.py` so output serialization ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_results.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.sweep_results'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_results.py -q` passed: 2 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 42 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_results.py tests/test_mlb_sweep_results.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Serialization preserves summary JSON metadata, per-config metrics JSON, conditional `bets.csv` / `predictions.csv` writes, config directory naming, CSV rounding, per-stat columns, and comparison-table formatting.
+- `run_mlb_sweep.py` imports `SweepResult`, `print_comparison_table`, and `save_results` from the new module so existing runner behavior stays wired.
+- No DB queries, model artifacts, long sweeps, edge math, probability semantics, line selection, prediction generation, or metrics calculation changed.
+
+### 2026-05-23 slice 05B — edge/base-probability extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/edge_engine.py`.
+- Created `tests/test_mlb_edge_engine.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so odds conversion, lowest-vig line selection, `compute_edges_for_config(...)`, base-probability precompute, and fast-path posterior edge-frame construction delegate to `edge_engine.py`.
+- Modified `tests/test_mlb_sweep_inventory.py` so edge/base-probability ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_edge_engine.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.edge_engine'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_edge_engine.py tests/test_mlb_sweep_inventory.py -q` passed: 14 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 48 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/edge_engine.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Empirical CDF semantics are unchanged: legacy per-config rows still use `(samples > line).mean()` with 5%-95% clipping, while fast base-probability cache still uses the previous `1e-6`/`1 - 1e-6` logit-safety clipping.
+- Lowest-vig line selection, devig math, selected snapshot/decision metadata, actual attachment, per-stat BL blender lookup, and fast-path vectorized BL weighting were moved, not redesigned.
+- `_odds_to_prob(...)` and `_select_sharpest_line(...)` remain as temporary compatibility wrappers in the runner for hidden/private imports; public `compute_edges_for_config(...)` and `precompute_mlb_base_probs(...)` are imported from the new module.
+- No DB queries, model artifacts, long sweeps, line fetching, prediction generation, bet simulation, metrics calculation, or result serialization changed.
+
+### 2026-05-23 slice 04C — matchup-cache precompute extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/matchup_cache.py`.
+- Created `tests/test_mlb_matchup_cache.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so season-level opposing-starter/platoon precompute delegates to `build_matchup_cache(...)`.
+- Modified `tests/test_mlb_sweep_inventory.py` so matchup-cache precompute ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_matchup_cache.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.matchup_cache'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_matchup_cache.py -q` passed: 3 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_matchup_cache.py tests/test_mlb_sweep_inventory.py -q` passed: 13 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_matchup_cache.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 52 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/matchup_cache.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/matchup_cache.py tests/test_mlb_matchup_cache.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Matchup cache remains disabled when `batter_feature_store is None` and precomputes once per unique season when enabled.
+- Opposing-starter bulk and platoon-splits bulk calls are still lazy-imported from `src.processing.mlb.mlb_batter_matchup_features`, but now inside the matchup-cache seam.
+- The runner still owns date orchestration and passes the cache to prediction construction; this slice only moved season-level matchup-cache precompute.
+- No DB queries were run manually, no model artifacts or long sweeps were touched, and no prediction, line, edge, simulator, metrics, or serialization behavior changed.
+
+### 2026-05-23 slice 06A — per-config execution extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/sweep_execution.py`.
+- Created `tests/test_mlb_sweep_execution.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so `run_single_config_fast_mlb(...)`, `run_single_config(...)`, and `run_combined_config(...)` are imported from the execution seam instead of defined inline.
+- Modified `tests/test_mlb_sweep_inventory.py` so simulator/metrics orchestration ownership is guarded outside the runner; the final thin-runner LOC guard is now enabled and passing.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_execution.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.sweep_execution'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_execution.py -q` passed: 2 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_execution.py tests/test_mlb_sweep_inventory.py -q` passed: 14 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_execution.py tests/test_mlb_matchup_cache.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 56 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_execution.py src/backtesting/mlb/matchup_cache.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_execution.py tests/test_mlb_sweep_execution.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Fast sweep path still uses the precomputed edge frame, `_resolve_bets_from_lookup(...)`, and the same metrics calculation.
+- Legacy single-config and combined-config execution preserve BL blender construction, actuals accumulation/resolution order, simulator construction kwargs, stat-config thresholds, representative combined `SweepConfig`, and result shape.
+- The runner now has 406 non-comment LOC and 10 top-level functions, down from the original 1,319 non-comment LOC and 18 top-level functions.
+- The `<450` non-comment LOC structural guard is no longer xfailed; it is passing.
+- No DB queries, model artifacts, long sweeps, line fetching, prediction generation, edge math, simulator policy, metrics math, or result serialization behavior changed.
+
+### 2026-05-23 slice 06B — bootstrap/model-dir extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/sweep_bootstrap.py`.
+- Created `tests/test_mlb_sweep_bootstrap.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so model-directory resolution and DB/model/feature-store bootstrap delegate to `initialize_sweep_runtime(...)`.
+- Modified `tests/test_mlb_sweep_inventory.py` so model-dir and runtime construction ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_bootstrap.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.sweep_bootstrap'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_bootstrap.py tests/test_mlb_sweep_inventory.py -q` passed: 17 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_bootstrap.py tests/test_mlb_sweep_execution.py tests/test_mlb_matchup_cache.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 61 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_bootstrap.py src/backtesting/mlb/sweep_execution.py src/backtesting/mlb/matchup_cache.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_bootstrap.py tests/test_mlb_sweep_bootstrap.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Model-directory priority is unchanged: `production/`, direct model files in base dir, then latest complete `mlb_run_*` directory.
+- Runtime construction still uses `get_engine(local=...)`, `MLBFeatureStore(engine)`, `MLBModelSuite.from_directory(..., n_samples=...)`, and conditional `MLBBatterFeatureStore(engine)` only when requested batter stats exist and are available in the suite.
+- `find_latest_model_dir(...)` remains imported into `run_mlb_sweep.py` for compatibility with hidden/private imports, but implementation ownership moved to `sweep_bootstrap.py`.
+- The runner now has 377 non-comment LOC and 9 top-level functions.
+- No DB queries were run manually, no model artifacts or long sweeps were touched, and no shared-phase, line, prediction, edge, simulator, metrics, or serialization behavior changed.
+
+### 2026-05-23 slice 06C — compatibility-wrapper cleanup
+
+Files changed:
+
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` to remove remaining transitional compatibility wrappers:
+  - `_build_quote_clean_cutoff_ts(...)`
+  - `_build_slate_decision_ts(...)`
+  - `_game_decision_time(...)`
+  - `_fetch_lines_for_date(...)`
+  - `_odds_to_prob(...)`
+  - `_select_sharpest_line(...)`
+- Modified `_process_date_shared(...)` to call `build_fixed_cutoff_ts(...)` and `fetch_lines_for_date(...)` directly.
+- Modified `tests/test_mlb_sweep_inventory.py` so wrapper absence is now guarded.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_inventory.py -q` failed with the wrappers still present: 3 failed, 10 passed, 1 pytest-asyncio deprecation warning.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_inventory.py -q` passed: 13 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_bootstrap.py tests/test_mlb_sweep_execution.py tests/test_mlb_matchup_cache.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 61 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_bootstrap.py src/backtesting/mlb/sweep_execution.py src/backtesting/mlb/matchup_cache.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- The only callsite change was replacing wrapper calls with their delegated helpers directly.
+- No hidden/internal callsites were found in `src/`, `tests/`, or `scripts/` for the removed wrapper names before removal.
+- The runner now has 313 non-comment LOC and 3 top-level functions: `run_shared_phases`, `_process_date_shared`, and `main`.
+- No DB queries were run manually, no model artifacts or long sweeps were touched, and no shared-phase semantics, line selection, prediction generation, edge math, simulator policy, metrics math, or serialization behavior changed.
+
+### 2026-05-23 slice 02B — runner uses typed config after parse boundary
+
+Files changed:
+
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` to replace remaining downstream `args.*` reads with `cli_config.*` fields after the parse boundary.
+- Modified `tests/test_mlb_sweep_inventory.py` to guard that the runner calls `parse_sweep_cli_config(args)` and has no remaining `args.` reads.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_inventory.py::test_run_mlb_sweep_uses_typed_cli_config_after_parse_boundary -q` failed because `run_mlb_sweep.py` still contained downstream `args.*` references.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_config.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 26 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py` passed.
+
+Behavior-preservation notes:
+
+- This was a wiring-only follow-up: the runner still parses the same CLI args, but downstream orchestration now reads the typed config object.
+- No DB queries, model loading, feature-store behavior, edge math, quote-line selection, or result serialization changed.
+- The structural inventory harness now prevents `args.*` reads from creeping back into the runner after the parse boundary.
+
+### 2026-05-23 slice 02A — typed sweep config and CLI parser extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/sweep_config.py`.
+- Created `tests/test_mlb_sweep_config.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` to delegate parser construction, tau parsing, sweep-grid construction, date parsing, quote-clean config capture, output-dir parsing, and CLI direction filter construction to the new module.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_config.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.sweep_config'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_config.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 25 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py` passed.
+
+Behavior-preservation notes:
+
+- Parser flags, defaults, and argparse `choices` are preserved in `build_arg_parser()`.
+- `SweepConfig` and `build_sweep_grid` are imported back into `run_mlb_sweep.py` so existing private imports like `from run_mlb_sweep import SweepConfig` keep working during migration.
+- `parse_sweep_cli_config(...)` is parse-only; it does not construct engines, feature stores, model suites, or touch DB/model state.
+- `run_mlb_sweep.py` still uses `args` for downstream orchestration fields in this slice; the next runner/config slice can replace those references with the typed config once behavior is fully characterized.
+
+Expansion checkpoint status:
+
+- No behavior-changing validation was added beyond existing argparse `choices`; promotion-grade enforcement remains deferred to `promotion_contracts.py`.
+
+### 2026-05-23 slice 01B — structural inventory harness
+
+Files changed:
+
+- Created `tests/test_mlb_sweep_inventory.py`.
+
+Harness coverage:
+
+- Verifies `quote_decision_policy.py` owns the expected public helper functions.
+- Verifies runner quote-decision helper names are only compatibility wrappers and do not re-own `pd.to_datetime`, `ZoneInfo`, or `datetime_time` implementation details.
+- Verifies `run_mlb_sweep.py` no longer imports quote-policy implementation dependencies directly.
+- Verifies the sweep path still references the shared `line_selection.fetch_lines_at_decision_time` seam.
+- Adds an `xfail` final-shape guard for the eventual thin-runner target: non-comment LOC below 450 and no raw SQL/`pd.read_sql`/`sqlalchemy.text` ownership in `run_mlb_sweep.py`.
+
+Validation:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 19 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py` passed.
+
+Behavior-preservation notes:
+
+- Test-only slice; no production code changed.
+- The final shape guard is intentionally marked `xfail` because the migration is not done yet. It documents the destination without blocking current work.
+
 ### 2026-05-19 initial migration documentation
 
 Created this plan from a bounded code/brain deep dive.

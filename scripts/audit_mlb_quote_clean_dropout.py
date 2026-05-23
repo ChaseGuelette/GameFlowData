@@ -420,7 +420,68 @@ def build_dropout_rows(
     return pd.DataFrame(rows)
 
 
-def summarize_and_write_outputs(dropout_rows: pd.DataFrame, clean_quotes: pd.DataFrame, output_dir: Path, cutoff_time_et: str) -> dict:
+def count_selected_quote_timing_violations(
+    clean_quotes: pd.DataFrame,
+    *,
+    quote_decision_policy: str,
+    cutoff_time_et: str,
+) -> dict:
+    """Count timing violations for selected clean quotes.
+
+    Fixed policies are checked against the fixed ET cutoff. Dynamic policies are
+    checked against row-level decision time when available. If dynamic-policy
+    decision time metadata is missing, return a warning rather than falsely
+    failing every valid later slate against 13:30 ET.
+    """
+    result = {
+        "cutoff_violations": 0,
+        "decision_time_violations": 0,
+        "commence_violations": 0,
+        "decision_time_missing": 0,
+        "timing_warning": None,
+    }
+    if clean_quotes.empty or "selected_snapshot_time" not in clean_quotes.columns:
+        return result
+
+    selected_ts = _to_utc(clean_quotes["selected_snapshot_time"])
+    if "commence_time" in clean_quotes.columns:
+        commence = _to_utc(clean_quotes["commence_time"])
+        result["commence_violations"] = int((selected_ts >= commence).fillna(False).sum())
+
+    if quote_decision_policy in {"fixed_et", "skip_early_fixed_et"}:
+        if "game_date" in clean_quotes.columns:
+            cutoffs = clean_quotes["game_date"].map(lambda x: build_quote_clean_cutoff_ts(x, cutoff_time_et))
+            result["cutoff_violations"] = int((selected_ts > pd.to_datetime(cutoffs, utc=True)).fillna(False).sum())
+        return result
+
+    decision_col = next(
+        (col for col in ["selected_decision_time", "decision_time", "bet_decision_time"] if col in clean_quotes.columns),
+        None,
+    )
+    if decision_col is None:
+        result["decision_time_missing"] = int(len(clean_quotes))
+        result["timing_warning"] = (
+            f"{quote_decision_policy} audit has no row-level decision time column; "
+            "fixed cutoff violations were not evaluated."
+        )
+        return result
+
+    decision_ts = _to_utc(clean_quotes[decision_col])
+    missing = decision_ts.isna()
+    result["decision_time_missing"] = int(missing.sum())
+    result["decision_time_violations"] = int((selected_ts > decision_ts).fillna(False).sum())
+    if result["decision_time_missing"]:
+        result["timing_warning"] = f"{result['decision_time_missing']} selected clean quotes lack row-level decision time."
+    return result
+
+
+def summarize_and_write_outputs(
+    dropout_rows: pd.DataFrame,
+    clean_quotes: pd.DataFrame,
+    output_dir: Path,
+    cutoff_time_et: str,
+    quote_decision_policy: str = "fixed_et",
+) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     summary = (
         dropout_rows["dropout_bucket"].value_counts().reindex(DROPOUT_BUCKETS, fill_value=0).rename_axis("dropout_bucket").reset_index(name="count")
@@ -448,33 +509,38 @@ def summarize_and_write_outputs(dropout_rows: pd.DataFrame, clean_quotes: pd.Dat
     else:
         pd.DataFrame(columns=["bookmaker", "clean_quotes"]).to_csv(output_dir / "dropout_by_bookmaker.csv", index=False)
 
-    cutoff_violations = 0
-    commence_violations = 0
-    if not clean_quotes.empty:
-        selected_ts = _to_utc(clean_quotes["selected_snapshot_time"])
-        if "game_date" in clean_quotes.columns:
-            cutoffs = clean_quotes["game_date"].map(lambda x: build_quote_clean_cutoff_ts(x, cutoff_time_et))
-            cutoff_violations = int((selected_ts > pd.to_datetime(cutoffs, utc=True)).sum())
-        if "commence_time" in clean_quotes.columns:
-            commence = _to_utc(clean_quotes["commence_time"])
-            commence_violations = int((selected_ts >= commence).fillna(False).sum())
+    timing = count_selected_quote_timing_violations(
+        clean_quotes,
+        quote_decision_policy=quote_decision_policy,
+        cutoff_time_et=cutoff_time_et,
+    )
+    cutoff_violations = timing["cutoff_violations"]
+    decision_time_violations = timing["decision_time_violations"]
+    commence_violations = timing["commence_violations"]
 
-    if cutoff_violations or commence_violations:
+    if cutoff_violations or decision_time_violations or commence_violations:
         decision = "FAIL"
-        reason = "Selected clean quotes include cutoff or commence-time violations."
+        reason = "Selected clean quotes include decision-time/cutoff or commence-time violations."
+    elif timing.get("timing_warning"):
+        decision = "WARN"
+        reason = str(timing["timing_warning"])
     elif total and float(summary.loc[summary["dropout_bucket"] == "unknown_unclassified", "pct"].iloc[0]) > 0.01:
         decision = "WARN"
         reason = "Some predictions remain unknown/unclassified; inspect row-level output."
     else:
         decision = "PASS"
-        reason = "Selected clean quotes have no detected cutoff/commence violations; dropout buckets are classified."
+        reason = "Selected clean quotes have no detected timing violations; dropout buckets are classified."
 
     audit_summary = {
         "decision": decision,
         "reason": reason,
+        "quote_decision_policy": quote_decision_policy,
         "total_predictions": total,
         "cutoff_violations": cutoff_violations,
+        "decision_time_violations": decision_time_violations,
+        "decision_time_missing": timing["decision_time_missing"],
         "commence_violations": commence_violations,
+        "timing_warning": timing.get("timing_warning"),
         "bucket_counts": dict(zip(summary["dropout_bucket"], summary["count"])),
     }
     (output_dir / "audit_summary.json").write_text(json.dumps(audit_summary, indent=2, default=str), encoding="utf-8")
@@ -514,6 +580,13 @@ def write_markdown_summary(path: Path, audit_summary: dict, summary: pd.DataFram
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def resolve_model_dir(model_dir: Path) -> Path:
+    """Mirror sweep model-dir resolution so audit accepts the same --model-dir."""
+    from src.backtesting.mlb.sweep_bootstrap import find_latest_model_dir
+
+    return find_latest_model_dir(str(model_dir))
+
+
 def run_audit(args: argparse.Namespace) -> dict:
     from src.backtesting.mlb.run_mlb_sweep import run_shared_phases
     from src.db.client import get_engine
@@ -522,12 +595,13 @@ def run_audit(args: argparse.Namespace) -> dict:
     from src.models.mlb.mlb_model_suite import MLBModelSuite
 
     engine = get_engine(local=args.local)
-    model_dir = Path(args.model_dir)
+    requested_model_dir = Path(args.model_dir)
+    model_dir = resolve_model_dir(requested_model_dir)
     suite = MLBModelSuite.from_directory(model_dir)
     stats = args.stats
     missing_stats = [str(s) for s in stats if not suite.has_stat(s)]
     if missing_stats:
-        production_hint = model_dir / "production"
+        production_hint = requested_model_dir / "production"
         hint = ""
         if production_hint.exists():
             hint = f" Did you mean --model-dir {production_hint}?"
@@ -564,7 +638,13 @@ def run_audit(args: argparse.Namespace) -> dict:
     validate_sweep_outputs(sweep_dir)
     placed_keys = collect_saved_bet_keys(sweep_dir)
     dropout_rows = build_dropout_rows(predictions, raw_props, clean_quotes, placed_keys, args.quote_cutoff_time_et)
-    return summarize_and_write_outputs(dropout_rows, clean_quotes, Path(args.output_dir), args.quote_cutoff_time_et)
+    return summarize_and_write_outputs(
+        dropout_rows,
+        clean_quotes,
+        Path(args.output_dir),
+        args.quote_cutoff_time_et,
+        quote_decision_policy=args.quote_decision_policy,
+    )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

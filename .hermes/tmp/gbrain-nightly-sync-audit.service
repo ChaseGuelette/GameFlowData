@@ -1,0 +1,8 @@
+[Unit]
+Description=GameFlow GBrain deterministic nightly sync/audit
+Wants=gbrain-gameflow.service
+After=gbrain-gameflow.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/gbrain-nightly-sync-audit
