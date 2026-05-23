@@ -1091,6 +1091,34 @@ Behavior-preservation notes:
 - The `<450` non-comment LOC structural guard is no longer xfailed; it is passing.
 - No DB queries, model artifacts, long sweeps, line fetching, prediction generation, edge math, simulator policy, metrics math, or result serialization behavior changed.
 
+### 2026-05-23 slice 06B — bootstrap/model-dir extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/sweep_bootstrap.py`.
+- Created `tests/test_mlb_sweep_bootstrap.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so model-directory resolution and DB/model/feature-store bootstrap delegate to `initialize_sweep_runtime(...)`.
+- Modified `tests/test_mlb_sweep_inventory.py` so model-dir and runtime construction ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_bootstrap.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.sweep_bootstrap'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_bootstrap.py tests/test_mlb_sweep_inventory.py -q` passed: 17 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_bootstrap.py tests/test_mlb_sweep_execution.py tests/test_mlb_matchup_cache.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 61 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_bootstrap.py src/backtesting/mlb/sweep_execution.py src/backtesting/mlb/matchup_cache.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_bootstrap.py tests/test_mlb_sweep_bootstrap.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Model-directory priority is unchanged: `production/`, direct model files in base dir, then latest complete `mlb_run_*` directory.
+- Runtime construction still uses `get_engine(local=...)`, `MLBFeatureStore(engine)`, `MLBModelSuite.from_directory(..., n_samples=...)`, and conditional `MLBBatterFeatureStore(engine)` only when requested batter stats exist and are available in the suite.
+- `find_latest_model_dir(...)` remains imported into `run_mlb_sweep.py` for compatibility with hidden/private imports, but implementation ownership moved to `sweep_bootstrap.py`.
+- The runner now has 377 non-comment LOC and 9 top-level functions.
+- No DB queries were run manually, no model artifacts or long sweeps were touched, and no shared-phase, line, prediction, edge, simulator, metrics, or serialization behavior changed.
+
 ### 2026-05-23 slice 02B — runner uses typed config after parse boundary
 
 Files changed:

@@ -19,6 +19,7 @@ SWEEP_RESULTS_PATH = Path("src/backtesting/mlb/sweep_results.py")
 EDGE_ENGINE_PATH = Path("src/backtesting/mlb/edge_engine.py")
 MATCHUP_CACHE_PATH = Path("src/backtesting/mlb/matchup_cache.py")
 SWEEP_EXECUTION_PATH = Path("src/backtesting/mlb/sweep_execution.py")
+SWEEP_BOOTSTRAP_PATH = Path("src/backtesting/mlb/sweep_bootstrap.py")
 
 
 def _source(path: Path) -> str:
@@ -205,6 +206,26 @@ def test_sweep_execution_owns_per_config_simulation_orchestration():
     assert "BetSimulator(" in execution_source
     assert "MetricsCalculator" in execution_source
     assert "_resolve_bets_from_lookup" in execution_source
+
+
+def test_sweep_bootstrap_owns_model_dir_and_runtime_construction():
+    runner_source = _source(RUNNER_PATH)
+    bootstrap_source = _source(SWEEP_BOOTSTRAP_PATH)
+
+    assert "initialize_sweep_runtime" in runner_source
+    assert "def find_latest_model_dir" not in runner_source
+    assert "get_engine(" not in runner_source
+    assert "MLBFeatureStore(engine)" not in runner_source
+    assert "MLBModelSuite.from_directory" not in runner_source
+    assert "MLBBatterFeatureStore(engine)" not in runner_source
+
+    assert "def find_latest_model_dir" in bootstrap_source
+    assert "def initialize_sweep_runtime" in bootstrap_source
+    assert "from src.db.client import get_engine" in bootstrap_source
+    assert "MLBFeatureStore" in bootstrap_source
+    assert "MLBModelSuite" in bootstrap_source
+    assert "from_directory" in bootstrap_source
+    assert "MLBBatterFeatureStore" in bootstrap_source
 
 
 def test_final_run_mlb_sweep_runner_shape_target():

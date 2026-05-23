@@ -45,6 +45,7 @@ from src.backtesting.mlb.quote_decision_policy import (
     decision_time_for_game,
 )
 from src.backtesting.mlb.quote_clean_line_service import fetch_lines_for_date
+from src.backtesting.mlb.sweep_bootstrap import find_latest_model_dir, initialize_sweep_runtime
 from src.backtesting.mlb.sweep_config import (
     SweepConfig,
     build_arg_parser,
@@ -57,7 +58,6 @@ from src.backtesting.mlb.sweep_execution import (
     run_single_config_fast_mlb,
 )
 from src.backtesting.mlb.sweep_results import SweepResult, print_comparison_table, save_results
-from src.db.client import get_engine
 from src.models.mlb.mlb_batter_feature_store import MLBBatterFeatureStore
 from src.models.mlb.mlb_feature_store import MLBFeatureStore
 from src.models.mlb.mlb_model_suite import MLBModelSuite
@@ -300,38 +300,6 @@ def _select_sharpest_line(
 # CLI
 # ---------------------------------------------------------------------------
 
-def find_latest_model_dir(base_dir: str) -> Path:
-    """Find the best model directory for the suite.
-
-    Priority:
-    1. production/ subdirectory (unified suite location)
-    2. Model files directly in base_dir (legacy)
-    3. Latest mlb_run_* directory
-    """
-    base = Path(base_dir)
-    if not base.exists():
-        raise FileNotFoundError(f"Artifacts directory not found: {base}")
-
-    # 1. Check production/ first (where unified suite lives)
-    prod = base / "production"
-    if prod.exists() and prod.is_dir():
-        return prod
-
-    # 2. Model files directly in base_dir (run dir passed directly, or legacy layout)
-    if (base / "pitcher_k_model.joblib").exists():
-        return base
-    if any(base.glob("*_binomial_booster.json")):
-        return base
-
-    # 3. Scan mlb_run_* directories, pick latest
-    runs = sorted([
-        d for d in base.iterdir()
-        if d.is_dir() and d.name.startswith("mlb_run_") and not d.name.endswith("_incomplete")
-    ])
-    if not runs:
-        raise FileNotFoundError(f"No model directories found in {base}")
-    return runs[-1]
-
 
 def main():
     parser = build_arg_parser()
@@ -351,20 +319,11 @@ def main():
         output_dir = Path("backtest_results") / f"mlb_sweep_{timestamp}"
 
     # Initialize
-    engine = get_engine(local=cli_config.local)
-    if cli_config.local:
-        logger.info("Using LOCAL database")
-    pitcher_feature_store = MLBFeatureStore(engine)
-
-    model_path = find_latest_model_dir(cli_config.model_dir)
-    logger.info(f"Using model directory: {model_path}")
-
-    suite = MLBModelSuite.from_directory(model_path, n_samples=cli_config.n_samples)
-    logger.info(f"Suite loaded stats: {suite.available_stats}")
-
-    # Only create batter feature store if we have batter stats to predict
-    has_batter_stats = any(s.startswith("batter_") and suite.has_stat(s) for s in cli_config.stats)
-    batter_feature_store = MLBBatterFeatureStore(engine) if has_batter_stats else None
+    runtime = initialize_sweep_runtime(cli_config, log=logger)
+    engine = runtime.engine
+    pitcher_feature_store = runtime.pitcher_feature_store
+    batter_feature_store = runtime.batter_feature_store
+    suite = runtime.suite
 
     # Phase 0 + 1
     logger.info("=" * 60)
