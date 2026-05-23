@@ -10,8 +10,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
-
 RUNNER_PATH = Path("src/backtesting/mlb/run_mlb_sweep.py")
 QUOTE_POLICY_PATH = Path("src/backtesting/mlb/quote_decision_policy.py")
 QUOTE_LINE_SERVICE_PATH = Path("src/backtesting/mlb/quote_clean_line_service.py")
@@ -20,6 +18,7 @@ PREDICTION_CACHE_PATH = Path("src/backtesting/mlb/prediction_cache.py")
 SWEEP_RESULTS_PATH = Path("src/backtesting/mlb/sweep_results.py")
 EDGE_ENGINE_PATH = Path("src/backtesting/mlb/edge_engine.py")
 MATCHUP_CACHE_PATH = Path("src/backtesting/mlb/matchup_cache.py")
+SWEEP_EXECUTION_PATH = Path("src/backtesting/mlb/sweep_execution.py")
 
 
 def _source(path: Path) -> str:
@@ -187,7 +186,27 @@ def test_matchup_cache_owns_season_level_precompute():
     assert "Precomputing matchup features" in matchup_source
 
 
-@pytest.mark.xfail(reason="Final thin-runner target; enable after later extraction phases remove remaining responsibilities.")
+def test_sweep_execution_owns_per_config_simulation_orchestration():
+    runner_source = _source(RUNNER_PATH)
+    execution_source = _source(SWEEP_EXECUTION_PATH)
+
+    assert "run_single_config_fast_mlb" in runner_source
+    assert "run_combined_config" in runner_source
+    assert "def run_single_config_fast_mlb" not in runner_source
+    assert "def run_single_config" not in runner_source
+    assert "def run_combined_config" not in runner_source
+    assert "BetSimulator(" not in runner_source
+    assert "MetricsCalculator" not in runner_source
+    assert "_resolve_bets_from_lookup" not in runner_source
+
+    assert "def run_single_config_fast_mlb" in execution_source
+    assert "def run_single_config" in execution_source
+    assert "def run_combined_config" in execution_source
+    assert "BetSimulator(" in execution_source
+    assert "MetricsCalculator" in execution_source
+    assert "_resolve_bets_from_lookup" in execution_source
+
+
 def test_final_run_mlb_sweep_runner_shape_target():
     source = _source(RUNNER_PATH)
 

@@ -1062,6 +1062,35 @@ Behavior-preservation notes:
 - The runner still owns date orchestration and passes the cache to prediction construction; this slice only moved season-level matchup-cache precompute.
 - No DB queries were run manually, no model artifacts or long sweeps were touched, and no prediction, line, edge, simulator, metrics, or serialization behavior changed.
 
+### 2026-05-23 slice 06A — per-config execution extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/sweep_execution.py`.
+- Created `tests/test_mlb_sweep_execution.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so `run_single_config_fast_mlb(...)`, `run_single_config(...)`, and `run_combined_config(...)` are imported from the execution seam instead of defined inline.
+- Modified `tests/test_mlb_sweep_inventory.py` so simulator/metrics orchestration ownership is guarded outside the runner; the final thin-runner LOC guard is now enabled and passing.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_execution.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.sweep_execution'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_execution.py -q` passed: 2 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_execution.py tests/test_mlb_sweep_inventory.py -q` passed: 14 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_execution.py tests/test_mlb_matchup_cache.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 56 passed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_execution.py src/backtesting/mlb/matchup_cache.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/sweep_execution.py tests/test_mlb_sweep_execution.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Fast sweep path still uses the precomputed edge frame, `_resolve_bets_from_lookup(...)`, and the same metrics calculation.
+- Legacy single-config and combined-config execution preserve BL blender construction, actuals accumulation/resolution order, simulator construction kwargs, stat-config thresholds, representative combined `SweepConfig`, and result shape.
+- The runner now has 406 non-comment LOC and 10 top-level functions, down from the original 1,319 non-comment LOC and 18 top-level functions.
+- The `<450` non-comment LOC structural guard is no longer xfailed; it is passing.
+- No DB queries, model artifacts, long sweeps, line fetching, prediction generation, edge math, simulator policy, metrics math, or result serialization behavior changed.
+
 ### 2026-05-23 slice 02B — runner uses typed config after parse boundary
 
 Files changed:
