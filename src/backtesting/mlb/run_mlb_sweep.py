@@ -30,13 +30,13 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from src.backtesting.bet_simulator import BetSimulator
-from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
 from src.backtesting.mlb.mlb_backtest_harness import STAT_ACTUALS
 from src.backtesting.mlb.quote_decision_policy import (
     build_fixed_cutoff_ts,
     build_slate_decision_ts,
     decision_time_for_game,
 )
+from src.backtesting.mlb.quote_clean_line_service import fetch_lines_for_date
 from src.backtesting.mlb.sweep_config import (
     SweepConfig,
     build_arg_parser,
@@ -455,59 +455,18 @@ def _fetch_lines_for_date(
     *,
     game_ids: list[int] | None = None,
 ) -> pd.DataFrame:
-    """Fetch quote-clean prop lines for a set of games.
-
-    Fixed mode uses one date-level decision timestamp. Per-game modes compute a
-    decision timestamp per game so early starts are handled explicitly.
-    """
-    if games is None and game_ids is not None:
-        games = [{"game_id": int(game_id)} for game_id in game_ids]
-    if not games or not market_keys:
-        return pd.DataFrame()
-
-    game_ids = [int(g["game_id"]) for g in games]
-
-    if quote_clean_cutoff_ts is not None and quote_decision_policy != "fixed_et":
-        parts = []
-        for game in games:
-            decision_ts = _game_decision_time(
-                game,
-                policy=quote_decision_policy,
-                fixed_cutoff_ts=quote_clean_cutoff_ts,
-                relative_minutes=quote_relative_minutes,
-            )
-            if decision_ts is None:
-                continue
-            part = fetch_lines_at_decision_time(
-                engine,
-                game_ids=[int(game["game_id"])],
-                market_keys=market_keys,
-                as_of_time=decision_ts,
-                allow_latest_without_as_of=False,
-                bookmakers=None,
-                source_table=line_source,
-            )
-            if not part.empty:
-                part = part.copy()
-                part["selected_decision_time"] = decision_ts
-                part["quote_decision_policy"] = quote_decision_policy
-                parts.append(part)
-        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-
-    out = fetch_lines_at_decision_time(
+    """Compatibility wrapper for migrated quote-clean line service."""
+    return fetch_lines_for_date(
         engine,
-        game_ids=game_ids,
+        games=games,
         market_keys=market_keys,
-        as_of_time=quote_clean_cutoff_ts,
-        allow_latest_without_as_of=quote_clean_cutoff_ts is None,
-        bookmakers=None,
-        source_table=line_source,
+        quote_clean_cutoff_ts=quote_clean_cutoff_ts,
+        quote_clean_cutoff_time_et=quote_clean_cutoff_time_et,
+        quote_decision_policy=quote_decision_policy,
+        quote_relative_minutes=quote_relative_minutes,
+        line_source=line_source,
+        game_ids=game_ids,
     )
-    if not out.empty and quote_clean_cutoff_ts is not None:
-        out = out.copy()
-        out["selected_decision_time"] = quote_clean_cutoff_ts
-        out["quote_decision_policy"] = quote_decision_policy
-    return out
 
 
 # ---------------------------------------------------------------------------

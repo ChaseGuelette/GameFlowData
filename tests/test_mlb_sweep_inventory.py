@@ -14,6 +14,7 @@ import pytest
 
 RUNNER_PATH = Path("src/backtesting/mlb/run_mlb_sweep.py")
 QUOTE_POLICY_PATH = Path("src/backtesting/mlb/quote_decision_policy.py")
+QUOTE_LINE_SERVICE_PATH = Path("src/backtesting/mlb/quote_clean_line_service.py")
 
 
 def _source(path: Path) -> str:
@@ -77,11 +78,14 @@ def test_run_mlb_sweep_no_longer_imports_quote_policy_implementation_dependencie
     assert "decision_time_for_game" in source
 
 
-def test_run_mlb_sweep_still_uses_shared_line_selection_seam():
-    source = _source(RUNNER_PATH)
+def test_quote_clean_line_service_owns_shared_line_selection_seam():
+    runner_source = _source(RUNNER_PATH)
+    service_source = _source(QUOTE_LINE_SERVICE_PATH)
 
-    assert "fetch_lines_at_decision_time" in source
-    assert "from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time" in source
+    assert "fetch_lines_for_date" in runner_source
+    assert "fetch_lines_at_decision_time" not in runner_source
+    assert "fetch_lines_at_decision_time" in service_source
+    assert "from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time" in service_source
 
 
 def test_run_mlb_sweep_uses_typed_cli_config_after_parse_boundary():

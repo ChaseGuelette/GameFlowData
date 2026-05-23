@@ -898,6 +898,36 @@ Expansion checkpoint status:
 - No additional production entrypoint was discovered during this slice.
 - Inventory/removal guard is now started in `tests/test_mlb_sweep_inventory.py`; final thin-runner threshold remains `xfail` until later extraction phases make it realistic.
 
+### 2026-05-23 slice 03A — quote-clean line service extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/quote_clean_line_service.py`.
+- Created `tests/test_mlb_quote_clean_line_service.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so `_fetch_lines_for_date(...)` is now a compatibility wrapper around `fetch_lines_for_date(...)`.
+- Modified `tests/test_mlb_sweep_inventory.py` so line-selection ownership is checked at the new service seam, not in the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_quote_clean_line_service.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.quote_clean_line_service'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 31 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+
+Behavior-preservation notes:
+
+- The service preserves fixed-policy one-fetch behavior, per-game decision-time behavior, `skip_early_fixed_et` omission, legacy `game_ids=` / latest-without-as-of behavior, line-source passthrough, and metadata columns for quote-clean rows.
+- `_fetch_lines_for_date(...)` remains in `run_mlb_sweep.py` as a temporary compatibility wrapper for hidden/private imports.
+- Raw SQL still lives in `line_selection.py`; this slice only moved orchestration ownership.
+- No DB queries, model loading, feature-store behavior, edge math, or result serialization changed.
+
+Expansion checkpoint status:
+
+- The service accepts `quote_clean_cutoff_time_et` only for signature compatibility; timestamp construction still happens upstream before this service is called.
+- Final wrapper removal and stricter service config objects are deferred until more callsites are characterized.
+
 ### 2026-05-23 slice 02B — runner uses typed config after parse boundary
 
 Files changed:
