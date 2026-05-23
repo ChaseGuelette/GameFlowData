@@ -1007,6 +1007,33 @@ Behavior-preservation notes:
 - `run_mlb_sweep.py` imports `SweepResult`, `print_comparison_table`, and `save_results` from the new module so existing runner behavior stays wired.
 - No DB queries, model artifacts, long sweeps, edge math, probability semantics, line selection, prediction generation, or metrics calculation changed.
 
+### 2026-05-23 slice 05B — edge/base-probability extraction
+
+Files changed:
+
+- Created `src/backtesting/mlb/edge_engine.py`.
+- Created `tests/test_mlb_edge_engine.py`.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so odds conversion, lowest-vig line selection, `compute_edges_for_config(...)`, base-probability precompute, and fast-path posterior edge-frame construction delegate to `edge_engine.py`.
+- Modified `tests/test_mlb_sweep_inventory.py` so edge/base-probability ownership is guarded outside the runner.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_edge_engine.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.edge_engine'`, as expected before creating the new module.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_edge_engine.py tests/test_mlb_sweep_inventory.py -q` passed: 14 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_edge_engine.py tests/test_mlb_sweep_results.py tests/test_mlb_prediction_cache.py tests/test_mlb_backtest_data_loader.py tests/test_mlb_sweep_inventory.py tests/test_mlb_quote_clean_line_service.py tests/test_mlb_sweep_config.py tests/test_mlb_quote_decision_policy.py tests/test_mlb_quote_clean_line_selection.py tests/test_mlb_run_mlb_sweep_flat.py -q` passed: 48 passed, 1 xfailed, 1 pytest-asyncio deprecation warning.
+- `venv/Scripts/python.exe -m py_compile src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/edge_engine.py src/backtesting/mlb/sweep_results.py src/backtesting/mlb/prediction_cache.py src/backtesting/mlb/backtest_data_loader.py src/backtesting/mlb/quote_decision_policy.py src/backtesting/mlb/sweep_config.py src/backtesting/mlb/quote_clean_line_service.py` passed.
+- `git diff --check -- src/backtesting/mlb/run_mlb_sweep.py src/backtesting/mlb/edge_engine.py tests/test_mlb_edge_engine.py tests/test_mlb_sweep_inventory.py` passed.
+
+Behavior-preservation notes:
+
+- Empirical CDF semantics are unchanged: legacy per-config rows still use `(samples > line).mean()` with 5%-95% clipping, while fast base-probability cache still uses the previous `1e-6`/`1 - 1e-6` logit-safety clipping.
+- Lowest-vig line selection, devig math, selected snapshot/decision metadata, actual attachment, per-stat BL blender lookup, and fast-path vectorized BL weighting were moved, not redesigned.
+- `_odds_to_prob(...)` and `_select_sharpest_line(...)` remain as temporary compatibility wrappers in the runner for hidden/private imports; public `compute_edges_for_config(...)` and `precompute_mlb_base_probs(...)` are imported from the new module.
+- No DB queries, model artifacts, long sweeps, line fetching, prediction generation, bet simulation, metrics calculation, or result serialization changed.
+
 ### 2026-05-23 slice 02B — runner uses typed config after parse boundary
 
 Files changed:

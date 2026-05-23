@@ -18,6 +18,7 @@ QUOTE_LINE_SERVICE_PATH = Path("src/backtesting/mlb/quote_clean_line_service.py"
 DATA_LOADER_PATH = Path("src/backtesting/mlb/backtest_data_loader.py")
 PREDICTION_CACHE_PATH = Path("src/backtesting/mlb/prediction_cache.py")
 SWEEP_RESULTS_PATH = Path("src/backtesting/mlb/sweep_results.py")
+EDGE_ENGINE_PATH = Path("src/backtesting/mlb/edge_engine.py")
 
 
 def _source(path: Path) -> str:
@@ -147,6 +148,27 @@ def test_sweep_results_owns_output_serialization_and_comparison_table():
     assert "def print_comparison_table" in results_source
     assert "sweep_results.json" in results_source
     assert "sweep_summary.csv" in results_source
+
+
+def test_edge_engine_owns_edge_and_base_probability_calculation():
+    runner_source = _source(RUNNER_PATH)
+    edge_source = _source(EDGE_ENGINE_PATH)
+
+    assert "compute_edges_for_config" in runner_source
+    assert "precompute_mlb_base_probs" in runner_source
+    assert "def compute_edges_for_config" not in runner_source
+    assert "def precompute_mlb_base_probs" not in runner_source
+    assert "float((samples > line_val).mean())" not in runner_source
+    assert "np.where(over_arr > 0" not in runner_source
+    assert "posterior_logit" not in runner_source
+
+    assert "def compute_edges_for_config" in edge_source
+    assert "def precompute_mlb_base_probs" in edge_source
+    assert "def build_config_edge_frame" in edge_source
+    assert "float((samples > line_val).mean())" in edge_source
+    assert "posterior_logit" in edge_source
+    assert "norm.cdf" not in edge_source
+    assert "scipy.stats" not in edge_source
 
 
 @pytest.mark.xfail(reason="Final thin-runner target; enable after later extraction phases remove remaining responsibilities.")
