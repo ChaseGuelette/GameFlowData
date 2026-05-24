@@ -25,133 +25,30 @@ logger = logging.getLogger(__name__)
 _PA_BY_LINEUP_POSITION = {1: 4.3, 2: 4.2, 3: 3.9, 4: 3.8, 5: 3.7, 6: 3.5, 7: 3.3, 8: 3.1, 9: 3.0}
 
 # ---------------------------------------------------------------------------
-# Feature lists (centralized, locked for model compatibility)
+# Feature contracts (owned by src.models.mlb.features.contracts; re-exported for compatibility)
 # ---------------------------------------------------------------------------
 
-# Stat key -> prop market_key mapping
-BATTER_STAT_MARKET_KEY: dict[str, str] = {
-    "hits": "batter_hits",
-    "home_runs": "batter_home_runs",
-    "total_bases": "batter_total_bases",
-    "rbis": "batter_rbis",
-    "runs": "batter_runs_scored",
-    "hrr": "batter_hrr",
-}
-
-# Stat key -> target column in mlb_player_game_stats_batting
-# For compound stats, the value is a SQL expression fragment: used as
-# `bgs.{target_col}` in the training query, so bgs.h + bgs.r + bgs.rbi is correct.
-BATTER_STAT_TARGET: dict[str, str] = {
-    "hits": "h",
-    "home_runs": "hr",
-    "total_bases": "tb",
-    "rbis": "rbi",
-    "runs": "r",
-    "hrr": "h + bgs.r + bgs.rbi",  # compound: bgs.h + bgs.r + bgs.rbi in SQL
-}
-
-BATTER_BASE_FEATURES: list[str] = [
-    # Batter rolling averages (mlb_player_average_batting)
-    "batter_avg_h_l5", "batter_avg_h_l10", "batter_avg_h_l20", "batter_avg_h_szn",
-    "batter_avg_hr_l5", "batter_avg_hr_l10",
-    "batter_avg_tb_l5", "batter_avg_tb_l10", "batter_avg_tb_szn",
-    "batter_avg_ab_l5", "batter_avg_pa_l5",
-    "batter_avg_r_l10", "batter_avg_r_szn",
-    "batter_avg_rbi_l5", "batter_avg_rbi_l10",
-    "batter_avg_bb_l5",
-    "batter_avg_batting_avg_l10", "batter_avg_obp_l10",
-    "batter_avg_slg_l10", "batter_avg_ops_l10",
-    "batter_std_h_l5", "batter_std_hr_l5", "batter_std_tb_l5",
-    "batter_std_rbi_l5", "batter_std_r_l5",
-    # Context
-    "batter_rest_days", "batter_games_last_7d", "batter_game_number",
-    # Statcast (mlb_player_average_statcast_batting)
-    "batter_avg_exit_velocity_l5", "batter_avg_exit_velocity_l10",
-    "batter_avg_launch_angle_l5",
-    "batter_barrel_pct_l5", "batter_barrel_pct_l10",
-    "batter_hard_hit_pct_l5",
-    "batter_xba_l5", "batter_xba_l10",
-    "batter_xslg_l5", "batter_xwoba_l5",
-    "batter_zone_pct_l5", "batter_chase_pct_l5", "batter_whiff_pct_l5",
-    # FanGraphs season-to-date snapshots (point-in-time via _history table,
-    # joined with `as_of_date < game_date`). BR backfill populates k_pct,
-    # bb_pct, iso, babip, avg/obp/slg/ops; FG-only columns (wrc_plus, woba,
-    # hard_pct) are NULL for pre-2026 dates and FG-populated for 2026+ daily.
-    "batter_wrc_plus_szn", "batter_woba_szn", "batter_iso_szn",
-    "batter_bb_pct_szn", "batter_k_pct_szn", "batter_hard_pct_szn", "batter_babip_szn",
-    # Lineup
-    "lineup_position",
-    # Opposing starter pitcher
-    "opp_pitcher_avg_era_l5", "opp_pitcher_avg_whip_l5",
-    "opp_pitcher_avg_k_per_9_l5", "opp_pitcher_avg_bb_per_9_l5",
-    "opp_pitcher_avg_h_allowed_l5", "opp_pitcher_avg_hr_allowed_l5",
-    "opp_pitcher_xwoba_against_l5", "opp_pitcher_hard_hit_pct_against_l5",
-    "opp_pitcher_avg_fastball_velo_l5", "opp_pitcher_days_rest",
-    "opp_pitcher_babip_against_l5",
-    # Platoon
-    "is_same_hand", "batter_avg_h_vs_hand_l20", "batter_avg_ops_vs_hand_l20",
-    # Game context
-    "is_home", "line_total",
-    # Weather (mlb_game_weather)
-    "air_density_idx",
-    "wind_out_mph",
-    "has_precip",
-    # Derived (Python post-SQL)
-    "batter_h_l5_l10_ratio",
-    # Opposing bullpen workload (mlb_bullpen_daily_status)
-    "opp_bullpen_ip_last_3d",
-    "opp_bullpen_era_last_7d",
-    "opp_relievers_available",
-    "opp_bullpen_pitches_last_3d",
-    # Opposing starter inning-level (mlb_pitcher_inning_stats)
-    "opp_pitcher_velo_drop_late_l5",
-    "opp_pitcher_avg_pitches_per_inning_l5",
-    "opp_pitcher_deep_inning_pct_l5",
-    # Umpire tendency
-    "umpire_avg_k_per_game_l20",
-]
-
-# Per-stat extensions
-BATTER_HITS_FEATURES: list[str] = BATTER_BASE_FEATURES + [
-    "park_hits_factor", "prop_line_batter_hits",
-    "projected_ab",
-    "batter_gb_pct_l10", "batter_fb_pct_l10",
-    "batter_babip_opp_babip_interaction", "projected_ab_x_recent_form",
-]
-BATTER_HR_FEATURES: list[str] = BATTER_BASE_FEATURES + [
-    "park_hr_factor", "batter_avg_hr_vs_hand_l20",
-    "batter_fb_pct_l10", "prop_line_batter_home_runs",
-]
-BATTER_TOTAL_BASES_FEATURES: list[str] = BATTER_BASE_FEATURES + [
-    "park_hits_factor", "park_hr_factor", "prop_line_batter_total_bases",
-]
-BATTER_RBIS_FEATURES: list[str] = BATTER_BASE_FEATURES + [
-    "park_runs_factor", "prop_line_batter_rbis",
-]
-BATTER_RUNS_FEATURES: list[str] = BATTER_BASE_FEATURES + [
-    "park_runs_factor", "prop_line_batter_runs_scored",
-]
-# H+R+RBI: hits carry the bulk of the signal; park factors for both hits and runs;
-# no sportsbook prop line exists (Kalshi-only), so prop_line_batter_hrr will be 0
-# during training — the model learns to ignore it and uses rolling avg features instead.
-BATTER_HRR_FEATURES: list[str] = BATTER_BASE_FEATURES + [
-    "park_hits_factor", "park_hr_factor", "park_runs_factor", "prop_line_batter_hrr",
-]
-
-BATTER_FEATURE_MAP: dict[str, list[str]] = {
-    "hits": BATTER_HITS_FEATURES,
-    "home_runs": BATTER_HR_FEATURES,
-    "total_bases": BATTER_TOTAL_BASES_FEATURES,
-    "rbis": BATTER_RBIS_FEATURES,
-    "runs": BATTER_RUNS_FEATURES,
-    "hrr": BATTER_HRR_FEATURES,
-}
-
-
-def get_features_for_stat(stat: str) -> list[str]:
-    """Return the feature list for a given batter stat."""
-    return BATTER_FEATURE_MAP[stat]
-
+from src.models.mlb.features.contracts import (
+    BATTER_BASE_FEATURES,
+    BATTER_FEATURE_MAP,
+    BATTER_HITS_FEATURES,
+    BATTER_HR_FEATURES,
+    BATTER_HRR_FEATURES,
+    BATTER_RBIS_FEATURES,
+    BATTER_RUNS_FEATURES,
+    BATTER_STAT_MARKET_KEY,
+    BATTER_STAT_TARGET,
+    BATTER_TOTAL_BASES_FEATURES,
+    get_features_for_stat,
+)
+from src.models.mlb.features.prop_line_feature_source import (
+    build_lateral_prop_line_join,
+    fetch_single_prop_line,
+)
+from src.models.mlb.features.transforms import (
+    add_batter_derived_features,
+    add_batter_interaction_features,
+)
 
 @dataclass
 class MLBBatterFeatureConfig:
@@ -520,32 +417,7 @@ class MLBBatterFeatureStore:
             ) lines ON TRUE
 
             -- Player prop line (stat-specific)
-            LEFT JOIN LATERAL (
-                SELECT sub.line AS prop_line
-                FROM (
-                    SELECT DISTINCT ON (market_key) market_key, line
-                    FROM mlb_raw_player_props
-                    WHERE player_id = bgs.player_id
-                      AND game_id = bgs.game_id
-                      AND market_key = :market_key
-                      AND bookmaker IN ('pinnacle', 'draftkings')
-                      AND (
-                          :as_of_time IS NULL
-                          OR market_last_update <= :as_of_time
-                      )
-                      AND (
-                          commence_time IS NULL
-                          OR market_last_update IS NULL
-                          OR market_last_update < commence_time
-                      )
-                      AND (
-                          commence_time IS NULL
-                          OR COALESCE(snapshot_time, inserted_at) < commence_time
-                      )
-                    ORDER BY market_key, market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
-                ) sub
-                LIMIT 1
-            ) props ON TRUE
+            {prop_line_lateral_join}
 
             -- Opposing bullpen workload
             LEFT JOIN mlb_bullpen_daily_status bull
@@ -558,7 +430,10 @@ class MLBBatterFeatureStore:
               AND bgs.did_not_play = FALSE
               AND gs.game_type = 'R'
               AND bgs.season = :season
-        """.replace("{target_col}", target_col))
+        """.replace("{target_col}", target_col).replace(
+            "{prop_line_lateral_join}",
+            build_lateral_prop_line_join(row_alias="bgs", market_key_sql=":market_key"),
+        ))
 
         with self.engine.connect() as conn:
             conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
@@ -577,40 +452,11 @@ class MLBBatterFeatureStore:
 
     def _add_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add Python-computed derived features after SQL load."""
-        # Momentum ratio: L5/L10 hit trend
-        df["batter_h_l5_l10_ratio"] = df.apply(
-            lambda r: (r["batter_avg_h_l5"] / r["batter_avg_h_l10"])
-            if r.get("batter_avg_h_l10", 0) > 0
-            else 1.0,
-            axis=1,
-        )
-
-        # Projected AB for binomial model (use rolling avg, avoid leakage)
-        if "batter_avg_ab_l5" in df.columns:
-            pa_map = _PA_BY_LINEUP_POSITION
-            df["_position_pa"] = df["lineup_position"].map(pa_map)
-            df["projected_ab"] = df.apply(
-                lambda r: max(0.5 * (r["batter_avg_ab_l5"] if pd.notna(r["batter_avg_ab_l5"]) else 3.5) + 0.5 * r["_position_pa"], 1.0)
-                if pd.notna(r["_position_pa"])
-                else max(r["batter_avg_ab_l5"] if pd.notna(r["batter_avg_ab_l5"]) else 3.5, 1.0),
-                axis=1,
-            )
-            df.drop(columns=["_position_pa"], inplace=True)
-        else:
-            df["projected_ab"] = 3.5
-
-        return df
+        return add_batter_derived_features(df)
 
     def _add_batter_interaction_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Compute batter interaction features that depend on matchup data."""
-        df["batter_babip_opp_babip_interaction"] = (
-            df["batter_babip_szn"].fillna(0.300)
-            * df["opp_pitcher_babip_against_l5"].fillna(0.300)
-        )
-        df["projected_ab_x_recent_form"] = (
-            df["projected_ab"].fillna(0) * df["batter_avg_h_l10"].fillna(0)
-        )
-        return df
+        return add_batter_interaction_features(df)
 
     # ------------------------------------------------------------------
     # Single-player inference (game-time)
@@ -956,32 +802,7 @@ class MLBBatterFeatureStore:
                   AND bookmaker IN ('pinnacle', 'draftkings')
             ) lines ON TRUE
 
-            LEFT JOIN LATERAL (
-                SELECT sub.line AS prop_line
-                FROM (
-                    SELECT DISTINCT ON (market_key) market_key, line
-                    FROM mlb_raw_player_props
-                    WHERE player_id = bgs.player_id
-                      AND game_id = bgs.game_id
-                      AND market_key = :market_key
-                      AND bookmaker IN ('pinnacle', 'draftkings')
-                      AND (
-                          :as_of_time IS NULL
-                          OR market_last_update <= :as_of_time
-                      )
-                      AND (
-                          commence_time IS NULL
-                          OR market_last_update IS NULL
-                          OR market_last_update < commence_time
-                      )
-                      AND (
-                          commence_time IS NULL
-                          OR COALESCE(snapshot_time, inserted_at) < commence_time
-                      )
-                    ORDER BY market_key, market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
-                ) sub
-                LIMIT 1
-            ) props ON TRUE
+            {prop_line_lateral_join}
 
             -- Opposing bullpen workload
             LEFT JOIN mlb_bullpen_daily_status bull
@@ -994,7 +815,10 @@ class MLBBatterFeatureStore:
               AND bgs.is_starter = TRUE
               AND bgs.did_not_play = FALSE
               AND gs.game_type = 'R'
-        """.replace("{target_col}", target_col))
+        """.replace("{target_col}", target_col).replace(
+            "{prop_line_lateral_join}",
+            build_lateral_prop_line_join(row_alias="bgs", market_key_sql=":market_key"),
+        ))
 
         with self.engine.connect() as conn:
             conn.execute(text("SET statement_timeout = '300000'"))  # 5 min
@@ -1290,50 +1114,14 @@ class MLBBatterFeatureStore:
         market_key: str,
         as_of_time: datetime | None = None,
     ) -> float:
-        """Fetch batter prop line at or before ``as_of_time``.
-
-        Historical backtests must not see odds snapshots captured after the
-        simulated inference/bet time. ``inserted_at`` is a fallback for legacy
-        rows missing ``snapshot_time``.
-        """
-        query = text("""
-            SELECT line
-            FROM mlb_raw_player_props
-            WHERE player_id = :player_id
-              AND game_id = :game_id
-              AND market_key = :market_key
-              AND bookmaker IN ('pinnacle', 'draftkings')
-              AND (
-                  :as_of_time IS NULL
-                  OR market_last_update <= :as_of_time
-              )
-              AND (
-                  commence_time IS NULL
-                  OR market_last_update IS NULL
-                  OR market_last_update < commence_time
-              )
-              AND (
-                  commence_time IS NULL
-                  OR COALESCE(snapshot_time, inserted_at) < commence_time
-              )
-            ORDER BY market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
-            LIMIT 1
-        """)
-        with self.engine.connect() as conn:
-            df = pd.read_sql(
-                query,
-                conn,
-                params={
-                    "player_id": player_id,
-                    "game_id": game_id,
-                    "market_key": market_key,
-                    "as_of_time": as_of_time,
-                },
-            )
-        if df.empty:
-            return 0
-        line = df.iloc[0].line
-        return float(line) if line else 0
+        """Fetch batter prop line at or before ``as_of_time``."""
+        return fetch_single_prop_line(
+            self.engine,
+            player_id=player_id,
+            game_id=game_id,
+            market_key=market_key,
+            as_of_time=as_of_time,
+        )
 
     def _get_platoon_features(self, player_id: int, opp_pitcher_id: int, game_date: str) -> dict:
         """Fetch platoon split features for a single batter."""

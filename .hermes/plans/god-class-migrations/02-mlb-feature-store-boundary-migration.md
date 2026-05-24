@@ -957,6 +957,110 @@ Expected commit shape:
 
 ## Progress log
 
+### 2026-05-23 slices 00-07A — contracts, transforms, prop-line source, source/request shells
+
+Files changed:
+
+- Created `src/models/mlb/features/__init__.py`.
+- Created `src/models/mlb/features/contracts.py`.
+- Created `src/models/mlb/features/transforms.py`.
+- Created `src/models/mlb/features/temporal_contracts.py`.
+- Created `src/models/mlb/features/prop_line_feature_source.py`.
+- Created `src/models/mlb/features/shared_sources.py`.
+- Created `src/models/mlb/features/pitcher_sources.py`.
+- Created `src/models/mlb/features/batter_sources.py`.
+- Created `src/models/mlb/features/requests.py`.
+- Created compatibility loader shells:
+  - `src/models/mlb/features/pitcher_training_loader.py`
+  - `src/models/mlb/features/pitcher_inference_loader.py`
+  - `src/models/mlb/features/batter_training_loader.py`
+  - `src/models/mlb/features/batter_inference_loader.py`
+- Modified `src/models/mlb/mlb_feature_store.py` to re-export contract constants, delegate pure pitcher transforms, and delegate single-player prop-line fetches.
+- Modified `src/models/mlb/mlb_batter_feature_store.py` to re-export contract constants, delegate pure batter transforms, and delegate single-player prop-line fetches.
+- Created focused tests:
+  - `tests/test_mlb_feature_store_inventory.py`
+  - `tests/test_mlb_feature_contracts.py`
+  - `tests/test_mlb_feature_transforms.py`
+  - `tests/test_mlb_feature_temporal_contracts.py`
+  - `tests/test_mlb_prop_line_feature_source.py`
+  - `tests/test_mlb_shared_feature_sources.py`
+  - `tests/test_mlb_pitcher_feature_sources.py`
+  - `tests/test_mlb_batter_feature_sources.py`
+  - `tests/test_mlb_feature_requests.py`
+- Updated Lane 01 compatibility imports in existing tests discovered by Lane 02 validation:
+  - `tests/test_mlb_feature_store_as_of.py`
+  - `tests/test_mlb_run_mlb_sweep_flat.py`
+- Created companion findings log: `02-mlb-feature-store-boundary-research-log.html`.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_feature_store_inventory.py tests/test_mlb_feature_contracts.py tests/test_mlb_feature_transforms.py tests/test_mlb_feature_temporal_contracts.py tests/test_mlb_prop_line_feature_source.py tests/test_mlb_shared_feature_sources.py tests/test_mlb_pitcher_feature_sources.py tests/test_mlb_batter_feature_sources.py tests/test_mlb_feature_requests.py -q` initially failed as expected before the new modules existed. A delegated worker hit its tool-call cap after discovery, so implementation resumed directly in the controller session.
+- Lane-wide regression initially failed at collection because existing tests imported removed Lane 01 compatibility names from `run_mlb_sweep.py`; those tests now import the new owner modules directly.
+
+GREEN result:
+
+- Focused Lane 02 + existing facade tests passed:
+  - `venv/Scripts/python.exe -m pytest tests/test_mlb_feature_store_inventory.py tests/test_mlb_feature_contracts.py tests/test_mlb_feature_transforms.py tests/test_mlb_feature_temporal_contracts.py tests/test_mlb_prop_line_feature_source.py tests/test_mlb_shared_feature_sources.py tests/test_mlb_pitcher_feature_sources.py tests/test_mlb_batter_feature_sources.py tests/test_mlb_feature_requests.py tests/test_mlb_feature_store_as_of.py tests/test_mlb_batter_feature_store.py tests/test_mlb_batter_train_pipeline_variants.py -q`
+  - Result: 66 passed, 1 warning.
+- Lane-wide filtered regression passed:
+  - `venv/Scripts/python.exe -m pytest tests -k "mlb and (feature_store or feature or batter_train_pipeline or run_mlb_sweep or quote_clean)" -q`
+  - Result: 104 passed, 871 deselected, 1 warning.
+- Compile passed:
+  - `venv/Scripts/python.exe -m py_compile src/models/mlb/mlb_feature_store.py src/models/mlb/mlb_batter_feature_store.py src/models/mlb/features/*.py`
+
+Behavior-preservation notes:
+
+- Public constants and `get_features_for_stat(...)` remain importable from the legacy feature-store modules.
+- Pure transform extraction preserves legacy in-place DataFrame mutation and default-filling behavior.
+- `MLBFeatureStore._get_prop_line(...)` and `MLBBatterFeatureStore._get_prop_line(...)` now delegate to `features.prop_line_feature_source.fetch_single_prop_line(...)` while preserving legacy zero fallback, bookmaker filter, as-of predicate, post-commence guards, and ordering.
+- Training/date-batch prop-line lateral SQL was deferred from slices 00-07A because it is promotion-critical; the 2026-05-24 follow-up moved this prop-line lateral SQL into the shared source owner with explicit tests.
+- Shared/pitcher/batter source modules and request/loader modules are established and tested, but production callsites still mostly pass through compatibility facades.
+
+Expansion checkpoint status:
+
+- A Lane 01 compatibility drift was discovered in tests and recorded in the HTML findings log.
+- Phase 8 production callsite migration is intentionally not done in this slice; the plan says not to migrate all callsites in one PR, and daily-runner/inference rewires are production-sensitive.
+- Phase 9 full facade shrink thresholds are documented but not enforced; current inventory guards keep the destination visible until all source-specific SQL is migrated safely.
+
+### 2026-05-24 slice 07B — training/date-batch prop-line source ownership and inventory tightening
+
+Files changed:
+
+- Modified `src/models/mlb/features/prop_line_feature_source.py`:
+  - added `build_lateral_prop_line_join(...)` as the single owner for training/date-batch prop-line lateral SQL;
+  - preserved the existing bookmaker filter, `market_last_update <= :as_of_time`, pre-commence `market_last_update < commence_time`, snapshot/inserted-at pre-commence guard, and ordering.
+- Modified `src/models/mlb/mlb_feature_store.py`:
+  - pitcher training and date-batch SQL now replace a `{prop_line_lateral_join}` placeholder with `build_lateral_prop_line_join(row_alias="pgs", market_key_sql="'pitcher_strikeouts'")`.
+- Modified `src/models/mlb/mlb_batter_feature_store.py`:
+  - batter training and date-batch SQL now replace a `{prop_line_lateral_join}` placeholder with `build_lateral_prop_line_join(row_alias="bgs", market_key_sql=":market_key")`.
+- Tightened tests:
+  - `tests/test_mlb_prop_line_feature_source.py` covers batch/lateral SQL construction for batter bind params and pitcher literal market keys.
+  - `tests/test_mlb_feature_store_inventory.py` now asserts prop-line lateral SQL is owned by the feature source and raw `mlb_raw_player_props` SQL is absent from both facades.
+
+RED result:
+
+- `./venv/Scripts/python.exe -m pytest tests/test_mlb_prop_line_feature_source.py tests/test_mlb_feature_store_inventory.py -q`
+- Expected failure before implementation: import error for missing `build_lateral_prop_line_join`.
+
+GREEN result:
+
+- Compile + smoke passed:
+  - `./venv/Scripts/python.exe -m py_compile src/models/mlb/mlb_feature_store.py src/models/mlb/mlb_batter_feature_store.py src/models/mlb/features/prop_line_feature_source.py && ./venv/Scripts/python.exe -m pytest tests/test_mlb_feature_store_as_of.py tests/test_mlb_prop_line_feature_source.py tests/test_mlb_feature_store_inventory.py tests/test_mlb_run_mlb_sweep_flat.py -q`
+  - Result: 16 passed, 1 warning.
+- Focused Lane 02 suite passed:
+  - `./venv/Scripts/python.exe -m pytest tests/test_mlb_feature_store_inventory.py tests/test_mlb_feature_contracts.py tests/test_mlb_feature_transforms.py tests/test_mlb_feature_temporal_contracts.py tests/test_mlb_prop_line_feature_source.py tests/test_mlb_shared_feature_sources.py tests/test_mlb_pitcher_feature_sources.py tests/test_mlb_batter_feature_sources.py tests/test_mlb_feature_requests.py tests/test_mlb_feature_store_as_of.py tests/test_mlb_batter_feature_store.py tests/test_mlb_batter_train_pipeline_variants.py -q`
+  - Result: 69 passed, 1 warning.
+- Lane-wide filtered regression passed:
+  - `./venv/Scripts/python.exe -m pytest tests -k "mlb and (feature_store or feature or batter_train_pipeline or run_mlb_sweep or quote_clean)" -q`
+  - Result: 107 passed, 877 deselected, 1 warning.
+- Diff hygiene passed:
+  - `git diff --check -- src/models/mlb/mlb_feature_store.py src/models/mlb/mlb_batter_feature_store.py src/models/mlb/features/prop_line_feature_source.py tests/test_mlb_prop_line_feature_source.py tests/test_mlb_feature_store_inventory.py`
+
+Behavior-preservation notes:
+
+- This slice intentionally did not change quote/as-of semantics; it centralized the duplicated lateral SQL string only.
+- Inventory guards are now stricter for prop-line SQL ownership but still do not enforce the `<600` non-comment LOC facade thresholds. Those thresholds remain deferred until remaining SQL/source helpers are safe.
+
 ### 2026-05-19 initial migration documentation
 
 Created this plan from a bounded code/brain deep dive.

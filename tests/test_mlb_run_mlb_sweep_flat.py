@@ -1,6 +1,6 @@
 """Tests for MLB sweep flat-stake configuration display."""
 
-from src.backtesting.mlb.run_mlb_sweep import SweepConfig
+from src.backtesting.mlb.sweep_config import SweepConfig
 
 
 def test_sweep_config_label_shows_flat_stake_instead_of_kelly():

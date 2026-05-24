@@ -15,7 +15,6 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -24,189 +23,25 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Feature lists (centralized, locked for model compatibility)
+# Feature contracts (owned by src.models.mlb.features.contracts; re-exported for compatibility)
 # ---------------------------------------------------------------------------
 
-PITCHER_K_FEATURES: list[str] = [
-    # Pitcher rolling/context features (from mlb_player_average_pitching)
-    "pitcher_avg_so_l3",
-    "pitcher_avg_so_l5",
-    "pitcher_avg_so_szn",
-    "pitcher_avg_k_per_9_l5",
-    "pitcher_avg_ip_l3",
-    "pitcher_avg_ip_l5",
-    "pitcher_avg_ip_szn",
-    "pitcher_min_ip_l5",
-    "pitcher_max_ip_l5",
-    "pitcher_median_ip_l5",
-    "pitcher_ip_range_l5",
-    "pitcher_short_start_rate_l5",
-    "pitcher_start_stability_l5",
-    "pitcher_avg_batters_faced_l5",
-    "pitcher_avg_batters_faced_szn",
-    "pitcher_avg_pitches_per_start_l5",
-    "pitcher_avg_pitches_thrown_l3",
-    "pitcher_avg_pitches_thrown_l5",
-    "pitcher_workload_spike_ratio",
-    "pitcher_recent_pitch_count_trend",
-    "rest_after_high_pitch_count",
-    "pitcher_avg_bb_l5",
-    "pitcher_std_so_l3",
-
-    # Derived/normalized features
-    "pitcher_est_bf_l5",
-    "pitcher_pitches_per_ip_l5",
-    "pitcher_so_l3_l5_ratio",
-
-    # Pitcher Statcast (from mlb_player_average_statcast_pitching)
-    "pitcher_avg_whiff_pct_l5",
-    "pitcher_avg_csw_pct_l5",
-    "pitcher_avg_chase_pct_l5",
-    "pitcher_avg_zone_pct_l5",
-    "pitcher_avg_fastball_velo_l5",
-    "pitcher_std_whiff_pct_l3",
-
-    # Team context
-    "team_starter_avg_ip_l10",
-    "team_starter_short_start_rate_l10",
-    "team_starter_avg_pitches_l10",
-    "team_starter_avg_ip_l30",
-    "team_starter_short_hook_rate_l30",
-    "team_starter_deep_start_rate_l30",
-    "bullpen_fatigue_pressure",
-    "pitcher_days_rest",
-    "pitcher_pitch_count_last_start",
-    "pitcher_starts_szn",
-
-    # Phase 3B: pitcher-side downside / short-outing risk only.
-    "manager_starter_short_hook_rate_l30",
-    "pitcher_pct_starts_under_5_ip_l10",
-    "pitcher_fastball_velo_delta_l3_vs_szn",
-    "team_bullpen_pitches_last_3d",
-    "pitcher_left_last_start_early_flag",
-
-    # Existing bullpen context retained for compatibility / derived fatigue pressure.
-    "team_bullpen_ip_last_3d",
-
-    # FanGraphs season-to-date snapshots from mlb_player_season_advanced_history.
-    # Joined with `as_of_date < game_date` (strict) — point-in-time, no leak.
-    "pitcher_fip_szn",
-    "pitcher_k_pct_szn",
-
-    # Opposing team batting context
-    "opp_team_avg_so_l10",
-    "opp_team_avg_batting_avg_l10",
-    "opp_team_k_pct_l10",
-    "opp_team_whiff_pct_l10",
-    "opp_team_contact_rate_l10",
-    "opp_team_chase_pct_l10",
-    "opp_team_zone_contact_pct_l10",
-
-    # Game context
-    "park_so_factor",
-    "is_home",
-    "line_total",
-
-    # Weather (mlb_game_weather)
-    "air_density_idx",
-    "wind_out_mph",
-
-    # Betting signal
-    "prop_line_pitcher_strikeouts",
-
-    # Inning-level fatigue (from mlb_pitcher_inning_stats)
-    "pitcher_velo_drop_late_l5",
-    "pitcher_avg_whiff_rate_late_l5",
-    "pitcher_avg_k_rate_early_l5",
-    "pitcher_avg_pitches_per_inning_l5",
-    "pitcher_avg_csw_rate_l5_inning",
-    "pitcher_deep_inning_pct_l5",
-
-    # First-5-IP K rate
-    "pitcher_avg_k_first_5ip_l5",
-
-    # Interaction features
-    "pitcher_k_opp_k_interaction",
-    "pitcher_whiff_opp_whiff_interaction",
-
-    # Pitch repertoire diversity
-    "pitcher_fastball_pct_l5",
-    "pitcher_breaking_pct_l5",
-    "pitcher_offspeed_pct_l5",
-    "pitcher_num_pitch_types_l5",
-
-    # Opposing lineup composition/contact profile
-    "projected_lineup_k_pct",
-    "projected_lineup_whiff_pct",
-    "projected_lineup_chase_pct",
-    "projected_lineup_contact_rate",
-    "projected_lineup_same_hand_k_pct",
-    "projected_lineup_opposite_hand_k_pct",
-    "projected_lineup_hand_k_delta",
-    "projected_lineup_top3_k_pct",
-    "projected_lineup_mid3_k_pct",
-    "projected_lineup_bot3_k_pct",
-    "projected_lineup_k_concentration",
-    "pct_opp_lineup_same_hand",
-
-    # Umpire tendency
-    "umpire_avg_k_per_game_l20",
-]
-
-
-# Feature 3 uses the existing mlb_player_average_statcast_pitching rolling
-# population: avg_avg_fastball_velo_l3 - avg_avg_fastball_velo_szn. This keeps
-# Phase 3B cheap and aligned with current pitcher-K Statcast feature sourcing.
-PITCHER_K_PHASE3B_ADDED_FEATURES: list[str] = [
-    "manager_starter_short_hook_rate_l30",
-    "pitcher_pct_starts_under_5_ip_l10",
-    "pitcher_fastball_velo_delta_l3_vs_szn",
-    "team_bullpen_pitches_last_3d",
-    "pitcher_left_last_start_early_flag",
-]
-
-# Phase 3A lineup/contact features were evaluated and rejected: they compressed
-# the Phase 2 contrarian-under edge. Keep them computable/returnable for
-# backwards compatibility with old artifacts, but do not let new training runs
-# select them unless this constant is deliberately changed in a future phase.
-PITCHER_K_PHASE3A_REJECTED_FEATURES: set[str] = {
-    "projected_lineup_k_pct",
-    "projected_lineup_whiff_pct",
-    "projected_lineup_chase_pct",
-    "projected_lineup_contact_rate",
-    "projected_lineup_same_hand_k_pct",
-    "projected_lineup_opposite_hand_k_pct",
-    "projected_lineup_hand_k_delta",
-    "projected_lineup_top3_k_pct",
-    "projected_lineup_mid3_k_pct",
-    "projected_lineup_bot3_k_pct",
-    "projected_lineup_k_concentration",
-    "pct_opp_lineup_same_hand",
-    "umpire_avg_k_per_game_l20",
-}
-
-PITCHER_K_TRAINING_FEATURES: list[str] = [
-    feature for feature in PITCHER_K_FEATURES
-    if feature not in PITCHER_K_PHASE3A_REJECTED_FEATURES
-]
-PITCHER_K_EXCLUDED_TRAINING_FEATURES = PITCHER_K_PHASE3A_REJECTED_FEATURES
-
-
-LINEUP_FEATURE_DEFAULTS: dict[str, float] = {
-    "projected_lineup_k_pct": 0.22,
-    "projected_lineup_whiff_pct": 0.22,
-    "projected_lineup_chase_pct": 0.28,
-    "projected_lineup_contact_rate": 0.78,
-    "projected_lineup_same_hand_k_pct": 0.22,
-    "projected_lineup_opposite_hand_k_pct": 0.22,
-    "projected_lineup_hand_k_delta": 0.0,
-    "projected_lineup_top3_k_pct": 0.22,
-    "projected_lineup_mid3_k_pct": 0.22,
-    "projected_lineup_bot3_k_pct": 0.22,
-    "projected_lineup_k_concentration": 0.0,
-    "pct_opp_lineup_same_hand": 0.50,
-}
-
+from src.models.mlb.features.contracts import (
+    LINEUP_FEATURE_DEFAULTS,
+    PITCHER_K_EXCLUDED_TRAINING_FEATURES,
+    PITCHER_K_FEATURES,
+    PITCHER_K_PHASE3A_REJECTED_FEATURES,
+    PITCHER_K_PHASE3B_ADDED_FEATURES,
+    PITCHER_K_TRAINING_FEATURES,
+)
+from src.models.mlb.features.prop_line_feature_source import (
+    build_lateral_prop_line_join,
+    fetch_single_prop_line,
+)
+from src.models.mlb.features.transforms import (
+    add_pitcher_derived_features,
+    add_pitcher_interaction_features,
+)
 
 @dataclass
 class MLBFeatureConfig:
@@ -531,32 +366,7 @@ class MLBFeatureStore:
             ) lines ON TRUE
 
             -- Pitcher strikeout prop line (latest point-in-time snapshot)
-            LEFT JOIN LATERAL (
-                SELECT sub.line AS prop_line
-                FROM (
-                    SELECT DISTINCT ON (market_key) market_key, line
-                    FROM mlb_raw_player_props
-                    WHERE player_id = pgs.player_id
-                      AND game_id = pgs.game_id
-                      AND market_key = 'pitcher_strikeouts'
-                      AND bookmaker IN ('pinnacle', 'draftkings')
-                      AND (
-                          :as_of_time IS NULL
-                          OR market_last_update <= :as_of_time
-                      )
-                      AND (
-                          commence_time IS NULL
-                          OR market_last_update IS NULL
-                          OR market_last_update < commence_time
-                      )
-                      AND (
-                          commence_time IS NULL
-                          OR COALESCE(snapshot_time, inserted_at) < commence_time
-                      )
-                    ORDER BY market_key, market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
-                ) sub
-                LIMIT 1
-            ) props ON TRUE
+            {prop_line_lateral_join}
 
             -- Inning-level fatigue from L5 starts
             LEFT JOIN LATERAL (
@@ -603,7 +413,10 @@ class MLBFeatureStore:
               AND pgs.did_not_play = FALSE
               AND gs.game_type = 'R'
               AND pgs.season = :season
-        """)
+        """.replace(
+            "{prop_line_lateral_join}",
+            build_lateral_prop_line_join(row_alias="pgs", market_key_sql="'pitcher_strikeouts'"),
+        ))
 
         with self.engine.connect() as conn:
             df = pd.read_sql(query, conn, params={"season": season, "as_of_time": None})
@@ -612,110 +425,7 @@ class MLBFeatureStore:
 
     def _add_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add Python-computed derived/default features after SQL load."""
-        def ensure_col(name: str, default=0.0):
-            if name not in df.columns:
-                df[name] = default
-            return df[name]
-
-        for col in [
-            "pitcher_avg_so_l3", "pitcher_avg_so_l5", "pitcher_avg_ip_l5",
-            "pitcher_avg_ip_szn", "pitcher_min_ip_l5", "pitcher_avg_h_allowed_l5",
-            "pitcher_avg_bb_l5", "pitcher_avg_pitches_thrown_l3",
-            "pitcher_avg_pitches_thrown_l5", "pitcher_pitch_count_last_start",
-            "pitcher_days_rest", "pitcher_starts_szn", "team_bullpen_ip_last_3d",
-            "team_bullpen_pitches_last_3d", "opp_team_whiff_pct_l10",
-            "pitcher_fastball_pct_l5", "pitcher_breaking_pct_l5", "pitcher_offspeed_pct_l5",
-            "pitcher_pct_starts_under_5_ip_l10", "pitcher_fastball_velo_delta_l3_vs_szn",
-            "pitcher_left_last_start_early_flag", "manager_starter_short_hook_rate_l30",
-        ]:
-            ensure_col(col, 0.0)
-
-        # Momentum ratio: L3/L5 strikeout trend
-        df["pitcher_so_l3_l5_ratio"] = df["pitcher_avg_so_l3"].div(
-            df["pitcher_avg_so_l5"].replace(0, np.nan)
-        ).fillna(1.0)
-
-        # Estimated batters faced per game: BF ≈ 3*IP + H + BB
-        bf_l5 = 3 * df["pitcher_avg_ip_l5"] + df["pitcher_avg_h_allowed_l5"] + df["pitcher_avg_bb_l5"]
-        df["pitcher_est_bf_l5"] = bf_l5
-        if "pitcher_avg_batters_faced_l5" not in df.columns:
-            df["pitcher_avg_batters_faced_l5"] = bf_l5
-        else:
-            df["pitcher_avg_batters_faced_l5"] = df["pitcher_avg_batters_faced_l5"].fillna(bf_l5)
-        bf_szn = 3 * df["pitcher_avg_ip_szn"] + df["pitcher_avg_h_allowed_l5"] + df["pitcher_avg_bb_l5"]
-        if "pitcher_avg_batters_faced_szn" not in df.columns:
-            df["pitcher_avg_batters_faced_szn"] = bf_szn
-        else:
-            df["pitcher_avg_batters_faced_szn"] = df["pitcher_avg_batters_faced_szn"].fillna(bf_szn).fillna(0.0)
-
-        # Pitch count efficiency / workload ratios
-        if "pitcher_avg_pitches_per_start_l5" not in df.columns:
-            df["pitcher_avg_pitches_per_start_l5"] = df["pitcher_avg_pitches_thrown_l5"].where(
-                df["pitcher_avg_pitches_thrown_l5"].gt(0), df["pitcher_avg_pitches_thrown_l3"]
-            )
-        df["pitcher_pitches_per_ip_l5"] = df["pitcher_avg_pitches_thrown_l3"].div(
-            df["pitcher_avg_ip_l5"].replace(0, np.nan)
-        ).fillna(0)
-        if "pitcher_workload_spike_ratio" not in df.columns:
-            df["pitcher_workload_spike_ratio"] = df["pitcher_pitch_count_last_start"].div(
-                df["pitcher_avg_pitches_thrown_l5"].replace(0, np.nan)
-            ).fillna(1.0)
-        else:
-            df["pitcher_workload_spike_ratio"] = df["pitcher_workload_spike_ratio"].fillna(1.0)
-        if "pitcher_recent_pitch_count_trend" not in df.columns:
-            df["pitcher_recent_pitch_count_trend"] = df["pitcher_avg_pitches_thrown_l3"].div(
-                df["pitcher_avg_pitches_thrown_l5"].replace(0, np.nan)
-            ).fillna(1.0)
-        else:
-            df["pitcher_recent_pitch_count_trend"] = df["pitcher_recent_pitch_count_trend"].fillna(1.0)
-        if "rest_after_high_pitch_count" not in df.columns:
-            df["rest_after_high_pitch_count"] = (df["pitcher_days_rest"].clip(upper=14) / 5.0) * (df["pitcher_pitch_count_last_start"] / 100.0)
-        df["pitcher_workload_spike_ratio"] = df["pitcher_workload_spike_ratio"].clip(lower=0.0, upper=3.0)
-        df["pitcher_recent_pitch_count_trend"] = df["pitcher_recent_pitch_count_trend"].clip(lower=0.0, upper=3.0)
-
-        # IP/leash defaults for paths that do not compute exact lateral history.
-        if "pitcher_max_ip_l5" not in df.columns:
-            df["pitcher_max_ip_l5"] = df["pitcher_avg_ip_l5"]
-        if "pitcher_median_ip_l5" not in df.columns:
-            df["pitcher_median_ip_l5"] = df["pitcher_avg_ip_l5"]
-        if "pitcher_ip_range_l5" not in df.columns:
-            df["pitcher_ip_range_l5"] = (df["pitcher_max_ip_l5"] - df["pitcher_min_ip_l5"]).clip(lower=0)
-        if "pitcher_short_start_rate_l5" not in df.columns:
-            df["pitcher_short_start_rate_l5"] = 0.0
-        if "pitcher_start_stability_l5" not in df.columns:
-            df["pitcher_start_stability_l5"] = (df["pitcher_starts_szn"].clip(upper=5) / 5.0).fillna(0.0)
-        for col in [
-            "team_starter_avg_ip_l10",
-            "team_starter_short_start_rate_l10",
-            "team_starter_avg_pitches_l10",
-            "team_starter_avg_ip_l30",
-            "team_starter_short_hook_rate_l30",
-            "manager_starter_short_hook_rate_l30",
-            "team_starter_deep_start_rate_l30",
-        ]:
-            ensure_col(col, 0.0)
-
-        # Bullpen and opponent contact context.
-        df["bullpen_fatigue_pressure"] = (
-            df["team_bullpen_ip_last_3d"].fillna(0) / 9.0
-            + df["team_bullpen_pitches_last_3d"].fillna(0) / 150.0
-        )
-        if "opp_team_contact_rate_l10" not in df.columns:
-            df["opp_team_contact_rate_l10"] = (1.0 - df["opp_team_whiff_pct_l10"]).clip(lower=0, upper=1).fillna(1.0)
-        if "opp_team_chase_pct_l10" not in df.columns:
-            df["opp_team_chase_pct_l10"] = 0.0
-        if "opp_team_zone_contact_pct_l10" not in df.columns:
-            df["opp_team_zone_contact_pct_l10"] = 0.0
-
-        # Lineup/contact defaults for paths that do not merge computed lineup features.
-        for col, default in LINEUP_FEATURE_DEFAULTS.items():
-            ensure_col(col, default)
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(default)
-
-        # Pitch repertoire diversity: count pitch types with > 5% usage
-        pitch_type_cols = ["pitcher_fastball_pct_l5", "pitcher_breaking_pct_l5", "pitcher_offspeed_pct_l5"]
-        df["pitcher_num_pitch_types_l5"] = df[pitch_type_cols].fillna(0).gt(0.05).sum(axis=1)
-        return df
+        return add_pitcher_derived_features(df)
 
     def enrich_with_matchup_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Merge opposing team batting stats into training DataFrame.
@@ -809,15 +519,7 @@ class MLBFeatureStore:
 
     def _add_interaction_features(self, df):
         """Compute interaction features that depend on matchup data."""
-        df["pitcher_k_opp_k_interaction"] = (
-            df["pitcher_avg_k_per_9_l5"].fillna(0) *
-            df["opp_team_k_pct_l10"].fillna(0)
-        )
-        df["pitcher_whiff_opp_whiff_interaction"] = (
-            df["pitcher_avg_whiff_pct_l5"].fillna(0) *
-            df["opp_team_whiff_pct_l10"].fillna(0)
-        )
-        return df
+        return add_pitcher_interaction_features(df)
 
     # ------------------------------------------------------------------
     # Single-player inference (game-time)
@@ -1230,32 +932,7 @@ class MLBFeatureStore:
             ) lines ON TRUE
 
             -- Pitcher strikeout prop line (latest point-in-time snapshot)
-            LEFT JOIN LATERAL (
-                SELECT sub.line AS prop_line
-                FROM (
-                    SELECT DISTINCT ON (market_key) market_key, line
-                    FROM mlb_raw_player_props
-                    WHERE player_id = pgs.player_id
-                      AND game_id = pgs.game_id
-                      AND market_key = 'pitcher_strikeouts'
-                      AND bookmaker IN ('pinnacle', 'draftkings')
-                      AND (
-                          :as_of_time IS NULL
-                          OR market_last_update <= :as_of_time
-                      )
-                      AND (
-                          commence_time IS NULL
-                          OR market_last_update IS NULL
-                          OR market_last_update < commence_time
-                      )
-                      AND (
-                          commence_time IS NULL
-                          OR COALESCE(snapshot_time, inserted_at) < commence_time
-                      )
-                    ORDER BY market_key, market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
-                ) sub
-                LIMIT 1
-            ) props ON TRUE
+            {prop_line_lateral_join}
 
             -- Inning-level fatigue from L5 starts
             LEFT JOIN LATERAL (
@@ -1302,7 +979,10 @@ class MLBFeatureStore:
               AND pgs.is_starter = TRUE
               AND pgs.did_not_play = FALSE
               AND gs.game_type = 'R'
-        """)
+        """.replace(
+            "{prop_line_lateral_join}",
+            build_lateral_prop_line_join(row_alias="pgs", market_key_sql="'pitcher_strikeouts'"),
+        ))
 
         with self.engine.connect() as conn:
             df = pd.read_sql(query, conn, params={"game_date": game_date, "as_of_time": as_of_time})
@@ -1723,45 +1403,14 @@ class MLBFeatureStore:
         return float(row.game_total) if row and row.game_total else 0
 
     def _get_prop_line(self, player_id: int, game_id: int, as_of_time: datetime | None = None) -> float:
-        """Fetch pitcher strikeout prop line at or before ``as_of_time``.
-
-        Historical backtests must not see odds snapshots captured after the
-        simulated inference/bet time. ``inserted_at`` is a fallback for legacy
-        rows missing ``snapshot_time``.
-        """
-        query = text("""
-            SELECT line
-            FROM mlb_raw_player_props
-            WHERE player_id = :player_id
-              AND game_id = :game_id
-              AND market_key = 'pitcher_strikeouts'
-              AND bookmaker IN ('pinnacle', 'draftkings')
-              AND (
-                  :as_of_time IS NULL
-                  OR market_last_update <= :as_of_time
-              )
-              AND (
-                  commence_time IS NULL
-                  OR market_last_update IS NULL
-                  OR market_last_update < commence_time
-              )
-              AND (
-                  commence_time IS NULL
-                  OR COALESCE(snapshot_time, inserted_at) < commence_time
-              )
-            ORDER BY market_last_update DESC NULLS LAST, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
-            LIMIT 1
-        """)
-        with self.engine.connect() as conn:
-            df = pd.read_sql(
-                query,
-                conn,
-                params={"player_id": player_id, "game_id": game_id, "as_of_time": as_of_time},
-            )
-        if df.empty:
-            return 0
-        line = df.iloc[0].line
-        return float(line) if line else 0
+        """Fetch pitcher strikeout prop line at or before ``as_of_time``."""
+        return fetch_single_prop_line(
+            self.engine,
+            player_id=player_id,
+            game_id=game_id,
+            market_key="pitcher_strikeouts",
+            as_of_time=as_of_time,
+        )
 
     def _get_inning_fatigue_stats(self, player_id: int, game_date: str) -> dict:
         """Fetch inning-level fatigue features from L5 starts."""

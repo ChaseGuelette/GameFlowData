@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from src.backtesting.mlb.run_mlb_sweep import _fetch_lines_for_date
+from src.backtesting.mlb.quote_clean_line_service import fetch_lines_for_date
 from src.models.mlb.mlb_batter_feature_store import MLBBatterFeatureStore
 from src.models.mlb.mlb_feature_store import MLBFeatureStore
 
@@ -151,7 +151,7 @@ def test_quote_clean_line_fetch_uses_effective_timestamp_fallback(monkeypatch):
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
 
     as_of = datetime(2026, 5, 10, 17, 30, tzinfo=UTC)
-    result = _fetch_lines_for_date(
+    result = fetch_lines_for_date(
         _FakeEngine(),
         game_ids=[456],
         market_keys=["pitcher_strikeouts"],
