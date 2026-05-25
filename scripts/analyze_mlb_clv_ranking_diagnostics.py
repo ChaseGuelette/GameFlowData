@@ -45,6 +45,11 @@ CANDIDATE_SCORE_ORDER = (
     "candidate_mean_edge",
     "candidate_edge_survival_count",
     "candidate_edge_std",
+    "reference_prob",
+    "execution_prob",
+    "model_alpha",
+    "execution_alpha",
+    "total_edge_decomposed",
     "selected_vs_candidate_best_gap",
     "selected_vs_candidate_mean_gap",
     "market_tightness_score",
@@ -309,12 +314,19 @@ def load_candidate_features(clv_df: pd.DataFrame, candidate_edges_csv: str | Pat
             ).values
 
             selected_edge = _coerce_numeric(clv_df.get("edge")).reindex(clv_df.index)
+            model_prob = _coerce_numeric(clv_df["model_prob"]) if "model_prob" in clv_df.columns else pd.Series([np.nan] * len(clv_df), index=clv_df.index)
+            model_prob = model_prob.reindex(clv_df.index)
             out.loc[:, "selected_vs_candidate_best_gap"] = selected_edge - out["candidate_best_edge"]
             out.loc[:, "selected_vs_candidate_mean_gap"] = selected_edge - out["candidate_mean_edge"]
+            out.loc[:, "reference_prob"] = model_prob - out["candidate_mean_edge"]
+            out.loc[:, "execution_prob"] = model_prob - selected_edge
+            out.loc[:, "model_alpha"] = model_prob - out["reference_prob"]
+            out.loc[:, "execution_alpha"] = out["reference_prob"] - out["execution_prob"]
+            out.loc[:, "total_edge_decomposed"] = out["model_alpha"] + out["execution_alpha"]
+            out.loc[:, "alpha_reconstruction_error"] = selected_edge - out["total_edge_decomposed"]
             out.loc[:, "market_tightness_score"] = -out["candidate_edge_std"]
 
             implied_col, implied_prob = _choose_implied_prob_column(clv_df)
-            model_prob = _coerce_numeric(clv_df["model_prob"]) if "model_prob" in clv_df.columns else pd.Series([np.nan] * len(clv_df), index=clv_df.index)
             if model_prob.notna().any() and implied_col is not None:
                 raw_composite = _zscore(_logit(model_prob) - _logit(implied_prob))
             else:
@@ -709,6 +721,183 @@ def build_slice_frames(
     return rows
 
 
+def _profit_stake_columns(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    profit = _coerce_numeric(df["profit"]) if "profit" in df.columns else pd.Series([np.nan] * len(df), index=df.index)
+    stake = _coerce_numeric(df["stake"]) if "stake" in df.columns else pd.Series([np.nan] * len(df), index=df.index)
+    return profit, stake
+
+
+def _max_drawdown_from_profit(profit: pd.Series) -> float:
+    clean = _coerce_numeric(profit).fillna(0.0).astype(float)
+    if clean.empty:
+        return float("nan")
+    equity = clean.cumsum()
+    running_max = equity.cummax().clip(lower=0.0)
+    drawdown = running_max - equity
+    return float(drawdown.max()) if not drawdown.empty else float("nan")
+
+
+def _mean_clv_ci(
+    df: pd.DataFrame,
+    *,
+    bootstrap_samples: int,
+    ci_level: float,
+    random_seed: int,
+) -> dict[str, Any]:
+    valid = df.loc[df[REQUIRED_SCORING_TARGET].notna()].copy()
+    if valid.empty:
+        return {"mean_clv": float("nan"), "clv_ci_low": float("nan"), "clv_ci_high": float("nan"), "n_blocks": 0}
+    valid["score"] = 0.0
+    block_col, _ = _block_columns(valid)
+    cols = ["score", REQUIRED_SCORING_TARGET]
+    if block_col and block_col in valid.columns:
+        cols.append(block_col)
+    boot = _bootstrap_metric_ci(
+        valid[cols],
+        lambda d: float(_coerce_numeric(d[REQUIRED_SCORING_TARGET]).mean()) if len(d) else float("nan"),
+        bootstrap_samples,
+        ci_level,
+        random_seed,
+        block_col,
+    )
+    return {
+        "mean_clv": float(_coerce_numeric(valid[REQUIRED_SCORING_TARGET]).mean()),
+        "clv_ci_low": float(boot["ci_low"]),
+        "clv_ci_high": float(boot["ci_high"]),
+        "n_blocks": int(boot["n_blocks"]),
+    }
+
+
+def _outcome_metrics(df: pd.DataFrame, *, bootstrap_samples: int, ci_level: float, random_seed: int) -> dict[str, Any]:
+    profit, stake = _profit_stake_columns(df)
+    profit_sum = float(profit.sum(skipna=True)) if profit.notna().any() else float("nan")
+    stake_sum = float(stake.sum(skipna=True)) if stake.notna().any() else float("nan")
+    roi = profit_sum / stake_sum if stake_sum and pd.notna(stake_sum) else float("nan")
+    clv = _mean_clv_ci(df, bootstrap_samples=bootstrap_samples, ci_level=ci_level, random_seed=random_seed)
+    return {
+        "n": int(len(df)),
+        "profit": profit_sum,
+        "staked": stake_sum,
+        "roi": float(roi),
+        "max_drawdown": _max_drawdown_from_profit(profit),
+        **clv,
+    }
+
+
+def _model_alpha_bucket(series: pd.Series) -> pd.Series:
+    values = _coerce_numeric(series)
+    out = pd.Series([pd.NA] * len(values), index=values.index, dtype="object")
+    valid = values.dropna()
+    if valid.empty:
+        return out
+    if valid.nunique() >= 3:
+        try:
+            labels = ["low", "medium", "high"]
+            binned = pd.qcut(valid, q=3, labels=labels, duplicates="drop")
+            out.loc[valid.index] = binned.astype("object")
+            return out
+        except ValueError:
+            pass
+    median = valid.median()
+    out.loc[valid.index] = np.where(valid < median, "low", "high")
+    return out
+
+
+def _execution_alpha_bucket(series: pd.Series) -> pd.Series:
+    values = _coerce_numeric(series)
+    out = pd.Series([pd.NA] * len(values), index=values.index, dtype="object")
+    out.loc[values < 0] = "negative"
+    out.loc[(values >= 0) & (values < 0.005)] = "neutral"
+    out.loc[values >= 0.005] = "positive"
+    return out
+
+
+def build_alpha_2d_buckets(
+    df: pd.DataFrame,
+    *,
+    bootstrap_samples: int,
+    ci_level: float,
+    random_seed: int,
+) -> list[dict[str, Any]]:
+    if "model_alpha" not in df.columns or "execution_alpha" not in df.columns:
+        return []
+    work = df.copy()
+    work["model_alpha_bucket"] = _model_alpha_bucket(work["model_alpha"])
+    work["execution_alpha_bucket"] = _execution_alpha_bucket(work["execution_alpha"])
+    work = work.loc[work["model_alpha_bucket"].notna() & work["execution_alpha_bucket"].notna()].copy()
+    if work.empty:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for (model_bucket, execution_bucket), bucket_df in work.groupby(["model_alpha_bucket", "execution_alpha_bucket"], dropna=True):
+        metrics = _outcome_metrics(bucket_df, bootstrap_samples=bootstrap_samples, ci_level=ci_level, random_seed=random_seed)
+        rows.append(
+            {
+                "model_alpha_bucket": str(model_bucket),
+                "execution_alpha_bucket": str(execution_bucket),
+                "bucket_n": int(len(bucket_df)),
+                "mean_model_alpha": float(_coerce_numeric(bucket_df["model_alpha"]).mean()),
+                "mean_execution_alpha": float(_coerce_numeric(bucket_df["execution_alpha"]).mean()),
+                **metrics,
+            }
+        )
+    order_model = {"low": 0, "medium": 1, "high": 2}
+    order_exec = {"negative": 0, "neutral": 1, "positive": 2}
+    return sorted(rows, key=lambda r: (order_model.get(r["model_alpha_bucket"], 99), order_exec.get(r["execution_alpha_bucket"], 99)))
+
+
+def build_filter_replay(
+    df: pd.DataFrame,
+    *,
+    bootstrap_samples: int,
+    ci_level: float,
+    random_seed: int,
+) -> list[dict[str, Any]]:
+    if "model_alpha" not in df.columns or "execution_alpha" not in df.columns:
+        return []
+    model_alpha = _coerce_numeric(df["model_alpha"])
+    execution_alpha = _coerce_numeric(df["execution_alpha"])
+    rules: list[tuple[str, pd.Series]] = [
+        ("all", pd.Series([True] * len(df), index=df.index)),
+        ("execution_alpha>=0", execution_alpha >= 0),
+        ("execution_alpha>=0.005", execution_alpha >= 0.005),
+        ("model_alpha>=0", model_alpha >= 0),
+        ("model_alpha>=0.02", model_alpha >= 0.02),
+        ("model_alpha>=0_and_execution_alpha>=0.005", (model_alpha >= 0) & (execution_alpha >= 0.005)),
+        (
+            "0<=model_alpha<=0.10_and_execution_alpha>0",
+            (model_alpha >= 0) & (model_alpha <= 0.10) & (execution_alpha > 0),
+        ),
+    ]
+    rows: list[dict[str, Any]] = []
+    for name, mask in rules:
+        subset = df.loc[mask.fillna(False)].copy()
+        metrics = _outcome_metrics(subset, bootstrap_samples=bootstrap_samples, ci_level=ci_level, random_seed=random_seed)
+        rows.append(
+            {
+                "filter_rule": name,
+                "mean_model_alpha": float(_coerce_numeric(subset["model_alpha"]).mean()) if not subset.empty else float("nan"),
+                "mean_execution_alpha": float(_coerce_numeric(subset["execution_alpha"]).mean()) if not subset.empty else float("nan"),
+                **metrics,
+            }
+        )
+    return rows
+
+
+def _score_class(score_name: str) -> str:
+    model_scores = {"raw_edge", "abs_edge", "model_prob", "logit_edge", "model_prob_x_abs_edge", "edge_zscore", "model_alpha", "total_edge_decomposed"}
+    market_scores = {"candidate_best_edge", "candidate_mean_edge", "candidate_edge_survival_count", "candidate_edge_std", "selected_vs_candidate_best_gap", "selected_vs_candidate_mean_gap", "market_tightness_score", "execution_alpha", "reference_prob", "execution_prob"}
+    if score_name in model_scores:
+        return "model_edge"
+    if score_name in market_scores:
+        return "market_relative_price"
+    return "other"
+
+
+def build_scorecard_rows(summary_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{**row, "score_class": _score_class(str(row.get("score_name", "")))} for row in summary_rows]
+
+
 def build_markdown(
     output_path: Path,
     clv_matches_path: Path,
@@ -784,6 +973,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(f"{clv_path} missing required '{REQUIRED_SCORING_TARGET}'")
 
     base = build_score_registry(df, candidate_scores=load_candidate_features(df, args.candidate_edges_csv))
+    analysis_df = df.copy()
+    alpha_columns = [
+        "reference_prob",
+        "execution_prob",
+        "model_alpha",
+        "execution_alpha",
+        "total_edge_decomposed",
+        "alpha_reconstruction_error",
+    ]
+    for name in alpha_columns:
+        if name in base:
+            analysis_df[name] = base[name]
     score_map = filter_scores_for_set(base, args.score_set)
 
     # Drop scores that are completely missing
@@ -845,12 +1046,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         min_n=args.min_n,
         random_seed=args.random_seed,
     )
+    alpha_2d_rows = build_alpha_2d_buckets(
+        analysis_df,
+        bootstrap_samples=args.bootstrap_samples,
+        ci_level=args.ci_level,
+        random_seed=args.random_seed,
+    )
+    filter_replay_rows = build_filter_replay(
+        analysis_df,
+        bootstrap_samples=args.bootstrap_samples,
+        ci_level=args.ci_level,
+        random_seed=args.random_seed,
+    )
+    scorecard_rows = build_scorecard_rows(summary_rows)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = output_dir / "ranking_score_summary.csv"
     bins_path = output_dir / "ranking_score_bins.csv"
     slice_path = output_dir / "ranking_score_slice_summary.csv"
+    scorecard_path = output_dir / "ranking_scorecard_summary.csv"
+    alpha_rows_path = output_dir / "edge_decomposition_rows.csv"
+    alpha_2d_path = output_dir / "edge_decomposition_2d_buckets.csv"
+    filter_replay_path = output_dir / "edge_decomposition_filter_replay.csv"
     md_path = output_dir / "ranking_score_recommendation.md"
 
     summary_columns = [
@@ -904,12 +1122,81 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ]
     pd.DataFrame(slice_summary).to_csv(slice_path, index=False, columns=slice_columns)
 
+    scorecard_columns = ["score_class", *summary_columns]
+    pd.DataFrame(scorecard_rows).to_csv(scorecard_path, index=False, columns=scorecard_columns)
+
+    alpha_row_columns = [
+        col
+        for col in [
+            "bet_id",
+            "game_id",
+            "game_date",
+            "player_id",
+            "bookmaker_at_bet",
+            "bookmaker",
+            "model_prob",
+            "edge",
+            "reference_prob",
+            "execution_prob",
+            "model_alpha",
+            "execution_alpha",
+            "total_edge_decomposed",
+            "alpha_reconstruction_error",
+            "clv_implied_prob",
+            "profit",
+            "stake",
+        ]
+        if col in analysis_df.columns
+    ]
+    if alpha_row_columns:
+        analysis_df[alpha_row_columns].to_csv(alpha_rows_path, index=False)
+    else:
+        pd.DataFrame().to_csv(alpha_rows_path, index=False)
+
+    alpha_2d_columns = [
+        "model_alpha_bucket",
+        "execution_alpha_bucket",
+        "bucket_n",
+        "n",
+        "mean_model_alpha",
+        "mean_execution_alpha",
+        "profit",
+        "staked",
+        "roi",
+        "max_drawdown",
+        "mean_clv",
+        "clv_ci_low",
+        "clv_ci_high",
+        "n_blocks",
+    ]
+    pd.DataFrame(alpha_2d_rows, columns=alpha_2d_columns).to_csv(alpha_2d_path, index=False)
+
+    filter_replay_columns = [
+        "filter_rule",
+        "n",
+        "mean_model_alpha",
+        "mean_execution_alpha",
+        "profit",
+        "staked",
+        "roi",
+        "max_drawdown",
+        "mean_clv",
+        "clv_ci_low",
+        "clv_ci_high",
+        "n_blocks",
+    ]
+    pd.DataFrame(filter_replay_rows, columns=filter_replay_columns).to_csv(filter_replay_path, index=False)
+
     build_markdown(md_path, clv_path, summary_rows, args.candidate_edges_csv)
 
     return {
         "summary_csv": str(summary_path),
         "bins_csv": str(bins_path),
         "slice_csv": str(slice_path),
+        "scorecard_csv": str(scorecard_path),
+        "edge_decomposition_rows_csv": str(alpha_rows_path),
+        "edge_decomposition_2d_buckets_csv": str(alpha_2d_path),
+        "edge_decomposition_filter_replay_csv": str(filter_replay_path),
         "recommendation_md": str(md_path),
         "n_scores": len(score_map),
     }
@@ -936,6 +1223,10 @@ def main() -> None:
         ("summary", result["summary_csv"]),
         ("bins", result["bins_csv"]),
         ("slice", result["slice_csv"]),
+        ("scorecard", result["scorecard_csv"]),
+        ("edge_decomposition_rows", result["edge_decomposition_rows_csv"]),
+        ("edge_decomposition_2d", result["edge_decomposition_2d_buckets_csv"]),
+        ("edge_decomposition_filter_replay", result["edge_decomposition_filter_replay_csv"]),
         ("recommendation", result["recommendation_md"]),
     ):
         print(f"{key}: {path}")

@@ -147,10 +147,48 @@ def test_candidate_edge_aggregation_from_bet_id_roundtrips_into_scores(tmp_path)
     expected_best = pd.Series([0.20, 0.04, 0.06], index=clv_df.index)
     expected_mean = pd.Series([0.175, 0.04, 0.025], index=clv_df.index)
     expected_survival = pd.Series([2, 1, 1], index=clv_df.index)
+    expected_reference_prob = pd.Series([0.375, 0.57, 0.465], index=clv_df.index)
+    expected_execution_prob = pd.Series([0.43, 0.69, 0.46], index=clv_df.index)
+    expected_model_alpha = pd.Series([0.175, 0.04, 0.025], index=clv_df.index)
+    expected_execution_alpha = pd.Series([-0.055, -0.12, 0.005], index=clv_df.index)
 
     pd.testing.assert_series_equal(candidate_scores["candidate_best_edge"].round(6), expected_best)
     pd.testing.assert_series_equal(candidate_scores["candidate_mean_edge"].round(6), expected_mean)
     pd.testing.assert_series_equal(candidate_scores["candidate_edge_survival_count"], expected_survival)
+    pd.testing.assert_series_equal(candidate_scores["reference_prob"].round(6), expected_reference_prob)
+    pd.testing.assert_series_equal(candidate_scores["execution_prob"].round(6), expected_execution_prob)
+    pd.testing.assert_series_equal(candidate_scores["model_alpha"].round(6), expected_model_alpha)
+    pd.testing.assert_series_equal(candidate_scores["execution_alpha"].round(6), expected_execution_alpha)
+    assert float(candidate_scores["alpha_reconstruction_error"].abs().max()) < 1e-12
+
+
+def test_alpha_2d_buckets_and_filter_replay_scorecard():
+    m = load_module()
+    df = pd.DataFrame(
+        {
+            "game_date": ["2026-05-01"] * 6,
+            "model_alpha": [-0.02, 0.01, 0.03, -0.01, 0.02, 0.05],
+            "execution_alpha": [-0.01, 0.0, 0.006, 0.02, 0.004, 0.015],
+            "clv_implied_prob": [-0.01, 0.0, 0.02, 0.01, 0.005, 0.03],
+            "profit": [-100, -50, 120, 80, 20, 150],
+            "stake": [100] * 6,
+        }
+    )
+
+    buckets = pd.DataFrame(m.build_alpha_2d_buckets(df, bootstrap_samples=25, ci_level=0.95, random_seed=42))
+    assert {"model_alpha_bucket", "execution_alpha_bucket", "bucket_n", "mean_clv", "roi", "max_drawdown"}.issubset(buckets.columns)
+    assert "positive" in set(buckets["execution_alpha_bucket"])
+    assert int(buckets["bucket_n"].sum()) == 6
+
+    replay = pd.DataFrame(m.build_filter_replay(df, bootstrap_samples=25, ci_level=0.95, random_seed=42))
+    rules = set(replay["filter_rule"])
+    assert "all" in rules
+    assert "execution_alpha>=0.005" in rules
+    assert "model_alpha>=0_and_execution_alpha>=0.005" in rules
+    positive_exec = replay.loc[replay["filter_rule"] == "execution_alpha>=0.005"].iloc[0]
+    assert int(positive_exec["n"]) == 3
+    assert positive_exec["roi"] > 0
+    assert positive_exec["mean_clv"] > 0
 
 
 def test_cli_run_writes_all_required_outputs(tmp_path):
@@ -182,8 +220,16 @@ def test_cli_run_writes_all_required_outputs(tmp_path):
     assert Path(out["summary_csv"]).is_file()
     assert Path(out["bins_csv"]).is_file()
     assert Path(out["slice_csv"]).is_file()
+    assert Path(out["scorecard_csv"]).is_file()
+    assert Path(out["edge_decomposition_rows_csv"]).is_file()
+    assert Path(out["edge_decomposition_2d_buckets_csv"]).is_file()
+    assert Path(out["edge_decomposition_filter_replay_csv"]).is_file()
     assert Path(out["recommendation_md"]).is_file()
     assert (out_dir / "ranking_score_summary.csv").exists()
     assert (out_dir / "ranking_score_bins.csv").exists()
     assert (out_dir / "ranking_score_slice_summary.csv").exists()
+    assert (out_dir / "ranking_scorecard_summary.csv").exists()
+    assert (out_dir / "edge_decomposition_rows.csv").exists()
+    assert (out_dir / "edge_decomposition_2d_buckets.csv").exists()
+    assert (out_dir / "edge_decomposition_filter_replay.csv").exists()
     assert (out_dir / "ranking_score_recommendation.md").exists()

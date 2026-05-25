@@ -33,6 +33,7 @@ Examples:
 
 import argparse
 import logging
+import os
 import shlex
 import subprocess
 import sys
@@ -77,8 +78,9 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
 
     start_time = time.time()
     try:
-        # Use shlex.split for proper command parsing (handles args with spaces/quotes)
-        cmd_args = shlex.split(command)
+        # POSIX shlex strips Windows backslashes (C:\Users\... -> C:Users...),
+        # so use platform-appropriate splitting before subprocess(shell=False).
+        cmd_args = shlex.split(command, posix=(os.name != "nt"))
         result = subprocess.run(
             cmd_args,
             check=True,
@@ -97,9 +99,11 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
         elapsed = time.time() - start_time
         logger.error(f"FAILED: {description} ({elapsed:.1f}s)")
         logger.error(f"  Exit code: {e.returncode}")
-        logger.error(f"  Stderr: {e.stderr[:500] if e.stderr else 'No error output'}")
         if e.stdout:
-            logger.error(f"  Stdout: {e.stdout[:500]}")
+            logger.error(f"  Stdout head: {e.stdout[:1000]}")
+        # Log stderr last and from the tail so scheduler/Discord's stderr[-500:]
+        # captures the real traceback/DB exception instead of early progress output.
+        logger.error(f"  Stderr tail: {e.stderr[-2000:] if e.stderr else 'No error output'}")
         return False
     except Exception as e:
         elapsed = time.time() - start_time
