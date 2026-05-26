@@ -20,6 +20,22 @@ Chase said we can leave NBA broken. Do not spend implementation time on NBA stat
 - Do not let NBA failures block MLB production-readiness work.
 - Continue to respect invariant: no advanced `stats.nba.com` scraping from Railway; `daily_stats_job` should remain CDN-only.
 
+## Implementation status
+
+Implemented 2026-05-26 as a guardrail-only hotfix:
+
+- Added scheduler-level deferred-failure tagging for `lines_job.py`.
+- Failed NBA `lines_job.py` alerts now display as `Lines Scraper (NBA deferred)`.
+- Failed NBA `lines_job.py` alert/error text and `job_executions.error_message` are prefixed with `NBA deferred — intermittent NBA lines linker failure is parked`.
+- MLB jobs, Kalshi MLB refresh, source scraping, and linker algorithms were not changed.
+
+Validation run:
+
+- `./venv/Scripts/python.exe -m ruff check src/orchestration/scheduler.py tests/test_pipeline_resilience.py` — passed.
+- `./venv/Scripts/python.exe -m py_compile src/orchestration/scheduler.py tests/test_pipeline_resilience.py` — passed.
+- `./venv/Scripts/python.exe -m pytest tests/test_pipeline_resilience.py::TestJobStatusTracking -q` — 5 passed, 1 warning.
+- Full `tests/test_pipeline_resilience.py` still has unrelated live-DB fallback failures in `TestCheckDependency` because current `job_executions` rows can satisfy dependency checks.
+
 ## Guardrail fix only, if needed
 
 If NBA failures make shared scheduler state noisy or create false red status for MLB/Kalshi readiness, implement a minimal isolation/observability fix, not a full NBA repair:

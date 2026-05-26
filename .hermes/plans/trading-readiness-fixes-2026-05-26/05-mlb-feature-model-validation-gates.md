@@ -47,6 +47,42 @@ Retrieved from GBrain/source-all fallback:
 5. `batter_hrr` is in some config/runner mappings but historically flagged as unsupported/no trained model in invariants.
    - Do not trade it unless current artifact + validation proves support.
 
+
+## Implementation status
+
+Implemented 2026-05-26 as the artifact/functionality gate for this hotfix lane:
+
+- Added `scripts/audit_mlb_model_artifacts.py` as a read-only model artifact audit.
+- Added `tests/test_audit_mlb_model_artifacts.py` coverage for loaded-stat failure, batter feature-count metadata, and explicit validation required before treating `batter_hrr` as supported.
+- The audit verifies the production model directory resolution, loaded suite stats, predictor classes, required production stats, core artifact presence, feature counts, and metadata visibility.
+- Required stats default to `pitcher_strikeouts` and `batter_hits`. Optional/unsupported loaded artifacts are reported as warnings and do not become live-trading support by existing merely in the directory.
+
+Validation run:
+
+- `./venv/Scripts/python.exe -m ruff check scripts/audit_mlb_model_artifacts.py tests/test_audit_mlb_model_artifacts.py` — passed.
+- `./venv/Scripts/python.exe -m py_compile scripts/audit_mlb_model_artifacts.py tests/test_audit_mlb_model_artifacts.py` — passed.
+- `./venv/Scripts/python.exe -m pytest tests/test_audit_mlb_model_artifacts.py -q` — 3 passed, 1 warning.
+- `./venv/Scripts/python.exe scripts/audit_mlb_model_artifacts.py --model-dir src/models/mlb/artifacts` — passed with `Status: OK`.
+
+Latest audit result:
+
+- Resolved model dir: `src/models/mlb/artifacts/production`.
+- Required stats loaded: `pitcher_strikeouts`, `batter_hits`.
+- Extra loaded stats: `batter_total_bases`, `batter_rbis`, `batter_runs_scored`, `batter_hrr`.
+- Warnings remain by design: extra loaded stats are not live-trading support; `batter_hrr` is present but not validated for live support; known non-live/unsupported stats must stay out of live trading; artifact metadata does not expose train seasons/calibration cutoff for the required stats.
+
+Relevant prior lessons/invariants preserved:
+
+- Quote-clean CLV and edge-ranking gates still come before feature expansion or live-money promotion.
+- Probabilities must remain empirical sample CDF where applicable.
+- Q10 miscalibration is a known edge and should not be blindly corrected.
+- This gate confirms artifact/functionality presence only; it is not permission to enable live money.
+
+Remaining operational follow-up before live money:
+
+- Run the remote prediction/Kalshi output verifier after the next approved non-dry-run cycle.
+- Complete quote-clean CLV, edge-ranking, dense intraday stability, and paper/live output gates before promotion.
+
 ## Fix proposal
 
 ### Phase A — model artifact/functionality audit
@@ -116,6 +152,12 @@ Only after Phases A-C:
 4. Keep `KALSHI_LIVE_TRADING_ENABLED=false` until Chase explicitly approves live execution.
 
 ## Suggested validation command shape
+
+Artifact/functionality gate:
+
+```powershell
+.\venv\Scripts\python.exe scripts\audit_mlb_model_artifacts.py --model-dir src\models\mlb\artifacts
+```
 
 After fixing derived data and prediction verifier:
 

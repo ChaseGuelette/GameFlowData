@@ -11,10 +11,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import UTC, date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.utils.time_windows import et_day_utc_bounds  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:
@@ -67,12 +73,6 @@ def _columns(conn, table: str) -> set[str]:
     return {row[0] for row in rows}
 
 
-def _et_window_utc(target_date: date) -> tuple[datetime, datetime]:
-    et = ZoneInfo("America/New_York")
-    start_et = datetime.combine(target_date, time.min, tzinfo=et)
-    end_et = start_et + timedelta(days=1)
-    return start_et.astimezone(UTC), end_et.astimezone(UTC)
-
 
 def _critical_null_condition(cols: set[str]) -> str:
     critical = ["player_id", "game_id", "stat", "pred_mean", "pred_q50"]
@@ -84,7 +84,7 @@ def _critical_null_condition(cols: set[str]) -> str:
 
 def run(args: argparse.Namespace) -> tuple[dict, list[str]]:
     target_date = date.fromisoformat(args.date)
-    start_utc, end_utc = _et_window_utc(target_date)
+    start_utc, end_utc = et_day_utc_bounds(target_date)
     engine = _get_engine(args)
     failures: list[str] = []
     warnings: list[str] = []

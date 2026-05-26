@@ -48,6 +48,28 @@ Why this matters:
 - Casting `snapshot_time` for every row prevents normal use of indexes on raw `snapshot_time` or `(sport, snapshot_time)`.
 - `DISTINCT ON (ticker) ... ORDER BY ticker, snapshot_time DESC` across a broad cast-filtered day can be expensive on tens of millions of rows.
 
+
+## Implementation status
+
+Implemented 2026-05-26:
+
+- Added shared `src/utils/time_windows.py` with half-open ET-day-to-UTC bounds.
+- Rewrote production Kalshi market loaders away from non-sargable ET date casts and onto `snapshot_time >= :start_utc AND snapshot_time < :end_utc`.
+- Updated the relevant Kalshi/arbitrage/paper-trading paths, including `src/trading/kalshi/selection_loader.py`, `src/models/kalshi_edge.py`, `src/paper_trading/kalshi_paper_trader.py`, and `src/arbitrage/market_matcher.py`.
+- Added regression coverage for DST-safe time-window calculation and for preventing production `kalshi_markets` queries from reintroducing `snapshot_time AT TIME ZONE 'America/New_York'` date casts.
+- No indexes/DDL were added.
+
+Validation run:
+
+- `./venv/Scripts/python.exe -m ruff check src/utils/time_windows.py src/trading/kalshi/selection_loader.py src/models/kalshi_edge.py src/paper_trading/kalshi_paper_trader.py src/arbitrage/market_matcher.py tests/test_time_windows.py tests/test_kalshi_sargable_queries.py` — passed.
+- `./venv/Scripts/python.exe -m py_compile src/utils/time_windows.py src/trading/kalshi/selection_loader.py src/models/kalshi_edge.py src/paper_trading/kalshi_paper_trader.py src/arbitrage/market_matcher.py tests/test_time_windows.py tests/test_kalshi_sargable_queries.py` — passed.
+- `./venv/Scripts/python.exe -m pytest tests/test_time_windows.py tests/test_kalshi_sargable_queries.py -q` — 5 passed, 1 warning.
+
+Remaining operational follow-up:
+
+- Production certification still requires Railway auth/log review and a runtime dry run to confirm no new `QueryCanceled` / statement-timeout symptoms.
+- If production is still slow after the rewrite, propose specific concurrent index DDL separately before running any DB changes.
+
 ## Fix proposal
 
 ### Phase A — centralize date-window calculation

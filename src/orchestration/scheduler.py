@@ -103,7 +103,14 @@ JOB_NAMES = {
     "resolve_user_paper_bets.py": "User Paper Bet Resolution",
 }
 
-# In-memory job status tracking for dependency checks.
+# These failures are currently deferred by trading-readiness policy. Keep them
+# visible in job history, but tag alerts/status so they do not block MLB/Kalshi
+# readiness triage or look like a fresh shared-infra regression.
+DEFERRED_FAILURE_JOBS = {
+    "lines_job.py": "NBA deferred — intermittent NBA lines linker failure is parked",
+}
+
+
 # Updated by run_job() after every execution.
 # Format: {"daily_stats_job.py": {"status": "success", "end_time": datetime, "duration": float}}
 JOB_STATUS: dict[str, dict] = {}
@@ -282,6 +289,23 @@ def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> di
     return metrics if metrics else None
 
 
+def _decorate_deferred_failure(script_name: str, success: bool, message: str | None) -> str | None:
+    """Prefix known-deferred job failures so alerts/history are triage-safe."""
+    reason = DEFERRED_FAILURE_JOBS.get(script_name)
+    if success or not reason:
+        return message
+    base = (message or "").strip()
+    return f"[{reason}] {base}" if base else f"[{reason}]"
+
+
+def _display_job_name(script_name: str, success: bool) -> str:
+    """Return alert display name with deferred-failure context when relevant."""
+    job_name = JOB_NAMES.get(script_name, script_name)
+    if not success and script_name in DEFERRED_FAILURE_JOBS:
+        return f"{job_name} (NBA deferred)"
+    return job_name
+
+
 def _send_job_alert(
     script_name: str,
     success: bool,
@@ -296,7 +320,7 @@ def _send_job_alert(
     try:
         from src.discord_bot.alerts import send_job_alert_sync
 
-        job_name = JOB_NAMES.get(script_name, script_name)
+        job_name = _display_job_name(script_name, success)
         metrics = _parse_metrics_from_output(script_name, stdout, stderr)
 
         # Get error message for failed jobs
@@ -304,6 +328,7 @@ def _send_job_alert(
         if not success and stderr:
             # Get last 500 chars of stderr for error display
             error_message = stderr.strip()[-500:]
+        error_message = _decorate_deferred_failure(script_name, success, error_message)
 
         send_job_alert_sync(
             job_name=job_name,
@@ -410,6 +435,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
     # Record to persistent DB (non-fatal)
     metrics = _parse_metrics_from_output(script_name, stdout, stderr)
     error_msg = stderr.strip()[-500:] if not success and stderr else None
+    error_msg = _decorate_deferred_failure(script_name, success, error_msg)
     record_job_execution(
         job_name=script_name,
         started_at=started_at,

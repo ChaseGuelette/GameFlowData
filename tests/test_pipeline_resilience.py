@@ -199,6 +199,14 @@ class TestJobStatusTracking:
 
         assert JOB_STATUS["test_job.py"]["status"] == "failed"
 
+    def test_deferred_nba_lines_failure_is_tagged_for_alerts(self):
+        from src.orchestration.scheduler import _decorate_deferred_failure, _display_job_name
+
+        decorated = _decorate_deferred_failure("lines_job.py", False, "linker failed")
+        assert _display_job_name("lines_job.py", success=False) == "Lines Scraper (NBA deferred)"
+        assert decorated is not None and "NBA deferred" in decorated
+        assert _decorate_deferred_failure("mlb_lines_job.py", False, "linker failed") == "linker failed"
+
     @patch("src.orchestration.scheduler.record_job_execution")
     @patch("src.orchestration.scheduler._send_job_alert")
     @patch("src.orchestration.scheduler.subprocess.run")

@@ -58,6 +58,28 @@ Relevant files:
    - Roster job exists and is scheduled, but remote data max `scraped_at` is one month old.
    - Need Railway/log/API confirmation once Railway auth is restored.
 
+
+## Implementation status
+
+Implemented 2026-05-26:
+
+- Added `scripts/refresh_mlb_derived_features.py` as a safe-by-default catch-up helper for stale MLB derived inputs.
+- Patched `src/orchestration/mlb_daily_stats_job.py` so rolling averages target the latest completed source-stat date instead of blindly using today's date.
+- Added bullpen workload derivation to the critical MLB daily stats path after pitching stats are available.
+- Added a stale-output guard so `mlb_player_average_batting`, `mlb_player_average_pitching`, and `mlb_bullpen_daily_status` must be current through the completed source date or the job exits non-zero.
+- Hardened `src/orchestration/mlb_roster_scraper_job.py` with a minimum stored-row count guard.
+- Added a scheduler retry path for the roster scraper after the morning run.
+
+Validation run:
+
+- `./venv/Scripts/python.exe -m ruff check scripts/refresh_mlb_derived_features.py src/orchestration/mlb_daily_stats_job.py src/orchestration/mlb_roster_scraper_job.py` — passed.
+- `./venv/Scripts/python.exe -m py_compile scripts/refresh_mlb_derived_features.py src/orchestration/mlb_daily_stats_job.py src/orchestration/mlb_roster_scraper_job.py` — passed.
+
+Remaining operational follow-up:
+
+- Run the remote catch-up only after approval, then verify production max dates with `scripts/validate_mlb_db_state.py --remote`.
+- Railway/log confirmation for the roster path still belongs to production certification, not this code hotfix.
+
 ## Fix proposal
 
 ### Phase A — no-code verification / one-off catch-up plan
