@@ -181,7 +181,7 @@ def test_build_config_edge_frame_applies_vectorized_bl_math_for_one_config():
     assert df.loc[0, "under_edge"] == (1.0 - expected_over) - 0.50
 
 
-def test_precompute_mlb_base_probs_builds_vectorized_cache_with_same_line_choice_and_empirical_probabilities():
+def test_precompute_mlb_base_probs_builds_vectorized_cache_for_all_candidate_books_with_empirical_probabilities():
     pred = _prediction(samples=[0, 1, 2, 3])
     game_date = date(2025, 7, 1)
 
@@ -192,13 +192,13 @@ def test_precompute_mlb_base_probs_builds_vectorized_cache_with_same_line_choice
         {game_date: {(101, "pitcher_strikeouts"): 2.0}},
     )
 
-    assert len(df) == 1
-    row = df.iloc[0]
-    assert row["bookmaker"] == "low_vig_book"
-    assert row["model_over"] == 0.5
-    assert row["market_over"] == 0.5
-    assert row["market_under"] == 0.5
-    assert row["model_logit"] == 0.0
-    assert row["market_logit"] == 0.0
-    assert row["actual"] == 2.0
-    assert row["selected_snapshot_time"] == "2025-07-01T16:05:00Z"
+    assert set(df["bookmaker"]) == {"wide_book", "low_vig_book"}
+    low_vig_row = df[df["bookmaker"] == "low_vig_book"].iloc[0]
+    assert low_vig_row["model_over"] == 0.5
+    assert low_vig_row["market_over"] == 0.5
+    assert low_vig_row["market_under"] == 0.5
+    assert low_vig_row["model_logit"] == 0.0
+    assert low_vig_row["market_logit"] == 0.0
+    assert low_vig_row["actual"] == 2.0
+    assert low_vig_row["selected_snapshot_time"] == "2025-07-01T16:05:00Z"
+    assert df.loc[df["bookmaker"] == "wide_book", "candidate_booksum"].iloc[0] > low_vig_row["candidate_booksum"]

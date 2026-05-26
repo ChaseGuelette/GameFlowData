@@ -22,8 +22,16 @@ from sqlalchemy.engine import Engine
 
 from src.models.mlb.features.contracts import (
     BATTER_BASE_FEATURES,
+    BATTER_FEATURE_MAP,
+    BATTER_HITS_FEATURES,
+    BATTER_HR_FEATURES,
+    BATTER_HRR_FEATURES,
+    BATTER_RBIS_FEATURES,
+    BATTER_RUNS_FEATURES,
     BATTER_STAT_MARKET_KEY,
     BATTER_STAT_TARGET,
+    BATTER_TOTAL_BASES_FEATURES,
+    get_features_for_stat,
 )
 from src.models.mlb.features.prop_line_feature_source import (
     build_lateral_prop_line_join,
@@ -37,6 +45,22 @@ from src.models.mlb.features.transforms import (
 logger = logging.getLogger(__name__)
 
 _PA_BY_LINEUP_POSITION = {1: 4.3, 2: 4.2, 3: 3.9, 4: 3.8, 5: 3.7, 6: 3.5, 7: 3.3, 8: 3.1, 9: 3.0}
+
+__all__ = [
+    "BATTER_BASE_FEATURES",
+    "BATTER_FEATURE_MAP",
+    "BATTER_HITS_FEATURES",
+    "BATTER_HR_FEATURES",
+    "BATTER_HRR_FEATURES",
+    "BATTER_RBIS_FEATURES",
+    "BATTER_RUNS_FEATURES",
+    "BATTER_STAT_MARKET_KEY",
+    "BATTER_STAT_TARGET",
+    "BATTER_TOTAL_BASES_FEATURES",
+    "MLBBatterFeatureConfig",
+    "MLBBatterFeatureStore",
+    "get_features_for_stat",
+]
 
 
 @dataclass

@@ -102,6 +102,48 @@ def test_save_results_writes_summary_json_and_per_config_artifacts(tmp_path):
     assert metrics_json["betting"]["total_bets"] == 12
 
 
+def test_save_results_records_promotion_contract_metadata_when_provided(tmp_path):
+    from src.backtesting.mlb.sweep_results import SweepResult, save_results
+
+    promotion_metadata = {
+        "promotion_grade": True,
+        "evidence_label": "promotion_grade_quote_clean",
+        "quote_clean": {
+            "enabled": True,
+            "cutoff_time_et": "13:30",
+            "decision_policy": "slate_or_tminus",
+            "relative_minutes": 60,
+            "line_source": "mlb_raw_player_props",
+        },
+        "line_source": "mlb_raw_player_props",
+        "quote_decision_policy": "slate_or_tminus",
+        "dense_clv_linked_coverage_audit_required": False,
+        "dense_clv_linked_coverage_audit_note": None,
+        "warnings": [],
+    }
+    result = SweepResult(
+        config=SweepConfig(tau=None, edge_threshold=0.08, kelly_fraction=0.125),
+        metrics=_metrics(),
+        bets_df=pd.DataFrame(),
+        predictions_df=pd.DataFrame(),
+        elapsed_seconds=1.0,
+    )
+
+    save_results(
+        [result],
+        output_dir=tmp_path,
+        start_date=date(2025, 7, 1),
+        end_date=date(2025, 7, 2),
+        phase01_time=12.34,
+        total_predictions=99,
+        total_dates=2,
+        promotion_metadata=promotion_metadata,
+    )
+
+    sweep_json = json.loads((tmp_path / "sweep_results.json").read_text())
+    assert sweep_json["sweep_metadata"]["promotion_contract"] == promotion_metadata
+
+
 def test_save_results_writes_bets_and_predictions_verbatim_for_cli_audits(tmp_path):
     from src.backtesting.mlb.sweep_results import SweepResult, save_results
 

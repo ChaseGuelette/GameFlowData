@@ -27,7 +27,7 @@
 
 | # | Migration lane | Plan file | Current priority | Notes |
 |---|---|---|---|---|
-| 01 | MLB quote-clean/backtest sweep architecture | `01-mlb-quote-clean-backtest-sweep-migration.md` | Highest | Blocks trusted MLB promotion evidence. |
+| 01 | MLB quote-clean/backtest sweep architecture | `01-mlb-quote-clean-backtest-sweep-migration.md` | Complete | Implementation complete as of 2026-05-26; future work is artifact validation, not structural migration. |
 | 02 | MLB feature-store boundary migration | `02-mlb-feature-store-boundary-migration.md` | High | Temporal integrity + train/backtest/inference parity. |
 | 03 | NBA/general feature-store migration | `03-nba-feature-store-boundary-migration.md` | Medium | Production-sensitive; avoid casual behavior changes. |
 | 04 | Training orchestrator migration | `04-training-orchestrator-migration.md` | Medium | Separate fitting, validation, artifact writing, promotion metadata. |

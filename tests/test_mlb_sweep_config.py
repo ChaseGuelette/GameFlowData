@@ -74,6 +74,8 @@ def test_parse_sweep_cli_config_records_dates_quote_clean_and_output_dir():
             "45",
             "--line-source",
             "mlb_player_props_clv_snapshots",
+            "--dense-clv-linked-coverage-audit-note",
+            "audit_suite verified linked game_id/player_id coverage",
             "--output-dir",
             "backtest_results/test_run",
         ]
@@ -93,6 +95,7 @@ def test_parse_sweep_cli_config_records_dates_quote_clean_and_output_dir():
         relative_minutes=45,
         line_source="mlb_player_props_clv_snapshots",
     )
+    assert config.dense_clv_linked_coverage_audit_note == "audit_suite verified linked game_id/player_id coverage"
     assert len(config.sweep_grid) == 2
     assert all(c.flat_bet_size == 100.0 for c in config.sweep_grid)
 

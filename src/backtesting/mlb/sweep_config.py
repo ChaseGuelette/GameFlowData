@@ -80,6 +80,7 @@ class SweepCliConfig:
     direction: str
     cli_allowed_bets: set[tuple[str, str]] | None
     quote_clean: QuoteCleanConfig
+    dense_clv_linked_coverage_audit_note: str | None = None
 
 
 def parse_tau_values(raw_tau_values: list[str]) -> list[float | None]:
@@ -239,6 +240,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Odds table for quote-clean line selection. Dense CLV table requires linked game_id/player_id.",
     )
     parser.add_argument(
+        "--dense-clv-linked-coverage-audit-note",
+        type=str,
+        default=None,
+        help=(
+            "Optional artifact note documenting linked game_id/player_id coverage when "
+            "--line-source mlb_player_props_clv_snapshots is used. Recorded in sweep metadata."
+        ),
+    )
+    parser.add_argument(
         "--book-routing-policy",
         choices=["lowest_vig", "preferred_book_first"],
         default="lowest_vig",
@@ -300,4 +310,5 @@ def parse_sweep_cli_config(args: argparse.Namespace) -> SweepCliConfig:
             relative_minutes=args.quote_relative_minutes,
             line_source=args.line_source,
         ),
+        dense_clv_linked_coverage_audit_note=args.dense_clv_linked_coverage_audit_note,
     )

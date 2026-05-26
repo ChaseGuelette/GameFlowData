@@ -34,6 +34,7 @@ from src.backtesting.mlb.edge_engine import precompute_mlb_base_probs
 from src.backtesting.mlb.matchup_cache import build_matchup_cache
 from src.backtesting.mlb.mlb_backtest_harness import STAT_ACTUALS
 from src.backtesting.mlb.prediction_cache import DatePrediction, build_predictions_for_date
+from src.backtesting.mlb.promotion_contracts import build_promotion_contract_metadata
 from src.backtesting.mlb.quote_clean_line_service import fetch_lines_for_date
 from src.backtesting.mlb.quote_decision_policy import build_fixed_cutoff_ts
 from src.backtesting.mlb.sweep_bootstrap import initialize_sweep_runtime
@@ -384,6 +385,10 @@ def main():
         total_predictions=total_predictions,
         total_dates=len(date_predictions),
         starting_bankroll=cli_config.starting_bankroll,
+        promotion_metadata=build_promotion_contract_metadata(
+            cli_config.quote_clean,
+            dense_clv_linked_coverage_audit_note=cli_config.dense_clv_linked_coverage_audit_note,
+        ),
     )
 
     total_time = phase01_time + sum(r.elapsed_seconds for r in results)

@@ -123,6 +123,7 @@ def save_results(
     total_predictions: int,
     total_dates: int,
     starting_bankroll: float = 10000.0,
+    promotion_metadata: dict | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -137,6 +138,8 @@ def save_results(
         },
         "results": [],
     }
+    if promotion_metadata is not None:
+        json_output["sweep_metadata"]["promotion_contract"] = promotion_metadata
 
     csv_rows = []
 

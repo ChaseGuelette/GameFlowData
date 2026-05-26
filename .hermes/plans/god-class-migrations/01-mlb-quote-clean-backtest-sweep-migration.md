@@ -868,6 +868,39 @@ Expected commit shape:
 
 ## Progress log
 
+### 2026-05-26 slice 08/09 closeout — promotion contracts and final done marker
+
+Files changed:
+
+- Created `src/backtesting/mlb/promotion_contracts.py`.
+- Created `tests/test_mlb_promotion_contracts.py`.
+- Modified `src/backtesting/mlb/sweep_config.py` to record optional `--dense-clv-linked-coverage-audit-note` metadata.
+- Modified `src/backtesting/mlb/sweep_results.py` so `sweep_results.json` can persist a `promotion_contract` metadata block.
+- Modified `src/backtesting/mlb/run_mlb_sweep.py` so every saved sweep records promotion-evidence metadata.
+- Modified `tests/test_mlb_sweep_results.py` and `tests/test_mlb_sweep_inventory.py` to guard the metadata/reporting seam.
+
+RED result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_promotion_contracts.py -q` failed with `ModuleNotFoundError: No module named 'src.backtesting.mlb.promotion_contracts'`, as expected before creating the module.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_results.py::test_save_results_records_promotion_contract_metadata_when_provided -q` failed with `TypeError: save_results() got an unexpected keyword argument 'promotion_metadata'`, as expected before wiring serialization.
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_sweep_config.py::test_parse_sweep_cli_config_records_dates_quote_clean_and_output_dir -q` failed because the CLI did not yet accept `--dense-clv-linked-coverage-audit-note`.
+
+GREEN result:
+
+- `venv/Scripts/python.exe -m pytest tests/test_mlb_promotion_contracts.py tests/test_mlb_sweep_config.py tests/test_mlb_sweep_results.py tests/test_mlb_sweep_inventory.py -q` passed: 27 passed, 1 warning.
+
+Behavior-preservation notes:
+
+- Promotion contracts are report-only; legacy mode remains runnable and is labeled `hypothesis_only` instead of being blocked.
+- Quote-clean mode records `line_source`, `quote_decision_policy`, cutoff time, relative minutes, and promotion-grade evidence label in sweep metadata.
+- Dense CLV snapshot runs now carry an explicit `dense_clv_linked_coverage_audit_required` flag unless the operator provides `--dense-clv-linked-coverage-audit-note`.
+- No DB queries, model artifacts, long sweeps, feature-store behavior, edge math, bet simulation, or metrics math changed.
+
+Completion status:
+
+- Lane 01 implementation is now complete against the current plan's done-when criteria.
+- Remaining future work is domain validation / artifact interpretation, not god-class migration structure.
+
 ### 2026-05-23 slice 01A started — quote decision policy extraction
 
 Files changed:
@@ -1246,13 +1279,13 @@ Current status:
 
 ---
 
-## Done when
+## Done when — COMPLETE as of 2026-05-26
 
-- `run_mlb_sweep.py` is a thin CLI adapter around typed config + runner service.
-- Quote decision policy is isolated and tested.
-- Quote-clean line service owns decision-time/source-table orchestration.
-- Prediction cache, data loading, edge computation, result writing, and promotion contracts have explicit owners.
-- Existing quote-clean/as-of tests still pass.
-- New inventory tests prevent `run_mlb_sweep.py` from regrowing raw SQL and domain policy.
-- Legacy mode remains clearly labeled hypothesis-only.
-- Promotion-grade runs record quote decision policy, line source, and temporal-integrity metadata.
+- [x] `run_mlb_sweep.py` is a thin CLI adapter around typed config + runner service.
+- [x] Quote decision policy is isolated and tested.
+- [x] Quote-clean line service owns decision-time/source-table orchestration.
+- [x] Prediction cache, data loading, edge computation, result writing, and promotion contracts have explicit owners.
+- [x] Existing quote-clean/as-of tests still pass.
+- [x] New inventory tests prevent `run_mlb_sweep.py` from regrowing raw SQL and domain policy.
+- [x] Legacy mode remains clearly labeled hypothesis-only.
+- [x] Promotion-grade runs record quote decision policy, line source, and temporal-integrity metadata.

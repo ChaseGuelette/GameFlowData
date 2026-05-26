@@ -20,6 +20,7 @@ EDGE_ENGINE_PATH = Path("src/backtesting/mlb/edge_engine.py")
 MATCHUP_CACHE_PATH = Path("src/backtesting/mlb/matchup_cache.py")
 SWEEP_EXECUTION_PATH = Path("src/backtesting/mlb/sweep_execution.py")
 SWEEP_BOOTSTRAP_PATH = Path("src/backtesting/mlb/sweep_bootstrap.py")
+PROMOTION_CONTRACTS_PATH = Path("src/backtesting/mlb/promotion_contracts.py")
 
 
 def _source(path: Path) -> str:
@@ -223,6 +224,20 @@ def test_sweep_bootstrap_owns_model_dir_and_runtime_construction():
     assert "MLBModelSuite" in bootstrap_source
     assert "from_directory" in bootstrap_source
     assert "MLBBatterFeatureStore" in bootstrap_source
+
+
+def test_promotion_contracts_own_evidence_quality_metadata():
+    runner_source = _source(RUNNER_PATH)
+    promotion_source = _source(PROMOTION_CONTRACTS_PATH)
+
+    assert "build_promotion_contract_metadata" in runner_source
+    assert "def build_promotion_contract_metadata" not in runner_source
+    assert "hypothesis_only" not in runner_source
+    assert "dense_clv_linked_coverage_audit_required" not in runner_source
+
+    assert "def build_promotion_contract_metadata" in promotion_source
+    assert "hypothesis_only" in promotion_source
+    assert "dense_clv_linked_coverage_audit_required" in promotion_source
 
 
 def test_final_run_mlb_sweep_runner_shape_target():
