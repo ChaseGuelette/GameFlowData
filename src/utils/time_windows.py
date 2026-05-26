@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
-UTC = timezone.utc
+UTC = UTC
 
 
 def et_day_utc_bounds(target_date: date) -> tuple[datetime, datetime]:

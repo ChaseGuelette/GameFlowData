@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timezone
+from datetime import UTC, date
 
 from src.utils.time_windows import et_day_utc_bounds
 
@@ -8,8 +8,8 @@ from src.utils.time_windows import et_day_utc_bounds
 def test_et_day_utc_bounds_uses_half_open_normal_day():
     start_utc, end_utc = et_day_utc_bounds(date(2026, 5, 26))
 
-    assert start_utc.tzinfo is timezone.utc
-    assert end_utc.tzinfo is timezone.utc
+    assert start_utc.tzinfo is UTC
+    assert end_utc.tzinfo is UTC
     assert start_utc.isoformat() == "2026-05-26T04:00:00+00:00"
     assert end_utc.isoformat() == "2026-05-27T04:00:00+00:00"
 
