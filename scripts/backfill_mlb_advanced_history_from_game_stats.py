@@ -87,7 +87,7 @@ BATTER_SQL = text(
         b.player_id,
         b.season,
         'batter',
-        :as_of_date::date,
+        CAST(:as_of_date AS date),
         NULL::float AS war,
         CASE WHEN (b.ab - b.so - b.hr + b.sf) > 0
              THEN (b.h - b.hr) / NULLIF((b.ab - b.so - b.hr + b.sf), 0)
@@ -171,7 +171,7 @@ PITCHER_SQL = text(
         player_id,
         season,
         'pitcher',
-        :as_of_date::date,
+        CAST(:as_of_date AS date),
         NULL::float AS war,
         CASE WHEN (outs_recorded + h_allowed - so - hr_allowed) > 0
              THEN (h_allowed - hr_allowed) / NULLIF((outs_recorded + h_allowed - so - hr_allowed), 0)
