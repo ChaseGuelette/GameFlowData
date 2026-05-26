@@ -11,8 +11,6 @@ No DB access, no model training, and no Gaussian-probability logic are used.
 from __future__ import annotations
 
 import argparse
-import math
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -492,7 +490,6 @@ def _score_bins_for_dataframe(
     if work.empty:
         return []
 
-    n_scored = len(work)
     unique = work["score"].nunique(dropna=True)
     if unique < 2:
         return []

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -20,7 +20,7 @@ def test_training_feature_request_requires_seasons():
 
 
 def test_date_feature_request_requires_date_or_backtest_mode():
-    as_of = datetime(2026, 5, 23, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 23, tzinfo=UTC)
     req = DateFeatureRequest(game_date="2026-05-23", mode=FeatureMode.BACKTEST, as_of_time=as_of)
     assert req.as_of_time == as_of
 

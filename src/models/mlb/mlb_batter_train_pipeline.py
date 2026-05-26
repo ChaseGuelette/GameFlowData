@@ -35,6 +35,11 @@ import pandas as pd
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from src.db.client import get_engine
+from src.models.mlb.features.contracts import (
+    features_for_batter_families,
+    normalize_feature_family_names,
+    normalize_feature_names,
+)
 from src.models.mlb.mlb_batter_feature_store import (
     BATTER_FEATURE_MAP,
     MLBBatterFeatureStore,
@@ -56,6 +61,11 @@ class MLBBatterTrainingOrchestrator:
 
     CALIBRATION_TOLERANCE = 0.05
     CALIBRATION_HARD_FAIL = 0.10
+    _NUMERIC_DTYPES = {"float64", "float32", "int64", "int32"}
+    _STRUCTURAL_EXCLUDED_FEATURES = {
+        "game_id", "player_id", "game_date", "season", "team_id",
+        "opp_team_id", "actual", "player_name", "actual_at_bats",
+    }
 
     def __init__(
         self,
@@ -66,6 +76,10 @@ class MLBBatterTrainingOrchestrator:
         feature_tolerance: float = 0.02,
         local: bool = False,
         exclude_prop_line: bool = False,
+        force_include_families: list[str] | None = None,
+        force_exclude_families: list[str] | None = None,
+        force_include_features: list[str] | None = None,
+        force_exclude_features: list[str] | None = None,
     ):
         if stat not in BATTER_FEATURE_MAP:
             raise ValueError(f"Unknown stat: {stat}. Valid: {list(BATTER_FEATURE_MAP.keys())}")
@@ -77,6 +91,10 @@ class MLBBatterTrainingOrchestrator:
         self.tune_hyperparams = tune_hyperparams
         self.tuning_trials = tuning_trials
         self.exclude_prop_line = exclude_prop_line
+        self.force_include_families = normalize_feature_family_names(force_include_families)
+        self.force_exclude_families = normalize_feature_family_names(force_exclude_families)
+        self.force_include_features = normalize_feature_names(force_include_features)
+        self.force_exclude_features = normalize_feature_names(force_exclude_features)
         self.is_binary = stat == "home_runs"
 
         # Create timestamped run directory
@@ -88,28 +106,86 @@ class MLBBatterTrainingOrchestrator:
 
         logger.info("Initialized MLB Batter Training Run: %s, stat=%s", timestamp_str, stat)
 
+    def _dtype_items(self, dtypes) -> list[tuple[str, str]]:
+        """Normalize pandas/dict dtype items into string pairs."""
+        return [(str(c), str(dtype)) for c, dtype in (dtypes.items() if hasattr(dtypes, "items") else [])]
+
+    def _excluded_feature_set(self, dtypes, extra_excluded: set[str] | None = None) -> set[str]:
+        """Return all structurally or experiment-excluded features."""
+        items = self._dtype_items(dtypes)
+        excluded = set(self._STRUCTURAL_EXCLUDED_FEATURES)
+        if extra_excluded:
+            excluded.update(extra_excluded)
+        if self.exclude_prop_line:
+            excluded.update({c for c, _ in items if c.startswith("prop_line_")})
+        excluded.update(features_for_batter_families(self.force_exclude_families))
+        excluded.update(self.force_exclude_features)
+        return excluded
+
+    def _forced_feature_set(self) -> list[str]:
+        """Return de-duped force-included features from families and exact names."""
+        forced: list[str] = []
+        for feature in features_for_batter_families(self.force_include_families):
+            if feature not in forced:
+                forced.append(feature)
+        for feature in self.force_include_features:
+            if feature not in forced:
+                forced.append(feature)
+        return forced
+
+    def _resolve_selector_candidates_and_required_features(
+        self,
+        dtypes,
+        extra_excluded: set[str] | None = None,
+        apply_forced_includes: bool = True,
+    ) -> tuple[list[str], list[str]]:
+        """Return selector candidates and force-required numeric features."""
+        items = self._dtype_items(dtypes)
+        dtype_by_name = {name: dtype for name, dtype in items}
+        excluded = self._excluded_feature_set(dtypes, extra_excluded=extra_excluded)
+        forced = self._forced_feature_set() if apply_forced_includes else []
+
+        conflicts = [feature for feature in forced if feature in excluded]
+        if conflicts:
+            raise ValueError(f"Features cannot be both included and excluded: {conflicts}")
+
+        missing = [feature for feature in forced if feature not in dtype_by_name]
+        if missing:
+            raise ValueError(f"Forced feature(s) missing from training dataframe: {missing}")
+
+        non_numeric = [feature for feature in forced if dtype_by_name.get(feature) not in self._NUMERIC_DTYPES]
+        if non_numeric:
+            raise ValueError(f"Forced feature(s) are not numeric: {non_numeric}")
+
+        required = [feature for feature in forced if feature not in excluded]
+        candidates = [
+            name for name, dtype in items
+            if name not in excluded
+            and name not in required
+            and dtype in self._NUMERIC_DTYPES
+        ]
+        return candidates, required
+
     def _numeric_model_feature_candidates(
         self,
         dtypes,
         extra_excluded: set[str] | None = None,
     ) -> list[str]:
-        """Return numeric model feature candidates for the current retrain variant."""
-        excluded = {
-            "game_id", "player_id", "game_date", "season", "team_id",
-            "opp_team_id", "actual", "player_name", "actual_at_bats",
-        }
-        if extra_excluded:
-            excluded.update(extra_excluded)
+        """Return numeric selector candidates for the current retrain variant."""
+        candidates, _required = self._resolve_selector_candidates_and_required_features(
+            dtypes,
+            extra_excluded=extra_excluded,
+        )
+        return candidates
 
-        items = dtypes.items() if hasattr(dtypes, "items") else []
-        if self.exclude_prop_line:
-            excluded.update({c for c, _ in items if str(c).startswith("prop_line_")})
-            items = dtypes.items() if hasattr(dtypes, "items") else []
-
-        return [
-            c for c, dtype in items
-            if c not in excluded and dtype in ("float64", "float32", "int64", "int32")
-        ]
+    @staticmethod
+    def _merge_required_and_selected_features(required: list[str], selected: list[str]) -> list[str]:
+        """Prepend force-required features and de-dupe selected features."""
+        merged: list[str] = []
+        for feature in [*required, *selected]:
+            if feature not in merged:
+                merged.append(feature)
+        return merged
 
     def run(
         self,
@@ -245,40 +321,43 @@ class MLBBatterTrainingOrchestrator:
 
         # Step 3: Feature selection — binomial NLL-based
         logger.info("Step 3: Running binomial NLL-based feature selection...")
-        candidates = self._numeric_model_feature_candidates(train_df.dtypes)
+        candidates, required_features = self._resolve_selector_candidates_and_required_features(train_df.dtypes)
 
         valid_df = train_df[
             train_df["actual"].notna() & (train_df["actual"] >= 0) & (train_df["actual_at_bats"] > 0)
         ].fillna(0)
 
         selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
-        selected_features = selector.select_features_binomial_nll(
+        selector_selected = selector.select_features_binomial_nll(
             valid_df, "actual", candidates,
             at_bats_col="actual_at_bats",
             model_name=f"Batter {self.stat} (Binomial)",
         )
+        selected_features = self._merge_required_and_selected_features(required_features, selector_selected)
         logger.info("Binomial feature set: %d features", len(selected_features))
 
         # Step 3b: Train AB NegBin model
         logger.info("Step 3b: Training AB NegBin model...")
         from src.models.negbin_model import NegBinConfig, NegBinModel
 
-        ab_candidates = self._numeric_model_feature_candidates(
+        ab_candidates, ab_required_features = self._resolve_selector_candidates_and_required_features(
             train_df.dtypes,
             extra_excluded={"projected_ab"},
+            apply_forced_includes=False,
         )
 
         ab_valid_df = valid_df[valid_df["actual_at_bats"] > 0].copy()
         ab_selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
         try:
-            ab_selected = ab_selector.select_features_negbin_nll(
+            ab_selector_selected = ab_selector.select_features_negbin_nll(
                 ab_valid_df, "actual_at_bats", ab_candidates,
                 model_name="Batter AB (NegBin)",
             )
         except AttributeError:
             logger.warning("NegBin feature selector not available, using top AB-correlated features")
             correlations = ab_valid_df[ab_candidates].corrwith(ab_valid_df["actual_at_bats"]).abs()
-            ab_selected = correlations.nlargest(min(20, len(ab_candidates))).index.tolist()
+            ab_selector_selected = correlations.nlargest(min(20, len(ab_candidates))).index.tolist()
+        ab_selected = self._merge_required_and_selected_features(ab_required_features, ab_selector_selected)
 
         logger.info("AB model feature set: %d features", len(ab_selected))
 
@@ -389,6 +468,11 @@ class MLBBatterTrainingOrchestrator:
         logger.info("Step 9: Saving artifacts...")
         model.save(self.run_dir)
         self._save_feature_manifest({"binomial": selected_features, "ab_negbin": ab_selected})
+        self._save_feature_experiment_metadata(
+            {"binomial": selected_features, "ab_negbin": ab_selected},
+            required_features=required_features,
+            ab_required_features=ab_required_features,
+        )
         self._save_calibration_report({f"batter_{self.stat}": cal_report})
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
 
@@ -571,7 +655,7 @@ class MLBBatterTrainingOrchestrator:
             extra_excluded.add("projected_ab")
             logger.info("Using projected_ab as exposure/offset (excluded from features)")
 
-        candidates = self._numeric_model_feature_candidates(
+        candidates, required_features = self._resolve_selector_candidates_and_required_features(
             train_df.dtypes,
             extra_excluded=extra_excluded,
         )
@@ -579,9 +663,10 @@ class MLBBatterTrainingOrchestrator:
         valid_df = train_df[train_df["actual"].notna() & (train_df["actual"] >= 0)].fillna(0)
 
         selector = ImprovedFeatureSelector(n_splits=3, tolerance=self.feature_tolerance)
-        selected_features = selector.select_features_nll(
+        selector_selected = selector.select_features_nll(
             valid_df, "actual", candidates, model_name=f"Batter {self.stat}"
         )
+        selected_features = self._merge_required_and_selected_features(required_features, selector_selected)
         # Double-check projected_ab is not in the selected features
         if use_exposure:
             selected_features = [f for f in selected_features if f != "projected_ab"]
@@ -677,6 +762,7 @@ class MLBBatterTrainingOrchestrator:
         logger.info("Step 9: Saving artifacts...")
         model.save(self.run_dir)
         self._save_feature_manifest({"negbin": selected_features})
+        self._save_feature_experiment_metadata({"negbin": selected_features}, required_features=required_features)
         self._save_calibration_report({f"batter_{self.stat}": cal_report})
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
 
@@ -869,10 +955,25 @@ class MLBBatterTrainingOrchestrator:
             "feature_tolerance": self.feature_tolerance,
             "exclude_prop_line": self.exclude_prop_line,
             "variant": "no_prop_line" if self.exclude_prop_line else "with_prop_line",
+            "force_include_families": self.force_include_families,
+            "force_exclude_families": self.force_exclude_families,
+            "force_include_features": self.force_include_features,
+            "force_exclude_features": self.force_exclude_features,
+            "force_feature_experiment": bool(
+                self.force_include_families
+                or self.force_exclude_families
+                or self.force_include_features
+                or self.force_exclude_features
+            ),
             "pre_registered_comparison_rule": (
                 "Compare clean with_prop_line vs no_prop_line variants only after quote_clean_replay "
                 "and rewritten CLV diagnostics pass timing gates. Primary winner uses CLV/edge rank "
                 "validation before ROI; do not promote from raw backtest ROI alone."
+            ),
+            "force_feature_comparison_rule": (
+                "Feature-family experiments must be compared via quote-clean replay, CLV CI, "
+                "ranker/Spearman CI, drawdown, volume, and book concentration. Selector output alone "
+                "is not an ablation or promotion gate."
             ),
         }
         with open(self.run_dir / "run_config.json", "w") as f:
@@ -882,6 +983,29 @@ class MLBBatterTrainingOrchestrator:
         manifest = {str(q): feats for q, feats in selected_features.items()}
         with open(self.run_dir / "feature_manifest.json", "w") as f:
             json.dump(manifest, f, indent=4)
+
+    def _save_feature_experiment_metadata(
+        self,
+        selected_features: dict[str, list[str]],
+        required_features: list[str] | None = None,
+        ab_required_features: list[str] | None = None,
+    ):
+        metadata = {
+            "force_include_families": self.force_include_families,
+            "force_exclude_families": self.force_exclude_families,
+            "force_include_features": self.force_include_features,
+            "force_exclude_features": self.force_exclude_features,
+            "required_features": required_features or [],
+            "ab_required_features": ab_required_features or [],
+            "selected_features": selected_features,
+            "comparison_rule": (
+                "Feature-family experiments must be compared via quote-clean replay, CLV CI, "
+                "ranker/Spearman CI, drawdown, volume, and book concentration. Selector output "
+                "alone is not an ablation or promotion gate."
+            ),
+        }
+        with open(self.run_dir / "feature_experiment_metadata.json", "w") as f:
+            json.dump(metadata, f, indent=4)
 
     def _save_calibration_report(self, reports):
         with open(self.run_dir / "calibration_report_combined.json", "w") as f:
@@ -901,6 +1025,10 @@ class MLBBatterTrainingOrchestrator:
             "git_hash": git_hash,
             "exclude_prop_line": self.exclude_prop_line,
             "variant": "no_prop_line" if self.exclude_prop_line else "with_prop_line",
+            "force_include_families": self.force_include_families,
+            "force_exclude_families": self.force_exclude_families,
+            "force_include_features": self.force_include_features,
+            "force_exclude_features": self.force_exclude_features,
         }
         with open(self.run_dir / "training_metadata.json", "w") as f:
             json.dump(metadata, f, indent=4)
@@ -917,7 +1045,7 @@ def _get_git_hash() -> str | None:
         return None
 
 
-if __name__ == "__main__":
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train MLB Batter Prop Models")
     parser.add_argument("--stat", type=str, default="hits",
                         choices=list(BATTER_FEATURE_MAP.keys()),
@@ -933,7 +1061,35 @@ if __name__ == "__main__":
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
     parser.add_argument("--exclude-prop-line", action="store_true",
                         help="Train the preregistered clean variant with all prop_line_* features excluded")
+    parser.add_argument(
+        "--force-include-families",
+        nargs="*",
+        default=None,
+        help="Comma/space separated batter feature families to force include.",
+    )
+    parser.add_argument(
+        "--force-exclude-families",
+        nargs="*",
+        default=None,
+        help="Comma/space separated batter feature families to exclude from selector candidates.",
+    )
+    parser.add_argument(
+        "--force-include-features",
+        nargs="*",
+        default=None,
+        help="Comma/space separated exact feature names to force include.",
+    )
+    parser.add_argument(
+        "--force-exclude-features",
+        nargs="*",
+        default=None,
+        help="Comma/space separated exact feature names to exclude.",
+    )
+    return parser
 
+
+if __name__ == "__main__":
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     orchestrator = MLBBatterTrainingOrchestrator(
@@ -944,6 +1100,10 @@ if __name__ == "__main__":
         feature_tolerance=args.feature_tolerance,
         local=args.local,
         exclude_prop_line=args.exclude_prop_line,
+        force_include_families=args.force_include_families,
+        force_exclude_families=args.force_exclude_families,
+        force_include_features=args.force_include_features,
+        force_exclude_features=args.force_exclude_features,
     )
 
     orchestrator.run(

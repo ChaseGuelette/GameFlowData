@@ -316,11 +316,129 @@ BATTER_FEATURE_MAP: dict[str, list[str]] = {
     "hrr": BATTER_HRR_FEATURES,
 }
 
+BATTER_FORCE_FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
+    "market": (
+        "prop_line_batter_hits",
+        "line_total",
+    ),
+    "recent_form": (
+        "batter_avg_h_l5",
+        "batter_avg_h_l10",
+        "batter_avg_h_l20",
+        "batter_avg_h_szn",
+        "batter_h_l5_l10_ratio",
+        "batter_std_h_l5",
+    ),
+    "contact_quality": (
+        "batter_avg_exit_velocity_l5",
+        "batter_avg_exit_velocity_l10",
+        "batter_avg_launch_angle_l5",
+        "batter_barrel_pct_l5",
+        "batter_barrel_pct_l10",
+        "batter_hard_hit_pct_l5",
+        "batter_xba_l5",
+        "batter_xba_l10",
+        "batter_xslg_l5",
+        "batter_xwoba_l5",
+        "batter_zone_pct_l5",
+        "batter_chase_pct_l5",
+        "batter_whiff_pct_l5",
+        "batter_gb_pct_l10",
+        "batter_fb_pct_l10",
+        "batter_babip_szn",
+        "batter_hard_pct_szn",
+    ),
+    "matchup_pitcher": (
+        "opp_pitcher_avg_era_l5",
+        "opp_pitcher_avg_whip_l5",
+        "opp_pitcher_avg_k_per_9_l5",
+        "opp_pitcher_avg_bb_per_9_l5",
+        "opp_pitcher_avg_h_allowed_l5",
+        "opp_pitcher_avg_hr_allowed_l5",
+        "opp_pitcher_xwoba_against_l5",
+        "opp_pitcher_hard_hit_pct_against_l5",
+        "opp_pitcher_avg_fastball_velo_l5",
+        "opp_pitcher_days_rest",
+        "opp_pitcher_babip_against_l5",
+        "opp_pitcher_velo_drop_late_l5",
+        "opp_pitcher_avg_pitches_per_inning_l5",
+        "opp_pitcher_deep_inning_pct_l5",
+    ),
+    "bullpen": (
+        "opp_bullpen_ip_last_3d",
+        "opp_bullpen_era_last_7d",
+        "opp_relievers_available",
+        "opp_bullpen_pitches_last_3d",
+    ),
+    "platoon": (
+        "is_same_hand",
+        "batter_avg_h_vs_hand_l20",
+        "batter_avg_ops_vs_hand_l20",
+    ),
+    "environment": (
+        "park_hits_factor",
+        "air_density_idx",
+        "wind_out_mph",
+        "has_precip",
+        "is_home",
+    ),
+    "opportunity": (
+        "lineup_position",
+        "projected_ab",
+        "batter_avg_ab_l5",
+        "batter_avg_pa_l5",
+        "batter_rest_days",
+        "batter_games_last_7d",
+        "batter_game_number",
+    ),
+}
 
-def get_features_for_stat(stat: str) -> list[str]:
-    """Return the feature list for a given batter stat."""
-    return BATTER_FEATURE_MAP[stat]
 
+def normalize_feature_family_names(names: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Normalize CLI family names and fail on unknown names."""
+    if not names:
+        return []
+
+    normalized: list[str] = []
+    unknown: list[str] = []
+    for raw in names:
+        for part in str(raw).split(","):
+            name = part.strip().lower().replace("-", "_")
+            if not name:
+                continue
+            if name not in BATTER_FORCE_FEATURE_FAMILIES:
+                unknown.append(name)
+            elif name not in normalized:
+                normalized.append(name)
+
+    if unknown:
+        valid = ", ".join(sorted(BATTER_FORCE_FEATURE_FAMILIES))
+        raise ValueError(f"Unknown batter feature family/families: {unknown}. Valid: {valid}")
+    return normalized
+
+
+def normalize_feature_names(names: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Normalize comma-separated CLI feature names while preserving order."""
+    if not names:
+        return []
+
+    normalized: list[str] = []
+    for raw in names:
+        for part in str(raw).split(","):
+            name = part.strip()
+            if name and name not in normalized:
+                normalized.append(name)
+    return normalized
+
+
+def features_for_batter_families(families: list[str] | tuple[str, ...]) -> list[str]:
+    """Expand family names to a de-duped feature list, preserving registry order."""
+    expanded: list[str] = []
+    for family in families:
+        for feature in BATTER_FORCE_FEATURE_FAMILIES[family]:
+            if feature not in expanded:
+                expanded.append(feature)
+    return expanded
 
 
 @dataclass(frozen=True)

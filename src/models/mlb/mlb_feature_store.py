@@ -19,20 +19,9 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Feature contracts (owned by src.models.mlb.features.contracts; re-exported for compatibility)
-# ---------------------------------------------------------------------------
-
 from src.models.mlb.features.contracts import (
     LINEUP_FEATURE_DEFAULTS,
-    PITCHER_K_EXCLUDED_TRAINING_FEATURES,
     PITCHER_K_FEATURES,
-    PITCHER_K_PHASE3A_REJECTED_FEATURES,
-    PITCHER_K_PHASE3B_ADDED_FEATURES,
-    PITCHER_K_TRAINING_FEATURES,
 )
 from src.models.mlb.features.prop_line_feature_source import (
     build_lateral_prop_line_join,
@@ -42,6 +31,9 @@ from src.models.mlb.features.transforms import (
     add_pitcher_derived_features,
     add_pitcher_interaction_features,
 )
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class MLBFeatureConfig:

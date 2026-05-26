@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.models.mlb.features.prop_line_feature_source import (
     build_lateral_prop_line_join,
@@ -16,7 +16,7 @@ def _sql(query) -> str:
 
 
 def test_single_prop_line_query_applies_as_of_and_pre_commence_guards():
-    as_of = datetime(2026, 5, 23, 17, 0, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 23, 17, 0, tzinfo=UTC)
     query = build_single_prop_line_query(
         player_id=1,
         game_id=2,

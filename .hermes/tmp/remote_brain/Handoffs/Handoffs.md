@@ -1,0 +1,102 @@
+---
+title: Handoffs
+type: note
+---
+
+# Handoffs
+
+> Part of [[BRAIN-INDEX]]
+
+Session continuity notes. Each handoff captures what was done, decisions made, and recommended next steps.
+
+## Session History
+- [[handoff-000]] - Brain initialization
+- [[handoff-001]] - Multi-sport dashboard (NBA + MLB) implementation
+- [[handoff-002]] - MLB batter pipeline aligned with distributional model
+- [[handoff-003]] - Mobile UI responsiveness overhaul — eliminated horizontal scroll
+- [[handoff-004]] - Binomial model for MLB batter hits + all 5 batter trainers ready
+- [[handoff-005]] - MLB Launch Prep: scheduler ungated, RLS policies, analysis modal, scoreboard API
+- [[handoff-006]] - Code health: ESLint errors fixed, ruff clean, all 721 tests passing
+- [[handoff-007]] - MLB Discord alerts, dashboard sport guards, pipeline audit
+- [[handoff-008]] - Kalshi Prediction Markets full integration (7 phases), merge resolution
+- [[handoff-009]] - DFS Slip Builder & Entry Tracking (parlay Kelly sizing, history tab, backend resolver)
+- [[handoff-010]] - MLB inference bugfixes: naming, prop lines, at_bats leakage, RLS policies
+- [[handoff-011]] - Kalshi paper trading: DB tables, KalshiPaperTrader, pipeline integration
+- [[handoff-012]] - Kalshi live trading bot: real orders, circuit breakers, Discord alerts, migration applied
+- [[handoff-013]] - MLB backtest timeout fix + at_bats data leakage code fix
+- [[handoff-014]] - Fixed failing Python test: game ID zero-padding assertion
+- [[handoff-015]] - Database optimization (47 GB freed), RLS fixes, local Postgres sync system
+- [[handoff-016]] - MLB pipeline debugging: Supavisor timeout, bet resolution, Discord alerts
+- [[handoff-017]] - Local Postgres setup, gameflow_local created, MLB sweep commands for hits/home_runs
+- [[handoff-018]] - AI Chat revamp: persistence, enriched data (depth chart, advanced stats, injury timeline), markdown rendering
+- [[handoff-019]] - Kalshi paper/live trader alignment, overflow bet tracking, Discord alerts with mode distinction
+- [[handoff-020]] - MLB model evaluation: HR dropped, hits backtested (+36.3% ROI), TB/runs retrained
+- [[handoff-021]] - Bot Tracker page + admin access control (admin_users, is_admin, RLS, middleware, /bot-tracker)
+- [[handoff-022]] - NBA calibration health check (HOLD, +9.8% ROI) + DFS bookmaker dashboard bug fix
+- [[handoff-023]] - Black-Litterman Kalshi blending + Railway pipeline debugging (env var fix, 607 markets matched)
+- [[handoff-024]] - MLB model promotion: 3 stats live (pitcher K, hits, RBIs), 3 dropped (TB, runs, HR), per-stat BL configs, dashboard updated
+- [[handoff-025]] - MLB + NBA paper trader fixes: per-stat BL configs (MLB), stored BL values + removed sanity checks (NBA)
+- [[handoff-026]] - Kalshi NO-only overhaul: cut YES bets, stat whitelist, bankroll-proportional exposure, BL fix in live trader, analysis script, live trading startup playbook
+- [[handoff-027]] - Bot Tracker enhancements (Value column + Kalshi link), ruff fixes, MLB Model Picks per-stat params, BL tau restored for MLB, MLB Stats Vault (migration 023 pending apply)
+- [[handoff-028]] - Polymarket-Kalshi Arbitrage Scanner: full pipeline (scraper, matcher, scanner, job), 2 DB tables, Discord alerts, Railway env var
+- [[handoff-029]] - Track Record page (migration 026, CSV import, 5 components, hook, page, navbar link) + History page edit/delete for all bet statuses
+- [[handoff-030]] - Backtesting 55x speedup docs, MLB sweep fast path, playoff model deployed (tau=0.9/z_max=0.25/mw=0.8/edge=0.12, +19.3% ROI OOS), NBA_PLAYOFF_MODE=true on Railway
+- [[handoff-031]] - Kalshi game-level arb pipeline activated: KALSHI_GAME_SERIES populated (27 series via /events API), 4 bugs fixed, MIN_KALSHI_BID=3c filter, 29 clean pure arbs from 203 matched pairs
+- [[handoff-032]] - Stripe subscription integration complete: DB migration, 5 new files (webhook/checkout/portal routes, stripe lib, admin client), 6 modified files (subscribe/account/pricing pages, types, subscription lib, middleware), paywall toggle (`SUBSCRIPTION_REQUIRED`), Stripe v22 dahlia API breaking changes documented
+- [[handoff-033]] - Arb Scanner dashboard page (Step 9.6), Phase 9 complete, batter_hrr + NBA checks marked done
+- [[handoff-034]] - Kalshi in-play contamination guards: close_time column, price filter, near-close detection, Bot Tracker Placed/Game Start columns
+- [[handoff-035]] - Non-sports arb: deterministic structured field extractor replacing SequenceMatcher 0.55, "eth"→"ether" keyword fix
+- [[handoff-036]] - Elections + Politics non-sports arb expansion: 200 → 6,439 markets, candidate disambiguation, 144 matched pairs
+- [[handoff-037]] - Bankroll manager overhaul (per-sportsbook balances + override), bot tracker fill-price fix, Railway libz.so.1 fix, Manual Paper Trader scoped (Phase 10)
+- [[handoff-038]] - MLB feature pipeline fix: feat_* columns now populated (L5 avg, rest days, park factor), MLB_COLD_OVER filter strengthened, per-stat daily bet caps added
+- [[handoff-039]] - Phase 10 Manual Paper Trader shipped: is_paper_trade column, Paper Trade button, Real/Paper toggle, resolver + scheduler wiring, onConflict + isPaperTrade forwarding bug fixes
+- [[handoff-040]] - Calibration Discord alerts: sample-size awareness (LOW_CONFIDENCE_THRESHOLD=75, relaxed thresholds, severity cap, "Early Signal" title)
+- [[handoff-041]] - Kalshi sportsbook line alignment, live trader SQL bug fix, star-hitter filter (yes_price >= 72), approval panel SB line display
+- [[handoff-042]] - Fixed broken Kalshi contract links (series from ticker prefix, all lowercase); added BetAnalysisModal to bot tracker (L5 history + bet metadata for historical bets)
+- [[handoff-043]] - Infrastructure bug-fix: MLB edge refresh CTE fix, Kalshi orderbook parallelization (16 min → 1 min), numpy.int64 psycopg2 adapter, systemic UTC/ET timezone fix (11 callsites across 6 files — root cause of Apr 22 failed trades)
+- [[handoff-044]] - Kalshi fill polling (5-min job), reconcile_fills() date bug fix, Discord alerts for placed/filled/resolved, live trader daily performance summary
+- [[handoff-045]] - Orderbook price sweep, NBA trading re-enabled, Discord queue notifications every 10 min
+- [[handoff-046]] - Kalshi failed trade visibility + retry: Discord failure alert, failed orders section in bot-tracker, one-click Retry button
+- [[handoff-047]] - Kalshi live trader: sweep resize, fill_price/game_start_time fixes, F821 lint fix, cap-aware resizing identified as bug
+- [[handoff-048]] - Stale fill cancellation queue: detection job, human-approval dashboard panel, execution job, cancel API routes; Kalshi Kelly bet sizing analysis
+- [[handoff-049]] - NBA Analysis Modal fixes (headshots, team display, combo stats), TradeApprovalPanel NBA team bug, sport gate safe default + renewal bypass fix
+- [[handoff-050]] - Cap-aware exposure clamp in execute_trades; MLB/NBA early window shifted ~1hr earlier; reprice_stale_orders SQL bug fixed
+- [[handoff-051]] - MLB model drift confirmed (2026 backtest: hits 51.6%/+12% ROI, K 53.6%/+13%); retrain plan ready (2024-2025 train, 2026 cal); --local flag added to pitcher pipeline; excluded bookmaker leak identified
+- [[handoff-052]] - Kalshi resolution pipeline 4-bug fix (reconcile_fills): fill data preserved from cancellation, fill_price derivation fallback, pending-to-filled promotion, WHERE clause expanded. 32 incorrectly cancelled orders restored, 21 resolved. batter_hits kill zone identified (yes_price 65-71), DB P&L approximate (expected vs actual fill prices).
+- [[handoff-053]] - MLB model architecture overhaul: pitcher K → IP + K-rate copula, batter hits → AB NegBin + compound Binomial, 13 new features (inning fatigue + bullpen workload). 7 files, +1,011 lines. Code complete, pending retraining.
+- [[handoff-054]] - Diagnostic session: confirmed copula model not yet trained (April 28 artifacts missing). Bash non-functional. No code changes. Next: create index, sync local DB, retrain copula, run sweep.
+- [[handoff-055]] - MLB Feature Improvements Batch 1 complete: 6 specs (9 features + ablation), umpire scraper + DB table, all code paths wired. Ablation test revealed pipeline ignores feature lists.
+- [[handoff-056]] - Copula backtest confirmed worse than single model; chose Option 4 (IP as feature source for K model); 2 missing features identified (pitcher_min_ip_l5, team_bullpen_ip_last_3d); implementation plan written.
+- [[handoff-057]] - Hermes/GBrain Phase 2 wrap-up: resume/sql/implementation/explore skills done, wrap-up live validation underway, PGLite sync/embed fragility points to Postgres migration next.
+- [[handoff-058]] - GBrain Postgres migration complete: WSL-local Postgres backing store, central HTTP MCP server active on localhost:3131, Hermes MCP test passing.
+- [[handoff-059]] - GBrain ownership migration complete: Phase 3 Solokit audit, Phase 4 slim contracts, Phase 5 operating standard and health automation.
+- [[handoff-060]] - MLB pitcher K Phase 2 static IP/leash features trained; 18/18 new features selected, calibration gate passed, next step is post-cal backtest and IP-as-feature-source.
+- [[handoff-061]] - MLB batter hits under-only flat benchmark confirmed; residual-first phased feature plan drafted.
+- [[handoff-062]] - GBrain lesson retrieval layer, original failure-family E2E eval, and code vectorization expansion plan.
+- [[handoff-063]] - MLB Pitcher K Phase 3A lineup-contact feature expansion blocked on historical lineups.
+- [[handoff-064]] - MLB pitcher K deep-start hook validation replicated across 2026 and 2025 windows.
+- [[handoff-065]] - GBrain code-vectorization source isolation blocker and Batch 2 pause.
+- [[handoff-066]] - MLB batter_hits quote-clean CLV gate: feature work blocked, edge ranking unconfirmed, paper-only until intraday stability.
+- [[handoff-067]] - MLB pitcher K Phase 3A rejected: lineup/contact features compressed Phase 2 under edge; Phase 3B roadmap shifts to pitcher-side extremes after quote-clean baseline gate.
+- [[handoff-068]] - MLB pitcher K hook quote-clean red flag and independent July/August 2025 window check.
+- [[handoff-069]] - MLB batter hits prop_line leakage confirmed in training path; odds timestamp metadata audit says no broad rescrape yet, but CLV timing is invalid until rewritten.
+- [[handoff-070]] - MLB/NBA quote-clean leakage cleanup: MLB prop-line as-of fixes, CLV timing rewrite, no-prop-line retrain variant, NBA line/prop as-of guard, scraper pregame snapshot support; validation passed, no retrain run.
+- [[handoff-071]] - MLB prop timestamp as-of fix follow-up: feature-store cutoff tests passed; Supabase timestamp columns exist but broad commence_time coverage audit timed out.
+- [[handoff-072]] - GameFlowBrain GitHub remote connected; other-machine Hermes/GBrain setup handoff and local patch bundle pushed to private repo.
+- [[handoff-073]] - MLB batter_hits quote-clean sweep review; no-prop and with-prop variants strong but promotion blocked pending dropout + CLV diagnostics; audit tooling plan updated.
+- [[handoff-074]] - MLB quote-clean audit tooling built; dropout audit and CLV classifier added, legacy backtest harness gated, bet snapshot metadata persisted, tests passed.
+- [[handoff-075]] - Kalshi live trader refactor begins: status/state machine, strategy, queue, execution, and reconciliation service extraction with facade compatibility tests passing.
+- [[handoff-076]] - Kalshi live trader service extraction nears completion: settlement, repricing, stale-order/cancellation, and risk services added; alert adapter remains next.
+- [[handoff-077]] - MLB dense CLV table, audit wrapper, and linker reset; migration applied, optimized linker written but not run.
+- [[handoff-078]] - Kalshi pending-fills job moved to reconciliation service.
+- [[handoff-079]] - MLB dense close live scraper and bounded CLV linking.
+- [[handoff-080]] - Kalshi live trader migration complete and committed.
+- [[handoff-081]] - MLB batter_hits dense CLV roadmap and audit blocker clarification.
+- [[handoff-082]] - God-class migration plan set completed.
+- [[handoff-083]] - Remote Linux Hermes workstation bootstrap.
+- [[handoff-084]] - MLB batter_hits preferred-book routing validation gate.
+- [[handoff-085]] - MLB sweep smoke validation and mixed-lane diff checkpoint.
+- [[handoff-086]] - MLB feature-store boundary migration foundation.
+- [[handoff-087]] - Hermes achievements performance migration committed
+- [[handoff-088]] - Railway Lines Scraper intermittent linker failures
+- [[Session-Archive]] - Full archive of Sessions 1-87 (Jan 27 - Mar 24, 2026)

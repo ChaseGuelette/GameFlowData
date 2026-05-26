@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -16,7 +16,7 @@ def test_resolve_as_of_policy_labels_legacy_latest_when_missing_as_of():
 
 
 def test_resolve_as_of_policy_labels_decision_time_when_as_of_present():
-    as_of = datetime(2026, 5, 23, 17, 0, tzinfo=timezone.utc)
+    as_of = datetime(2026, 5, 23, 17, 0, tzinfo=UTC)
     contract = resolve_as_of_policy(as_of)
     assert contract.policy is FeatureAsOfPolicy.AS_OF_DECISION_TIME
     assert contract.as_of_time == as_of
