@@ -350,6 +350,11 @@ def main():
                 f"Updating Bullpen Workload Derived Status ({latest_source_date})",
                 True, 600, 2,
             ),
+            (
+                f"{sys.executable} scripts/backfill_mlb_advanced_history_from_game_stats.py --season {current_season} --as-of-date {latest_source_date} --execute",
+                f"Updating MLB Advanced History Snapshot ({latest_source_date})",
+                True, 600, 2,
+            ),
         ]
 
         for i, (command, description, critical, timeout, retries) in enumerate(derived_steps, 1):
