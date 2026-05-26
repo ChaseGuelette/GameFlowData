@@ -12,6 +12,7 @@ Schedule (ET):
     9:00 AM  - mlb_daily_stats_job
     9:00 AM  - nonsports_polymarket_scrape (2hr timeout)
     9:20 AM  - mlb_daily_stats_retry
+    10:05 AM - mlb_roster_scraper_retry
     9:15 AM  - Kalshi live resolution
     9:25 AM  - mlb_weather_forecast
     9:30 AM  - daily_stats_retry (if 9 AM failed)
@@ -591,6 +592,16 @@ def run_mlb_roster_scraper():
     run_job("mlb_roster_scraper_job.py")
 
 
+def run_mlb_roster_scraper_retry():
+    """Re-run MLB roster scraper if the 9 AM run failed."""
+    status = JOB_STATUS.get("mlb_roster_scraper_job.py", {})
+    if status.get("status") == "success":
+        logger.info("MLB roster scraper already succeeded today, skipping 10:05 retry.")
+        return
+    logger.warning("MLB roster scraper failed or did not run at 9 AM — retrying now...")
+    run_job("mlb_roster_scraper_job.py")
+
+
 def run_mlb_weather_forecast():
     """Fetch weather forecast for today's MLB games (before inference window)."""
     run_job("mlb_weather_scraper_job.py", silent_on_success=True)
@@ -859,6 +870,14 @@ def main():
         CronTrigger(hour=9, minute=0, timezone=ET),
         id="mlb_roster_scraper",
         name="MLB Active Roster (9 AM ET)",
+    )
+
+    # 10:05 AM ET - Retry MLB active roster if 9 AM failed/under-counted
+    scheduler.add_job(
+        run_mlb_roster_scraper_retry,
+        CronTrigger(hour=10, minute=5, timezone=ET),
+        id="mlb_roster_scraper_retry",
+        name="MLB Active Roster Retry (10:05 AM ET)",
     )
 
     # 9:00 AM ET - MLB daily stats (results from last night)

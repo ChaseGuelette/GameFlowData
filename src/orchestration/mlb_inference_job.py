@@ -55,6 +55,36 @@ logging.basicConfig(
 logger = logging.getLogger("MLBInferenceJob")
 
 
+def _count_scheduled_games(engine, target_date: date) -> int:
+    """Return non-cancelled MLB games scheduled for target_date."""
+    from sqlalchemy import text
+
+    query = text("""
+        SELECT COUNT(*)
+        FROM mlb_game_schedule
+        WHERE game_date = :target_date
+          AND status != 'Cancelled'
+    """)
+    with engine.connect() as conn:
+        return int(conn.execute(query, {"target_date": target_date}).scalar() or 0)
+
+
+def _count_stored_outputs(engine, target_date: date) -> tuple[int, int]:
+    """Return committed prediction/sample row counts for target_date."""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        prediction_count = int(conn.execute(
+            text("SELECT COUNT(*) FROM mlb_daily_predictions WHERE prediction_date = :target_date"),
+            {"target_date": target_date},
+        ).scalar() or 0)
+        sample_count = int(conn.execute(
+            text("SELECT COUNT(*) FROM mlb_daily_prediction_samples WHERE prediction_date = :target_date"),
+            {"target_date": target_date},
+        ).scalar() or 0)
+    return prediction_count, sample_count
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="MLB Inference Job - Generate Daily Predictions",
@@ -143,6 +173,13 @@ def main():
             stats = list(MLB_STATS.keys())
 
         logger.info(f"Stats: {stats}")
+        logger.info("Model suite available stats: %s", getattr(suite, "available_stats", []))
+        logger.info("Model suite batter stats: %s", getattr(suite, "batter_stats", []))
+        logger.info("Pitcher feature store: %s", type(pitcher_feature_store).__name__)
+        logger.info("Batter feature store: %s", type(batter_feature_store).__name__)
+
+        scheduled_games = _count_scheduled_games(engine, target_date)
+        logger.info("Scheduled non-cancelled MLB games for %s: %s", target_date, scheduled_games)
 
         # Create runner with unified suite
         runner = MLBDailyPredictionRunner(
@@ -156,12 +193,24 @@ def main():
         preds, samples = runner.run_for_date(target_date, stats=stats)
 
         if preds.empty:
-            logger.warning("No MLB predictions generated (no games or no data)")
+            if scheduled_games > 0:
+                raise RuntimeError(
+                    f"MLB inference generated zero predictions for {target_date} "
+                    f"despite {scheduled_games} scheduled non-cancelled games"
+                )
+            logger.warning("No MLB predictions generated because no MLB games were scheduled")
             elapsed = time.time() - start_time
-            logger.info(f"MLB INFERENCE JOB COMPLETED ({elapsed:.1f}s) - No predictions")
+            logger.info(f"MLB INFERENCE JOB COMPLETED ({elapsed:.1f}s) - No scheduled games")
             return
 
+        if not samples:
+            raise RuntimeError(
+                f"MLB inference generated {len(preds)} predictions for {target_date} "
+                "but zero MC sample arrays; refusing to report a healthy run"
+            )
+
         logger.info(f"Generated {len(preds)} MLB predictions")
+        logger.info(f"Generated {len(samples)} MLB sample arrays")
 
         # Show summary
         if "over_edge" in preds.columns:
@@ -176,6 +225,21 @@ def main():
             store = MLBPredictionStore(engine)
             store.store_predictions(preds, target_date)
             store.store_samples(samples, target_date)
+            stored_predictions, stored_samples = _count_stored_outputs(engine, target_date)
+            logger.info(
+                "Stored output readback for %s: %s predictions + %s sample arrays",
+                target_date, stored_predictions, stored_samples,
+            )
+            if stored_predictions <= 0:
+                raise RuntimeError(
+                    f"MLB predictions were generated but no rows committed to "
+                    f"mlb_daily_predictions for {target_date}"
+                )
+            if stored_samples <= 0:
+                raise RuntimeError(
+                    f"MLB predictions were generated but no rows committed to "
+                    f"mlb_daily_prediction_samples for {target_date}"
+                )
             logger.info(f"Stored {len(preds)} predictions + {len(samples)} sample arrays")
 
         # Export CSV backup

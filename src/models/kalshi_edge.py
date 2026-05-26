@@ -32,6 +32,7 @@ from src.scrapers.kalshi.kalshi_utils import (
     fee_adjusted_edge,
     kalshi_mid_to_prob,
 )
+from src.utils.time_windows import et_day_utc_bounds
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +53,7 @@ class KalshiEdgeCalculator:
 
         Returns the most recent snapshot per ticker.
         """
+        start_utc, end_utc = et_day_utc_bounds(target_date)
         query = text("""
             SELECT DISTINCT ON (ticker)
                 id, ticker, player_name, stat_type, line, player_id,
@@ -59,14 +61,19 @@ class KalshiEdgeCalculator:
                 volume, open_interest, close_time, market_status, snapshot_time
             FROM kalshi_markets
             WHERE sport = :sport
-              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
+              AND snapshot_time >= :start_utc
+              AND snapshot_time < :end_utc
               AND market_status = 'open'
               AND line IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
         """)
 
         with self.engine.connect() as conn:
-            rows = conn.execute(query, {"sport": sport, "target_date": target_date}).fetchall()
+            rows = conn.execute(query, {
+                "sport": sport,
+                "start_utc": start_utc,
+                "end_utc": end_utc,
+            }).fetchall()
 
         markets = []
         for row in rows:
@@ -206,7 +213,14 @@ class KalshiEdgeCalculator:
         Returns:
             Summary dict with counts.
         """
-        stats = {"markets": 0, "matched": 0, "updated": 0, "no_samples": 0}
+        stats = {
+            "markets": 0,
+            "matched": 0,
+            "updated": 0,
+            "no_samples": 0,
+            "blocking_output_gap": False,
+            "warning": None,
+        }
 
         markets = self._load_latest_markets(target_date, sport)
         stats["markets"] = len(markets)
@@ -218,7 +232,17 @@ class KalshiEdgeCalculator:
         samples_dict = self._load_samples(target_date, sport)
 
         if not samples_dict:
-            logger.warning("No MC samples found — edges cannot be computed")
+            warning = "No MC samples found — Kalshi edges cannot be computed"
+            stats["warning"] = warning
+            if sport == "mlb":
+                stats["blocking_output_gap"] = True
+                logger.error(
+                    "%s for %s despite %s open MLB markets; this is a blocking "
+                    "prediction/sample output gap",
+                    warning, target_date, stats["markets"],
+                )
+            else:
+                logger.warning(warning)
             return stats
 
         # Build player_id → [(game_id, stat, samples)] lookup

@@ -37,6 +37,7 @@ from src.trading.kalshi.live_trading_config import (
     SPORTSBOOK_LINE_FALLBACK_GAP,
     SUPPORTED_STATS,
 )
+from src.utils.time_windows import et_day_utc_bounds
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,7 @@ class KalshiPaperTrader:
         )
 
         # Get latest snapshot per ticker for the date
+        start_utc, end_utc = et_day_utc_bounds(target_date)
         query = text("""
             SELECT DISTINCT ON (ticker)
                 ticker, sport, player_id, player_name, stat_type, line,
@@ -208,7 +210,8 @@ class KalshiPaperTrader:
                 close_time
             FROM kalshi_markets
             WHERE sport = :sport
-              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
+              AND snapshot_time >= :start_utc
+              AND snapshot_time < :end_utc
               AND market_status = 'open'
               AND model_prob IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
@@ -216,7 +219,9 @@ class KalshiPaperTrader:
 
         with self.engine.connect() as conn:
             df = pd.read_sql(query, conn, params={
-                "sport": sport, "target_date": target_date,
+                "sport": sport,
+                "start_utc": start_utc,
+                "end_utc": end_utc,
             })
 
         if df.empty:

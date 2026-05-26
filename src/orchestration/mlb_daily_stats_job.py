@@ -18,11 +18,12 @@ Usage:
 
 import argparse
 import logging
+import os
 import shlex
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # Add project root to path
@@ -44,6 +45,77 @@ logging.basicConfig(
 logger = logging.getLogger("MLBDailyStatsJob")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _split_command(command: str) -> list[str]:
+    """Split subprocess command safely on Windows and POSIX.
+
+    Railway runs Linux, but Chase often validates these jobs from native Windows.
+    posix=True mangles paths such as C:\\Users\\...\\python.exe on Windows.
+    """
+    return shlex.split(command, posix=(os.name != "nt"))
+
+
+def get_latest_completed_source_date() -> date | None:
+    """Return the latest date where MLB batting and pitching source stats both exist.
+
+    The derived average scripts used to default to date.today(), which can no-op
+    before today's games have completed. Use the freshest completed source-stat
+    date instead so the daily cron refreshes the rows that actually exist.
+    """
+    from sqlalchemy import text as sa_text
+
+    from src.db.client import get_engine
+
+    engine = get_engine()
+    query = sa_text("""
+        SELECT LEAST(
+            (SELECT MAX(game_date)::date FROM mlb_player_game_stats_batting),
+            (SELECT MAX(game_date)::date FROM mlb_player_game_stats_pitching)
+        ) AS latest_source_date
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query).fetchone()
+    return row[0] if row and row[0] else None
+
+
+def validate_mlb_derived_freshness(expected_date: date, dry_run: bool = False) -> bool:
+    """Fail the job if critical MLB derived feature tables remain stale."""
+    logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: Validating MLB derived feature freshness")
+    if dry_run:
+        logger.info(
+            "  Would assert mlb_player_average_batting, mlb_player_average_pitching, "
+            f"and mlb_bullpen_daily_status are fresh through {expected_date}"
+        )
+        return True
+
+    from sqlalchemy import text as sa_text
+
+    from src.db.client import get_engine
+
+    engine = get_engine()
+    checks = {
+        "mlb_player_average_batting": "SELECT MAX(game_date)::date FROM mlb_player_average_batting",
+        "mlb_player_average_pitching": "SELECT MAX(game_date)::date FROM mlb_player_average_pitching",
+        "mlb_bullpen_daily_status": "SELECT MAX(game_date)::date FROM mlb_bullpen_daily_status",
+    }
+
+    stale: list[str] = []
+    with engine.connect() as conn:
+        for table, sql in checks.items():
+            max_date = conn.execute(sa_text(sql)).scalar()
+            logger.info(f"  {table}.max_date = {max_date} (expected >= {expected_date})")
+            if max_date is None or max_date < expected_date:
+                stale.append(f"{table} max_date={max_date}")
+
+    if stale:
+        logger.error("FAILED: MLB derived feature freshness check")
+        for item in stale:
+            logger.error(f"  stale: {item}")
+        return False
+
+    logger.info("COMPLETED: MLB derived feature freshness check")
+    return True
 
 
 def _send_mlb_pnl_summary(result: dict) -> None:
@@ -145,7 +217,7 @@ def run_command(
         logger.info(f"  Command: {command}")
         return True
 
-    cmd_args = shlex.split(command)
+    cmd_args = _split_command(command)
     attempts = 1 + max_retries
 
     for attempt in range(1, attempts + 1):
@@ -215,6 +287,8 @@ def main():
 
     # Each step: (command, description, critical, timeout_sec, max_retries)
     current_season = datetime.now().year
+    latest_source_date: date | None = None
+    default_target_date = date.today() - timedelta(days=1)
 
     steps = [
         # Step 1: Update schedule + scrape boxscores for completed games
@@ -235,29 +309,60 @@ def main():
             "Linking MLB Players (Incremental)",
             True, 600, 2,
         ),
-        # Step 4: Update batting rolling averages
-        (
-            f"{sys.executable} src/processing/mlb/mlb_populate_averages_incremental.py --type batting",
-            "Updating Batting Rolling Averages",
-            True, 900, 2,
-        ),
-        # Step 5: Update pitching rolling averages
-        (
-            f"{sys.executable} src/processing/mlb/mlb_populate_averages_incremental.py --type pitching",
-            "Updating Pitching Rolling Averages",
-            True, 900, 2,
-        ),
     ]
 
     for i, (command, description, critical, timeout, retries) in enumerate(steps, 1):
-        logger.info(f"Step {i}/{len(steps)}")
+        logger.info(f"Source step {i}/{len(steps)}")
         if not run_command(command, description, args.dry_run, timeout=timeout, max_retries=retries):
             if critical:
                 success = False
-                logger.error(f"Critical step failed: {description}")
+                logger.error(f"Critical source step failed: {description}")
                 break
             else:
-                logger.warning(f"Non-critical step failed: {description} — continuing")
+                logger.warning(f"Non-critical source step failed: {description} — continuing")
+
+    if success:
+        if args.dry_run:
+            latest_source_date = default_target_date
+            logger.info(f"[DRY RUN] Would derive MLB feature rows for latest completed source date: {latest_source_date}")
+        else:
+            latest_source_date = get_latest_completed_source_date()
+            logger.info(f"Latest completed MLB source-stat date: {latest_source_date}")
+
+        if latest_source_date is None:
+            logger.error("Critical step failed: could not determine latest completed MLB source-stat date")
+            success = False
+
+    if success and latest_source_date is not None:
+        derived_steps = [
+            (
+                f"{sys.executable} src/processing/mlb/mlb_populate_averages_incremental.py --type batting --date {latest_source_date}",
+                f"Updating Batting Rolling Averages ({latest_source_date})",
+                True, 900, 2,
+            ),
+            (
+                f"{sys.executable} src/processing/mlb/mlb_populate_averages_incremental.py --type pitching --date {latest_source_date}",
+                f"Updating Pitching Rolling Averages ({latest_source_date})",
+                True, 900, 2,
+            ),
+            (
+                f"{sys.executable} -m src.scrapers.mlb.mlb_bullpen_workload_scraper --date {latest_source_date}",
+                f"Updating Bullpen Workload Derived Status ({latest_source_date})",
+                True, 600, 2,
+            ),
+        ]
+
+        for i, (command, description, critical, timeout, retries) in enumerate(derived_steps, 1):
+            logger.info(f"Derived step {i}/{len(derived_steps)}")
+            if not run_command(command, description, args.dry_run, timeout=timeout, max_retries=retries):
+                if critical:
+                    success = False
+                    logger.error(f"Critical derived step failed: {description}")
+                    break
+                logger.warning(f"Non-critical derived step failed: {description} — continuing")
+
+    if success and latest_source_date is not None:
+        success = validate_mlb_derived_freshness(latest_source_date, args.dry_run)
 
     # Resolve pending MLB paper bets
     if not args.skip_resolution:

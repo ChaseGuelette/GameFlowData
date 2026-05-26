@@ -37,6 +37,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--date", type=str, help="YYYY-MM-DD (default: today)")
+    parser.add_argument(
+        "--min-roster-entries",
+        type=int,
+        default=600,
+        help="Fail if fewer than this many active roster rows are stored (default: 600)",
+    )
     args = parser.parse_args()
 
     roster_date = date.fromisoformat(args.date) if args.date else date.today()
@@ -49,6 +55,18 @@ def main() -> None:
     scraper = MLBRosterScraper(engine, dry_run=args.dry_run)
     count = scraper.scrape_date(roster_date)
     logger.info(f"Done — {count} active roster entries stored")
+
+    if not args.dry_run and count < args.min_roster_entries:
+        logger.error(
+            "MLB roster scraper produced too few active roster rows: "
+            f"{count} < {args.min_roster_entries}. Treating as failed so scheduler retry/alerts fire."
+        )
+        sys.exit(1)
+
+    if args.dry_run and count < args.min_roster_entries:
+        logger.warning(
+            f"[DRY RUN] Roster count {count} is below min-roster-entries={args.min_roster_entries}"
+        )
 
 
 if __name__ == "__main__":

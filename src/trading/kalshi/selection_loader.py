@@ -21,6 +21,7 @@ from src.models.daily_runner import should_skip_recommendation
 from src.scrapers.kalshi.kalshi_utils import fee_adjusted_edge
 from src.trading.kalshi.live_trading_config import SPORTSBOOK_LINE_FALLBACK_GAP
 from src.trading.kalshi.strategy import ExistingPosition, StrategyConfig, TradeCandidate
+from src.utils.time_windows import et_day_utc_bounds
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,7 @@ class KalshiSelectionInputLoader:
         )
 
     def _load_market_rows(self, target_date: date, sport: str) -> pd.DataFrame:
+        start_utc, end_utc = et_day_utc_bounds(target_date)
         query = text("""
             SELECT DISTINCT ON (ticker)
                 ticker, sport, player_id, player_name, stat_type, line,
@@ -182,13 +184,18 @@ class KalshiSelectionInputLoader:
                 sportsbook_consensus_line, line_vs_sportsbook
             FROM kalshi_markets
             WHERE sport = :sport
-              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
+              AND snapshot_time >= :start_utc
+              AND snapshot_time < :end_utc
               AND market_status = 'open'
               AND model_prob IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
         """)
         with self.engine.connect() as conn:
-            return pd.read_sql(query, conn, params={"sport": sport, "target_date": target_date})
+            return pd.read_sql(query, conn, params={
+                "sport": sport,
+                "start_utc": start_utc,
+                "end_utc": end_utc,
+            })
 
     def _load_existing_player_stats(self, target_date: date) -> set[tuple[int, str]]:
         with self.engine.connect() as conn:
@@ -221,16 +228,18 @@ class KalshiSelectionInputLoader:
 
     def _lookup_game_start_times(self, target_date: date, sport: str) -> dict[str, datetime | None]:
         start_times: dict[str, datetime | None] = {}
+        start_utc, end_utc = et_day_utc_bounds(target_date)
         try:
             with self.engine.connect() as conn:
                 rows = conn.execute(text("""
                     SELECT DISTINCT ON (ticker) ticker, close_time
                     FROM kalshi_markets
                     WHERE sport = :sport
-                      AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :d
+                      AND snapshot_time >= :start_utc
+                      AND snapshot_time < :end_utc
                       AND close_time IS NOT NULL
                     ORDER BY ticker, snapshot_time DESC
-                """), {"d": target_date, "sport": sport}).fetchall()
+                """), {"sport": sport, "start_utc": start_utc, "end_utc": end_utc}).fetchall()
                 for row in rows:
                     start_times[row[0]] = row[1]
         except Exception as e:

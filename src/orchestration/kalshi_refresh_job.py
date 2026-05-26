@@ -289,6 +289,10 @@ def run(
                 f"Edges: {edge_stats.get('matched', 0)} matched, "
                 f"{edge_stats.get('updated', 0)} updated"
             )
+            if edge_stats.get("blocking_output_gap"):
+                summary["fatal_error"] = edge_stats.get("warning") or "Blocking Kalshi edge output gap"
+                logger.error(summary["fatal_error"])
+                return summary
         except Exception as e:
             logger.error(f"Edge computation failed: {e}", exc_info=True)
             summary["edges"] = {"error": str(e)}
@@ -365,6 +369,7 @@ def run(
 
 def _get_pending_queue_trades(engine, target_date, sport: str) -> list[dict]:
     from sqlalchemy import text as sa_text
+
     try:
         with engine.connect() as conn:
             rows = conn.execute(sa_text("""
@@ -412,6 +417,7 @@ def _fetch_orderbooks(target_date: date, sport: str) -> int:
 
     from src.db.client import get_engine
     from src.scrapers.kalshi.kalshi_client import KalshiClient
+    from src.utils.time_windows import et_day_utc_bounds
 
     client = KalshiClient()
     if not client.is_authenticated:
@@ -419,16 +425,22 @@ def _fetch_orderbooks(target_date: date, sport: str) -> int:
         return 0
 
     engine = get_engine()
+    start_utc, end_utc = et_day_utc_bounds(target_date)
 
     # Get open market tickers
     query = text("""
         SELECT DISTINCT ticker FROM kalshi_markets
         WHERE sport = :sport
-          AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
+          AND snapshot_time >= :start_utc
+          AND snapshot_time < :end_utc
           AND market_status = 'open'
     """)
     with engine.connect() as conn:
-        tickers = [row[0] for row in conn.execute(query, {"sport": sport, "target_date": target_date}).fetchall()]
+        tickers = [row[0] for row in conn.execute(query, {
+            "sport": sport,
+            "start_utc": start_utc,
+            "end_utc": end_utc,
+        }).fetchall()]
 
     if not tickers:
         logger.info("No open markets to fetch orderbooks for")
@@ -509,8 +521,10 @@ def _send_high_edge_alerts(target_date: date, sport: str, min_edge: float = 0.05
     from sqlalchemy import text
 
     from src.db.client import get_engine
+    from src.utils.time_windows import et_day_utc_bounds
 
     engine = get_engine()
+    start_utc, end_utc = et_day_utc_bounds(target_date)
 
     query = text("""
         SELECT DISTINCT ON (ticker)
@@ -519,7 +533,8 @@ def _send_high_edge_alerts(target_date: date, sport: str, min_edge: float = 0.05
             maker_fee_adjusted_edge, close_time, model_prob, kalshi_implied
         FROM kalshi_markets
         WHERE sport = :sport
-          AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
+          AND snapshot_time >= :start_utc
+          AND snapshot_time < :end_utc
           AND market_status = 'open'
           AND maker_fee_adjusted_edge IS NOT NULL
           AND maker_fee_adjusted_edge >= :min_edge
@@ -530,7 +545,10 @@ def _send_high_edge_alerts(target_date: date, sport: str, min_edge: float = 0.05
 
     with engine.connect() as conn:
         rows = conn.execute(query, {
-            "sport": sport, "target_date": target_date, "min_edge": min_edge,
+            "sport": sport,
+            "start_utc": start_utc,
+            "end_utc": end_utc,
+            "min_edge": min_edge,
         }).fetchall()
 
     if not rows:
@@ -612,6 +630,8 @@ def main():
     logger.info(f"  Live trading: {summary.get('live_trading', {})}")
     logger.info(f"  Alerts sent: {summary.get('alerts_sent', False)}")
     logger.info("=" * 60)
+    if summary.get("fatal_error"):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

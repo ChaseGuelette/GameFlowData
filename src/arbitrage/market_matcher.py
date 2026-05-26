@@ -33,6 +33,7 @@ from src.arbitrage.non_sports_extractor import (
 from src.arbitrage.non_sports_extractor import (
     match_score as structured_match_score,
 )
+from src.utils.time_windows import et_day_utc_bounds
 
 logger = logging.getLogger(__name__)
 
@@ -341,19 +342,25 @@ class MarketMatcher:
 
     def _load_kalshi_props(self, target_date: date, sport: str) -> list[dict]:
         """Load most recent Kalshi player prop snapshot for target_date."""
+        start_utc, end_utc = et_day_utc_bounds(target_date)
         query = text("""
             SELECT DISTINCT ON (ticker)
                 ticker, player_name, stat_type, line, yes_price, no_price,
                 yes_bid, yes_ask, volume, player_id
             FROM kalshi_markets
             WHERE sport = :sport
-              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
+              AND snapshot_time >= :start_utc
+              AND snapshot_time < :end_utc
               AND market_status = 'open'
               AND player_name IS NOT NULL
             ORDER BY ticker, snapshot_time DESC
         """)
         with self.engine.connect() as conn:
-            rows = conn.execute(query, {"sport": sport, "target_date": target_date}).fetchall()
+            rows = conn.execute(query, {
+                "sport": sport,
+                "start_utc": start_utc,
+                "end_utc": end_utc,
+            }).fetchall()
         return [dict(row._mapping) for row in rows]
 
     def _load_poly_props(self, target_date: date, sport: str) -> list[dict]:
@@ -361,19 +368,25 @@ class MarketMatcher:
         # Look back up to 3 days for the most recent snapshot (markets may not update daily)
         for days_back in range(4):
             check_date = target_date - timedelta(days=days_back)
+            start_utc, end_utc = et_day_utc_bounds(check_date)
             query = text("""
                 SELECT DISTINCT ON (condition_id)
                     condition_id, player_name, stat_type, line, yes_price, no_price,
                     yes_bid, yes_ask, liquidity, player_id
                 FROM polymarket_markets
                 WHERE sport = :sport
-                  AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
+                  AND snapshot_time >= :start_utc
+                  AND snapshot_time < :end_utc
                   AND market_type = 'player_prop'
                   AND market_status = 'open'
                 ORDER BY condition_id, snapshot_time DESC
             """)
             with self.engine.connect() as conn:
-                rows = conn.execute(query, {"sport": sport, "target_date": check_date}).fetchall()
+                rows = conn.execute(query, {
+                    "sport": sport,
+                    "start_utc": start_utc,
+                    "end_utc": end_utc,
+                }).fetchall()
             if rows:
                 return [dict(row._mapping) for row in rows]
         return []
@@ -711,14 +724,20 @@ class MarketMatcher:
                 yes_price, no_price, yes_bid, yes_ask, volume, market_title
             FROM kalshi_markets
             WHERE sport = :sport
-              AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
+              AND snapshot_time >= :start_utc
+              AND snapshot_time < :end_utc
               AND market_status = 'open'
               AND market_type != 'player_prop'
             ORDER BY ticker, snapshot_time DESC
         """)
         for check_date in check_dates:
+            start_utc, end_utc = et_day_utc_bounds(check_date)
             with self.engine.connect() as conn:
-                rows = conn.execute(query, {"sport": sport, "target_date": check_date}).fetchall()
+                rows = conn.execute(query, {
+                    "sport": sport,
+                    "start_utc": start_utc,
+                    "end_utc": end_utc,
+                }).fetchall()
             if rows:
                 return [dict(row._mapping) for row in rows]
         return []
@@ -727,19 +746,25 @@ class MarketMatcher:
         """Load most recent Polymarket game-level snapshot for target_date."""
         for days_back in range(4):
             check_date = target_date - timedelta(days=days_back)
+            start_utc, end_utc = et_day_utc_bounds(check_date)
             query = text("""
                 SELECT DISTINCT ON (condition_id)
                     condition_id, event_slug, market_type, team1, team2, line,
                     yes_price, no_price, yes_bid, yes_ask, liquidity, question
                 FROM polymarket_markets
                 WHERE sport = :sport
-                  AND (snapshot_time AT TIME ZONE 'America/New_York')::date = :target_date
+                  AND snapshot_time >= :start_utc
+                  AND snapshot_time < :end_utc
                   AND market_type IN ('moneyline', 'nrfi', 'total', 'spread', 'season_future')
                   AND market_status = 'open'
                 ORDER BY condition_id, snapshot_time DESC
             """)
             with self.engine.connect() as conn:
-                rows = conn.execute(query, {"sport": sport, "target_date": check_date}).fetchall()
+                rows = conn.execute(query, {
+                    "sport": sport,
+                    "start_utc": start_utc,
+                    "end_utc": end_utc,
+                }).fetchall()
             if rows:
                 return [dict(row._mapping) for row in rows]
         return []

@@ -31,10 +31,12 @@ TABLE_SPECS = [
     ("mlb_teams", None, False),
     ("mlb_player_game_stats_pitching", "game_date", False),
     ("mlb_player_game_stats_batting", "game_date", False),
+    ("mlb_player_average_batting", "game_date", False),
     ("mlb_player_average_pitching", "game_date", True),
     ("mlb_bullpen_daily_status", "game_date", False),
     ("mlb_game_lineups", "game_date", False),
     ("mlb_game_umpires", "game_date", False),
+    ("mlb_active_roster", "roster_date", False),
 ]
 
 SUMMARY_SQL = """
