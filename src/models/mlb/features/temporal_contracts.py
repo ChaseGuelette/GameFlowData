@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 
-class FeatureAsOfPolicy(str, Enum):
+class FeatureAsOfPolicy(StrEnum):
     """As-of policy labels for feature sources."""
 
     LEGACY_LATEST = "legacy_latest"

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 
-class FeatureMode(str, Enum):
+class FeatureMode(StrEnum):
     TRAINING = "training"
     DATE_BATCH = "date_batch"
     PLAYER_GAME = "player_game"
