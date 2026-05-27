@@ -241,6 +241,7 @@ def run(
         Summary dict.
     """
     summary: dict = {"scrape": {}, "edges": {}, "paper_trading": {}, "live_trading": {}, "alerts_sent": False}
+    edge_sample_output_gap = False
 
     # Resolve-only mode: skip scrape/edges/paper/live, just resolve + reconcile
     if resolve_only:
@@ -285,6 +286,7 @@ def run(
             calc = KalshiEdgeCalculator()
             edge_stats = calc.compute_edges(target_date, sport=sport)
             summary["edges"] = edge_stats
+            edge_sample_output_gap = bool(edge_stats.get("sample_output_gap"))
             logger.info(
                 f"Edges: {edge_stats.get('matched', 0)} matched, "
                 f"{edge_stats.get('updated', 0)} updated"
@@ -300,7 +302,10 @@ def run(
         logger.info("Step 3: Skipping edge computation (dry-run)")
 
     # Step 4: Paper trading
-    if not skip_paper and not dry_run and not mock:
+    if edge_sample_output_gap:
+        logger.info("Step 4: Skipping paper trading because Kalshi edges were not computed (missing MC samples)")
+        summary["paper_trading"] = {"skipped": "missing_mc_samples"}
+    elif not skip_paper and not dry_run and not mock:
         logger.info("Step 4: Paper trading...")
         try:
             from src.paper_trading.kalshi_paper_trader import KalshiPaperTrader
@@ -336,7 +341,10 @@ def run(
         logger.info("Step 4.5a: Skipping live resolution (dry-run/mock)")
 
     # Step 4.5b: Live trading — NEW trades only (gated by env var)
-    if not skip_live and not dry_run and not mock:
+    if edge_sample_output_gap:
+        logger.info("Step 4.5b: Skipping live trading because Kalshi edges were not computed (missing MC samples)")
+        summary["live_trading"] = {"skipped": "missing_mc_samples"}
+    elif not skip_live and not dry_run and not mock:
         live_enabled = os.getenv("KALSHI_LIVE_TRADING_ENABLED", "false").lower() == "true"
         if live_enabled:
             logger.info("Step 4.5b: Live trading...")
@@ -354,7 +362,10 @@ def run(
         logger.info("Step 4.5b: Skipping live trading")
 
     # Step 5: Discord alerts
-    if not skip_discord and not dry_run:
+    if edge_sample_output_gap:
+        logger.info("Step 5: Skipping high-edge alerts because Kalshi edges were not computed (missing MC samples)")
+        summary["alerts_sent"] = False
+    elif not skip_discord and not dry_run:
         logger.info("Step 5: Checking for high-edge markets...")
         try:
             alerts_sent = _send_high_edge_alerts(target_date, sport)

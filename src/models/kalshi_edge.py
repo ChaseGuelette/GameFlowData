@@ -218,6 +218,7 @@ class KalshiEdgeCalculator:
             "matched": 0,
             "updated": 0,
             "no_samples": 0,
+            "sample_output_gap": False,
             "blocking_output_gap": False,
             "warning": None,
         }
@@ -234,6 +235,7 @@ class KalshiEdgeCalculator:
         if not samples_dict:
             warning = "No MC samples found — Kalshi edges cannot be computed"
             stats["warning"] = warning
+            stats["sample_output_gap"] = True
             if sport == "mlb":
                 stats["blocking_output_gap"] = True
                 logger.error(

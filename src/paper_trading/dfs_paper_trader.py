@@ -107,8 +107,8 @@ class DfsPaperTrader:
             WITH game_ids AS (
                 SELECT DISTINCT game_id
                 FROM raw_player_props_combined
-                WHERE commence_time >= :game_date::timestamptz
-                  AND commence_time < (:game_date::date + 1)::timestamptz
+                WHERE commence_time >= CAST(:game_date AS timestamptz)
+                  AND commence_time < (CAST(:game_date AS date) + 1)::timestamptz
                   AND game_id IS NOT NULL
                   AND bookmaker IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
             ),
@@ -171,8 +171,8 @@ class DfsPaperTrader:
             WITH game_ids AS (
                 SELECT DISTINCT game_id
                 FROM raw_player_props_combined
-                WHERE commence_time >= :game_date::timestamptz
-                  AND commence_time < (:game_date::date + 1)::timestamptz
+                WHERE commence_time >= CAST(:game_date AS timestamptz)
+                  AND commence_time < (CAST(:game_date AS date) + 1)::timestamptz
                   AND game_id IS NOT NULL
                   AND bookmaker NOT IN ('prizepicks', 'underdog', 'pick6', 'betr_us_dfs')
             ),

@@ -110,7 +110,7 @@ def install_pipeline_fakes(monkeypatch):
         def compute_edges(self, target_date, sport="nba"):
             return {"matched": 0, "updated": 0}
 
-    edge_module.KalshiEdgeCalculator = FakeEdgeCalculator
+    setattr(edge_module, "KalshiEdgeCalculator", FakeEdgeCalculator)
     monkeypatch.setitem(sys.modules, "src.models.kalshi_edge", edge_module)
     monkeypatch.setattr(refresh_job, "_fetch_orderbooks", lambda target_date, sport: 0)
 
@@ -133,6 +133,58 @@ def test_refresh_live_resolution_step_uses_direct_services_with_target_date(monk
     assert summary["live_resolution"] == resolve_result
     assert calls["reconcile_target_date"] == target_date
     assert calls["resolve_called"] is True
+
+
+def test_refresh_missing_samples_skips_new_paper_live_and_alert_steps(monkeypatch):
+    calls = {"paper_trader_init": 0, "live_trading": 0, "alerts": 0}
+    target_date = date(2026, 5, 27)
+
+    install_forbidden_live_trader(monkeypatch)
+    install_resolution_fakes(monkeypatch, calls, {"resolved": 0, "won": 0, "lost": 0, "cancelled": 0})
+
+    scraper_module = types.ModuleType("src.scrapers.kalshi.kalshi_market_scraper")
+    setattr(scraper_module, "scrape_and_store", lambda **kwargs: {"parsed": 2, "stored": 2})
+    monkeypatch.setitem(sys.modules, "src.scrapers.kalshi.kalshi_market_scraper", scraper_module)
+
+    edge_module = types.ModuleType("src.models.kalshi_edge")
+
+    class FakeEdgeCalculator:
+        def compute_edges(self, target_date, sport="nba"):
+            return {
+                "markets": 2,
+                "matched": 0,
+                "updated": 0,
+                "sample_output_gap": True,
+                "blocking_output_gap": False,
+                "warning": "No MC samples found — Kalshi edges cannot be computed",
+            }
+
+    setattr(edge_module, "KalshiEdgeCalculator", FakeEdgeCalculator)
+    monkeypatch.setitem(sys.modules, "src.models.kalshi_edge", edge_module)
+    monkeypatch.setattr(refresh_job, "_fetch_orderbooks", lambda target_date, sport: 2)
+    monkeypatch.setattr(refresh_job, "_run_live_trading", lambda target_date, sport: calls.__setitem__("live_trading", 1))
+    monkeypatch.setattr(refresh_job, "_send_high_edge_alerts", lambda target_date, sport: calls.__setitem__("alerts", 1))
+    monkeypatch.setenv("KALSHI_LIVE_TRADING_ENABLED", "true")
+
+    paper_module = types.ModuleType("src.paper_trading.kalshi_paper_trader")
+
+    class FakePaperTrader:
+        def __init__(self):
+            calls["paper_trader_init"] += 1
+
+    setattr(paper_module, "KalshiPaperTrader", FakePaperTrader)
+    monkeypatch.setitem(sys.modules, "src.paper_trading.kalshi_paper_trader", paper_module)
+
+    summary = refresh_job.run(target_date, sport="nba")
+
+    assert summary["paper_trading"] == {"skipped": "missing_mc_samples"}
+    assert summary["live_trading"] == {"skipped": "missing_mc_samples"}
+    assert summary["alerts_sent"] is False
+    assert summary["live_resolution"] == {"resolved": 0, "won": 0, "lost": 0, "cancelled": 0}
+    assert calls["resolve_called"] is True
+    assert calls["paper_trader_init"] == 0
+    assert calls["live_trading"] == 0
+    assert calls["alerts"] == 0
 
 
 def test_refresh_live_trading_step_uses_direct_risk_selection_and_queue_services(monkeypatch):
