@@ -10,7 +10,7 @@ Schedule (ET):
     9:00 AM  - daily_stats_job
     9:00 AM  - mlb_roster_scraper_job
     9:00 AM  - mlb_daily_stats_job
-    9:00 AM  - nonsports_polymarket_scrape (2hr timeout)
+    9:00 AM  - nonsports_polymarket_scrape (2hr timeout, disabled unless ARB_SCRAPING_ENABLED=true)
     9:20 AM  - mlb_daily_stats_retry
     10:05 AM - mlb_roster_scraper_retry
     9:15 AM  - Kalshi live resolution
@@ -39,7 +39,7 @@ Schedule (ET):
 
     4:00 PM  - lines_job --live --parallel (full)
     4:15 PM  - inference_job (full MC)
-    5:00 PM  - nonsports_polymarket_scrape (2nd run)
+    5:00 PM  - nonsports_polymarket_scrape (2nd run, disabled unless ARB_SCRAPING_ENABLED=true)
 
     "silent" = Discord alerts only on failure.
 
@@ -114,6 +114,14 @@ DEFERRED_FAILURE_JOBS = {
 # Updated by run_job() after every execution.
 # Format: {"daily_stats_job.py": {"status": "success", "end_time": datetime, "duration": float}}
 JOB_STATUS: dict[str, dict] = {}
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    """Return True only for explicit truthy env values."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def record_job_execution(
@@ -727,12 +735,24 @@ def run_kalshi_execute_cancellations():
 
 def run_arb_scan_mlb():
     """MLB Polymarket-Kalshi arb scan: scrape, match (props + game-level), detect, alert."""
-    run_job("arb_scan_job.py", extra_args="--sport mlb --mode sport", silent_on_success=True)
+    extra_parts = ["--sport", "mlb", "--mode", "sport"]
+    if not env_flag("ARB_SCRAPING_ENABLED", default=False):
+        extra_parts.append("--skip-scrape")
+    if not env_flag("ARB_ALERTS_ENABLED", default=False):
+        extra_parts.append("--skip-discord")
+    if not env_flag("ARB_PAPER_TRADING_ENABLED", default=False):
+        extra_parts.append("--skip-paper")
+    run_job("arb_scan_job.py", extra_args=" ".join(extra_parts), silent_on_success=True)
 
 
 def run_arb_scan_all_categories():
     """Non-sports Polymarket arb SCAN only (no scrape). Uses existing polymarket_markets data."""
-    run_job("arb_scan_job.py", extra_args="--mode all --include-non-sports --skip-scrape --skip-paper", silent_on_success=True)
+    extra_parts = ["--mode", "all", "--include-non-sports", "--skip-scrape"]
+    if not env_flag("ARB_ALERTS_ENABLED", default=False):
+        extra_parts.append("--skip-discord")
+    if not env_flag("ARB_PAPER_TRADING_ENABLED", default=False):
+        extra_parts.append("--skip-paper")
+    run_job("arb_scan_job.py", extra_args=" ".join(extra_parts), silent_on_success=True)
 
 
 def run_nonsports_scrape():
@@ -1168,33 +1188,46 @@ def main():
     # Offset 5 min after Kalshi refresh to use fresh Kalshi data.
     # ==============================================================
 
+    # Arb lane is parked by default. Re-enable intentionally with env flags.
+    arb_scanner_enabled = env_flag("ARB_SCANNER_ENABLED", default=False)
+    arb_scraping_enabled = env_flag("ARB_SCRAPING_ENABLED", default=False)
+
     # MLB arb scan: every 10 min, 12:05 PM - 11:05 PM ET (sport-specific, game-level)
-    scheduler.add_job(
-        run_arb_scan_mlb,
-        CronTrigger(hour='12-23', minute='5,15,25,35,45,55', timezone=ET),
-        id="arb_scan_mlb",
-        name="Arb Scan MLB (every 10 min, 12:05PM-11:05PM ET)",
-    )
+    if arb_scanner_enabled:
+        scheduler.add_job(
+            run_arb_scan_mlb,
+            CronTrigger(hour='12-23', minute='5,15,25,35,45,55', timezone=ET),
+            id="arb_scan_mlb",
+            name="Arb Scan MLB (every 10 min, 12:05PM-11:05PM ET)",
+        )
+    else:
+        logger.info("Arb scan MLB disabled by ARB_SCANNER_ENABLED=false")
 
     # Non-sports scrape: 2x/day (9 AM + 5 PM ET), 2-hour timeout.
     # Fetches all 70k+ Polymarket markets and stores to polymarket_markets.
     # The scan jobs below then read from this existing data via --skip-scrape.
-    scheduler.add_job(
-        run_nonsports_scrape,
-        CronTrigger(hour='9,17', minute='0', timezone=ET),
-        id="nonsports_scrape",
-        name="Non-Sports Polymarket Scrape (9AM + 5PM ET, 2hr timeout)",
-    )
+    if arb_scraping_enabled:
+        scheduler.add_job(
+            run_nonsports_scrape,
+            CronTrigger(hour='9,17', minute='0', timezone=ET),
+            id="nonsports_scrape",
+            name="Non-Sports Polymarket Scrape (9AM + 5PM ET, 2hr timeout)",
+        )
+    else:
+        logger.info("Non-sports Polymarket scrape disabled by ARB_SCRAPING_ENABLED=false")
 
     # Non-sports arb SCAN: every 30 min, 9 AM - 11 PM ET.
     # Fast (<2 min) — uses existing polymarket_markets data, no re-scrape.
     # Matches Kalshi non-sports (politics, crypto, economics) vs Polymarket.
-    scheduler.add_job(
-        run_arb_scan_all_categories,
-        CronTrigger(hour='9-23', minute='0,30', timezone=ET),
-        id="arb_scan_all_categories",
-        name="Arb Scan Non-Sports (every 30 min, 9AM-11PM ET, scan-only)",
-    )
+    if arb_scanner_enabled:
+        scheduler.add_job(
+            run_arb_scan_all_categories,
+            CronTrigger(hour='9-23', minute='0,30', timezone=ET),
+            id="arb_scan_all_categories",
+            name="Arb Scan Non-Sports (every 30 min, 9AM-11PM ET, scan-only)",
+        )
+    else:
+        logger.info("Arb scan non-sports disabled by ARB_SCANNER_ENABLED=false")
 
     # Log scheduled jobs
     logger.info("Scheduled jobs:")

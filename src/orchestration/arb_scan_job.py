@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -35,6 +36,14 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("ArbScanJob")
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Return True only for explicit truthy env values."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def run(
@@ -77,9 +86,19 @@ def run(
         "paper_resolved": 0,
     }
 
+    alerts_enabled = _env_flag("ARB_ALERTS_ENABLED", default=False)
+    paper_enabled = _env_flag("ARB_PAPER_TRADING_ENABLED", default=False)
+    effective_skip_discord = skip_discord or not alerts_enabled
+    effective_skip_paper = skip_paper or not paper_enabled
+
+    if not alerts_enabled and not skip_discord:
+        logger.info("Arb Discord alerts disabled by ARB_ALERTS_ENABLED=false")
+    if not paper_enabled and not skip_paper:
+        logger.info("Arb paper trading disabled by ARB_PAPER_TRADING_ENABLED=false")
+
     # Step 0: Resolve any pending arb paper bets from previous game dates
     arb_trader = None
-    if not dry_run and not skip_paper:
+    if not dry_run and not effective_skip_paper:
         logger.info("Step 0: Resolving pending arb paper bets...")
         try:
             from src.paper_trading.arb_paper_trader import ArbPaperTrader
@@ -155,7 +174,7 @@ def run(
         return summary
 
     # Step 3.5: Paper trade detected arbs
-    if not dry_run and not skip_paper:
+    if not dry_run and not effective_skip_paper:
         logger.info("Step 3.5: Paper trading detected arb opportunities...")
         try:
             if arb_trader is None:
@@ -171,7 +190,7 @@ def run(
         logger.info("Step 3.5: Skipping arb paper trading")
 
     # Step 4: Discord alerts
-    if not skip_discord and not dry_run:
+    if not effective_skip_discord and not dry_run:
         logger.info("Step 4: Sending Discord alerts...")
         try:
             alerts_sent = _send_arb_alerts(result, sport)
