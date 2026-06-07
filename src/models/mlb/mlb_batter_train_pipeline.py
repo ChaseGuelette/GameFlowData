@@ -35,11 +35,13 @@ import pandas as pd
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from src.db.client import get_engine
+from src.models.mlb.features.batter_training_loader import BatterTrainingLoader
 from src.models.mlb.features.contracts import (
     features_for_batter_families,
     normalize_feature_family_names,
     normalize_feature_names,
 )
+from src.models.mlb.features.requests import TrainingFeatureRequest
 from src.models.mlb.mlb_batter_feature_store import (
     BATTER_FEATURE_MAP,
     MLBBatterFeatureStore,
@@ -87,6 +89,7 @@ class MLBBatterTrainingOrchestrator:
         self.stat = stat
         self.engine = get_engine(local=local)
         self.feature_store = MLBBatterFeatureStore(self.engine)
+        self.training_loader = BatterTrainingLoader(self.feature_store)
         self.feature_tolerance = feature_tolerance
         self.tune_hyperparams = tune_hyperparams
         self.tuning_trials = tuning_trials
@@ -198,14 +201,14 @@ class MLBBatterTrainingOrchestrator:
 
         # Step 1: Load training data
         logger.info("Step 1: Loading training data...")
-        train_df = self.feature_store.get_training_dataset(seasons=train_seasons, stat=self.stat)
+        train_df = self.training_loader.load(TrainingFeatureRequest(seasons=tuple(train_seasons), stat=self.stat))
         train_df = self.feature_store.enrich_with_matchup_features(train_df)
         train_df = self.feature_store._add_batter_interaction_features(train_df)
         logger.info("Training data: %d rows", len(train_df))
 
         # Step 2: Load calibration data
         logger.info("Step 2: Loading calibration data...")
-        cal_df = self.feature_store.get_training_dataset(seasons=[cal_season], stat=self.stat)
+        cal_df = self.training_loader.load(TrainingFeatureRequest(seasons=(cal_season,), stat=self.stat))
         cal_df = self.feature_store.enrich_with_matchup_features(cal_df)
         cal_df = self.feature_store._add_batter_interaction_features(cal_df)
         if cal_end_date:

@@ -10,18 +10,17 @@ Outputs:
 from __future__ import annotations
 
 import argparse
+import json
 from collections import defaultdict
 from datetime import date
-import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
-
 from dotenv import load_dotenv
 from pybaseball import batting_stats_range, pitching_stats_range
+from sqlalchemy import text
 
 from src.db.client import get_engine
 
@@ -86,7 +85,7 @@ def dedupe_totals(df: pd.DataFrame) -> pd.DataFrame:
     out["_tot"] = out.get("Tm", "").astype(str).eq("TOT")
     out = out.sort_values(["player_id", "_tot"], ascending=[True, False], kind="mergesort")
     out = out.drop_duplicates(subset=["player_id"], keep="first")
-    return out.drop(columns=["_tot"]) 
+    return out.drop(columns=["_tot"])
 
 
 def derive_batter_stats(df: pd.DataFrame) -> pd.DataFrame:

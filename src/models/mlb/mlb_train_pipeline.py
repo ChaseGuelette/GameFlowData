@@ -37,6 +37,8 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from src.db.client import get_engine
 from src.models.hyperparameter_tuner import QuantileHyperparameterTuner
+from src.models.mlb.features.pitcher_training_loader import PitcherTrainingLoader
+from src.models.mlb.features.requests import TrainingFeatureRequest
 from src.models.mlb.mlb_feature_store import (
     PITCHER_K_EXCLUDED_TRAINING_FEATURES,
     PITCHER_K_FEATURES,
@@ -96,6 +98,7 @@ class MLBTrainingOrchestrator:
     ):
         self.engine = get_engine(local=local)
         self.feature_store = MLBFeatureStore(self.engine)
+        self.training_loader = PitcherTrainingLoader(self.feature_store)
         self.feature_tolerance = feature_tolerance
 
         self.tune_hyperparams = tune_hyperparams
@@ -141,14 +144,14 @@ class MLBTrainingOrchestrator:
 
         # Step 1: Load training data
         logger.info("Step 1: Loading training data...")
-        train_df = self.feature_store.get_training_dataset(seasons=train_seasons)
+        train_df = self.training_loader.load(TrainingFeatureRequest(seasons=tuple(train_seasons)))
         train_df = self.feature_store.enrich_with_matchup_features(train_df)
         train_df = self.feature_store._add_interaction_features(train_df)
         logger.info(f"Training data: {len(train_df):,} rows")
 
         # Step 2: Load calibration data
         logger.info("Step 2: Loading calibration data...")
-        cal_df = self.feature_store.get_training_dataset(seasons=[cal_season])
+        cal_df = self.training_loader.load(TrainingFeatureRequest(seasons=(cal_season,)))
         cal_df = self.feature_store.enrich_with_matchup_features(cal_df)
         cal_df = self.feature_store._add_interaction_features(cal_df)
         if cal_end_date:

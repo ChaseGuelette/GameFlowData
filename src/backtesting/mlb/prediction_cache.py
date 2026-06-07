@@ -14,6 +14,10 @@ from datetime import date, datetime
 import numpy as np
 import pandas as pd
 
+from src.models.mlb.features.batter_inference_loader import BatterInferenceLoader
+from src.models.mlb.features.pitcher_inference_loader import PitcherInferenceLoader
+from src.models.mlb.features.requests import DateFeatureRequest, FeatureMode, PlayerGameFeatureRequest
+
 logger = logging.getLogger("MLBBacktestSweep")
 
 # Mapping from sweep stat key → batter feature store short stat name
@@ -116,9 +120,10 @@ def _build_pitcher_predictions(
     as_of_time: datetime | None,
 ) -> list[DatePrediction]:
     predictions: list[DatePrediction] = []
+    pitcher_loader = PitcherInferenceLoader(pitcher_feature_store)
     for pitcher in pitchers:
         try:
-            features = pitcher_feature_store.get_player_game_features(
+            request = PlayerGameFeatureRequest(
                 player_id=pitcher["player_id"],
                 game_id=pitcher["game_id"],
                 game_date=str(game_date),
@@ -129,6 +134,7 @@ def _build_pitcher_predictions(
                 is_home=pitcher["is_home"],
                 as_of_time=as_of_time,
             )
+            features = pitcher_loader.load_player_game(request)
             if features is None:
                 continue
 
@@ -171,6 +177,12 @@ def _build_batter_predictions(
     as_of_time: datetime | None,
 ) -> list[DatePrediction]:
     predictions: list[DatePrediction] = []
+    batter_loader = BatterInferenceLoader(batter_feature_store)
+    date_request = DateFeatureRequest(
+        game_date=str(game_date),
+        mode=FeatureMode.BACKTEST,
+        as_of_time=as_of_time,
+    )
     for batter_stat in batter_stats:
         short_stat = BATTER_STAT_FS_MAP.get(batter_stat)
         if short_stat is None:
@@ -178,11 +190,10 @@ def _build_batter_predictions(
             continue
 
         try:
-            features_df = batter_feature_store.get_features_for_date(
-                str(game_date),
+            features_df = batter_loader.load_date(
+                date_request,
                 stat=short_stat,
                 matchup_cache=matchup_cache,
-                as_of_time=as_of_time,
             )
         except Exception as exc:
             logger.warning(f"Error loading batter features for {batter_stat} on {game_date}: {exc}")

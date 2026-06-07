@@ -187,6 +187,63 @@ def test_build_predictions_for_date_routes_pitcher_and_batter_features_with_as_o
     assert suite.predict_calls[1]["features"]["bat_feature"] == 99
 
 
+def test_build_predictions_for_date_uses_explicit_feature_loaders(monkeypatch):
+    from src.backtesting.mlb.prediction_cache import build_predictions_for_date
+    from src.models.mlb.features.batter_inference_loader import BatterInferenceLoader
+    from src.models.mlb.features.pitcher_inference_loader import PitcherInferenceLoader
+
+    class DirectPitcherFeatureStore:
+        def get_player_game_features(self, **kwargs):
+            raise AssertionError("prediction cache should use PitcherInferenceLoader")
+
+    class DirectBatterFeatureStore:
+        def get_features_for_date(self, *args, **kwargs):
+            raise AssertionError("prediction cache should use BatterInferenceLoader")
+
+    loader_calls = []
+
+    def fake_load_player_game(self, request):
+        loader_calls.append(("pitcher", request))
+        return {"pitcher_feature": request.player_id}
+
+    def fake_load_date(self, request, *, stat="hits", matchup_cache=None):
+        loader_calls.append(("batter", request, stat, matchup_cache))
+        return pd.DataFrame([
+            {"player_id": 301, "game_id": 10, "team_id": 1, "opp_team_id": 2, "bat_feature": 99}
+        ])
+
+    monkeypatch.setattr(PitcherInferenceLoader, "load_player_game", fake_load_player_game)
+    monkeypatch.setattr(BatterInferenceLoader, "load_date", fake_load_date)
+
+    games = [
+        {
+            "game_id": 10,
+            "home_team_id": 1,
+            "away_team_id": 2,
+            "probable_pitcher_home_id": 101,
+            "probable_pitcher_away_id": None,
+            "venue_id": 55,
+            "season": 2025,
+        }
+    ]
+    suite = FakeSuite({"pitcher_strikeouts", "batter_hits"})
+
+    predictions = build_predictions_for_date(
+        pitcher_feature_store=DirectPitcherFeatureStore(),
+        batter_feature_store=DirectBatterFeatureStore(),
+        suite=suite,
+        game_date=date(2025, 7, 4),
+        games=games,
+        stats=["pitcher_strikeouts", "batter_hits"],
+    )
+
+    assert [p.stat for p in predictions] == ["pitcher_strikeouts", "batter_hits"]
+    assert loader_calls[0][0] == "pitcher"
+    assert loader_calls[0][1].player_id == 101
+    assert loader_calls[1][0] == "batter"
+    assert loader_calls[1][2] == "hits"
+
+
 def test_build_predictions_for_date_skips_pitchers_with_missing_features_and_absent_batter_store():
     from src.backtesting.mlb.prediction_cache import build_predictions_for_date
 

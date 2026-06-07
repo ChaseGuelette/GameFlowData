@@ -125,8 +125,10 @@ def test_prediction_cache_owns_date_prediction_and_feature_store_prediction_loop
 
     assert "class DatePrediction" in cache_source
     assert "BATTER_STAT_FS_MAP" in cache_source
-    assert "get_player_game_features" in cache_source
-    assert "get_features_for_date" in cache_source
+    assert "PitcherInferenceLoader" in cache_source
+    assert "BatterInferenceLoader" in cache_source
+    assert "PlayerGameFeatureRequest" in cache_source
+    assert "DateFeatureRequest" in cache_source
 
 
 def test_sweep_results_owns_output_serialization_and_comparison_table():

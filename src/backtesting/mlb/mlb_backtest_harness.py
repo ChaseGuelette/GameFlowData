@@ -35,6 +35,8 @@ from src.backtesting.bet_simulator import BetSimulator
 from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
 from src.models.black_litterman import BlackLittermanBlender
+from src.models.mlb.features.pitcher_inference_loader import PitcherInferenceLoader
+from src.models.mlb.features.requests import PlayerGameFeatureRequest
 
 logger = logging.getLogger(__name__)
 
@@ -353,7 +355,7 @@ class MLBBacktestHarness:
 
     def _predict_pitcher(self, pitcher: dict, game_date: date) -> dict | None:
         """Generate prediction for a single pitcher."""
-        features = self.pitcher_feature_store.get_player_game_features(
+        request = PlayerGameFeatureRequest(
             player_id=pitcher["player_id"],
             game_id=pitcher["game_id"],
             game_date=str(game_date),
@@ -363,6 +365,7 @@ class MLBBacktestHarness:
             season=game_date.year,
             is_home=pitcher["is_home"],
         )
+        features = PitcherInferenceLoader(self.pitcher_feature_store).load_player_game(request)
 
         if features is None:
             return None

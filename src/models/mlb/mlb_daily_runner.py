@@ -29,6 +29,9 @@ from sqlalchemy import bindparam, text
 from src.backtesting.mlb.line_selection import fetch_lines_at_decision_time
 from src.models.black_litterman import BlackLittermanBlender
 from src.models.daily_runner import should_skip_recommendation
+from src.models.mlb.features.batter_inference_loader import BatterInferenceLoader
+from src.models.mlb.features.pitcher_inference_loader import PitcherInferenceLoader
+from src.models.mlb.features.requests import PlayerGameFeatureRequest
 from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL_CONFIGS
 
 logger = logging.getLogger(__name__)
@@ -421,10 +424,12 @@ class MLBDailyPredictionRunner:
             name_rows = conn.execute(name_query, {"pids": pitcher_ids}).fetchall()
         name_map = {row[0]: row[1] for row in name_rows}
 
+        pitcher_loader = PitcherInferenceLoader(self.pitcher_feature_store)
+
         # Build features in parallel
         def fetch_pitcher_features(pitcher: dict) -> tuple[dict, dict | None]:
             try:
-                features = self.pitcher_feature_store.get_player_game_features(
+                request = PlayerGameFeatureRequest(
                     player_id=pitcher["player_id"],
                     game_id=pitcher["game_id"],
                     game_date=str(target_date),
@@ -434,6 +439,7 @@ class MLBDailyPredictionRunner:
                     season=pitcher.get("season") or target_date.year,
                     is_home=pitcher.get("is_home"),
                 )
+                features = pitcher_loader.load_player_game(request)
                 return pitcher, features
             except Exception as e:
                 logger.error(f"Error building features for pitcher {pitcher['player_id']}: {e}")
@@ -525,11 +531,13 @@ class MLBDailyPredictionRunner:
             len(batters), available_batter,
         )
 
+        batter_loader = BatterInferenceLoader(self.batter_feature_store)
+
         # Build features in parallel (one call per batter, covers all stats)
         def fetch_batter_features(batter: dict) -> tuple[dict, dict | None]:
             try:
                 lineup_pos = batter.get("confirmed_lineup_pos")
-                features = self.batter_feature_store.get_player_game_features(
+                request = PlayerGameFeatureRequest(
                     player_id=batter["player_id"],
                     game_id=batter["game_id"],
                     game_date=str(target_date),
@@ -538,6 +546,9 @@ class MLBDailyPredictionRunner:
                     venue_id=batter.get("venue_id") or 0,
                     season=batter.get("season") or target_date.year,
                     is_home=batter["is_home"],
+                )
+                features = batter_loader.load_player_game(
+                    request,
                     opp_pitcher_id=batter.get("opp_pitcher_id"),
                     lineup_pos=lineup_pos,
                     stat="hits",
@@ -549,6 +560,7 @@ class MLBDailyPredictionRunner:
                     batter["player_id"], e,
                 )
                 return batter, None
+
 
         batter_features = []
         max_workers = min(8, len(batters)) if batters else 1

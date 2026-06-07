@@ -13,9 +13,8 @@ date (or daily historical snapshot dates for backtests).
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime
-
 import os
+from datetime import date, datetime
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
