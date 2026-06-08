@@ -72,6 +72,7 @@ MLB_TABLES: dict[str, tuple[str | None, str]] = {
     "mlb_bullpen_daily_status":             ("game_date", "incremental"),
     "mlb_game_lineups":                      ("game_date", "incremental"),
     "mlb_game_umpires":                      ("game_date", "incremental"),
+    "mlb_active_roster":                     ("roster_date", "incremental"),
     "mlb_player_props_clv_snapshots":        ("snapshot_time", "incremental"),
 }
 
@@ -275,6 +276,41 @@ def get_local_max_date(local_conn, table_name: str, date_col: str):
         return row[0] if row and row[0] else None
 
 
+def get_primary_key_columns(local_conn, table_name: str) -> list[str]:
+    """Return local table primary-key columns in constraint order."""
+    with local_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.attname
+            FROM pg_index i
+            JOIN pg_attribute a
+              ON a.attrelid = i.indrelid
+             AND a.attnum = ANY(i.indkey)
+            WHERE i.indrelid = %s::regclass
+              AND i.indisprimary
+            ORDER BY array_position(i.indkey, a.attnum)
+            """,
+            (table_name,),
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+def get_identity_always_columns(local_conn, table_name: str) -> set[str]:
+    """Return GENERATED ALWAYS identity columns for local table."""
+    with local_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = %s
+              AND identity_generation = 'ALWAYS'
+            """,
+            (table_name,),
+        )
+        return {row[0] for row in cur.fetchall()}
+
+
 def sync_table(
     remote_conn,
     local_conn,
@@ -386,29 +422,38 @@ def sync_table(
         columns = [c.strip('"') for c in header_line.split(",")]
         tmp.seek(0)
 
-        # Import to local. Incremental/date-window syncs stage then upsert on id
-        # when available so local mirrors recover from partial prior copies or
-        # remote rows whose snapshot_time moved after they were first mirrored.
+        # Import to local. Incremental/date-window syncs stage then upsert on the
+        # actual primary key (including composite PKs) so historical gap repairs
+        # update existing local rows instead of failing on duplicates. Staging via
+        # CREATE TABLE AS avoids GENERATED ALWAYS identity restrictions during COPY.
         with local_conn.cursor() as cur:
             col_list = ", ".join(f'"{c}"' for c in columns)
-            if mode != "full" and "id" in columns:
+            conflict_cols = get_primary_key_columns(local_conn, table_name)
+            identity_always_cols = get_identity_always_columns(local_conn, table_name)
+            insert_override = " OVERRIDING SYSTEM VALUE" if identity_always_cols.intersection(columns) else ""
+
+            if mode != "full" and conflict_cols:
                 temp_table = f"_sync_{table_name}_{int(time.time() * 1000)}"
                 cur.execute(
-                    f'CREATE TEMP TABLE "{temp_table}" (LIKE "{table_name}" INCLUDING DEFAULTS) ON COMMIT DROP'
+                    f'CREATE TEMP TABLE "{temp_table}" ON COMMIT DROP AS SELECT * FROM "{table_name}" WHERE false'
                 )
                 copy_in_sql = f'COPY "{temp_table}" ({col_list}) FROM STDIN WITH CSV HEADER'
                 cur.copy_expert(copy_in_sql, tmp)
-                update_cols = [c for c in columns if c != "id"]
+
+                conflict_list = ", ".join(f'"{c}"' for c in conflict_cols)
+                update_cols = [c for c in columns if c not in conflict_cols]
                 if update_cols:
                     update_sql = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in update_cols)
                     insert_sql = (
-                        f'INSERT INTO "{table_name}" ({col_list}) SELECT {col_list} FROM "{temp_table}" '
-                        f'ON CONFLICT ("id") DO UPDATE SET {update_sql}'
+                        f'INSERT INTO "{table_name}" ({col_list}){insert_override} '
+                        f'SELECT {col_list} FROM "{temp_table}" '
+                        f'ON CONFLICT ({conflict_list}) DO UPDATE SET {update_sql}'
                     )
                 else:
                     insert_sql = (
-                        f'INSERT INTO "{table_name}" ({col_list}) SELECT {col_list} FROM "{temp_table}" '
-                        'ON CONFLICT ("id") DO NOTHING'
+                        f'INSERT INTO "{table_name}" ({col_list}){insert_override} '
+                        f'SELECT {col_list} FROM "{temp_table}" '
+                        f'ON CONFLICT ({conflict_list}) DO NOTHING'
                     )
                 cur.execute(insert_sql)
             else:

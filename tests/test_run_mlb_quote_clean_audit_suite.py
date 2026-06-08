@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from scripts.run_mlb_quote_clean_audit_suite import (
@@ -105,3 +106,41 @@ def test_determine_gate_status_fails_edge_ranking_ci_low() -> None:
     )
 
     assert determine_gate_status(item, {"decision": "PASS"}).startswith("FAIL: edge-ranking")
+
+
+def test_dry_run_clv_command_uses_generic_analyzer(tmp_path: Path, monkeypatch) -> None:
+    from scripts import run_mlb_quote_clean_audit_suite as suite
+
+    sweep_dir = tmp_path / "sweep"
+    sweep_dir.mkdir()
+    bets_csv = sweep_dir / "bets.csv"
+    bets_csv.write_text("bookmaker,profit,stake\nDraftKings,1,10\n", encoding="utf-8")
+    output_dir = tmp_path / "out"
+    calls: list[list[str]] = []
+
+    def fake_run_cmd(cmd, *, dry_run=False):
+        calls.append([str(part) for part in cmd])
+        return 0
+
+    monkeypatch.setattr(suite, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_mlb_quote_clean_audit_suite.py",
+            "--sweep-output-dir", str(sweep_dir),
+            "--output-dir", str(output_dir),
+            "--model-dir", "dummy-model",
+            "--start", "2026-04-01",
+            "--end", "2026-04-02",
+            "--stats", "pitcher_strikeouts",
+            "--skip-dropout-audit",
+            "--dry-run",
+        ],
+    )
+
+    assert suite.main() == 0
+    clv_calls = [cmd for cmd in calls if any("analyze_mlb" in part for part in cmd)]
+    assert clv_calls
+    assert any(part.endswith("analyze_mlb_clv.py") for part in clv_calls[0])
+    assert not any(part.endswith("analyze_mlb_batter_hits_clv.py") for part in clv_calls[0])

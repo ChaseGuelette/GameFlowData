@@ -573,7 +573,7 @@ def main() -> int:
 
         clv_cmd = [
             py,
-            str(repo_root / "scripts" / "analyze_mlb_batter_hits_clv.py"),
+            str(repo_root / "scripts" / "analyze_mlb_clv.py"),
             "--bets-csv", str(bets_csv),
             "--output-dir", str(clv_dir),
             "--snapshots-table", args.snapshots_table,
