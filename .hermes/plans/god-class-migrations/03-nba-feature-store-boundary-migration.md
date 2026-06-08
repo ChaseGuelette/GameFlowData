@@ -327,7 +327,7 @@ Final role for `src/models/feature_store.py`:
 
 ## Refactor phases
 
-### Phase 0: Safety baseline and inventory
+### Phase 0: Safety baseline and inventory — COMPLETE
 
 Objective: Make current behavior and callsites observable before extraction.
 
@@ -344,7 +344,7 @@ Validation:
 
 ---
 
-### Phase 1: Extract contracts
+### Phase 1: Extract contracts — COMPLETE
 
 Objective: Move feature lists/stat mappings without behavior change.
 
@@ -365,7 +365,7 @@ TDD tests:
 
 ---
 
-### Phase 2: Extract pure transforms/defaults
+### Phase 2: Extract pure transforms/defaults — COMPLETE
 
 Objective: Move no-DB feature derivations out first.
 
@@ -383,7 +383,7 @@ TDD tests:
 
 ---
 
-### Phase 3: Extract line feature sources
+### Phase 3: Extract line feature sources — COMPLETE
 
 Objective: Give game/prop lines one tested owner.
 
@@ -405,7 +405,7 @@ Safety:
 
 ---
 
-### Phase 4: Extract injury context
+### Phase 4: Extract injury context — COMPLETE
 
 Objective: Isolate injury opportunity logic and defaults.
 
@@ -423,7 +423,7 @@ TDD tests:
 
 ---
 
-### Phase 5: Extract player/team/opponent/context source loaders
+### Phase 5: Extract player/team/opponent/context source loaders — COMPLETE
 
 Objective: Move DB source families into focused modules.
 
@@ -440,7 +440,7 @@ TDD tests:
 
 ---
 
-### Phase 6: Introduce request objects and mode-specific loaders
+### Phase 6: Introduce request objects and mode-specific loaders — COMPLETE
 
 Objective: Make training/date/date-range/player-game intent explicit.
 
@@ -456,7 +456,7 @@ Compatibility:
 
 ---
 
-### Phase 7: Migrate callsites one lane at a time
+### Phase 7: Migrate callsites one lane at a time — DEFERRED / OPTIONAL
 
 Suggested order:
 
@@ -485,9 +485,11 @@ TDD pattern:
 - rewire to focused loader/source
 - verify GREEN
 
+Status note, 2026-06-07: intentionally deferred. Existing production/backtest/training callers still use the stable `FeatureStore` facade, but that facade is now thin and delegates to focused loaders. Do not treat this as blocking the Lane 03 core refactor unless Chase explicitly wants callsite import cleanup.
+
 ---
 
-### Phase 8: Thin facade and anti-regrowth guards
+### Phase 8: Thin facade and anti-regrowth guards — COMPLETE
 
 Inventory assertions after migration:
 
@@ -948,8 +950,12 @@ Current status:
 
 ## Done when
 
-- NBA feature contracts live outside the god class.
-- Injury, line, player/team/opponent, and transform responsibilities have explicit owners.
-- `FeatureStore` is a thin compatibility facade.
-- Inventory tests prevent regrowth.
-- Production behavior and feature names remain stable unless a separate approved behavior-changing fix is made.
+- [x] NBA feature contracts live outside the god class.
+- [x] Injury, line, player/team/opponent, and transform responsibilities have explicit owners.
+- [x] `FeatureStore` is a thin compatibility facade.
+- [x] Inventory tests prevent regrowth.
+- [x] Production behavior and feature names remain stable unless a separate approved behavior-changing fix is made.
+
+Deferred / optional:
+
+- [ ] Phase 7 callsite import cleanup: migrate callers from the compatibility facade to focused loaders only if Chase explicitly wants cleaner import boundaries. The stable facade is thin and tested, so this is not blocking Lane 03 core completion.

@@ -29,7 +29,7 @@
 |---|---|---|---|---|
 | 01 | MLB quote-clean/backtest sweep architecture | `01-mlb-quote-clean-backtest-sweep-migration.md` | Complete | Implementation complete as of 2026-05-26; future work is artifact validation, not structural migration. |
 | 02 | MLB feature-store boundary migration | `02-mlb-feature-store-boundary-migration.md` | Complete | Implementation complete as of 2026-06-07; facades thinned, major train/backtest/inference callsites migrated, and anti-regrowth guards enforce the boundary. |
-| 03 | NBA/general feature-store migration | `03-nba-feature-store-boundary-migration.md` | Medium | Production-sensitive; avoid casual behavior changes. |
+| 03 | NBA/general feature-store migration | `03-nba-feature-store-boundary-migration.md` | Core complete | Phases 0-6 and facade-thinning/anti-regrowth are complete as of 2026-06-07; Phase 7 callsite rewiring is intentionally deferred behind the thin compatibility facade. |
 | 04 | Training orchestrator migration | `04-training-orchestrator-migration.md` | Medium | Separate fitting, validation, artifact writing, promotion metadata. |
 | 05 | Daily prediction runner migration | `05-daily-prediction-runner-migration.md` | Medium | Separate discovery, inference, line loading, persistence, alerts. |
 | 06 | Paper-trading shared primitives migration | `06-paper-trading-shared-primitives-migration.md` | Medium | Follow-up to Kalshi; shared staking/ledger/status primitives. |
