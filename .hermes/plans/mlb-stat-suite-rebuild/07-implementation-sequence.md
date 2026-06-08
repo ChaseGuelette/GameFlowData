@@ -22,31 +22,33 @@ git diff --check -- .hermes/plans/mlb-stat-suite-rebuild
 
 ### Slice 1 — CLV analyzer genericization
 
-Status: implemented locally on 2026-06-07; pending Chase review/commit.
+Status: complete locally on 2026-06-07; pending Chase review/commit.
 
 Why first: low model risk, unblocks stat-generic audit suite, avoids pitcher CLV fork.
 
 Files:
 
-- Create: `scripts/analyze_mlb_clv.py`
-- Modify: `scripts/analyze_mlb_batter_hits_clv.py`
-- Modify: `scripts/run_mlb_quote_clean_audit_suite.py`
-- Add/modify tests:
-  - `tests/test_analyze_mlb_clv.py`
-  - `tests/test_analyze_mlb_batter_hits_clv.py`
-  - `tests/test_run_mlb_quote_clean_audit_suite.py`
+- [x] Create: `scripts/analyze_mlb_clv.py`
+- [x] Modify: `scripts/analyze_mlb_batter_hits_clv.py`
+- [x] Modify: `scripts/run_mlb_quote_clean_audit_suite.py`
+- [x] Add/modify tests:
+  - [x] `tests/test_analyze_mlb_clv.py`
+  - [x] `tests/test_analyze_mlb_batter_hits_clv.py`
+  - [x] `tests/test_run_mlb_quote_clean_audit_suite.py`
 
 Worker spec summary:
 
-- Preserve all output file names and CLV semantics.
-- Add pitcher-shaped tests.
-- Keep backward-compatible batter script.
+- [x] Preserve all output file names and CLV semantics.
+- [x] Add pitcher-shaped tests.
+- [x] Keep backward-compatible batter script.
 
 Validation:
 
 ```bash
 ./venv/Scripts/python.exe -m pytest tests/test_analyze_mlb_clv.py tests/test_analyze_mlb_batter_hits_clv.py tests/test_run_mlb_quote_clean_audit_suite.py -q
 ```
+
+Result: passed locally on 2026-06-07 (`36 passed, 1 warning`).
 
 ### Slice 2 — Generic operational runner dry-run
 

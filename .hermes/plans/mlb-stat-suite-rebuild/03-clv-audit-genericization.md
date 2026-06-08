@@ -16,82 +16,91 @@ Make CLV and audit tooling explicitly stat-generic so pitcher_strikeouts does no
 
 ## New / modified files
 
-- Create: `scripts/analyze_mlb_clv.py`
-- Modify: `scripts/analyze_mlb_batter_hits_clv.py` into compatibility wrapper or alias.
-- Modify: `scripts/run_mlb_quote_clean_audit_suite.py` to call generic analyzer.
-- Add/modify tests:
-  - `tests/test_analyze_mlb_clv.py`
-  - keep `tests/test_analyze_mlb_batter_hits_clv.py` compatibility coverage
-  - `tests/test_run_mlb_quote_clean_audit_suite.py`
+Status: implemented locally on 2026-06-07; pending review/commit.
+
+- [x] Create: `scripts/analyze_mlb_clv.py`
+- [x] Modify: `scripts/analyze_mlb_batter_hits_clv.py` into compatibility wrapper or alias.
+- [x] Modify: `scripts/run_mlb_quote_clean_audit_suite.py` to call generic analyzer.
+- [x] Add/modify tests:
+  - [x] `tests/test_analyze_mlb_clv.py`
+  - [x] keep `tests/test_analyze_mlb_batter_hits_clv.py` compatibility coverage
+  - [x] `tests/test_run_mlb_quote_clean_audit_suite.py`
 
 ## Required behavior
 
 Generic analyzer must support:
 
-- `--bets-csv`
-- `--snapshots-csv`
-- `--output-dir`
-- `--local`
-- `--bootstrap-samples`
-- `--ci-level`
-- `--batch-size`
-- `--snapshots-table`
-- `--assume-bet-time-et`
-- `--min-mean-clv`
-- new optional `--stat-label` or infer labels from bets.
+- [x] `--bets-csv`
+- [x] `--snapshots-csv`
+- [x] `--output-dir`
+- [x] `--local`
+- [x] `--bootstrap-samples`
+- [x] `--ci-level`
+- [x] `--batch-size`
+- [x] `--snapshots-table`
+- [x] `--assume-bet-time-et`
+- [x] `--min-mean-clv`
+- [x] new optional `--stat-label` or infer labels from bets.
 
 It must preserve output files:
 
-- `clv_matches.csv`
-- `clv_summary.csv`
-- `clv_by_bookmaker.csv`
-- `clv_by_edge_bin.csv`
-- `clv_timing_stability.csv`
-- `phase1b_decision.csv`
-- `phase1b_clv_summary.md`
+- [x] `clv_matches.csv`
+- [x] `clv_summary.csv`
+- [x] `clv_by_bookmaker.csv`
+- [x] `clv_by_edge_bin.csv`
+- [x] `clv_timing_stability.csv`
+- [x] `phase1b_decision.csv`
+- [x] `phase1b_clv_summary.md`
 
 It must preserve semantics:
 
-- same-book close first;
-- consensus fallback;
-- changed-line classification;
-- +15/+30/+60 timing if bet timestamps exist;
-- block bootstrap CI;
-- Spearman edge/CLV diagnostics;
-- unmatched reason summaries.
+- [x] same-book close first;
+- [x] consensus fallback;
+- [x] changed-line classification;
+- [x] +15/+30/+60 timing if bet timestamps exist;
+- [x] block bootstrap CI;
+- [x] Spearman edge/CLV diagnostics;
+- [x] unmatched reason summaries.
 
 ## Refactor approach
 
-1. Copy/import existing implementation into `analyze_mlb_clv.py` without behavior change.
-2. Rename user-facing headings from “batter hits” to “MLB CLV” or profile-specific label.
-3. Keep `STAT_TO_MARKET_KEY = {"batter_hrr": "batter_hits_runs_rbis"}` or move it to shared stat mapping; pitcher_strikeouts passthrough is okay.
-4. Update audit suite line 574-ish behavior to call `analyze_mlb_clv.py`.
-5. Keep `analyze_mlb_batter_hits_clv.py` as a thin wrapper that imports and calls generic `main()` for backwards compatibility.
+1. [x] Copy/import existing implementation into `analyze_mlb_clv.py` without behavior change.
+2. [x] Rename user-facing headings from “batter hits” to “MLB CLV” or profile-specific label.
+3. [x] Keep `STAT_TO_MARKET_KEY = {"batter_hrr": "batter_hits_runs_rbis"}` or move it to shared stat mapping; pitcher_strikeouts passthrough is okay.
+4. [x] Update audit suite line 574-ish behavior to call `analyze_mlb_clv.py`.
+5. [x] Keep `analyze_mlb_batter_hits_clv.py` as a thin wrapper that imports and calls generic `main()` for backwards compatibility.
 
 ## Tests
 
 ### Characterization tests
 
-Move broad tests from `tests/test_analyze_mlb_batter_hits_clv.py` to `tests/test_analyze_mlb_clv.py`.
+- [x] Move broad tests from `tests/test_analyze_mlb_batter_hits_clv.py` to `tests/test_analyze_mlb_clv.py`.
 
 Add pitcher-shaped tests:
 
-- `stat = pitcher_strikeouts`
-- line values like `5.5`, `6.5`
-- side `under`
-- same-book close CLV works;
-- consensus fallback works;
-- line movement classification works;
-- output report no longer hardcodes batter_hits in generic path.
+- [x] `stat = pitcher_strikeouts`
+- [x] line values like `5.5`, `6.5`
+- [x] side `under`
+- [x] same-book close CLV works;
+- [x] consensus fallback works;
+- [x] line movement classification works via carried generic characterization coverage;
+- [x] output report no longer hardcodes batter_hits in generic path.
 
 ### Audit-suite tests
 
-Modify `tests/test_run_mlb_quote_clean_audit_suite.py` to verify dry-run/command assembly references `analyze_mlb_clv.py`, not `analyze_mlb_batter_hits_clv.py`.
+- [x] Modify `tests/test_run_mlb_quote_clean_audit_suite.py` to verify dry-run/command assembly references `analyze_mlb_clv.py`, not `analyze_mlb_batter_hits_clv.py`.
 
 ## Done criteria
 
-- Generic analyzer tests pass.
-- Backward compatibility wrapper tests pass.
-- Audit suite calls generic analyzer.
-- No pitcher-specific CLV fork exists.
-- Existing artifact output filenames remain compatible with ranker/book scripts.
+- [x] Generic analyzer tests pass.
+- [x] Backward compatibility wrapper tests pass.
+- [x] Audit suite calls generic analyzer.
+- [x] No pitcher-specific CLV fork exists.
+- [x] Existing artifact output filenames remain compatible with ranker/book scripts.
+
+## Validation evidence
+
+- `./venv/Scripts/python.exe -m pytest tests/test_analyze_mlb_clv.py tests/test_analyze_mlb_batter_hits_clv.py tests/test_run_mlb_quote_clean_audit_suite.py -q` → 36 passed, 1 warning.
+- `./venv/Scripts/python.exe -m py_compile scripts/analyze_mlb_clv.py scripts/analyze_mlb_batter_hits_clv.py scripts/run_mlb_quote_clean_audit_suite.py tests/test_analyze_mlb_clv.py tests/test_analyze_mlb_batter_hits_clv.py tests/test_run_mlb_quote_clean_audit_suite.py` → passed.
+- `git diff --check -- .hermes/plans/mlb-stat-suite-rebuild scripts/analyze_mlb_clv.py scripts/analyze_mlb_batter_hits_clv.py scripts/run_mlb_quote_clean_audit_suite.py tests/test_analyze_mlb_clv.py tests/test_analyze_mlb_batter_hits_clv.py tests/test_run_mlb_quote_clean_audit_suite.py` → passed.
+- Offline pitcher_strikeouts smoke with `--snapshots-csv` produced expected CLV output files and `# MLB Pitcher Strikeouts Phase 1B CLV Summary`.
