@@ -37,6 +37,7 @@ from datetime import date, datetime, timedelta
 import psycopg2
 from dotenv import load_dotenv
 from sqlalchemy import ForeignKeyConstraint, MetaData, create_engine, inspect
+from sqlalchemy.pool import NullPool
 
 load_dotenv()
 
@@ -206,6 +207,22 @@ def redact_database_url(url: str | None) -> str:
         return urlunsplit((parts.scheme, safe_netloc, parts.path, parts.query, parts.fragment))
     except Exception:
         return "<redacted database url>"
+
+
+def remote_connect_kwargs() -> dict:
+    """Connection options for read-only Supabase export sessions."""
+    return {
+        "application_name": "gameflow:sync_local_db:remote_copy",
+        "connect_timeout": 15,
+        "options": "-c statement_timeout=1800000 -c idle_in_transaction_session_timeout=60000",
+    }
+
+
+def local_connect_kwargs() -> dict:
+    return {
+        "application_name": "gameflow:sync_local_db:local_copy",
+        "connect_timeout": 15,
+    }
 
 
 def ensure_local_db() -> None:
@@ -541,8 +558,16 @@ def main() -> None:
     ensure_local_db()
 
     # Create engines for schema reflection
-    remote_engine = create_engine(remote_url)
-    local_engine = create_engine(local_url)
+    remote_engine = create_engine(
+        remote_url,
+        poolclass=NullPool,
+        connect_args=remote_connect_kwargs(),
+    )
+    local_engine = create_engine(
+        local_url,
+        poolclass=NullPool,
+        connect_args=local_connect_kwargs(),
+    )
 
     # Create tables locally if needed
     logger.info("Checking schemas...")
@@ -550,8 +575,9 @@ def main() -> None:
         ensure_table_schema(remote_engine, local_engine, table_name)
 
     # Sync data using psycopg2 COPY
-    remote_conn = psycopg2.connect(remote_url)
-    local_conn = psycopg2.connect(local_url)
+    remote_conn = psycopg2.connect(remote_url, **remote_connect_kwargs())
+    remote_conn.autocommit = True
+    local_conn = psycopg2.connect(local_url, **local_connect_kwargs())
 
     total_rows = 0
     failed = []

@@ -17,6 +17,7 @@ Adapted from src/models/daily_runner.py (NBA) with MLB-specific differences:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
@@ -35,6 +36,13 @@ from src.models.mlb.features.requests import PlayerGameFeatureRequest
 from src.models.mlb.mlb_stat_config import DEFAULT_BL_CONFIG, MLB_STATS, STAT_BL_CONFIGS
 
 logger = logging.getLogger(__name__)
+
+
+def _feature_build_max_workers() -> int:
+    try:
+        return max(1, int(os.getenv("MLB_FEATURE_BUILD_MAX_WORKERS", "4")))
+    except ValueError:
+        return 4
 
 # Bookmakers excluded from edge calculation.
 # novig: low-vig sharp book (user cannot bet there)
@@ -446,7 +454,7 @@ class MLBDailyPredictionRunner:
                 return pitcher, None
 
         pitcher_features = []
-        max_workers = min(8, len(pitchers)) if pitchers else 1
+        max_workers = min(_feature_build_max_workers(), len(pitchers)) if pitchers else 1
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(fetch_pitcher_features, p): p for p in pitchers}
@@ -563,7 +571,7 @@ class MLBDailyPredictionRunner:
 
 
         batter_features = []
-        max_workers = min(8, len(batters)) if batters else 1
+        max_workers = min(_feature_build_max_workers(), len(batters)) if batters else 1
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(fetch_batter_features, b): b for b in batters}

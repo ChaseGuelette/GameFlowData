@@ -1,10 +1,12 @@
 # File: src/db/client.py
 import os
+import sys
 
 import numpy as np
 import psycopg2.extensions
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 
 psycopg2.extensions.register_adapter(
     np.int64, lambda val: psycopg2.extensions.AsIs(int(val))
@@ -15,21 +17,61 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _application_name() -> str:
+    configured = os.getenv("GAMEFLOW_DB_APP_NAME")
+    if configured:
+        base = configured
+    else:
+        script = os.path.basename(sys.argv[0] or "python")
+        base = f"gameflow:{script}"
+    safe = "".join(ch if ch.isalnum() or ch in "._:-" else "_" for ch in base)
+    return safe[:63] or "gameflow"
+
+
+def _use_null_pool(database_url: str | None) -> bool:
+    mode = os.getenv("DB_POOL_MODE", "").strip().lower()
+    if mode:
+        return mode in {"null", "nullpool", "none", "off"}
+    if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_SERVICE_ID"):
+        return True
+    return bool(database_url and "pooler.supabase.com" in database_url)
+
+
+def _engine_kwargs(database_url: str) -> dict:
+    connect_args = {
+        "application_name": _application_name(),
+        "options": "-c statement_timeout=300000 -c idle_in_transaction_session_timeout=60000",
+    }
+    kwargs = {
+        "pool_pre_ping": True,
+        "pool_recycle": _env_int("DB_POOL_RECYCLE_SECONDS", 300),
+        "connect_args": connect_args,
+    }
+    if _use_null_pool(database_url):
+        kwargs["poolclass"] = NullPool
+    else:
+        kwargs["pool_size"] = _env_int("DB_POOL_SIZE", 5)
+        kwargs["max_overflow"] = _env_int("DB_MAX_OVERFLOW", 2)
+        kwargs["pool_timeout"] = _env_int("DB_POOL_TIMEOUT_SECONDS", 30)
+    return kwargs
+
 # 2. Create the engine ONCE (deferred to avoid crash during import in CI/test)
 _engine = None
 _local_engine = None
 
 if DATABASE_URL:
-    _engine = create_engine(
-        DATABASE_URL,
-        pool_pre_ping=True,  # detect stale pgBouncer connections
-        pool_size=10,  # max persistent connections (increased for parallel feature building)
-        max_overflow=6,  # extra connections under load
-        pool_recycle=300,  # recycle every 5 min (pgBouncer compat)
-        connect_args={
-            "options": "-c statement_timeout=300000"  # 5 min per statement
-        },
-    )
+    _engine = create_engine(DATABASE_URL, **_engine_kwargs(DATABASE_URL))
 
 # Keep module-level 'engine' for backward compatibility with direct imports
 engine = _engine
@@ -55,6 +97,7 @@ def get_engine(local: bool = False):
                 pool_pre_ping=True,
                 pool_size=5,
                 max_overflow=5,
+                connect_args={"application_name": _application_name()},
             )
         return _local_engine
 

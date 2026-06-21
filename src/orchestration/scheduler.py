@@ -1158,22 +1158,24 @@ def main():
     )
 
     # Every 2 min, 9 AM - 11 PM ET — execute dashboard-approved trades
+    # Offset from cancellation/reprice jobs to avoid DB connection spikes.
     # Picks up rows where kalshi_trade_queue.status='approved' and places them
     # via the Kalshi API. Exits gracefully when nothing is approved.
     scheduler.add_job(
         run_kalshi_execute_approved,
-        CronTrigger(hour='9-23', minute='*/2', timezone=ET),
+        CronTrigger(hour='9-23', minute='1-59/2', timezone=ET),
         id="kalshi_execute_approved",
         name="Kalshi Execute Approved (every 2 min, 9AM-11PM ET)",
     )
 
-    # Every 2 min, 9 AM - 11 PM ET — reprice stale resting Kalshi orders
+    # Every 4 min, 9 AM - 11 PM ET — reprice stale resting Kalshi orders
+    # Offset from approved-trade and cancellation executors.
     # Checks if market has moved from resting order price, cancels+replaces if edge retained.
     scheduler.add_job(
         run_kalshi_reprice_stale,
-        CronTrigger(hour='9-23', minute='*/2', timezone=ET),
+        CronTrigger(hour='9-23', minute='2-58/4', timezone=ET),
         id="kalshi_reprice_stale",
-        name="Kalshi Reprice Stale (every 2 min, 9AM-11PM ET)",
+        name="Kalshi Reprice Stale (every 4 min, 9AM-11PM ET)",
     )
 
     # Every 5 min, 9 AM - 11 PM ET — poll Kalshi API for pending order fills
@@ -1194,11 +1196,12 @@ def main():
     )
 
     # Cancellation executor — executes human-approved cancellations via Kalshi API
+    # Offset from approved-trade and reprice executors.
     scheduler.add_job(
         run_kalshi_execute_cancellations,
-        CronTrigger(hour='9-23', minute='*/2', timezone=ET),
+        CronTrigger(hour='9-23', minute='0-58/4', timezone=ET),
         id="kalshi_execute_cancellations",
-        name="Kalshi Cancel Executor (every 2 min, 9AM-11PM ET)",
+        name="Kalshi Cancel Executor (every 4 min, 9AM-11PM ET)",
     )
 
     # ==============================================================
