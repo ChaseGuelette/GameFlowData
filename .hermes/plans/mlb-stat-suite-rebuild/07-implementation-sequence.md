@@ -105,20 +105,23 @@ Validation:
 
 ### Slice 4 — Pitcher K feature controls in current pipeline
 
+Status: complete locally on 2026-06-21; pending Chase review/commit.
+
 Why fourth: gives pitcher parity while minimizing refactor surface.
 
 Files:
 
-- Modify: `src/models/mlb/mlb_train_pipeline.py`
-- Modify: `src/models/mlb/features/contracts.py` if profile cannot fully own family lists
-- Add: `tests/test_mlb_pitcher_train_pipeline_variants.py`
+- [x] Modify: `src/models/mlb/mlb_train_pipeline.py`
+- [x] Modify: `src/models/mlb/training/feature_controls.py`
+- [x] Modify: `scripts/run_mlb_stat_ablation.ps1`
+- [x] Add: `tests/test_mlb_pitcher_train_pipeline_variants.py`
 
 Worker spec summary:
 
-- Add CLI args matching batter pattern.
-- Preserve legacy `--ablation-variant` behavior.
-- Keep Phase 3A rejected features locked out by default.
-- Persist metadata.
+- [x] Add CLI args matching batter pattern.
+- [x] Preserve legacy `--ablation-variant` behavior.
+- [x] Keep Phase 3A rejected features locked out by default.
+- [x] Persist metadata.
 
 Validation:
 

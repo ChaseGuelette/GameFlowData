@@ -51,6 +51,14 @@ from src.models.mlb.mlb_quantile_trainer import (
     MLB_PITCHER_K_CONFIG,
     MLBPitcherKPipeline,
 )
+from src.models.mlb.training.feature_controls import (
+    FeatureControlSpec,
+    merge_required_and_selected_features,
+    normalize_cli_names,
+    normalize_feature_names,
+    resolve_feature_controls,
+)
+from src.models.mlb.training.profiles import get_training_profile
 from src.processing.feature_selection import ImprovedFeatureSelector
 
 logging.basicConfig(
@@ -95,6 +103,10 @@ class MLBTrainingOrchestrator:
         local: bool = False,
         copula: bool = False,
         ablation_variant: str = "none",
+        force_include_families: list[str] | tuple[str, ...] | None = None,
+        force_exclude_families: list[str] | tuple[str, ...] | None = None,
+        force_include_features: list[str] | tuple[str, ...] | None = None,
+        force_exclude_features: list[str] | tuple[str, ...] | None = None,
     ):
         self.engine = get_engine(local=local)
         self.feature_store = MLBFeatureStore(self.engine)
@@ -108,6 +120,17 @@ class MLBTrainingOrchestrator:
         if ablation_variant not in ABLATION_VARIANTS:
             raise ValueError(f"Unknown ablation_variant={ablation_variant!r}; expected one of {ABLATION_VARIANTS}")
         self.ablation_variant = ablation_variant
+        self.profile = get_training_profile("pitcher_strikeouts")
+        self.force_include_families = normalize_cli_names(force_include_families)
+        self.force_exclude_families = normalize_cli_names(force_exclude_families)
+        self.force_include_features = normalize_feature_names(force_include_features)
+        self.force_exclude_features = normalize_feature_names(force_exclude_features)
+        self.force_feature_spec = FeatureControlSpec(
+            force_include_families=tuple(self.force_include_families),
+            force_exclude_families=tuple(self.force_exclude_families),
+            force_include_features=tuple(self.force_include_features),
+            force_exclude_features=tuple(self.force_exclude_features),
+        )
         self.forced_features: list[str] = []
         self.ip_feature_correlations: dict[str, dict[str, float | None]] = {}
         self.ip_feature_manifest: dict[float, list[str]] = {}
@@ -124,6 +147,14 @@ class MLBTrainingOrchestrator:
         if tune_hyperparams:
             logger.info(f"Hyperparameter tuning ENABLED: {tuning_trials} trials")
         logger.info("IP feature-source ablation variant: %s", self.ablation_variant)
+        if any((self.force_include_families, self.force_exclude_families, self.force_include_features, self.force_exclude_features)):
+            logger.info(
+                "Pitcher force feature controls: include_families=%s exclude_families=%s include_features=%s exclude_features=%s",
+                self.force_include_families,
+                self.force_exclude_families,
+                self.force_include_features,
+                self.force_exclude_features,
+            )
 
     def run(
         self,
@@ -259,17 +290,26 @@ class MLBTrainingOrchestrator:
         if excluded_features:
             excluded.update(excluded_features)
 
-        candidates = [
-            c
-            for c in PITCHER_K_TRAINING_FEATURES
-            if c not in excluded and c in df.columns and df[c].dtype in ("float64", "float32", "int64", "int32")
+        candidates, required_features = resolve_feature_controls(
+            self.profile,
+            df.dtypes,
+            self.force_feature_spec,
+            extra_excluded=excluded,
+        )
+        candidates = [c for c in candidates if c in PITCHER_K_TRAINING_FEATURES or c in PREDICTED_IP_FEATURES]
+        required_features = [
+            c for c in required_features if c in PITCHER_K_FEATURES or c in PREDICTED_IP_FEATURES
         ]
 
         locked_out_present = sorted(PITCHER_K_EXCLUDED_TRAINING_FEATURES.intersection(df.columns))
         if locked_out_present:
             logger.info("Locked out rejected/non-3B training features: %s", locked_out_present)
 
-        missing_phase3b = [f for f in PITCHER_K_PHASE3B_ADDED_FEATURES if f not in candidates]
+        missing_phase3b = [
+            f
+            for f in PITCHER_K_PHASE3B_ADDED_FEATURES
+            if f not in df.columns or df[f].dtype not in ("float64", "float32", "int64", "int32")
+        ]
         if missing_phase3b:
             raise ValueError(f"Missing Phase 3B feature-store columns: {missing_phase3b}")
 
@@ -277,6 +317,10 @@ class MLBTrainingOrchestrator:
 
         valid_df = df[df["actual_so"].notna() & (df["actual_so"] >= 0)].fillna(0)
         selected = selector.select_features_per_quantile(valid_df, "actual_so", candidates, model_name="Pitcher K")
+        selected = {
+            q: merge_required_and_selected_features(required_features, feats)
+            for q, feats in selected.items()
+        }
 
         for q, feats in selected.items():
             logger.info(f"  Q{q:.2f}: {len(feats)} features selected")
@@ -695,6 +739,18 @@ class MLBTrainingOrchestrator:
             "tuning_trials": self.tuning_trials,
             "feature_tolerance": self.feature_tolerance,
             "ablation_variant": self.ablation_variant,
+            "force_include_families": self.force_include_families,
+            "force_exclude_families": self.force_exclude_families,
+            "force_include_features": self.force_include_features,
+            "force_exclude_features": self.force_exclude_features,
+            "force_feature_experiment": any(
+                (
+                    self.force_include_families,
+                    self.force_exclude_families,
+                    self.force_include_features,
+                    self.force_exclude_features,
+                )
+            ),
             "copula": self.copula,
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
@@ -727,6 +783,18 @@ class MLBTrainingOrchestrator:
             "locked_out_training_features": sorted(PITCHER_K_EXCLUDED_TRAINING_FEATURES),
             "ablation_variant": self.ablation_variant,
             "forced_features": self.forced_features,
+            "force_include_families": self.force_include_families,
+            "force_exclude_families": self.force_exclude_families,
+            "force_include_features": self.force_include_features,
+            "force_exclude_features": self.force_exclude_features,
+            "force_feature_experiment": any(
+                (
+                    self.force_include_families,
+                    self.force_exclude_families,
+                    self.force_include_features,
+                    self.force_exclude_features,
+                )
+            ),
             "predicted_ip_features": PREDICTED_IP_FEATURES if self.ablation_variant in ("ip_only", "ip_hook") else [],
             "l30_hook_features": L30_HOOK_FEATURES,
             "ip_feature_correlations_vs_pitcher_avg_ip_l5": self.ip_feature_correlations,
@@ -751,7 +819,7 @@ def _get_git_hash() -> str | None:
         return None
 
 
-if __name__ == "__main__":
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train MLB Pitcher Strikeout Models")
     parser.add_argument(
         "--train-seasons",
@@ -815,6 +883,35 @@ if __name__ == "__main__":
         default="none",
         help="Pitcher K IP-feature-source ablation: none, hook_only, ip_only, ip_hook",
     )
+    parser.add_argument(
+        "--force-include-families",
+        nargs="*",
+        default=[],
+        help="Pitcher feature families to force into selected K features (comma or space separated)",
+    )
+    parser.add_argument(
+        "--force-exclude-families",
+        nargs="*",
+        default=[],
+        help="Pitcher feature families to remove from K selector candidates (comma or space separated)",
+    )
+    parser.add_argument(
+        "--force-include-features",
+        nargs="*",
+        default=[],
+        help="Exact pitcher features to force into selected K features",
+    )
+    parser.add_argument(
+        "--force-exclude-features",
+        nargs="*",
+        default=[],
+        help="Exact pitcher features to remove from K selector candidates",
+    )
+    return parser
+
+
+if __name__ == "__main__":
+    parser = build_arg_parser()
 
     args = parser.parse_args()
 
@@ -827,6 +924,10 @@ if __name__ == "__main__":
         local=args.local,
         copula=args.copula,
         ablation_variant=args.ablation_variant,
+        force_include_families=args.force_include_families,
+        force_exclude_families=args.force_exclude_families,
+        force_include_features=args.force_include_features,
+        force_exclude_features=args.force_exclude_features,
     )
 
     orchestrator.run(

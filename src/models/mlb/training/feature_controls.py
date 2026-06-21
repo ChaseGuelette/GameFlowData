@@ -151,6 +151,9 @@ def resolve_feature_controls(
         raise ValueError(f"Forced feature(s) missing or non-numeric for {profile.stat_key}: {missing_exact}")
 
     excluded = set(profile.locked_out_features).union(forced_excludes)
+    # Exact/family forced includes are controlled experiments; allow them to
+    # override profile lockouts unless they are also explicitly excluded.
+    excluded.difference_update(forced_includes)
     if extra_excluded:
         excluded.update(extra_excluded)
 

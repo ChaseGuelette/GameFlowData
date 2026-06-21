@@ -165,8 +165,12 @@ if ($Profile -eq 'batter_hits') {
     }
 } elseif ($Profile -eq 'pitcher_strikeouts') {
     # Literal fragments kept for static characterization: '--stats', 'pitcher_strikeouts'
-    if ($Families.Count -gt 0 -or $Features.Count -gt 0) {
-        Write-Warning "Pitcher feature family/exact-feature controls are label-only until Slice 4 adds trainer support. Use -Variant for current pitcher training variants."
+    if ($Mode -eq 'include') {
+        if ($Families.Count -gt 0) { $trainArgs += '--force-include-families'; foreach ($f in $Families) { $trainArgs += $f } }
+        if ($Features.Count -gt 0) { $trainArgs += '--force-include-features'; foreach ($f in $Features) { $trainArgs += $f } }
+    } else {
+        if ($Families.Count -gt 0) { $trainArgs += '--force-exclude-families'; foreach ($f in $Families) { $trainArgs += $f } }
+        if ($Features.Count -gt 0) { $trainArgs += '--force-exclude-features'; foreach ($f in $Features) { $trainArgs += $f } }
     }
     if ($Variant -ne 'none') { $trainArgs += @('--ablation-variant', $Variant) }
 }

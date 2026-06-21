@@ -60,6 +60,16 @@ def test_pitcher_wrapper_delegates_to_generic_runner() -> None:
     assert "mlb_train_pipeline.py" not in text
 
 
+def test_generic_runner_threads_pitcher_force_feature_controls() -> None:
+    text = read(RUNNER)
+
+    assert "Pitcher feature family/exact-feature controls are label-only" not in text
+    assert "--force-include-families" in text
+    assert "--force-exclude-families" in text
+    assert "--force-include-features" in text
+    assert "--force-exclude-features" in text
+
+
 def test_resume_runner_is_profile_generic_and_uses_generic_audit_suite() -> None:
     text = read(RESUME_RUNNER)
 
