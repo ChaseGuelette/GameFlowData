@@ -4,9 +4,21 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 class TestCheckDependency:
     """Tests for scheduler.check_dependency()."""
+
+    @pytest.fixture(autouse=True)
+    def _disable_db_dependency_fallback(self, monkeypatch):
+        """Keep these unit tests isolated from live job_executions rows."""
+        import src.db.client as db_client
+
+        def fail_get_engine():
+            raise RuntimeError("unit test disables DB fallback")
+
+        monkeypatch.setattr(db_client, "get_engine", fail_get_engine)
 
     def setup_method(self):
         # Import and reset JOB_STATUS before each test
@@ -218,6 +230,64 @@ class TestJobStatusTracking:
         run_job("test_job.py")
 
         assert JOB_STATUS["test_job.py"]["status"] == "timeout"
+
+    @patch("src.orchestration.scheduler.record_job_execution")
+    @patch("src.orchestration.scheduler._send_job_alert")
+    @patch("src.orchestration.scheduler.subprocess.run")
+    def test_timeout_persists_partial_stderr_for_deferred_lines_job(self, mock_run, mock_alert, mock_record):
+        from src.orchestration.scheduler import run_job
+
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            "cmd",
+            2700,
+            output="partial stdout with 123 props",
+            stderr="partial stderr tail",
+        )
+
+        run_job("lines_job.py")
+
+        mock_record.assert_called_once()
+        call_kwargs = mock_record.call_args.kwargs
+        assert call_kwargs["status"] == "timeout"
+        assert "NBA deferred" in call_kwargs["error_message"]
+        assert "partial stderr tail" in call_kwargs["error_message"]
+        assert "Job timed out after 45 minutes" in call_kwargs["error_message"]
+
+    @patch("src.orchestration.scheduler.record_job_execution")
+    @patch("src.orchestration.scheduler._send_job_alert")
+    @patch("src.orchestration.scheduler.subprocess.run")
+    def test_lines_job_overlap_is_skipped_without_subprocess(self, mock_run, mock_alert, mock_record):
+        from src.orchestration.scheduler import JOB_STATUS, _get_job_lock, run_job
+
+        lock = _get_job_lock("lines_job.py")
+        assert lock is not None
+        assert lock.acquire(blocking=False)
+        try:
+            run_job("lines_job.py", extra_args="--live --props-only")
+        finally:
+            lock.release()
+
+        mock_run.assert_not_called()
+        mock_alert.assert_not_called()
+        mock_record.assert_called_once()
+        call_kwargs = mock_record.call_args.kwargs
+        assert call_kwargs["status"] == "skipped"
+        assert "another lines_job.py run is still active" in call_kwargs["error_message"]
+        assert JOB_STATUS["lines_job.py"]["status"] == "skipped"
+
+    @patch("src.orchestration.scheduler.record_job_execution")
+    @patch("src.orchestration.scheduler._send_job_alert")
+    @patch("src.orchestration.scheduler.subprocess.run")
+    def test_lines_job_lock_releases_after_completion(self, mock_run, mock_alert, mock_record):
+        from src.orchestration.scheduler import _get_job_lock, run_job
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="OK", stderr="")
+        run_job("lines_job.py")
+
+        lock = _get_job_lock("lines_job.py")
+        assert lock is not None
+        assert lock.acquire(blocking=False)
+        lock.release()
 
     @patch("src.orchestration.scheduler.record_job_execution")
     @patch("src.orchestration.scheduler._send_job_alert")

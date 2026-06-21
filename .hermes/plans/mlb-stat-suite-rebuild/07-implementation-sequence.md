@@ -178,12 +178,18 @@ Validation:
 
 ### Slice 7 — Pitcher baseline restoration run docs
 
+Status: docs/runbook complete locally on 2026-06-21; actual training/sweeps require Chase-run approval/execution.
+
 Files:
 
-- Create/update: `docs/development_docs/mlb_pitcher_k_frozen_baselines.md`
-- Create/update: `docs/development_docs/mlb_pitcher_k_ablation_iteration_pipeline.md`
+- [x] Create/update: `docs/development_docs/mlb_pitcher_k_frozen_baselines.md`
+- [x] Create/update: `docs/development_docs/mlb_pitcher_k_ablation_iteration_pipeline.md`
 
-Needs Chase approval to run actual sweeps/training.
+Run stance:
+
+- [x] Did not run actual sweeps/training in-agent.
+- [x] Provided PowerShell-safe commands and justifications for baseline replay, optional fresh retrain, focused BL sweep, and audit/CLV suite.
+- [x] Kept recommendation baseline-first: freeze quote-clean Phase 2 before any new variant training.
 
 ## Rollback strategy
 

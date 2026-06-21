@@ -85,20 +85,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_rapidapi_inj_unique
     ON public.rapidapi_injuries(report_date, COALESCE(team, ''), player, status, COALESCE(reason, ''));
 """
 
-DDL_MIGRATE_TABLE = """
-ALTER TABLE public.rapidapi_injuries ALTER COLUMN team DROP NOT NULL;
-DROP INDEX IF EXISTS idx_rapidapi_inj_unique;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rapidapi_inj_unique
-    ON public.rapidapi_injuries(report_date, COALESCE(team, ''), player, status, COALESCE(reason, ''));
-"""
-
-
 def ensure_table(engine) -> None:
-    """Create the rapidapi_injuries table if it doesn't exist, and migrate if needed."""
+    """Create the rapidapi_injuries table for explicit local/dev bootstrap.
+
+    Recurring production scraper runs should not perform schema migrations or
+    drop/rebuild indexes. Structural changes belong in database migrations.
+    """
     with engine.begin() as conn:
         conn.execute(text(DDL_CREATE_TABLE))
-        # Migrate existing table: drop NOT NULL on team, rebuild unique index
-        conn.execute(text(DDL_MIGRATE_TABLE))
     logger.info("Ensured rapidapi_injuries table exists.")
 
 
@@ -416,15 +410,22 @@ Examples:
         action="store_true",
         help="Print what would be fetched without making API calls or DB writes",
     )
+    parser.add_argument(
+        "--ensure-schema",
+        action="store_true",
+        help=(
+            "Explicitly create bootstrap table/indexes for local/dev use. "
+            "Production schema changes belong in database migrations."
+        ),
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
-    # Validate API key
     api_key = os.getenv("RAPIDAPI_KEY")
-    if not api_key:
+    if not api_key and not args.dry_run:
         logger.error("RAPIDAPI_KEY not found in environment. Add it to your .env file.")
         sys.exit(1)
 
@@ -448,13 +449,19 @@ def main():
     logger.info(f"  Dry run: {args.dry_run}")
     logger.info("=" * 70)
 
-    # Initialize
-    engine = get_engine()
+    # Initialize. Dry-run intentionally avoids DB connections and API calls so
+    # scheduled-command validation cannot mutate schema or consume quota.
+    engine = None if args.dry_run else get_engine()
 
-    if not args.dry_run:
-        ensure_table(engine)
+    if args.ensure_schema:
+        if engine is None:
+            logger.info("Dry run requested; skipping --ensure-schema bootstrap.")
+        else:
+            ensure_table(engine)
+    elif not args.dry_run:
+        logger.info("Skipping schema bootstrap; production schema is managed by database migrations.")
 
-    client = RapidAPIInjuryClient(api_key=api_key, delay=args.delay)
+    client = RapidAPIInjuryClient(api_key or "dry-run", delay=args.delay)
 
     # Run
     stats = run_backfill(
