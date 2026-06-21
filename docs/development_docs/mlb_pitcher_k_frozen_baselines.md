@@ -39,6 +39,23 @@ Known result anchors from local sweep summaries and prior docs:
 
 Working interpretation: Phase 2 pitcher K is still the baseline to beat, but the decision-grade bar should be quote-clean + CLV/ranker quality, not raw legacy ROI.
 
+## Slice 7 replay result — 2026-06-21
+
+Chase reran the preferred 2026-04-13 to 2026-05-10 quote-clean baseline checks against `src/models/mlb/artifacts/mlb_run_20260513_111207`:
+
+| Output dir | Predictions | Configs | Decision-grade bets | Result |
+|---|---:|---:|---:|---|
+| `backtest_results/mlb_pitcher_k_phase2_quote_clean_raw_under_20260413_20260510` | 752 | 6 | 0 | FAIL baseline freeze gate |
+| `backtest_results/mlb_pitcher_k_phase2_quote_clean_bl_under_20260413_20260510` | 752 | 108 | 0 | FAIL baseline freeze gate |
+
+Interpretation:
+
+- The old Phase 2 clean comparison artifact still produced predictions, but no tested raw or BL quote-clean under config produced any bets.
+- Therefore this artifact is not a frozen current baseline for new feature work.
+- This also confirms the operational caveat that `pitcher_strikeouts` has not been retrained for months; stale-but-loadable artifacts should be treated as historical evidence, not current paper/live candidates.
+- The audit/CLV suite should not be run on these outputs as a decision-grade certification step because there are no decision-grade `bets.csv` rows to audit.
+- Next gate is a fresh baseline retrain with the current Slice 6 trainer/artifact lifecycle, then repeat the same quote-clean raw/BL checks against that new artifact.
+
 ## Freeze criteria
 
 A pitcher K baseline is frozen only when all of these are true:
@@ -88,15 +105,15 @@ Justification: ROI without dropout/CLV/ranker quality is not enough to freeze or
 .\venv\Scripts\python.exe scripts\run_mlb_quote_clean_audit_suite.py --local --sweep-output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_bl_under_20260413_20260510 --output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_bl_under_20260413_20260510\audit_suite --model-dir src\models\mlb\artifacts\mlb_run_20260513_111207 --start 2026-04-13 --end 2026-05-10 --stats pitcher_strikeouts --quote-decision-policy slate_or_tminus --quote-relative-minutes 60 --line-source mlb_player_props_clv_snapshots --snapshots-table mlb_player_props_clv_snapshots --batch-size 25
 ```
 
-### 5. Optional fresh baseline retrain after Slice 6
+### 5. Fresh baseline retrain after Slice 6
 
-Justification: only needed if you want a newly minted artifact that proves the base-orchestrator refactor writes the full artifact set during a real train run. It should not change model math. This is compute/runtime heavier than replaying existing artifacts, so run it after the replay gate or if you specifically want a fresh baseline artifact.
+Justification: now required for current baseline restoration because the old pre-window-calibrated Phase 2 artifact produced 0 quote-clean bets on the main validation window. This should not change model math; it refreshes the artifact under the current trainer and proves the Slice 6 artifact lifecycle during a real run.
 
 ```powershell
 .\venv\Scripts\python.exe src\models\mlb\mlb_train_pipeline.py --local --train-seasons 2024 2025 --cal-season 2026 --cal-end-date 2026-04-12 --n-simulations 10000 --ablation-variant none --output-dir src\models\mlb\artifacts\baselines\pitcher_strikeouts_phase2_slice7_none_20260621
 ```
 
-If you run step 5, repeat steps 2-4 with the new finalized artifact directory under `src\models\mlb\artifacts\baselines\pitcher_strikeouts_phase2_slice7_none_20260621\mlb_run_<timestamp>`.
+After step 5, repeat steps 2-4 with the new finalized artifact directory under `src\models\mlb\artifacts\baselines\pitcher_strikeouts_phase2_slice7_none_20260621\mlb_run_<timestamp>`.
 
 ## How to interpret outputs
 
@@ -107,4 +124,4 @@ If you run step 5, repeat steps 2-4 with the new finalized artifact directory un
 
 ## Current recommendation
 
-Do not run new feature training before steps 2-4. Existing artifacts are sufficient to freeze or reject the current baseline first; fresh retraining is optional and should be used mainly to validate the new Slice 6 artifact lifecycle on a real run.
+Do not run new feature-variant training yet. The old artifact failed the quote-clean baseline-freeze gate with 0 bets, and pitcher K has not been retrained for months. Run a fresh `--ablation-variant none` baseline first, then repeat quote-clean raw/BL validation before `hook_deep_start_l30`, `static_no_l30`, `ip_only`, or `ip_hook`.

@@ -23,6 +23,8 @@ Before running any variant, Chase should run the baseline commands in:
 
 - `docs/development_docs/mlb_pitcher_k_frozen_baselines.md`
 
+As of the 2026-06-21 Slice 7 replay, the old Phase 2 comparison artifact (`src/models/mlb/artifacts/mlb_run_20260513_111207`) produced 752 predictions but 0 quote-clean bets across both raw and focused BL under-only grids. Because pitcher K has not been retrained for months, a fresh `--ablation-variant none` baseline is now required before any variant run.
+
 Baseline pass criteria:
 
 - raw under-only quote-clean has `n_bets >= 100` and directionally positive ROI;
