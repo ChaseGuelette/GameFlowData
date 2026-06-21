@@ -166,6 +166,8 @@ Why: avoids both duplication and fake generic abstractions.
 
 Build profiles for `batter_hits` and `pitcher_strikeouts` first. Do not design a full plugin registry for every possible stat until needed.
 
+`batter_hrr` / hits+runs+RBIs should be treated as a likely separate validation track, not automatically folded into the batter_hits/pitcher K migration slice. HRR is Kalshi-oriented and does not have the same sportsbook prop-line/CLV surface as batter_hits, so its profile and gates may need a separate rubric after the generic runner/profile scaffolding exists.
+
 ### 8. Explicit manifests over filename inference
 
 New training runs should write a manifest with:

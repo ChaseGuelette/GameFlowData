@@ -52,14 +52,16 @@ Result: passed locally on 2026-06-07 (`36 passed, 1 warning`).
 
 ### Slice 2 — Generic operational runner dry-run
 
+Status: complete locally on 2026-06-21; pending Chase review/commit.
+
 Why second: gives a clean user-facing path without touching training internals.
 
 Files:
 
-- Create: `scripts/run_mlb_stat_ablation.ps1`
-- Create: `scripts/run_pitcher_k_ablation.ps1`
-- Create: `scripts/resume_mlb_stat_ablation_audit.ps1`
-- Add: `tests/test_mlb_stat_ablation_runner_static.py`
+- [x] Create: `scripts/run_mlb_stat_ablation.ps1`
+- [x] Create: `scripts/run_pitcher_k_ablation.ps1`
+- [x] Create: `scripts/resume_mlb_stat_ablation_audit.ps1`
+- [x] Add: `tests/test_mlb_stat_ablation_runner_static.py`
 
 Worker spec summary:
 
