@@ -11,6 +11,7 @@ Schedule (ET):
     9:00 AM  - mlb_roster_scraper_job
     9:00 AM  - mlb_daily_stats_job
     9:00 AM  - nonsports_polymarket_scrape (2hr timeout, disabled unless ARB_SCRAPING_ENABLED=true)
+    2:20 AM  - mlb_dense_clv_job (disabled unless MLB_DENSE_CLV_ENABLED=true)
     9:20 AM  - mlb_daily_stats_retry
     10:05 AM - mlb_roster_scraper_retry
     9:15 AM  - Kalshi live resolution
@@ -90,6 +91,7 @@ JOB_NAMES = {
     "test_job.py": "System Test",
     "mlb_daily_stats_job.py": "MLB Daily Stats",
     "mlb_lines_job.py": "MLB Lines Scraper",
+    "mlb_dense_clv_job.py": "MLB Dense CLV Snapshots",
     "mlb_inference_job.py": "MLB Inference",
     "mlb_edge_refresh_job.py": "MLB Edge Refresh",
     "kalshi_refresh_job.py": "Kalshi Refresh",
@@ -468,6 +470,7 @@ def _validate_environment():
         ("DISCORD_CHANNEL_PERFORMANCE", "P&L summaries"),
         ("KALSHI_API_KEY", "Kalshi prediction markets"),
         ("NBA_PLAYOFF_MODE", "Use playoff model for NBA inference (set true Apr 19 - Jun 20)"),
+        ("MLB_DENSE_CLV_ENABLED", "Enable bounded recurring MLB dense CLV snapshot capture"),
     ]
 
     logger.info("Environment check:")
@@ -609,6 +612,11 @@ def run_mlb_pregame_30min_props():
         extra_args="--live --props-only --extended --pregame-minutes 30 --pregame-tolerance-minutes 5 --dense-clv-close",
         silent_on_success=True,
     )
+
+
+def run_mlb_dense_clv_snapshots():
+    """Run bounded/resume-aware dense MLB CLV snapshot capture."""
+    run_job("mlb_dense_clv_job.py", silent_on_success=True, timeout=7200)
 
 
 def run_mlb_lineup_scraper():
@@ -909,6 +917,16 @@ def main():
     # ==============================================================
     # MLB Jobs
     # ==============================================================
+
+    # 2:20 AM ET - bounded dense CLV grid backfill for completed MLB dates.
+    # The job is env-gated in mlb_dense_clv_job.py; scheduling it unconditionally
+    # keeps Railway config simple while allowing instant disable via env var.
+    scheduler.add_job(
+        run_mlb_dense_clv_snapshots,
+        CronTrigger(hour=2, minute=20, timezone=ET),
+        id="mlb_dense_clv_snapshots",
+        name="MLB Dense CLV Snapshots (2:20 AM ET, env-gated)",
+    )
 
     # 9:00 AM ET - MLB active roster (IL tracking, availability)
     scheduler.add_job(
