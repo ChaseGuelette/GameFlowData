@@ -10,6 +10,7 @@ from src.models.mlb.training.artifacts import (
     write_run_config,
     write_training_metadata,
 )
+from src.models.mlb.training.base_orchestrator import BaseMLBTrainingOrchestrator
 from src.models.mlb.training.feature_controls import (
     FeatureControlSpec,
     expand_feature_families,
@@ -19,13 +20,14 @@ from src.models.mlb.training.feature_controls import (
     resolve_feature_controls,
 )
 from src.models.mlb.training.profiles import (
-    MLBTrainingProfile,
     PITCHER_K_FORCE_FEATURE_FAMILIES,
+    MLBTrainingProfile,
     get_training_profile,
     list_training_profiles,
 )
 
 __all__ = [
+    "BaseMLBTrainingOrchestrator",
     "FeatureControlSpec",
     "MLBTrainingProfile",
     "PITCHER_K_FORCE_FEATURE_FAMILIES",

@@ -171,9 +171,10 @@ class TestJobStatusTracking:
     """Tests for JOB_STATUS updates in run_job()."""
 
     def setup_method(self):
-        from src.orchestration.scheduler import JOB_STATUS
+        from src.orchestration.scheduler import JOB_LOCKS, JOB_STATUS
 
         JOB_STATUS.clear()
+        JOB_LOCKS.clear()
 
     @patch("src.orchestration.scheduler.record_job_execution")
     @patch("src.orchestration.scheduler._send_job_alert")

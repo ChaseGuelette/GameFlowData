@@ -149,25 +149,32 @@ Worker spec summary:
 
 ### Slice 6 — Base orchestrator extraction
 
-Highest risk; do only after prior slices settle.
+Status: core lifecycle extraction complete locally on 2026-06-21; pending Chase review/commit.
+
+Highest risk; done as a conservative lifecycle-only extraction after prior slices passed.
 
 Files:
 
-- Create: `src/models/mlb/training/base_orchestrator.py`
-- Create strategy modules if needed.
-- Modify both training pipelines.
+- [x] Create: `src/models/mlb/training/base_orchestrator.py`
+- [ ] Create strategy modules if needed; deferred because this slice intentionally did not move model objectives.
+- [x] Modify both training pipelines.
+- [x] Add: `tests/test_mlb_training_base_orchestrator.py`
 
 Worker spec summary:
 
-- Preserve CLI entrypoints and behavior.
-- Move lifecycle, not model objective.
-- Keep old class names importing/working if possible.
+- [x] Preserve CLI entrypoints and behavior.
+- [x] Move lifecycle/artifact writer plumbing, not model objective.
+- [x] Keep old class names importing/working.
 
 Validation:
 
-- focused unit tests;
-- CLI help checks;
-- no long training unless separately approved.
+- [x] Focused unit tests: `52 passed, 1 warning` for stat-suite training/artifact/profile/control tests.
+- [x] Full suite: `1188 passed, 11 warnings`.
+- [x] `py_compile` for shared base, training package, pitcher pipeline, and batter pipeline.
+- [x] CLI help checks for pitcher and batter training entrypoints.
+- [x] `ruff check` on touched files.
+- [x] `git diff --check` on touched files.
+- [x] No long training/backtests run.
 
 ### Slice 7 — Pitcher baseline restoration run docs
 

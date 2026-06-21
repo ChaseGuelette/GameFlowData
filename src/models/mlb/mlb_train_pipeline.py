@@ -25,7 +25,6 @@ import json as json_module
 import logging
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -51,15 +50,7 @@ from src.models.mlb.mlb_quantile_trainer import (
     MLB_PITCHER_K_CONFIG,
     MLBPitcherKPipeline,
 )
-from src.models.mlb.training.artifacts import (
-    build_run_directory,
-    finalize_incomplete_run_directory,
-    write_calibration_report,
-    write_feature_manifest,
-    write_model_manifest,
-    write_run_config,
-    write_training_metadata,
-)
+from src.models.mlb.training.base_orchestrator import BaseMLBTrainingOrchestrator
 from src.models.mlb.training.feature_controls import (
     FeatureControlSpec,
     merge_required_and_selected_features,
@@ -96,7 +87,7 @@ PREDICTED_IP_FEATURES = [
 ]
 
 
-class MLBTrainingOrchestrator:
+class MLBTrainingOrchestrator(BaseMLBTrainingOrchestrator):
     """Orchestrates end-to-end MLB pitcher K model training."""
 
     CALIBRATION_TOLERANCE = 0.05
@@ -144,13 +135,11 @@ class MLBTrainingOrchestrator:
         self.ip_feature_correlations: dict[str, dict[str, float | None]] = {}
         self.ip_feature_manifest: dict[float, list[str]] = {}
 
-        self.timestamp = datetime.now()
-        timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
-        self.run_dir, self._final_run_dir_name = build_run_directory(
-            base_artifacts_dir,
-            prefix="mlb_run",
-            timestamp=self.timestamp,
+        super().__init__(
+            base_artifacts_dir=base_artifacts_dir,
+            artifact_prefix="mlb_run",
         )
+        timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
 
         logger.info(f"Initialized MLB Training Run: {timestamp_str}")
         logger.info(f"Artifacts will be saved to: {self.run_dir} (renamed on completion)")
@@ -265,8 +254,7 @@ class MLBTrainingOrchestrator:
         self._save_model_manifest(git_hash=_get_git_hash())
 
         # Step 10: Finalize
-        final_dir = finalize_incomplete_run_directory(self.run_dir, self._final_run_dir_name)
-        self.run_dir = final_dir
+        self._finalize_run_directory()
         logger.info(f"Training pipeline completed successfully. Artifacts in {self.run_dir}")
 
     # ------------------------------------------------------------------
@@ -765,14 +753,14 @@ class MLBTrainingOrchestrator:
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
         }
-        write_run_config(self.run_dir, config)
+        self._write_run_config(config)
 
     def _save_feature_manifest(self, selected_features: dict[float, list[str]]):
-        write_feature_manifest(self.run_dir, selected_features)
+        self._write_feature_manifest(selected_features)
         logger.info(f"Saved feature manifest to {self.run_dir / 'feature_manifest.json'}")
 
     def _save_calibration_report(self, reports: dict):
-        write_calibration_report(self.run_dir, reports)
+        self._write_calibration_report(reports)
         logger.info(f"Saved calibration report to {self.run_dir / 'calibration_report_combined.json'}")
 
     def _save_training_metadata(self, train_seasons, cal_season, cal_end_date, train_df, cal_df):
@@ -807,19 +795,16 @@ class MLBTrainingOrchestrator:
             "timestamp": self.timestamp.isoformat(),
             "git_hash": git_hash,
         }
-        write_training_metadata(self.run_dir, metadata)
+        self._write_training_metadata(metadata)
         logger.info(f"Saved training metadata to {self.run_dir / 'training_metadata.json'}")
 
     def _save_model_manifest(self, git_hash: str | None = None):
-        write_model_manifest(
-            self.run_dir,
+        self._write_model_manifest(
             stat_key=self.profile.stat_key,
             model_type=self.profile.model_type,
             profile_name=self.profile.stat_key,
-            created_at=self.timestamp.isoformat(),
             git_hash=git_hash,
             artifact_files=list(self.profile.model_artifact_names),
-            compatibility_loader="src.models.mlb.mlb_model_suite.MLBModelSuite",
         )
 
 

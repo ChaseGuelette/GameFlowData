@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 import logging
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -47,16 +46,7 @@ from src.models.mlb.mlb_batter_feature_store import (
     get_features_for_stat,
 )
 from src.models.mlb.mlb_binary_model import MLBBinaryModel
-from src.models.mlb.training.artifacts import (
-    build_run_directory,
-    finalize_incomplete_run_directory,
-    write_calibration_report,
-    write_feature_experiment_metadata,
-    write_feature_manifest,
-    write_model_manifest,
-    write_run_config,
-    write_training_metadata,
-)
+from src.models.mlb.training.base_orchestrator import BaseMLBTrainingOrchestrator
 from src.models.mlb.training.profiles import get_training_profile
 from src.processing.feature_selection import ImprovedFeatureSelector
 
@@ -68,7 +58,7 @@ logging.basicConfig(
 logger = logging.getLogger("MLBBatterTrainingPipeline")
 
 
-class MLBBatterTrainingOrchestrator:
+class MLBBatterTrainingOrchestrator(BaseMLBTrainingOrchestrator):
     """Orchestrates end-to-end MLB batter model training."""
 
     CALIBRATION_TOLERANCE = 0.05
@@ -110,14 +100,12 @@ class MLBBatterTrainingOrchestrator:
         self.force_exclude_features = normalize_feature_names(force_exclude_features)
         self.is_binary = stat == "home_runs"
 
-        self.timestamp = datetime.now()
-        timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
-        self.run_dir, self._final_run_dir_name = build_run_directory(
-            base_artifacts_dir,
-            prefix=f"mlb_run_batter_{stat}",
-            timestamp=self.timestamp,
-            suffix="no_prop_line" if exclude_prop_line else None,
+        super().__init__(
+            base_artifacts_dir=base_artifacts_dir,
+            artifact_prefix=f"mlb_run_batter_{stat}",
+            artifact_suffix="no_prop_line" if exclude_prop_line else None,
         )
+        timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
 
         logger.info("Initialized MLB Batter Training Run: %s, stat=%s", timestamp_str, stat)
 
@@ -237,8 +225,7 @@ class MLBBatterTrainingOrchestrator:
             self._run_negbin_pipeline(train_df, cal_df, train_seasons, cal_season, cal_end_date)
 
         # Finalize
-        final_dir = finalize_incomplete_run_directory(self.run_dir, self._final_run_dir_name)
-        self.run_dir = final_dir
+        self._finalize_run_directory()
         logger.info("Training pipeline completed. Artifacts in %s", self.run_dir)
 
     # ------------------------------------------------------------------
@@ -988,10 +975,10 @@ class MLBBatterTrainingOrchestrator:
                 "is not an ablation or promotion gate."
             ),
         }
-        write_run_config(self.run_dir, config)
+        self._write_run_config(config)
 
     def _save_feature_manifest(self, selected_features):
-        write_feature_manifest(self.run_dir, selected_features)
+        self._write_feature_manifest(selected_features)
 
     def _save_feature_experiment_metadata(
         self,
@@ -1013,10 +1000,10 @@ class MLBBatterTrainingOrchestrator:
                 "alone is not an ablation or promotion gate."
             ),
         }
-        write_feature_experiment_metadata(self.run_dir, metadata)
+        self._write_feature_experiment_metadata(metadata)
 
     def _save_calibration_report(self, reports):
-        write_calibration_report(self.run_dir, reports)
+        self._write_calibration_report(reports)
 
     def _save_training_metadata(self, train_seasons, cal_season, cal_end_date, train_df, cal_df):
         git_hash = _get_git_hash()
@@ -1037,7 +1024,7 @@ class MLBBatterTrainingOrchestrator:
             "force_include_features": self.force_include_features,
             "force_exclude_features": self.force_exclude_features,
         }
-        write_training_metadata(self.run_dir, metadata)
+        self._write_training_metadata(metadata)
 
     def _model_type(self) -> str:
         if self.is_binary:
@@ -1056,15 +1043,12 @@ class MLBBatterTrainingOrchestrator:
 
     def _save_model_manifest(self, git_hash: str | None = None):
         profile_name = "batter_hits" if self.stat == "hits" else f"batter_{self.stat}"
-        write_model_manifest(
-            self.run_dir,
+        self._write_model_manifest(
             stat_key=profile_name,
             model_type=self._model_type(),
             profile_name=profile_name,
-            created_at=self.timestamp.isoformat(),
             git_hash=git_hash,
             artifact_files=self._model_artifact_names(),
-            compatibility_loader="src.models.mlb.mlb_model_suite.MLBModelSuite",
         )
 
 

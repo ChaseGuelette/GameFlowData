@@ -32,13 +32,13 @@ Schedule (ET):
     9 AM - 11 PM ET every 10 min:
         kalshi_refresh (NBA + MLB + non-sports)
 
-    12:00 PM - lines_job --live (full)
+    12:01 PM - lines_job --live (full)
     12:05 PM - mlb_lineup_scraper_job (before noon inference — catches early-posting lineups)
     12:15 PM - inference_job (full MC)
     12:15 PM - mlb_inference_job (noon MLB pass)
     12:45 PM - mlb_lineup_scraper_job (catches late-posting afternoon lineups)
 
-    4:00 PM  - lines_job --live --parallel (full)
+    4:01 PM  - lines_job --live --parallel (full)
     4:15 PM  - inference_job (full MC)
     5:00 PM  - nonsports_polymarket_scrape (2nd run, disabled unless ARB_SCRAPING_ENABLED=true)
 
@@ -59,6 +59,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -111,6 +112,13 @@ JOB_NAMES = {
 DEFERRED_FAILURE_JOBS = {
     "lines_job.py": "NBA deferred — intermittent NBA lines linker failure is parked",
 }
+
+# Prevent overlapping scheduler launches for jobs that are unsafe to run
+# concurrently. Start with NBA lines only to minimize blast radius; MLB/Kalshi
+# schedules already have separate job scripts and intentional offsets.
+LOCKABLE_JOB_SCRIPTS = {"lines_job.py"}
+JOB_LOCKS: dict[str, threading.Lock] = {}
+JOB_LOCKS_GUARD = threading.Lock()
 
 
 # Updated by run_job() after every execution.
@@ -316,6 +324,14 @@ def _display_job_name(script_name: str, success: bool) -> str:
     return job_name
 
 
+def _get_job_lock(script_name: str) -> threading.Lock | None:
+    """Return the in-process lock for scripts that must not overlap."""
+    if script_name not in LOCKABLE_JOB_SCRIPTS:
+        return None
+    with JOB_LOCKS_GUARD:
+        return JOB_LOCKS.setdefault(script_name, threading.Lock())
+
+
 def _send_job_alert(
     script_name: str,
     success: bool,
@@ -371,6 +387,29 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
     stdout = ""
     stderr = ""
     job_status = "failed"
+    job_lock = _get_job_lock(script_name)
+    lock_acquired = False
+
+    if job_lock is not None:
+        lock_acquired = job_lock.acquire(blocking=False)
+        if not lock_acquired:
+            duration = time.time() - start_time
+            reason = f"Skipped because another {script_name} run is still active"
+            logger.warning(reason)
+            JOB_STATUS[script_name] = {
+                "status": "skipped",
+                "end_time": datetime.now(UTC),
+                "duration": duration,
+            }
+            record_job_execution(
+                job_name=script_name,
+                started_at=started_at,
+                status="skipped",
+                duration=duration,
+                error_message=reason,
+                metrics=None,
+            )
+            return
 
     try:
         result = subprocess.run(
@@ -416,6 +455,8 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
         if e.stderr:
             partial_stderr = (e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace"))
             partial_stderr += f"\n\nJob timed out after {timeout_mins} minutes"
+        stdout = partial_stdout
+        stderr = partial_stderr
         _send_job_alert(
             script_name,
             success=False,
@@ -434,6 +475,11 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
             stdout="",
             stderr=str(e),
         )
+        stderr = str(e)
+
+    finally:
+        if lock_acquired and job_lock is not None:
+            job_lock.release()
 
     # Update in-memory status for dependency checks
     JOB_STATUS[script_name] = {
@@ -852,13 +898,19 @@ def main():
 
     # --- First window: noon full scrape + inference ---
 
-    # 12:00 PM ET - Full lines scrape (live)
-    scheduler.add_job(
-        run_lines_full,
-        CronTrigger(hour=12, minute=0, timezone=ET),
-        id="lines_noon_full",
-        name="Lines Full Parallel (12 PM ET)",
-    )
+    nba_full_lines_enabled = env_flag("NBA_FULL_LINES_ENABLED", default=True)
+
+    # 12:01 PM ET - Full lines scrape (live). Offset from props_every_5 to
+    # avoid intentional lines_job.py collisions at exact :00 minutes.
+    if nba_full_lines_enabled:
+        scheduler.add_job(
+            run_lines_full,
+            CronTrigger(hour=12, minute=1, timezone=ET),
+            id="lines_noon_full",
+            name="Lines Full (12:01 PM ET)",
+        )
+    else:
+        logger.info("NBA full lines disabled by NBA_FULL_LINES_ENABLED=false")
 
     # 12:15 PM ET - Full inference
     scheduler.add_job(
@@ -886,13 +938,18 @@ def main():
 
     # --- Second window: 4 PM full scrape + inference ---
 
-    # 4:00 PM ET - Full lines scrape (live, parallel)
-    scheduler.add_job(
-        run_lines_full_parallel,
-        CronTrigger(hour=16, minute=0, timezone=ET),
-        id="lines_4pm_full",
-        name="Lines Full Parallel (4 PM ET)",
-    )
+    # 4:01 PM ET - Full lines scrape (live, parallel). Offset from
+    # props_every_5 to avoid intentional lines_job.py collisions at exact :00
+    # minutes.
+    if nba_full_lines_enabled:
+        scheduler.add_job(
+            run_lines_full_parallel,
+            CronTrigger(hour=16, minute=1, timezone=ET),
+            id="lines_4pm_full",
+            name="Lines Full Parallel (4:01 PM ET)",
+        )
+    else:
+        logger.info("NBA full lines disabled by NBA_FULL_LINES_ENABLED=false")
 
     # 4:15 PM ET - Full inference (skip bets — already placed at noon)
     scheduler.add_job(
