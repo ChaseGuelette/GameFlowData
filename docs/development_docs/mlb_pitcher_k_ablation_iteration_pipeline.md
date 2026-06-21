@@ -23,7 +23,7 @@ Before running any variant, Chase should run the baseline commands in:
 
 - `docs/development_docs/mlb_pitcher_k_frozen_baselines.md`
 
-As of the 2026-06-21 Slice 7 replay, the old Phase 2 comparison artifact (`src/models/mlb/artifacts/mlb_run_20260513_111207`) produced 752 predictions but 0 quote-clean bets across both raw and focused BL under-only grids. Because pitcher K has not been retrained for months, a fresh `--ablation-variant none` baseline is now required before any variant run.
+As of the 2026-06-21 Slice 7 replay, the old Phase 2 comparison artifact (`src/models/mlb/artifacts/mlb_run_20260513_111207`) produced 752 predictions but 0 quote-clean bets across both raw and focused BL under-only grids when using `--line-source mlb_player_props_clv_snapshots`. Follow-up debugging showed local `mlb_player_props_clv_snapshots` has 0 `pitcher_strikeouts` rows for 2026-04-13 to 2026-05-10, while `mlb_raw_player_props` has linked rows. Therefore pitcher K quote-clean ROI replays should use `--line-source mlb_raw_player_props` unless/until dense CLV snapshots are populated for this market. A fresh `--ablation-variant none` baseline was trained at `src/models/mlb/artifacts/baselines/pitcher_strikeouts_phase2_slice7_none_20260621/mlb_run_20260621_170841`; validate that artifact with raw-props quote-clean before any variant run.
 
 Baseline pass criteria:
 

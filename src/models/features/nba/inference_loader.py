@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from src.models.features.nba.requests import PlayerGameFeatureRequest
 
-
 DEPRECATED_COMPAT_FEATURES = {
     "travel_dist": 0,
     "opp_rest_days": 0,

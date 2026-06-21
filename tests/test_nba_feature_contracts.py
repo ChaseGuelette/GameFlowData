@@ -9,7 +9,6 @@ import pytest
 import src.models.feature_store as legacy_feature_store
 from src.models.features.nba import contracts
 
-
 LEGACY_FEATURE_LIST_NAMES = [
     "MINUTES_FEATURES",
     "RATE_FEATURES_PTS",

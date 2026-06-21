@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import MagicMock, Mock
 
+from src.models.feature_store import FeatureStore
 from src.models.features.nba.inference_loader import InferenceFeatureLoader
 from src.models.features.nba.requests import (
     DateFeatureRequest,
@@ -12,7 +13,6 @@ from src.models.features.nba.requests import (
     PlayerGameFeatureRequest,
     TrainingFeatureRequest,
 )
-from src.models.feature_store import FeatureStore
 
 
 def _store_with_connection():

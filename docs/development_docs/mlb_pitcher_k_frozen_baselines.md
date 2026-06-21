@@ -51,10 +51,23 @@ Chase reran the preferred 2026-04-13 to 2026-05-10 quote-clean baseline checks a
 Interpretation:
 
 - The old Phase 2 clean comparison artifact still produced predictions, but no tested raw or BL quote-clean under config produced any bets.
-- Therefore this artifact is not a frozen current baseline for new feature work.
-- This also confirms the operational caveat that `pitcher_strikeouts` has not been retrained for months; stale-but-loadable artifacts should be treated as historical evidence, not current paper/live candidates.
-- The audit/CLV suite should not be run on these outputs as a decision-grade certification step because there are no decision-grade `bets.csv` rows to audit.
-- Next gate is a fresh baseline retrain with the current Slice 6 trainer/artifact lifecycle, then repeat the same quote-clean raw/BL checks against that new artifact.
+- Follow-up debugging showed the zero-bet result was caused by the requested `--line-source mlb_player_props_clv_snapshots`: local `mlb_player_props_clv_snapshots` has 0 `pitcher_strikeouts` rows for 2026-04-13 to 2026-05-10, while `mlb_raw_player_props` has linked rows for that market/window.
+- Therefore this result is a line-source coverage failure, not proof that the artifact/model edge disappeared.
+- Quote-clean pitcher K replays should use `--line-source mlb_raw_player_props` unless/until dense CLV snapshots are populated for `pitcher_strikeouts`.
+- CLV certification remains blocked on dense CLV coverage for pitcher K; ROI replay can proceed against raw props in quote-clean/as-of mode.
+
+## Slice 7 fresh baseline note — 2026-06-21
+
+Chase retrained a fresh `--ablation-variant none` baseline under the Slice 6 trainer lifecycle:
+
+- Artifact: `src/models/mlb/artifacts/baselines/pitcher_strikeouts_phase2_slice7_none_20260621/mlb_run_20260621_170841`
+- The `_incomplete` directory was finalized successfully to the path above.
+- One-day debug on 2026-04-13 confirmed the issue is line source, not model loading:
+  - Legacy/non-quote-clean raw props: 20 predictions, 277 precomputed line rows, 6 bets at edge 0.0.
+  - Quote-clean with `mlb_player_props_clv_snapshots`: 20 predictions, 0 precomputed line rows, 0 bets.
+  - Quote-clean with `mlb_raw_player_props`: 20 predictions, 277 precomputed line rows, 7 bets at edge 0.0.
+
+Next gate is to rerun the full raw/BL quote-clean baseline checks for the fresh artifact with `--line-source mlb_raw_player_props`.
 
 ## Freeze criteria
 
@@ -86,7 +99,7 @@ Justification: confirms the refactored training entrypoint and quote-clean sweep
 Justification: this is the cheapest decision-grade baseline check; it does not retrain and tests the preferred 2026-04-13 to 2026-05-10 validation window with the pre-window-calibrated artifact.
 
 ```powershell
-.\venv\Scripts\python.exe src\backtesting\mlb\run_mlb_sweep.py --local --quote-clean --quote-decision-policy slate_or_tminus --quote-relative-minutes 60 --line-source mlb_player_props_clv_snapshots --book-routing-policy preferred_book_first --model-dir src\models\mlb\artifacts\mlb_run_20260513_111207 --stats pitcher_strikeouts --direction under --start 2026-04-13 --end 2026-05-10 --tau none --edge 0.02 0.05 0.08 0.10 0.12 0.15 --flat 100 --output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_raw_under_20260413_20260510
+.\venv\Scripts\python.exe src\backtesting\mlb\run_mlb_sweep.py --local --quote-clean --quote-decision-policy slate_or_tminus --quote-relative-minutes 60 --line-source mlb_raw_player_props --book-routing-policy preferred_book_first --model-dir src\models\mlb\artifacts\mlb_run_20260513_111207 --stats pitcher_strikeouts --direction under --start 2026-04-13 --end 2026-05-10 --tau none --edge 0.02 0.05 0.08 0.10 0.12 0.15 --flat 100 --output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_raw_under_20260413_20260510
 ```
 
 ### 3. Replay the existing clean Phase 2 baseline in quote-clean focused-BL-under mode
@@ -94,7 +107,7 @@ Justification: this is the cheapest decision-grade baseline check; it does not r
 Justification: tests whether the historical BL edge survives the current quote-clean line-selection path; use this as the main baseline to beat for future variants.
 
 ```powershell
-.\venv\Scripts\python.exe src\backtesting\mlb\run_mlb_sweep.py --local --quote-clean --quote-decision-policy slate_or_tminus --quote-relative-minutes 60 --line-source mlb_player_props_clv_snapshots --book-routing-policy preferred_book_first --model-dir src\models\mlb\artifacts\mlb_run_20260513_111207 --stats pitcher_strikeouts --direction under --start 2026-04-13 --end 2026-05-10 --tau 0.5 0.75 0.9 --edge 0.02 0.03 0.04 0.05 0.06 0.08 --z-max 0.25 0.5 --max-weight 0.50 0.65 0.80 --flat 100 --output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_bl_under_20260413_20260510
+.\venv\Scripts\python.exe src\backtesting\mlb\run_mlb_sweep.py --local --quote-clean --quote-decision-policy slate_or_tminus --quote-relative-minutes 60 --line-source mlb_raw_player_props --book-routing-policy preferred_book_first --model-dir src\models\mlb\artifacts\mlb_run_20260513_111207 --stats pitcher_strikeouts --direction under --start 2026-04-13 --end 2026-05-10 --tau 0.5 0.75 0.9 --edge 0.02 0.03 0.04 0.05 0.06 0.08 --z-max 0.25 0.5 --max-weight 0.50 0.65 0.80 --flat 100 --output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_bl_under_20260413_20260510
 ```
 
 ### 4. Run audit/CLV suite on decision-grade configs from steps 2-3
@@ -102,7 +115,7 @@ Justification: tests whether the historical BL edge survives the current quote-c
 Justification: ROI without dropout/CLV/ranker quality is not enough to freeze or promote. Use only configs with at least 100 bets as decision-grade.
 
 ```powershell
-.\venv\Scripts\python.exe scripts\run_mlb_quote_clean_audit_suite.py --local --sweep-output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_bl_under_20260413_20260510 --output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_bl_under_20260413_20260510\audit_suite --model-dir src\models\mlb\artifacts\mlb_run_20260513_111207 --start 2026-04-13 --end 2026-05-10 --stats pitcher_strikeouts --quote-decision-policy slate_or_tminus --quote-relative-minutes 60 --line-source mlb_player_props_clv_snapshots --snapshots-table mlb_player_props_clv_snapshots --batch-size 25
+.\venv\Scripts\python.exe scripts\run_mlb_quote_clean_audit_suite.py --local --sweep-output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_bl_under_20260413_20260510 --output-dir backtest_results\mlb_pitcher_k_phase2_quote_clean_bl_under_20260413_20260510\audit_suite --model-dir src\models\mlb\artifacts\mlb_run_20260513_111207 --start 2026-04-13 --end 2026-05-10 --stats pitcher_strikeouts --quote-decision-policy slate_or_tminus --quote-relative-minutes 60 --line-source mlb_raw_player_props --snapshots-table mlb_raw_player_props --batch-size 25
 ```
 
 ### 5. Fresh baseline retrain after Slice 6
