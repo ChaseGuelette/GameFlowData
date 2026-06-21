@@ -163,3 +163,16 @@ def test_pitcher_force_feature_metadata_written_to_run_config(monkeypatch, tmp_p
     assert config["force_include_features"] == ["pitcher_avg_ip_l5"]
     assert config["force_exclude_features"] == ["projected_lineup_k_pct"]
     assert config["force_feature_experiment"] is True
+
+
+def test_pitcher_model_manifest_written_from_shared_artifact_helper(monkeypatch, tmp_path) -> None:
+    orchestrator = _make_orchestrator(monkeypatch, tmp_path)
+
+    orchestrator._save_model_manifest(git_hash="abc123")
+
+    manifest = json.loads((orchestrator.run_dir / "model_manifest.json").read_text())
+    assert manifest["stat_key"] == "pitcher_strikeouts"
+    assert manifest["model_type"] == "quantile"
+    assert manifest["profile_name"] == "pitcher_strikeouts"
+    assert manifest["artifact_files"] == ["pitcher_k_model.joblib", "pitcher_k_feature_config.joblib"]
+    assert manifest["feature_manifest_file"] == "feature_manifest.json"

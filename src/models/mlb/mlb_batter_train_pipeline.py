@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from src.models.binomial_model import BinomialConfig
     from src.models.negbin_model import NegBinConfig
-import json
 import logging
 import subprocess
 import sys
@@ -48,6 +47,17 @@ from src.models.mlb.mlb_batter_feature_store import (
     get_features_for_stat,
 )
 from src.models.mlb.mlb_binary_model import MLBBinaryModel
+from src.models.mlb.training.artifacts import (
+    build_run_directory,
+    finalize_incomplete_run_directory,
+    write_calibration_report,
+    write_feature_experiment_metadata,
+    write_feature_manifest,
+    write_model_manifest,
+    write_run_config,
+    write_training_metadata,
+)
+from src.models.mlb.training.profiles import get_training_profile
 from src.processing.feature_selection import ImprovedFeatureSelector
 
 logging.basicConfig(
@@ -100,12 +110,14 @@ class MLBBatterTrainingOrchestrator:
         self.force_exclude_features = normalize_feature_names(force_exclude_features)
         self.is_binary = stat == "home_runs"
 
-        # Create timestamped run directory
         self.timestamp = datetime.now()
         timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
-        self._final_run_dir_name = f"mlb_run_batter_{stat}_{timestamp_str}{'_no_prop_line' if exclude_prop_line else ''}"
-        self.run_dir = Path(base_artifacts_dir) / f"{self._final_run_dir_name}_incomplete"
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.run_dir, self._final_run_dir_name = build_run_directory(
+            base_artifacts_dir,
+            prefix=f"mlb_run_batter_{stat}",
+            timestamp=self.timestamp,
+            suffix="no_prop_line" if exclude_prop_line else None,
+        )
 
         logger.info("Initialized MLB Batter Training Run: %s, stat=%s", timestamp_str, stat)
 
@@ -225,8 +237,7 @@ class MLBBatterTrainingOrchestrator:
             self._run_negbin_pipeline(train_df, cal_df, train_seasons, cal_season, cal_end_date)
 
         # Finalize
-        final_dir = self.run_dir.parent / self._final_run_dir_name
-        self.run_dir.rename(final_dir)
+        final_dir = finalize_incomplete_run_directory(self.run_dir, self._final_run_dir_name)
         self.run_dir = final_dir
         logger.info("Training pipeline completed. Artifacts in %s", self.run_dir)
 
@@ -308,6 +319,7 @@ class MLBBatterTrainingOrchestrator:
             }
         })
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
+        self._save_model_manifest(git_hash=_get_git_hash())
 
     # ------------------------------------------------------------------
     # Binomial pipeline (hits)
@@ -478,6 +490,7 @@ class MLBBatterTrainingOrchestrator:
         )
         self._save_calibration_report({f"batter_{self.stat}": cal_report})
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
+        self._save_model_manifest(git_hash=_get_git_hash())
 
     # ------------------------------------------------------------------
     # Binomial Hyperparameter Tuning
@@ -768,6 +781,7 @@ class MLBBatterTrainingOrchestrator:
         self._save_feature_experiment_metadata({"negbin": selected_features}, required_features=required_features)
         self._save_calibration_report({f"batter_{self.stat}": cal_report})
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
+        self._save_model_manifest(git_hash=_get_git_hash())
 
     # ------------------------------------------------------------------
     # NegBin Hyperparameter Tuning
@@ -941,12 +955,7 @@ class MLBBatterTrainingOrchestrator:
     # ------------------------------------------------------------------
 
     def _save_run_config(self, train_seasons, cal_season, cal_end_date):
-        if self.is_binary:
-            model_type = "binary"
-        elif self.stat == "hits":
-            model_type = "binomial"
-        else:
-            model_type = "negbin"
+        model_type = self._model_type()
         config = {
             "stat": self.stat,
             "model_type": model_type,
@@ -979,13 +988,10 @@ class MLBBatterTrainingOrchestrator:
                 "is not an ablation or promotion gate."
             ),
         }
-        with open(self.run_dir / "run_config.json", "w") as f:
-            json.dump(config, f, indent=4)
+        write_run_config(self.run_dir, config)
 
     def _save_feature_manifest(self, selected_features):
-        manifest = {str(q): feats for q, feats in selected_features.items()}
-        with open(self.run_dir / "feature_manifest.json", "w") as f:
-            json.dump(manifest, f, indent=4)
+        write_feature_manifest(self.run_dir, selected_features)
 
     def _save_feature_experiment_metadata(
         self,
@@ -1007,12 +1013,10 @@ class MLBBatterTrainingOrchestrator:
                 "alone is not an ablation or promotion gate."
             ),
         }
-        with open(self.run_dir / "feature_experiment_metadata.json", "w") as f:
-            json.dump(metadata, f, indent=4)
+        write_feature_experiment_metadata(self.run_dir, metadata)
 
     def _save_calibration_report(self, reports):
-        with open(self.run_dir / "calibration_report_combined.json", "w") as f:
-            json.dump(reports, f, indent=4)
+        write_calibration_report(self.run_dir, reports)
 
     def _save_training_metadata(self, train_seasons, cal_season, cal_end_date, train_df, cal_df):
         git_hash = _get_git_hash()
@@ -1033,8 +1037,35 @@ class MLBBatterTrainingOrchestrator:
             "force_include_features": self.force_include_features,
             "force_exclude_features": self.force_exclude_features,
         }
-        with open(self.run_dir / "training_metadata.json", "w") as f:
-            json.dump(metadata, f, indent=4)
+        write_training_metadata(self.run_dir, metadata)
+
+    def _model_type(self) -> str:
+        if self.is_binary:
+            return "binary"
+        if self.stat == "hits":
+            return "binomial"
+        return "negbin"
+
+    def _model_artifact_names(self) -> list[str]:
+        if self.is_binary:
+            return ["hr_binary_model.joblib", "hr_calibrator.joblib"]
+        if self.stat == "hits":
+            return list(get_training_profile("batter_hits").model_artifact_names)
+        model_name = f"batter_{self.stat}"
+        return [f"{model_name}_xgblss_booster.json", f"{model_name}_negbin_meta.json"]
+
+    def _save_model_manifest(self, git_hash: str | None = None):
+        profile_name = "batter_hits" if self.stat == "hits" else f"batter_{self.stat}"
+        write_model_manifest(
+            self.run_dir,
+            stat_key=profile_name,
+            model_type=self._model_type(),
+            profile_name=profile_name,
+            created_at=self.timestamp.isoformat(),
+            git_hash=git_hash,
+            artifact_files=self._model_artifact_names(),
+            compatibility_loader="src.models.mlb.mlb_model_suite.MLBModelSuite",
+        )
 
 
 def _get_git_hash() -> str | None:

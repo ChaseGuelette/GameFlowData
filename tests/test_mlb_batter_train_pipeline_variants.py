@@ -241,6 +241,19 @@ def test_force_feature_metadata_written_to_run_config(monkeypatch, tmp_path):
     assert config["force_feature_experiment"] is True
 
 
+def test_batter_model_manifest_written_from_shared_artifact_helper(monkeypatch, tmp_path):
+    orchestrator = _make_orchestrator(monkeypatch, tmp_path)
+
+    orchestrator._save_model_manifest(git_hash="abc123")
+
+    manifest = json.loads((orchestrator.run_dir / "model_manifest.json").read_text())
+    assert manifest["stat_key"] == "batter_hits"
+    assert manifest["model_type"] == "binomial"
+    assert manifest["profile_name"] == "batter_hits"
+    assert "batter_hits_binomial_meta.json" in manifest["artifact_files"]
+    assert manifest["training_metadata_file"] == "training_metadata.json"
+
+
 def test_parser_accepts_force_feature_controls():
     parser = pipeline.build_arg_parser()
     args = parser.parse_args([

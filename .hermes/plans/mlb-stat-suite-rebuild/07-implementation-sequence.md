@@ -132,18 +132,20 @@ Validation:
 
 ### Slice 5 — Shared artifact helpers
 
+Status: complete locally on 2026-06-21; pending Chase review/commit.
+
 Files:
 
-- Create: `src/models/mlb/training/artifacts.py`
-- Modify: `src/models/mlb/mlb_train_pipeline.py`
-- Modify: `src/models/mlb/mlb_batter_train_pipeline.py`
-- Add/modify metadata tests.
+- [x] Create: `src/models/mlb/training/artifacts.py`
+- [x] Modify: `src/models/mlb/mlb_train_pipeline.py`
+- [x] Modify: `src/models/mlb/mlb_batter_train_pipeline.py`
+- [x] Add/modify metadata tests.
 
 Worker spec summary:
 
-- Extract JSON writing and run-dir lifecycle.
-- Preserve existing fields.
-- Add optional `model_manifest.json` for new runs.
+- [x] Extract JSON writing and run-dir lifecycle.
+- [x] Preserve existing fields.
+- [x] Add optional `model_manifest.json` for new runs.
 
 ### Slice 6 — Base orchestrator extraction
 

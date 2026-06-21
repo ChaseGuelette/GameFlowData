@@ -51,6 +51,15 @@ from src.models.mlb.mlb_quantile_trainer import (
     MLB_PITCHER_K_CONFIG,
     MLBPitcherKPipeline,
 )
+from src.models.mlb.training.artifacts import (
+    build_run_directory,
+    finalize_incomplete_run_directory,
+    write_calibration_report,
+    write_feature_manifest,
+    write_model_manifest,
+    write_run_config,
+    write_training_metadata,
+)
 from src.models.mlb.training.feature_controls import (
     FeatureControlSpec,
     merge_required_and_selected_features,
@@ -135,12 +144,13 @@ class MLBTrainingOrchestrator:
         self.ip_feature_correlations: dict[str, dict[str, float | None]] = {}
         self.ip_feature_manifest: dict[float, list[str]] = {}
 
-        # Create timestamped run directory with _incomplete suffix
         self.timestamp = datetime.now()
         timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
-        self._final_run_dir_name = f"mlb_run_{timestamp_str}"
-        self.run_dir = Path(base_artifacts_dir) / f"mlb_run_{timestamp_str}_incomplete"
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.run_dir, self._final_run_dir_name = build_run_directory(
+            base_artifacts_dir,
+            prefix="mlb_run",
+            timestamp=self.timestamp,
+        )
 
         logger.info(f"Initialized MLB Training Run: {timestamp_str}")
         logger.info(f"Artifacts will be saved to: {self.run_dir} (renamed on completion)")
@@ -252,10 +262,10 @@ class MLBTrainingOrchestrator:
         self._save_feature_manifest(selected_features)
         self._save_calibration_report(cal_report)
         self._save_training_metadata(train_seasons, cal_season, cal_end_date, train_df, cal_df)
+        self._save_model_manifest(git_hash=_get_git_hash())
 
         # Step 10: Finalize
-        final_dir = self.run_dir.parent / self._final_run_dir_name
-        self.run_dir.rename(final_dir)
+        final_dir = finalize_incomplete_run_directory(self.run_dir, self._final_run_dir_name)
         self.run_dir = final_dir
         logger.info(f"Training pipeline completed successfully. Artifacts in {self.run_dir}")
 
@@ -755,18 +765,14 @@ class MLBTrainingOrchestrator:
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
         }
-        with open(self.run_dir / "run_config.json", "w") as f:
-            json.dump(config, f, indent=4)
+        write_run_config(self.run_dir, config)
 
     def _save_feature_manifest(self, selected_features: dict[float, list[str]]):
-        manifest = {str(q): feats for q, feats in selected_features.items()}
-        with open(self.run_dir / "feature_manifest.json", "w") as f:
-            json.dump(manifest, f, indent=4)
+        write_feature_manifest(self.run_dir, selected_features)
         logger.info(f"Saved feature manifest to {self.run_dir / 'feature_manifest.json'}")
 
     def _save_calibration_report(self, reports: dict):
-        with open(self.run_dir / "calibration_report_combined.json", "w") as f:
-            json.dump(reports, f, indent=4)
+        write_calibration_report(self.run_dir, reports)
         logger.info(f"Saved calibration report to {self.run_dir / 'calibration_report_combined.json'}")
 
     def _save_training_metadata(self, train_seasons, cal_season, cal_end_date, train_df, cal_df):
@@ -801,9 +807,20 @@ class MLBTrainingOrchestrator:
             "timestamp": self.timestamp.isoformat(),
             "git_hash": git_hash,
         }
-        with open(self.run_dir / "training_metadata.json", "w") as f:
-            json.dump(metadata, f, indent=4)
+        write_training_metadata(self.run_dir, metadata)
         logger.info(f"Saved training metadata to {self.run_dir / 'training_metadata.json'}")
+
+    def _save_model_manifest(self, git_hash: str | None = None):
+        write_model_manifest(
+            self.run_dir,
+            stat_key=self.profile.stat_key,
+            model_type=self.profile.model_type,
+            profile_name=self.profile.stat_key,
+            created_at=self.timestamp.isoformat(),
+            git_hash=git_hash,
+            artifact_files=list(self.profile.model_artifact_names),
+            compatibility_loader="src.models.mlb.mlb_model_suite.MLBModelSuite",
+        )
 
 
 def _get_git_hash() -> str | None:
