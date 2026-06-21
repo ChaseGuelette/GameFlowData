@@ -79,21 +79,23 @@ Manual PowerShell dry-run after approval.
 
 ### Slice 3 — Training profiles and feature controls helpers
 
+Status: complete locally on 2026-06-21; pending Chase review/commit.
+
 Why third: pure helpers before editing large training files.
 
 Files:
 
-- Create: `src/models/mlb/training/__init__.py`
-- Create: `src/models/mlb/training/profiles.py`
-- Create: `src/models/mlb/training/feature_controls.py`
-- Add: `tests/test_mlb_training_profiles.py`
-- Add: `tests/test_mlb_training_feature_controls.py`
+- [x] Create: `src/models/mlb/training/__init__.py`
+- [x] Create: `src/models/mlb/training/profiles.py`
+- [x] Create: `src/models/mlb/training/feature_controls.py`
+- [x] Add: `tests/test_mlb_training_profiles.py`
+- [x] Add: `tests/test_mlb_training_feature_controls.py`
 
 Worker spec summary:
 
-- Encode batter_hits and pitcher_strikeouts profiles.
-- Add pitcher feature-family registry.
-- No existing pipeline changes yet.
+- [x] Encode batter_hits and pitcher_strikeouts profiles.
+- [x] Add pitcher feature-family registry.
+- [x] No existing pipeline changes yet.
 
 Validation:
 
