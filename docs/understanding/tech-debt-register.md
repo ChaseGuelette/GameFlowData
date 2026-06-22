@@ -134,24 +134,49 @@ Validation:
 Owner decision needed:
 - Confirm whether to continue the shared suite migration before more model experiments.
 
-### TD-005: Production scheduler/job complexity is hard to explain
+### TD-005: Production scheduler/job complexity and stale docs
+
+Status: confirmed
+Area: Railway / orchestration
+Evidence:
+- Recent handoffs around NBA lines hardening, Supabase connection pressure, overlap locks, and env gates show scheduler behavior has many interacting flags/jobs.
+- `src/orchestration/scheduler.py` currently defines one always-on APScheduler process with many NBA, MLB, Kalshi, maintenance, and env-gated arbitrage jobs.
+- `docs/railway_deployment.md` still says the worker has "7 APScheduler job definitions" and lists older 11 AM / noon / 4 PM-era schedules, which no longer matches the current scheduler code.
+- `docs/daily_pipeline_automation.md` still contains older Railway schedule prose in places, while its resilience section remains useful for `JOB_STATUS` / `job_executions` concepts.
+- `tests/test_pipeline_resilience.py` covers several scheduler safety behaviors, proving this is important enough to test: dependency checks, retry behavior, timeout persistence, deferred NBA lines failure tagging, and `lines_job.py` overlap skipping.
+Why it matters:
+- Chase needs to know which jobs are running, which are gated, and what operational alerts mean.
+- Stale schedule docs can cause agents or Chase to debug the wrong runtime window or misunderstand what `NBA_FULL_LINES_ENABLED=false` actually pauses.
+Current workaround:
+- Use `docs/understanding/railway-scheduler.md` plus current `src/orchestration/scheduler.py` as the human/code pair for schedule understanding.
+Risk if ignored:
+- Off-season gates, props-only refreshes, and full-line jobs get confused; agents may pause or debug the wrong layer.
+Safe first step:
+- Decide whether to refresh or deprecate the older schedule sections in `docs/railway_deployment.md` and `docs/daily_pipeline_automation.md` so they point at the newer scheduler explainer instead of drifting independently.
+Validation:
+- Chase can answer: which NBA/MLB/Kalshi/arb jobs run, on what schedule, what env flags gate them, what alerts indicate, and where to check real runtime history.
+Owner decision needed:
+- Confirm whether to treat old schedule docs as archived historical guides or update them to delegate schedule truth to `docs/understanding/railway-scheduler.md`.
+
+### TD-006: Duplicate 10 AM NBA props-only scheduler trigger
 
 Status: candidate
 Area: Railway / orchestration
 Evidence:
-- Recent handoffs around NBA lines hardening, Supabase connection pressure, overlap locks, and env gates show scheduler behavior has many interacting flags/jobs.
+- `src/orchestration/scheduler.py` adds `lines_props_10am` at 10:00 AM ET and also adds `props_every_5` for every 5 minutes from 9 AM through 11 PM, which includes 10:00 AM.
+- `LOCKABLE_JOB_SCRIPTS = {"lines_job.py"}` means the second simultaneous NBA lines launch should be skipped and persisted as `status='skipped'`, not run concurrently.
 Why it matters:
-- Chase needs to know which jobs are running, which are gated, and what operational alerts mean.
+- The lock likely prevents overlap damage, but the duplicate trigger can create noisy skipped job history and confuse schedule explanations.
 Current workaround:
-- Use handoff-105 behavior notes and `daily_pipeline_automation.md` for schedule context.
+- The in-process `lines_job.py` lock prevents concurrent subprocess execution.
 Risk if ignored:
-- Off-season gates, props-only refreshes, and full-line jobs get confused; agents may pause or debug the wrong layer.
+- Agents or Chase may misread expected 10 AM skips as a failure, or future schedule edits may accidentally rely on duplicate behavior.
 Safe first step:
-- Create/update a scheduler explainer table from current `src/orchestration/scheduler.py`, with env gates and job names.
+- Check Railway logs / `job_executions` around 10:00 AM ET for repeated skipped `lines_job.py` rows, then decide whether to remove the explicit `lines_props_10am` trigger or offset it.
 Validation:
-- Chase can answer: which NBA/MLB jobs run, on what schedule, what env flags gate them, and what alerts indicate.
+- After the chosen cleanup, 10:00 AM ET has exactly one intended NBA props-only launch path and no routine lock-skip row.
 Owner decision needed:
-- Confirm whether scheduler explanation is the first guided review subsystem.
+- Confirm whether to clean this up now or accept the harmless skip noise until a scheduler refactor pass.
 
 ## Review cadence
 

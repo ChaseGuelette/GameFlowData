@@ -8,6 +8,7 @@ Use these docs when the project starts to feel like “it works lol” instead o
 
 - `system-atlas.md` — the high-level map of systems and responsibilities.
 - `gameflow-data-flow.md` — how data moves from external providers through DB, models, recommendations, trading, and dashboard surfaces.
+- `railway-scheduler.md` — how the always-on Railway APScheduler worker launches jobs, applies gates, records history, and maps current schedules.
 - `agent-workflow.md` — how Hermes, GBrain, handoffs, skills, workers, and wrap-up should operate together.
 - `glossary.md` — short operational definitions for recurring terms.
 - `tech-debt-register.md` — evidence-backed debt and migration candidates.

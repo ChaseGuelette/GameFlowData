@@ -60,7 +60,7 @@ def test_feature_store_date_facade_delegates_to_date_batch_loader(monkeypatch):
 
     result = store.get_features_for_date(date(2025, 1, 2))
 
-    assert result.loc[0, "ok"] == True
+    assert bool(result.loc[0, "ok"])
     assert observed["feature_store"] is store
     assert observed["request"] == DateFeatureRequest(game_date=date(2025, 1, 2))
 
@@ -82,7 +82,7 @@ def test_feature_store_date_range_facade_delegates_to_date_range_loader(monkeypa
 
     result = store.get_features_for_date_range(date(2025, 1, 1), date(2025, 1, 3))
 
-    assert result[date(2025, 1, 2)].loc[0, "ok"] == True
+    assert bool(result[date(2025, 1, 2)].loc[0, "ok"])
     assert observed["feature_store"] is store
     assert observed["request"] == DateRangeFeatureRequest(
         start_date=date(2025, 1, 1),
@@ -112,7 +112,7 @@ def test_feature_store_training_facade_delegates_to_training_loader(monkeypatch)
     result = store.get_training_dataset(["22024"])
     single = store._load_single_season_training("22024")
 
-    assert result.loc[0, "ok"] == True
+    assert bool(result.loc[0, "ok"])
     assert single.loc[0, "season"] == "22024"
     assert observed["feature_store"] is store
     assert observed["request"] == TrainingFeatureRequest(seasons=["22024"])

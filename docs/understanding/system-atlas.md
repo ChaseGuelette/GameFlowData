@@ -48,6 +48,9 @@ Important boundaries:
 - `NBA_FULL_LINES_ENABLED=false` gates full NBA lines/injury jobs only, not every NBA-adjacent job.
 - Production DB writes require the correct writable Supabase pooler path.
 
+Read next:
+- `railway-scheduler.md` for the current scheduler mental model, job groups, env gates, and audit notes.
+
 ### Vercel dashboard
 
 What it is:

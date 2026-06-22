@@ -84,6 +84,14 @@ The production Python runtime that runs GameFlow scheduled jobs. It is where sch
 
 The scheduler framework used by the Railway worker to run recurring GameFlow jobs.
 
+### `job_executions`
+
+The Supabase table where scheduler job launches are recorded with status, timing, error text, and parsed metrics. Use it with Railway logs to verify what actually ran.
+
+### Silent-on-success job
+
+A scheduled job that suppresses Discord success alerts but still alerts on failure and records `job_executions` history. Used for high-frequency refresh loops.
+
 ### Full lines job
 
 A heavier lines run that can include game lines, player props, injuries, and linker work depending on flags. In NBA, these can be gated separately from props-only refresh.
@@ -91,6 +99,10 @@ A heavier lines run that can include game lines, player props, injuries, and lin
 ### Props-only job
 
 A lightweight lines refresh focused on player props and linker work. For NBA, this can still run even when `NBA_FULL_LINES_ENABLED=false`.
+
+### Env gate
+
+An environment variable that controls whether a scheduler job is added or whether a job script exits/omits risky behavior. Example: `NBA_FULL_LINES_ENABLED=false` removes full NBA lines schedules but does not pause all NBA automation.
 
 ### CDN-only daily stats
 
