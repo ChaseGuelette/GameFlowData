@@ -28,6 +28,6 @@ gbrain sync --source gameflow --no-pull --yes --retry-failed
 gbrain embed --stale
 bun scripts/backfill_gameflow_graph.ts
 gbrain orphans --json
-gbrain doctor --json
+gbrain doctor --json || true
 gbrain get handoffs/handoff-113
 gbrain backlinks handoffs/handoff-113

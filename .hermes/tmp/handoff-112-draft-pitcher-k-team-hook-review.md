@@ -16,7 +16,7 @@ tags: [handoff, gbrain, mlb, pitcher-k, ablation]
 
 ## Summary
 
-The first two Pitcher K Track A force-exclude family ablations were reconstructed and reviewed. `workload_leash` and `market` are both load-bearing for the current frozen Black-Litterman flat-paper strategy and must be retained. The next session must start by locating and reviewing the newly run `team_hook` exclusion; do not start `pitcher_stuff` first.
+The first two Pitcher K Track A force-exclude family ablations were reconstructed and reviewed. `workload_leash` and `market` are both load-bearing for the current frozen Black-Litterman flat-paper strategy and must be retained. The raw/no-BL `team_hook` exclusion was then completed and reviewed; it is plausible enough to advance to the exact-artifact focused BL sweep. The next Pitcher K step is that focused sweep, not `pitcher_stuff`.
 
 ## What Was Done
 
@@ -29,6 +29,10 @@ The first two Pitcher K Track A force-exclude family ablations were reconstructe
 - Paired-bet mechanism: 121 common bets were nearly unchanged; 25 baseline-only bets returned +39.75% ROI; 82 candidate-only bets returned -2.48% ROI. The exclusion removed strong selections and added losing volume.
 - Classified `market` as confirmed load-bearing for the current BL strategy. Retain `prop_line_pitcher_strikeouts` and `line_total`; exclude the market-removal artifact from promotion.
 - Identified a routing caveat: quote routing occurs before the simulator's `[-200,+200]` odds filter, with no reroute after rejection. It affected both artifacts under identical logic and did not change the market-family decision.
+- Reviewed the completed raw/no-BL `team_hook` exclusion artifact at:
+  `src/models/mlb/artifacts/ablations/pitcher_strikeouts_exclude_load_bearing_exclude_team_hook_slice_20260719_135149/mlb_run_20260719_135150`
+- Verified all three `team_hook` features were excluded, calibration passed with a 1.38% worst gap, and all six raw cells had at least 100 bets. Shared-edge ROI improved versus the raw baseline at `.02` (-3.88% to +0.26%), `.05` (-1.49% to +1.00%), and `.08` (-2.85% to +0.32%).
+- At raw edge `.02`, the exclusion removed 50 baseline-only bets returning -8.34% ROI and added 49 candidate-only bets returning +10.11% ROI. Raw edge still failed the CLV ranker gate, while post-hoc `model_prob` barely passed at `.02` and `.03`; this supports focused BL evaluation but not Kelly/live promotion.
 
 ## Decisions Made
 
@@ -37,28 +41,26 @@ The first two Pitcher K Track A force-exclude family ablations were reconstructe
 - Keep the frozen Pitcher K candidate flat-paper only. Kelly/live/Kalshi remain blocked by ranker uncertainty.
 - Do not use post-hoc winning cells from the 108-point market-exclusion BL sweep to override the preregistered frozen-policy and paired-bet failure.
 - Continue Track A one family at a time. The next family is `team_hook`.
+- `team_hook` is not yet classified as load-bearing or safe to remove. Its raw result advances to the focused BL gate only.
 
 ## Next Session — Start Here
 
-1. Locate the newest completed run whose label begins:
-   `pitcher_strikeouts_exclude_load_bearing_exclude_team_hook_slice7_`
-2. If no completed artifact/output exists, inspect whether the run is still active or failed; do not restart it blindly.
-3. Review the exact artifact metadata, force-excluded features, calibration gate, raw preferred-book sweep, CLV audit, ranker reports, and `ablation_summary.md`.
-4. Compare `team_hook` against the frozen baseline at fixed settings and inspect paired-bet movement.
-5. Only if the raw result is plausible, run the focused 108-cell quote-clean BL sweep against the exact new artifact.
-6. Classify `team_hook` as Confirm load-bearing, Shelf, or Exclude candidate.
-7. Do not launch `pitcher_stuff` until the `team_hook` result is reviewed.
-
-The launch command handed to Chase was:
+1. Run the focused 108-cell quote-clean BL sweep against the exact reviewed `team_hook` exclusion artifact:
 
 ```powershell
-.\scripts\run_pitcher_k_ablation.ps1 -Mode exclude -Families team_hook -Start 2026-04-13 -End 2026-06-21 -CalEndDate 2026-04-12 -TrainSeasons 2024,2025 -Direction under -Edge 0.02,0.03,0.04,0.05,0.06,0.08 -FlatBet -LabelTag load_bearing_exclude_team_hook_slice7
+.\venv\Scripts\python.exe src\backtesting\mlb\run_mlb_sweep.py --local --quote-clean --quote-decision-policy slate_or_tminus --quote-relative-minutes 60 --line-source mlb_player_props_clv_snapshots --book-routing-policy preferred_book_first --model-dir "src\models\mlb\artifacts\ablations\pitcher_strikeouts_exclude_load_bearing_exclude_team_hook_slice_20260719_135149\mlb_run_20260719_135150" --stats pitcher_strikeouts --direction under --start 2026-04-13 --end 2026-06-21 --tau 0.5 0.75 0.9 --edge 0.02 0.03 0.04 0.05 0.06 0.08 --z-max 0.25 0.5 --max-weight 0.50 0.65 0.80 --flat 100 --output-dir "backtest_results\ablations\pitcher_strikeouts_exclude_team_hook_slice7_bl_under_20260413_20260621"
 ```
+
+2. Review the frozen operating point first: `tau=.5`, `z_max=.25`, `max_weight=.50`, `edge=.02`, compared with the certified baseline's 146 bets, +17.19% ROI, 2.338 Sharpe, and 5.32% drawdown.
+3. Inspect paired common, baseline-only, and candidate-only bets before considering any swept winner.
+4. Classify `team_hook` as Confirm load-bearing, Shelf, or Exclude candidate.
+5. Do not launch `pitcher_stuff` until this focused `team_hook` result is reviewed.
 
 ## Blockers and Open Questions
 
 - The focused `market` BL sweep has no focused CLV/ranker audit, but rejection is decision-grade because it failed the frozen configuration and paired-bet mechanism. The earlier raw/no-BL CLV evidence does not rescue the underperforming BL policy.
 - The candidate's retraining explicitly removed the `market` family, but the normal selector also changed some non-market features. Interpret this as the family removal plus the training pipeline's response, not static deletion from fixed trees.
+- The `team_hook` audit suite's overall FAIL reflects the intentionally skipped dropout audit and raw-edge ranker CI lows below zero. Mean CLV was positive in every cell, and the already-certified dense window makes a focused BL sweep the correct next gate rather than a raw rerun.
 - [[handoff-112]] records the separate technical-debt audit consolidation status completed concurrently on July 19.
 
 ## Files to Read on Resume
@@ -68,4 +70,6 @@ The launch command handed to Chase was:
 - `backtest_results/ablations/pitcher_strikeouts_exclude_market_slice7_bl_under_20260413_20260621/sweep_results.json`
 - `src/models/mlb/artifacts/ablations/pitcher_strikeouts_exclude_load_bearing_exclude_market_slice7_20260718_174843/mlb_run_20260718_174844/run_config.json`
 - `src/models/mlb/artifacts/ablations/pitcher_strikeouts_exclude_load_bearing_exclude_market_slice7_20260718_174843/mlb_run_20260718_174844/feature_manifest.json`
-- The newest `team_hook` artifact and matching `backtest_results/ablations/` output.
+- `src/models/mlb/artifacts/ablations/pitcher_strikeouts_exclude_load_bearing_exclude_team_hook_slice_20260719_135149/mlb_run_20260719_135150/`
+- `backtest_results/ablations/pitcher_strikeouts_exclude_load_bearing_exclude_team_hook_slice_20260719_135149_preferred_book/`
+- After it runs: `backtest_results/ablations/pitcher_strikeouts_exclude_team_hook_slice7_bl_under_20260413_20260621/`
