@@ -68,6 +68,10 @@ class SuiteItem:
     preferred_candidates_share: float | None = None
     preferred_selected_share: float | None = None
     preferred_edge_survives_share: float | None = None
+    timing_stability_status: str | None = None
+    timing_required_horizons: list[str] | None = None
+    timing_horizons_present: list[str] | None = None
+    timing_horizon_coverage_pct: dict[str, float] | None = None
 
 
 def _sanitize_label(path: Path) -> str:
@@ -365,6 +369,7 @@ def determine_gate_status(item: SuiteItem, dropout_summary: dict | None) -> str:
         return "FAIL: command failure"
     if dropout_summary and dropout_summary.get("decision") == "FAIL":
         return "FAIL: dropout timing"
+
     if item.mean_clv_ci_low is None or item.edge_clv_ci_low is None:
         return "WARN: missing CLV gates"
     if item.mean_clv_ci_low <= 0:
@@ -519,6 +524,45 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_audit_evidence_metadata(
+    *,
+    skip_dropout_audit: bool,
+    dry_run: bool,
+    dropout_returncode: int | None,
+    dropout_summary_path: Path,
+    dropout_summary: dict,
+) -> dict:
+    dropout_dir = dropout_summary_path.parent
+    dropout_output_paths = [
+        dropout_summary_path,
+        dropout_dir / "audit_summary.md",
+        dropout_dir / "dropout_summary_by_bucket.csv",
+        dropout_dir / "dropout_rows.csv",
+        dropout_dir / "selected_clean_quotes.csv",
+        dropout_dir / "dropout_by_date.csv",
+        dropout_dir / "dropout_by_game.csv",
+        dropout_dir / "dropout_by_bookmaker.csv",
+    ]
+    full_audit_complete = (
+        not skip_dropout_audit
+        and not dry_run
+        and dropout_returncode == 0
+        and bool(dropout_summary)
+    )
+    return {
+        "audit_mode": "clv_only" if skip_dropout_audit else "full",
+        "dropout_audit_ran": not skip_dropout_audit and not dry_run,
+        "dropout_returncode": dropout_returncode,
+        "dropout_summary_path": str(dropout_summary_path),
+        "dropout_output_paths": [str(path) for path in dropout_output_paths],
+        "dropout_decision": dropout_summary.get("decision"),
+        "full_audit_complete": full_audit_complete,
+        "full_audit_passed": (
+            full_audit_complete and dropout_summary.get("decision") == "PASS"
+        ),
+    }
+
+
 def main() -> int:
     args = build_arg_parser().parse_args()
     repo_root = Path(__file__).resolve().parents[1]
@@ -602,6 +646,12 @@ def main() -> int:
             item.edge_clv_ci_low = _float_or_none(overall.get("edge_clv_ci_low"))
             failure = read_failure_rollup(diag_dir / "clv_failure_modes.json")
             item.failure_mode_top = failure.get("top")
+            timing_stability = diag.get("timing_stability", {})
+            if isinstance(timing_stability, dict):
+                item.timing_stability_status = timing_stability.get("status")
+                item.timing_required_horizons = timing_stability.get("required_horizons")
+                item.timing_horizons_present = timing_stability.get("horizons_present")
+                item.timing_horizon_coverage_pct = timing_stability.get("coverage_pct")
         rollup = read_bets_rollup(bets_csv)
         item.total_bets = int(rollup["total_bets"]) if rollup.get("total_bets") is not None else None
         item.total_profit = _float_or_none(rollup.get("total_profit"))
@@ -622,14 +672,21 @@ def main() -> int:
         item.preferred_edge_survives_share = _float_or_none(routing.get("preferred_edge_survives_share"))
         items.append(item)
 
-    dropout_summary = read_json(output_dir / "dropout_audit" / "audit_summary.json") if not args.dry_run else {}
+    dropout_summary_path = output_dir / "dropout_audit" / "audit_summary.json"
+    dropout_summary = read_json(dropout_summary_path) if not args.dry_run else {}
     for item in items:
         populate_validation_decisions(item, dropout_summary)
         item.gate_status = determine_gate_status(item, dropout_summary)
 
     metadata = {
         "sweep_output_dir": str(sweep_dir),
-        "dropout_returncode": dropout_rc,
+        **build_audit_evidence_metadata(
+            skip_dropout_audit=args.skip_dropout_audit,
+            dry_run=args.dry_run,
+            dropout_returncode=dropout_rc,
+            dropout_summary_path=dropout_summary_path,
+            dropout_summary=dropout_summary,
+        ),
         "line_source": args.line_source,
         "snapshots_table": args.snapshots_table,
         "quote_decision_policy": args.quote_decision_policy,

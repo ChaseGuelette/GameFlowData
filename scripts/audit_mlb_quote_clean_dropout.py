@@ -518,7 +518,10 @@ def summarize_and_write_outputs(
     decision_time_violations = timing["decision_time_violations"]
     commence_violations = timing["commence_violations"]
 
-    if cutoff_violations or decision_time_violations or commence_violations:
+    if total == 0:
+        decision = "WARN"
+        reason = "Dropout audit produced no prediction rows; full-audit evidence is unavailable."
+    elif cutoff_violations or decision_time_violations or commence_violations:
         decision = "FAIL"
         reason = "Selected clean quotes include decision-time/cutoff or commence-time violations."
     elif timing.get("timing_warning"):

@@ -221,3 +221,16 @@ def test_slate_or_tminus_fails_when_selected_snapshot_after_decision_time(tmp_pa
     )
     assert summary["decision"] == "FAIL"
     assert summary["decision_time_violations"] == 1
+
+
+def test_empty_dropout_audit_cannot_pass(tmp_path: Path) -> None:
+    summary = summarize_and_write_outputs(
+        pd.DataFrame(columns=["dropout_bucket"]),
+        pd.DataFrame(),
+        tmp_path,
+        "13:30",
+        quote_decision_policy="slate_or_tminus",
+    )
+
+    assert summary["decision"] == "WARN"
+    assert summary["total_predictions"] == 0

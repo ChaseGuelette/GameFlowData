@@ -1,5 +1,9 @@
 # MLB Pitcher K Phase 3B+ Pitcher-Side Extremes Roadmap
 
+> **Historical design source:** The five-feature pitcher-side-downside thesis is retained,
+> but current ordering, fixed-hyperparameter discovery rules, validation gates, and commands
+> are canonical in [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md).
+
 Date: 2026-05-14
 Status: planning / validation-gated
 

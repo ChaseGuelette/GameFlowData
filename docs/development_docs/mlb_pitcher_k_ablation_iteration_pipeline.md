@@ -1,5 +1,10 @@
 # MLB Pitcher K Ablation Iteration Pipeline
 
+> **Superseded operating plan (2026-07-18):** Use
+> [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md). The fresh
+> Slice 7 baseline and dense-CLV gate were subsequently completed, so the missing-dense-data
+> blocker and named-variant-first ordering below are historical.
+
 Date: 2026-06-21
 Status: runbook / awaiting Chase-run baseline freeze
 

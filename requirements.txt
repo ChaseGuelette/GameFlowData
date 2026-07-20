@@ -20,3 +20,4 @@ Pillow>=10.0.0
 pybaseball>=2.2.7
 cryptography>=42.0.0
 rich>=15.0.0
+PyYAML==6.0.3

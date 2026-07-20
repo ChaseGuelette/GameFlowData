@@ -27,12 +27,15 @@ To use local DB for backtesting:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 import tempfile
 import time
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 import psycopg2
 from dotenv import load_dotenv
@@ -96,6 +99,180 @@ NBA_TABLES: dict[str, tuple[str | None, str]] = {
 }
 
 DEFAULT_LOCAL_URL = "postgresql://postgres:***@localhost:5432/gameflow_local"
+SYNC_STATE_SCHEMA_VERSION = 1
+DEFAULT_STATE_FILE = Path("logs/sync/sync_state.json")
+
+
+def _utc_now() -> str:
+    """Return UTC timestamp as a compact ISO string."""
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _serialize_partition(value: Any | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime) or isinstance(value, date):
+        return _to_iso(value)
+    return str(value)
+
+
+def _format_int_or_none(value: int | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:,}"
+
+
+def _make_table_result(
+    *,
+    table_name: str,
+    date_column: str | None,
+    strategy: str,
+    mode: str,
+    rows_selected: int | None,
+    rows_copied: int | None,
+    remote_min_partition: Any | None,
+    remote_max_partition: Any | None,
+    local_max_partition_after_sync: Any | None,
+    duration_seconds: float,
+    status: str,
+    error: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "table": table_name,
+        "date_column": date_column,
+        "strategy": strategy,
+        "mode": mode,
+        "rows_selected": rows_selected,
+        "rows_copied": rows_copied,
+        "remote_min_partition": _serialize_partition(remote_min_partition),
+        "remote_max_partition": _serialize_partition(remote_max_partition),
+        "local_max_partition": _serialize_partition(local_max_partition_after_sync),
+        "duration_seconds": round(duration_seconds, 3),
+        "status": status,
+        "error": error,
+    }
+
+
+def _build_initial_state(sport: str, full: bool, start_date: str | None, end_date: str | None, tables: dict[str, tuple[str | None, str]]) -> dict[str, Any]:
+    if full:
+        mode = "full"
+    elif start_date or end_date:
+        mode = "window"
+    else:
+        mode = "incremental"
+
+    return {
+        "schema_version": SYNC_STATE_SCHEMA_VERSION,
+        "started_at": _utc_now(),
+        "finished_at": None,
+        "status": "running",
+        "mode": mode,
+        "sport": sport,
+        "failed_tables": [],
+        "start_date": start_date,
+        "end_date": end_date,
+        "tables_planned": list(tables.keys()),
+        "tables": [],
+    }
+
+
+def write_sync_state(state: dict[str, Any], state_path: str | Path) -> None:
+    path = Path(state_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def load_sync_state(state_path: str | Path) -> dict[str, Any]:
+    path = Path(state_path)
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def render_sync_state_table(state: dict[str, Any]) -> str:
+    tables = state.get("tables", [])
+
+    header = (
+        f"Schema v{state.get('schema_version', 'n/a')} | "
+        f"Status: {state.get('status', 'unknown')} | "
+        f"Mode: {state.get('mode', 'unknown')} | "
+        f"Sport: {state.get('sport', 'unknown')}"
+    )
+    started = state.get("started_at")
+    finished = state.get("finished_at")
+    if started or finished:
+        header += f" | Started: {started or '-'} | Finished: {finished or '-'}"
+
+    lines = [header, "-"]
+    if tables:
+        col_table = "{:<30}"
+        col_status = "{:<12}"
+        col_rows = "{:>11}"
+        col_mode = "{:<11}"
+        col_strategy = "{:<12}"
+        col_time = "{:>9}"
+        title = (
+            f"{col_table.format('table'):30}"
+            f"{col_status.format('status'):12}"
+            f"{col_mode.format('mode'):11}"
+            f"{col_strategy.format('strategy'):12}"
+            f"{col_rows.format('rows'):>11}"
+            f"{col_rows.format('copied'):>11}"
+            f"{'min_partition':>22}"
+            f"{'max_partition':>22}"
+            f"{'local_max':>22}"
+            f"{col_time.format('secs'):>9}"
+        )
+        lines.append(title)
+        lines.append(" ".join(["-" * 30, "-" * 12, "-" * 11, "-" * 12, "-" * 11, "-" * 11, "-" * 22, "-" * 22, "-" * 22, "-" * 9]))
+        for table in tables:
+            row_status = str(table.get("status", ""))
+            row_mode = str(table.get("mode", ""))
+            row_strategy = str(table.get("strategy", ""))
+            rows_selected = table.get("rows_selected")
+            rows_copied = table.get("rows_copied")
+            row = (
+                f"{col_table.format(table.get('table', '')):30}"
+                f"{col_status.format(row_status):12}"
+                f"{col_mode.format(row_mode):11}"
+                f"{col_strategy.format(row_strategy):12}"
+                f"{col_rows.format(_format_int_or_none(rows_selected)):11}"
+                f"{col_rows.format(_format_int_or_none(rows_copied)):11}"
+                f"{str(table.get('remote_min_partition', '-') or '-'):>22}"
+                f"{str(table.get('remote_max_partition', '-') or '-'):>22}"
+                f"{str(table.get('local_max_partition', '-') or '-'):>22}"
+                f"{str(col_time.format(table.get('duration_seconds', 0))):>9}"
+            )
+            lines.append(row)
+    else:
+        lines.append("No table summaries available")
+
+    failed = state.get("failed_tables", [])
+    lines.append(f"Failed tables: {', '.join(failed) if failed else 'none'}")
+    return "\n".join(lines)
+
+
+def print_sync_status(state_path: str | Path) -> int:
+    try:
+        state = load_sync_state(state_path)
+    except FileNotFoundError:
+        print(f"No sync journal found at {state_path}")
+        print("Run scripts/sync_local_db.py without --status to create one.")
+        return 1
+    except json.JSONDecodeError:
+        print(f"Unable to read sync journal at {state_path}: invalid JSON")
+        return 1
+
+    print(render_sync_state_table(state))
+    return 0
 
 
 def _to_iso(value: datetime | date) -> str:
@@ -339,21 +516,25 @@ def sync_table(
     start_date: str | None = None,
     end_date: str | None = None,
     dry_run: bool = False,
-) -> int:
-    """Sync a single table from remote to local using COPY."""
+) -> dict[str, Any]:
+    """Sync a single table from remote to local using COPY.
+
+    Returns a compact execution record suitable for persisting to the sync journal.
+    """
     t0 = time.time()
 
     where_clause = ""
     where_params: dict[str, str] = {}
     mode = "full"
+    pre_local_max = None
 
     if strategy == "incremental" and date_col and not force_full:
-        max_date = get_local_max_date(local_conn, table_name, date_col)
+        pre_local_max = get_local_max_date(local_conn, table_name, date_col)
         where_clause, where_params = build_where_clause(
             date_col,
             start_date=start_date,
             end_date=end_date,
-            incremental_max=max_date,
+            incremental_max=pre_local_max,
             include_incremental=True,
         )
         mode = "incremental"
@@ -399,11 +580,37 @@ def sync_table(
             date_col or "date",
             max_value,
         )
-        return 0
+        elapsed = time.time() - t0
+        return _make_table_result(
+            table_name=table_name,
+            date_column=date_col,
+            strategy=strategy,
+            mode=mode,
+            rows_selected=count,
+            rows_copied=0,
+            remote_min_partition=min_value,
+            remote_max_partition=max_value,
+            local_max_partition_after_sync=None,
+            duration_seconds=elapsed,
+            status="dry_run",
+        )
 
     if count == 0 and mode == "incremental":
         logger.info("  %s: up to date", table_name)
-        return 0
+        elapsed = time.time() - t0
+        return _make_table_result(
+            table_name=table_name,
+            date_column=date_col,
+            strategy=strategy,
+            mode=mode,
+            rows_selected=0,
+            rows_copied=0,
+            remote_min_partition=min_value,
+            remote_max_partition=max_value,
+            local_max_partition_after_sync=pre_local_max,
+            duration_seconds=elapsed,
+            status="up_to_date",
+        )
 
     count_str = f"{count:,}" if count is not None else "?"
     logger.info("  %s: syncing %s rows (%s)...", table_name, count_str, mode)
@@ -430,7 +637,20 @@ def sync_table(
         file_size = tmp.tell()
         if file_size == 0:
             logger.info("  %s: empty result", table_name)
-            return 0
+            elapsed = time.time() - t0
+            return _make_table_result(
+                table_name=table_name,
+                date_column=date_col,
+                strategy=strategy,
+                mode=mode,
+                rows_selected=0,
+                rows_copied=0,
+                remote_min_partition=min_value,
+                remote_max_partition=max_value,
+                local_max_partition_after_sync=None,
+                duration_seconds=elapsed,
+                status="empty",
+            )
 
         tmp.seek(0)
 
@@ -482,8 +702,18 @@ def sync_table(
     elapsed = time.time() - t0
     size_mb = file_size / (1024 * 1024)
     rows = count or 0
+    local_max = None
+    if date_col:
+        try:
+            local_max = get_local_max_date(local_conn, table_name, date_col)
+        except Exception as exc:
+            logger.warning("  %s: copied successfully but local max lookup failed: %s", table_name, exc)
+            try:
+                local_conn.rollback()
+            except Exception:
+                pass
     logger.info(
-        "  %s: done (%s rows, %.1f MB, %.1f s, min_%s=%s, max_%s=%s)",
+        "  %s: done (%s rows, %.1f MB, %.1f s, min_%s=%s, max_%s=%s, local_max_%s=%s)",
         table_name,
         count_str,
         size_mb,
@@ -492,8 +722,22 @@ def sync_table(
         min_value,
         date_col or "date",
         max_value,
+        date_col or "date",
+        local_max,
     )
-    return rows
+    return _make_table_result(
+        table_name=table_name,
+        date_column=date_col,
+        strategy=strategy,
+        mode=mode,
+        rows_selected=rows,
+        rows_copied=rows,
+        remote_min_partition=min_value,
+        remote_max_partition=max_value,
+        local_max_partition_after_sync=local_max,
+        duration_seconds=elapsed,
+        status="success",
+    )
 
 
 def main() -> None:
@@ -517,11 +761,32 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Report planned counts without copying rows")
     parser.add_argument("--allow-unknown-full-refresh", action="store_true", help="Allow unknown --tables to fall back to full refresh")
     parser.add_argument("--allow-large-full-refresh", action="store_true", help="Allow unbounded full refresh of very large tables such as dense CLV snapshots")
+    parser.add_argument(
+        "--state-file",
+        default=str(DEFAULT_STATE_FILE),
+        help="Path to sync state JSON journal",
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Print persisted sync state and exit",
+    )
     args = parser.parse_args()
+
+    state_path = Path(args.state_file)
+
+    if args.status:
+        sys.exit(print_sync_status(state_path))
+
+    sync_state = _build_initial_state(args.sport, args.full, args.start_date, args.end_date, {})
+    write_sync_state(sync_state, state_path)
 
     remote_url = os.getenv("DATABASE_URL")
     if not remote_url:
-        logger.error("DATABASE_URL not set. Add it to your .env file.")
+        message = "DATABASE_URL not set. Add it to your .env file."
+        logger.error(message)
+        sync_state.update(status="failed", finished_at=_utc_now(), error=message)
+        write_sync_state(sync_state, state_path)
         sys.exit(1)
 
     local_url = get_local_url()
@@ -531,7 +796,12 @@ def main() -> None:
         tables = build_table_plan(args)
     except ValueError as exc:
         logger.error(str(exc))
+        sync_state.update(status="failed", finished_at=_utc_now(), error=str(exc))
+        write_sync_state(sync_state, state_path)
         sys.exit(2)
+
+    sync_state["tables_planned"] = list(tables.keys())
+    write_sync_state(sync_state, state_path)
 
     large_unbounded = [
         table_name
@@ -542,10 +812,14 @@ def main() -> None:
         and not args.allow_large_full_refresh
     ]
     if large_unbounded:
-        logger.error(
-            "Refusing unbounded full refresh for large table(s): %s. Use --start-date/--end-date or --allow-large-full-refresh.",
-            ", ".join(large_unbounded),
+        message = (
+            "Refusing unbounded full refresh for large table(s): "
+            f"{', '.join(large_unbounded)}. Use --start-date/--end-date or "
+            "--allow-large-full-refresh."
         )
+        logger.error(message)
+        sync_state.update(status="failed", finished_at=_utc_now(), error=message)
+        write_sync_state(sync_state, state_path)
         sys.exit(2)
 
     logger.info("Syncing %d tables to local Postgres", len(tables))
@@ -554,39 +828,43 @@ def main() -> None:
     if args.full:
         logger.info("Mode:   FULL REFRESH")
 
-    # Ensure local database exists
-    ensure_local_db()
-
-    # Create engines for schema reflection
-    remote_engine = create_engine(
-        remote_url,
-        poolclass=NullPool,
-        connect_args=remote_connect_kwargs(),
-    )
-    local_engine = create_engine(
-        local_url,
-        poolclass=NullPool,
-        connect_args=local_connect_kwargs(),
-    )
-
-    # Create tables locally if needed
-    logger.info("Checking schemas...")
-    for table_name in tables:
-        ensure_table_schema(remote_engine, local_engine, table_name)
-
-    # Sync data using psycopg2 COPY
-    remote_conn = psycopg2.connect(remote_url, **remote_connect_kwargs())
-    remote_conn.autocommit = True
-    local_conn = psycopg2.connect(local_url, **local_connect_kwargs())
-
     total_rows = 0
-    failed = []
-    t_start = time.time()
+    table_results: list[dict[str, Any]] = []
+    failed: list[str] = []
+    remote_conn = None
+    local_conn = None
 
+    t_start = time.time()
     try:
+        # Ensure local database exists
+        ensure_local_db()
+
+        # Create engines for schema reflection
+        remote_engine = create_engine(
+            remote_url,
+            poolclass=NullPool,
+            connect_args=remote_connect_kwargs(),
+        )
+        local_engine = create_engine(
+            local_url,
+            poolclass=NullPool,
+            connect_args=local_connect_kwargs(),
+        )
+
+        # Create tables locally if needed
+        logger.info("Checking schemas...")
+        for table_name in tables:
+            ensure_table_schema(remote_engine, local_engine, table_name)
+
+        # Sync data using psycopg2 COPY
+        remote_conn = psycopg2.connect(remote_url, **remote_connect_kwargs())
+        remote_conn.autocommit = True
+        local_conn = psycopg2.connect(local_url, **local_connect_kwargs())
+
         for table_name, (date_col, strategy) in tables.items():
+            table_start = time.time()
             try:
-                rows = sync_table(
+                result = sync_table(
                     remote_conn,
                     local_conn,
                     table_name,
@@ -597,25 +875,80 @@ def main() -> None:
                     end_date=args.end_date,
                     dry_run=args.dry_run,
                 )
-                total_rows += rows
             except Exception as e:
                 logger.error("  %s: FAILED - %s", table_name, e)
-                local_conn.rollback()
+                if local_conn is not None:
+                    local_conn.rollback()
                 failed.append(table_name)
-    finally:
-        remote_conn.close()
-        local_conn.close()
-        remote_engine.dispose()
-        local_engine.dispose()
+                safe_error = str(e).replace(remote_url, redact_database_url(remote_url)).replace(
+                    local_url, redact_database_url(local_url)
+                )
+                result = _make_table_result(
+                    table_name=table_name,
+                    date_column=date_col,
+                    strategy=strategy,
+                    mode="full" if args.full else ("window" if (args.start_date or args.end_date) else "incremental"),
+                    rows_selected=None,
+                    rows_copied=0,
+                    remote_min_partition=None,
+                    remote_max_partition=None,
+                    local_max_partition_after_sync=None,
+                    duration_seconds=time.time() - table_start,
+                    status="failed",
+                    error=f"{type(e).__name__}: {safe_error.splitlines()[0]}",
+                )
 
-    elapsed = time.time() - t_start
-    logger.info("=" * 60)
-    logger.info("Sync complete: %s rows in %.1f s", f"{total_rows:,}", elapsed)
-    if failed:
-        logger.warning("Failed tables: %s", ", ".join(failed))
-    logger.info(
-        "Use local DB: python src/backtesting/mlb/run_mlb_sweep.py --local ..."
-    )
+            table_results.append(result)
+            if result.get("status") == "failed":
+                if table_name not in failed:
+                    failed.append(table_name)
+            total_rows += int(result.get("rows_copied") or 0)
+            sync_state["tables"] = table_results
+            sync_state["failed_tables"] = failed
+            sync_state["total_rows"] = total_rows
+            write_sync_state(sync_state, state_path)
+
+        elapsed = time.time() - t_start
+        sync_state["status"] = "dry_run" if args.dry_run else ("failed" if failed else "success")
+        sync_state["tables"] = table_results
+        sync_state["failed_tables"] = failed
+        sync_state["finished_at"] = _utc_now()
+        sync_state["total_rows"] = total_rows
+        sync_state["runtime_seconds"] = round(elapsed, 3)
+        write_sync_state(sync_state, state_path)
+
+        logger.info("=" * 60)
+        logger.info("Sync complete: %s rows in %.1f s", f"{total_rows:,}", elapsed)
+        if failed:
+            logger.warning("Failed tables: %s", ", ".join(failed))
+        logger.info("Use local DB: python src/backtesting/mlb/run_mlb_sweep.py --local ...")
+
+        if failed:
+            sys.exit(1)
+        return
+    except Exception as exc:
+        safe_error = str(exc).replace(remote_url, redact_database_url(remote_url)).replace(
+            local_url, redact_database_url(local_url)
+        )
+        sync_state["status"] = "failed"
+        sync_state["tables"] = table_results
+        sync_state["failed_tables"] = failed
+        sync_state["finished_at"] = _utc_now()
+        sync_state["total_rows"] = total_rows
+        sync_state["runtime_seconds"] = round(time.time() - t_start, 3)
+        sync_state["error"] = f"{type(exc).__name__}: {safe_error.splitlines()[0]}"
+        write_sync_state(sync_state, state_path)
+        logger.error("Sync aborted before completion: %s", exc)
+        raise
+    finally:
+        if remote_conn is not None:
+            remote_conn.close()
+        if local_conn is not None:
+            local_conn.close()
+        if "remote_engine" in locals():
+            remote_engine.dispose()
+        if "local_engine" in locals():
+            local_engine.dispose()
 
 
 if __name__ == "__main__":

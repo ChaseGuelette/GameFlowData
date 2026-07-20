@@ -1,0 +1,115 @@
+{"target":"LOCAL","env_key":"LOCAL_DATABASE_URL","queries":{"schema":[{"column_name":"id","data_type":"bigint"},{"column_name":"api_game_id","data_type":"text"},{"column_name":"player_id","data_type":"integer"},{"column_name":"api_player_name","data_type":"text"},{"column_name":"bookmaker","data_type":"text"},{"column_name":"market_key","data_type":"text"},{"column_name":"outcome_label","data_type":"text"},{"column_name":"line","data_type":"numeric"},{"column_name":"commence_time","data_type":"timestamp with time zone"},{"column_name":"snapshot_time","data_type":"timestamp with time zone"},{"column_name":"requested_snapshot_time","data_type":"timestamp with time zone"},{"column_name":"scrape_reason","data_type":"text"},{"column_name":"target_offset_minutes","data_type":"integer"},{"column_name":"inserted_at","data_type":"timestamp with time zone"},{"column_name":"game_id","data_type":"integer"}],"overview":[{"total_rows":384114,"min_requested_snapshot_time":"2026-04-13T09:30:00-04:00","max_requested_snapshot_time":"2026-07-16T17:40:02-04:00","min_commence_date":"2026-04-13","max_commence_date":"2026-07-16","latest_inserted_at":"2026-07-16T17:40:03.500592-04:00","game_id_nonnull":383919,"game_id_nonnull_pct":"99.95","player_id_nonnull":362247,"player_id_nonnull_pct":"94.31","both_ids_nonnull":362136,"both_ids_nonnull_pct":"94.28"}],"recent_by_game_date":[{"game_date":"2026-06-22","rows":1055,"api_games":13,"requested_times":10,"game_id_nonnull":1055,"player_id_nonnull":1011,"latest_inserted_at":"2026-06-22T21:40:03.713574-04:00"},{"game_date":"2026-06-23","rows":1234,"api_games":15,"requested_times":11,"game_id_nonnull":1234,"player_id_nonnull":1142,"latest_inserted_at":"2026-06-23T21:20:03.730286-04:00"},{"game_date":"2026-06-24","rows":1302,"api_games":16,"requested_times":12,"game_id_nonnull":1302,"player_id_nonnull":1174,"latest_inserted_at":"2026-06-24T21:20:03.973269-04:00"},{"game_date":"2026-06-25","rows":805,"api_games":9,"requested_times":8,"game_id_nonnull":805,"player_id_nonnull":758,"latest_inserted_at":"2026-06-25T20:20:03.868857-04:00"},{"game_date":"2026-06-26","rows":1246,"api_games":15,"requested_times":8,"game_id_nonnull":1246,"player_id_nonnull":1177,"latest_inserted_at":"2026-06-26T21:50:03.752083-04:00"},{"game_date":"2026-06-27","rows":1057,"api_games":15,"requested_times":11,"game_id_nonnull":1057,"player_id_nonnull":1053,"latest_inserted_at":"2026-06-27T21:10:03.659127-04:00"},{"game_date":"2026-06-28","rows":1200,"api_games":15,"requested_times":6,"game_id_nonnull":1200,"player_id_nonnull":1064,"latest_inserted_at":"2026-06-28T18:50:03.641449-04:00"},{"game_date":"2026-06-29","rows":1154,"api_games":13,"requested_times":6,"game_id_nonnull":1154,"player_id_nonnull":1154,"latest_inserted_at":"2026-06-29T21:11:03.330678-04:00"},{"game_date":"2026-06-30","rows":1374,"api_games":15,"requested_times":7,"game_id_nonnull":1374,"player_id_nonnull":1185,"latest_inserted_at":"2026-06-30T21:10:59.123898-04:00"},{"game_date":"2026-07-01","rows":1137,"api_games":14,"requested_times":11,"game_id_nonnull":1137,"player_id_nonnull":1094,"latest_inserted_at":"2026-07-01T21:10:09.048222-04:00"},{"game_date":"2026-07-02","rows":834,"api_games":9,"requested_times":9,"game_id_nonnull":834,"player_id_nonnull":736,"latest_inserted_at":"2026-07-02T21:40:03.644811-04:00"},{"game_date":"2026-07-03","rows":1112,"api_games":13,"requested_times":7,"game_id_nonnull":1112,"player_id_nonnull":1112,"latest_inserted_at":"2026-07-03T21:40:33.553824-04:00"},{"game_date":"2026-07-04","rows":1175,"api_games":15,"requested_times":8,"game_id_nonnull":1175,"player_id_nonnull":1087,"latest_inserted_at":"2026-07-04T21:40:03.667667-04:00"},{"game_date":"2026-07-05","rows":1428,"api_games":15,"requested_times":12,"game_id_nonnull":1428,"player_id_nonnull":1280,"latest_inserted_at":"2026-07-05T21:00:03.927227-04:00"},{"game_date":"2026-07-06","rows":709,"api_games":8,"requested_times":8,"game_id_nonnull":709,"player_id_nonnull":622,"latest_inserted_at":"2026-07-06T21:40:03.960525-04:00"},{"game_date":"2026-07-07","rows":1315,"api_games":16,"requested_times":11,"game_id_nonnull":1315,"player_id_nonnull":1251,"latest_inserted_at":"2026-07-07T21:40:03.854466-04:00"},{"game_date":"2026-07-08","rows":1267,"api_games":15,"requested_times":8,"game_id_nonnull":1267,"player_id_nonnull":1218,"latest_inserted_at":"2026-07-08T21:40:47.115582-04:00"},{"game_date":"2026-07-09","rows":1051,"api_games":13,"requested_times":10,"game_id_nonnull":1051,"player_id_nonnull":1002,"latest_inserted_at":"2026-07-09T21:20:03.818085-04:00"},{"game_date":"2026-07-10","rows":1493,"api_games":15,"requested_times":12,"game_id_nonnull":1493,"player_id_nonnull":1493,"latest_inserted_at":"2026-07-10T21:50:03.999528-04:00"},{"game_date":"2026-07-11","rows":1336,"api_games":16,"requested_times":9,"game_id_nonnull":1336,"player_id_nonnull":1206,"latest_inserted_at":"2026-07-11T20:40:03.811969-04:00"},{"game_date":"2026-07-12","rows":1355,"api_games":15,"requested_times":6,"game_id_nonnull":1355,"player_id_nonnull":1263,"latest_inserted_at":"2026-07-12T15:41:16.062189-04:00"},{"game_date":"2026-07-16","rows":88,"api_games":1,"requested_times":1,"game_id_nonnull":88,"player_id_nonnull":88,"latest_inserted_at":"2026-07-16T17:40:03.500592-04:00"}],"july_reason_offsets":[{"scrape_reason":"close_t_minus_30","target_offset_minutes":30,"rows":14300,"game_dates":13,"min_requested_snapshot_time":"2026-07-01T12:10:02-04:00","max_requested_snapshot_time":"2026-07-16T17:40:02-04:00"}],"recent_pairing_by_game_date":[{"game_date":"2026-06-22","quote_groups":565,"paired_over_under_groups":484,"paired_pct":"85.66"},{"game_date":"2026-06-23","quote_groups":663,"paired_over_under_groups":566,"paired_pct":"85.37"},{"game_date":"2026-06-24","quote_groups":694,"paired_over_under_groups":604,"paired_pct":"87.03"},{"game_date":"2026-06-25","quote_groups":431,"paired_over_under_groups":374,"paired_pct":"86.77"},{"game_date":"2026-06-26","quote_groups":672,"paired_over_under_groups":571,"paired_pct":"84.97"},{"game_date":"2026-06-27","quote_groups":556,"paired_over_under_groups":501,"paired_pct":"90.11"},{"game_date":"2026-06-28","quote_groups":640,"paired_over_under_groups":558,"paired_pct":"87.19"},{"game_date":"2026-06-29","quote_groups":599,"paired_over_under_groups":554,"paired_pct":"92.49"},{"game_date":"2026-06-30","quote_groups":733,"paired_over_under_groups":641,"paired_pct":"87.45"},{"game_date":"2026-07-01","quote_groups":607,"paired_over_under_groups":527,"paired_pct":"86.82"},{"game_date":"2026-07-02","quote_groups":441,"paired_over_under_groups":392,"paired_pct":"88.89"},{"game_date":"2026-07-03","quote_groups":604,"paired_over_under_groups":507,"paired_pct":"83.94"},{"game_date":"2026-07-04","quote_groups":629,"paired_over_under_groups":546,"paired_pct":"86.80"},{"game_date":"2026-07-05","quote_groups":762,"paired_over_under_groups":664,"paired_pct":"87.14"},{"game_date":"2026-07-06","quote_groups":380,"paired_over_under_groups":329,"paired_pct":"86.58"},{"game_date":"2026-07-07","quote_groups":697,"paired_over_under_groups":609,"paired_pct":"87.37"},{"game_date":"2026-07-08","quote_groups":669,"paired_over_under_groups":597,"paired_pct":"89.24"},{"game_date":"2026-07-09","quote_groups":548,"paired_over_under_groups":501,"paired_pct":"91.42"},{"game_date":"2026-07-10","quote_groups":790,"paired_over_under_groups":701,"paired_pct":"88.73"},{"game_date":"2026-07-11","quote_groups":720,"paired_over_under_groups":614,"paired_pct":"85.28"},{"game_date":"2026-07-12","quote_groups":717,"paired_over_under_groups":632,"paired_pct":"88.15"},{"game_date":"2026-07-16","quote_groups":47,"paired_over_under_groups":41,"paired_pct":"87.23"}],"recent_post_commence":[{"recent_rows_with_commence":24727,"requested_at_or_post_commence":0,"snapshot_at_or_post_commence":0,"either_at_or_post_commence":0,"first_violation_requested_time":null,"last_violation_requested_time":null}]}}
+{"target":"REMOTE","env_key":"DATABASE_URL","queries":{"schema":[{"column_name":"id","data_type":"bigint"},{"column_name":"api_game_id","data_type":"text"},{"column_name":"player_id","data_type":"integer"},{"column_name":"api_player_name","data_type":"text"},{"column_name":"bookmaker","data_type":"text"},{"column_name":"market_key","data_type":"text"},{"column_name":"outcome_label","data_type":"text"},{"column_name":"line","data_type":"numeric"},{"column_name":"commence_time","data_type":"timestamp with time zone"},{"column_name":"snapshot_time","data_type":"timestamp with time zone"},{"column_name":"requested_snapshot_time","data_type":"timestamp with time zone"},{"column_name":"scrape_reason","data_type":"text"},{"column_name":"target_offset_minutes","data_type":"integer"},{"column_name":"inserted_at","data_type":"timestamp with time zone"},{"column_name":"game_id","data_type":"integer"}],"overview":[{"total_rows":978931,"min_requested_snapshot_time":"2026-04-13T09:30:00-04:00","max_requested_snapshot_time":"2026-07-18T16:40:01-04:00","min_commence_date":"2026-04-13","max_commence_date":"2026-07-18","latest_inserted_at":"2026-07-18T16:40:03.112328-04:00","game_id_nonnull":975698,"game_id_nonnull_pct":"99.67","player_id_nonnull":975436,"player_id_nonnull_pct":"99.64","both_ids_nonnull":972203,"both_ids_nonnull_pct":"99.31"}],"recent_by_game_date":[{"game_date":"2026-06-22","rows":1055,"api_games":13,"requested_times":10,"game_id_nonnull":1055,"player_id_nonnull":1011,"latest_inserted_at":"2026-06-22T21:40:03.713574-04:00"},{"game_date":"2026-06-23","rows":1234,"api_games":15,"requested_times":11,"game_id_nonnull":1234,"player_id_nonnull":1142,"latest_inserted_at":"2026-06-23T21:20:03.730286-04:00"},{"game_date":"2026-06-24","rows":1302,"api_games":16,"requested_times":12,"game_id_nonnull":1302,"player_id_nonnull":1174,"latest_inserted_at":"2026-06-24T21:20:03.973269-04:00"},{"game_date":"2026-06-25","rows":805,"api_games":9,"requested_times":8,"game_id_nonnull":805,"player_id_nonnull":758,"latest_inserted_at":"2026-06-25T20:20:03.868857-04:00"},{"game_date":"2026-06-26","rows":1246,"api_games":15,"requested_times":8,"game_id_nonnull":1246,"player_id_nonnull":1177,"latest_inserted_at":"2026-06-26T21:50:03.752083-04:00"},{"game_date":"2026-06-27","rows":1057,"api_games":15,"requested_times":11,"game_id_nonnull":1057,"player_id_nonnull":1053,"latest_inserted_at":"2026-06-27T21:10:03.659127-04:00"},{"game_date":"2026-06-28","rows":1200,"api_games":15,"requested_times":6,"game_id_nonnull":1200,"player_id_nonnull":1064,"latest_inserted_at":"2026-06-28T18:50:03.641449-04:00"},{"game_date":"2026-06-29","rows":1154,"api_games":13,"requested_times":6,"game_id_nonnull":1154,"player_id_nonnull":1154,"latest_inserted_at":"2026-06-29T21:11:03.330678-04:00"},{"game_date":"2026-06-30","rows":1374,"api_games":15,"requested_times":7,"game_id_nonnull":1374,"player_id_nonnull":1185,"latest_inserted_at":"2026-06-30T21:10:59.123898-04:00"},{"game_date":"2026-07-01","rows":1137,"api_games":14,"requested_times":11,"game_id_nonnull":1137,"player_id_nonnull":1094,"latest_inserted_at":"2026-07-01T21:10:09.048222-04:00"},{"game_date":"2026-07-02","rows":834,"api_games":9,"requested_times":9,"game_id_nonnull":834,"player_id_nonnull":736,"latest_inserted_at":"2026-07-02T21:40:03.644811-04:00"},{"game_date":"2026-07-03","rows":1112,"api_games":13,"requested_times":7,"game_id_nonnull":1112,"player_id_nonnull":1112,"latest_inserted_at":"2026-07-03T21:40:33.553824-04:00"},{"game_date":"2026-07-04","rows":1175,"api_games":15,"requested_times":8,"game_id_nonnull":1175,"player_id_nonnull":1087,"latest_inserted_at":"2026-07-04T21:40:03.667667-04:00"},{"game_date":"2026-07-05","rows":1428,"api_games":15,"requested_times":12,"game_id_nonnull":1428,"player_id_nonnull":1280,"latest_inserted_at":"2026-07-05T21:00:03.927227-04:00"},{"game_date":"2026-07-06","rows":709,"api_games":8,"requested_times":8,"game_id_nonnull":709,"player_id_nonnull":622,"latest_inserted_at":"2026-07-06T21:40:03.960525-04:00"},{"game_date":"2026-07-07","rows":1315,"api_games":16,"requested_times":11,"game_id_nonnull":1315,"player_id_nonnull":1251,"latest_inserted_at":"2026-07-07T21:40:03.854466-04:00"},{"game_date":"2026-07-08","rows":1267,"api_games":15,"requested_times":8,"game_id_nonnull":1267,"player_id_nonnull":1218,"latest_inserted_at":"2026-07-08T21:40:47.115582-04:00"},{"game_date":"2026-07-09","rows":1051,"api_games":13,"requested_times":10,"game_id_nonnull":1051,"player_id_nonnull":1002,"latest_inserted_at":"2026-07-09T21:20:03.818085-04:00"},{"game_date":"2026-07-10","rows":1493,"api_games":15,"requested_times":12,"game_id_nonnull":1493,"player_id_nonnull":1493,"latest_inserted_at":"2026-07-10T21:50:03.999528-04:00"},{"game_date":"2026-07-11","rows":1336,"api_games":16,"requested_times":9,"game_id_nonnull":1336,"player_id_nonnull":1206,"latest_inserted_at":"2026-07-11T20:40:03.811969-04:00"},{"game_date":"2026-07-12","rows":1355,"api_games":15,"requested_times":6,"game_id_nonnull":1355,"player_id_nonnull":1263,"latest_inserted_at":"2026-07-12T15:41:16.062189-04:00"},{"game_date":"2026-07-16","rows":88,"api_games":1,"requested_times":1,"game_id_nonnull":88,"player_id_nonnull":88,"latest_inserted_at":"2026-07-16T17:40:03.500592-04:00"},{"game_date":"2026-07-17","rows":1154,"api_games":14,"requested_times":8,"game_id_nonnull":1154,"player_id_nonnull":1154,"latest_inserted_at":"2026-07-17T21:40:03.474793-04:00"},{"game_date":"2026-07-18","rows":697,"api_games":11,"requested_times":5,"game_id_nonnull":697,"player_id_nonnull":658,"latest_inserted_at":"2026-07-18T16:40:03.112328-04:00"}],"july_reason_offsets":[{"scrape_reason":"close_t_minus_30","target_offset_minutes":30,"rows":16151,"game_dates":15,"min_requested_snapshot_time":"2026-07-01T12:10:02-04:00","max_requested_snapshot_time":"2026-07-18T16:40:01-04:00"}],"recent_pairing_by_game_date":[{"game_date":"2026-06-22","quote_groups":565,"paired_over_under_groups":484,"paired_pct":"85.66"},{"game_date":"2026-06-23","quote_groups":663,"paired_over_under_groups":566,"paired_pct":"85.37"},{"game_date":"2026-06-24","quote_groups":694,"paired_over_under_groups":604,"paired_pct":"87.03"},{"game_date":"2026-06-25","quote_groups":431,"paired_over_under_groups":374,"paired_pct":"86.77"},{"game_date":"2026-06-26","quote_groups":672,"paired_over_under_groups":571,"paired_pct":"84.97"},{"game_date":"2026-06-27","quote_groups":556,"paired_over_under_groups":501,"paired_pct":"90.11"},{"game_date":"2026-06-28","quote_groups":640,"paired_over_under_groups":558,"paired_pct":"87.19"},{"game_date":"2026-06-29","quote_groups":599,"paired_over_under_groups":554,"paired_pct":"92.49"},{"game_date":"2026-06-30","quote_groups":733,"paired_over_under_groups":641,"paired_pct":"87.45"},{"game_date":"2026-07-01","quote_groups":607,"paired_over_under_groups":527,"paired_pct":"86.82"},{"game_date":"2026-07-02","quote_groups":441,"paired_over_under_groups":392,"paired_pct":"88.89"},{"game_date":"2026-07-03","quote_groups":604,"paired_over_under_groups":507,"paired_pct":"83.94"},{"game_date":"2026-07-04","quote_groups":629,"paired_over_under_groups":546,"paired_pct":"86.80"},{"game_date":"2026-07-05","quote_groups":762,"paired_over_under_groups":664,"paired_pct":"87.14"},{"game_date":"2026-07-06","quote_groups":380,"paired_over_under_groups":329,"paired_pct":"86.58"},{"game_date":"2026-07-07","quote_groups":697,"paired_over_under_groups":609,"paired_pct":"87.37"},{"game_date":"2026-07-08","quote_groups":669,"paired_over_under_groups":597,"paired_pct":"89.24"},{"game_date":"2026-07-09","quote_groups":548,"paired_over_under_groups":501,"paired_pct":"91.42"},{"game_date":"2026-07-10","quote_groups":790,"paired_over_under_groups":701,"paired_pct":"88.73"},{"game_date":"2026-07-11","quote_groups":720,"paired_over_under_groups":614,"paired_pct":"85.28"},{"game_date":"2026-07-12","quote_groups":717,"paired_over_under_groups":632,"paired_pct":"88.15"},{"game_date":"2026-07-16","quote_groups":47,"paired_over_under_groups":41,"paired_pct":"87.23"},{"game_date":"2026-07-17","quote_groups":627,"paired_over_under_groups":525,"paired_pct":"83.73"},{"game_date":"2026-07-18","quote_groups":381,"paired_over_under_groups":316,"paired_pct":"82.94"}],"recent_post_commence":[{"recent_rows_with_commence":26578,"requested_at_or_post_commence":0,"snapshot_at_or_post_commence":0,"either_at_or_post_commence":0,"first_violation_requested_time":null,"last_violation_requested_time":null}]}}
+SQL_USED_BEGIN
+-- Per-query read-only session setup:
+SET LOCAL statement_timeout = '120s';
+SET LOCAL TIME ZONE 'America/New_York';
+
+-- schema
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'mlb_player_props_clv_snapshots'
+  AND column_name IN (
+    'id', 'market_key', 'outcome_label', 'line', 'game_id', 'player_id',
+    'requested_snapshot_time', 'snapshot_time', 'commence_time',
+    'scrape_reason', 'target_offset_minutes', 'inserted_at',
+    'api_game_id', 'bookmaker', 'api_player_name'
+  )
+ORDER BY ordinal_position;
+
+-- overview
+SELECT
+  COUNT(*)::bigint AS total_rows,
+  MIN(requested_snapshot_time) AS min_requested_snapshot_time,
+  MAX(requested_snapshot_time) AS max_requested_snapshot_time,
+  MIN(commence_time)::date AS min_commence_date,
+  MAX(commence_time)::date AS max_commence_date,
+  MAX(inserted_at) AS latest_inserted_at,
+  COUNT(game_id)::bigint AS game_id_nonnull,
+  ROUND(100.0 * COUNT(game_id) / NULLIF(COUNT(*), 0), 2) AS game_id_nonnull_pct,
+  COUNT(player_id)::bigint AS player_id_nonnull,
+  ROUND(100.0 * COUNT(player_id) / NULLIF(COUNT(*), 0), 2) AS player_id_nonnull_pct,
+  COUNT(*) FILTER (WHERE game_id IS NOT NULL AND player_id IS NOT NULL)::bigint AS both_ids_nonnull,
+  ROUND(100.0 * COUNT(*) FILTER (WHERE game_id IS NOT NULL AND player_id IS NOT NULL)
+        / NULLIF(COUNT(*), 0), 2) AS both_ids_nonnull_pct
+FROM public.mlb_player_props_clv_snapshots
+WHERE market_key = %(market)s;
+
+-- recent_by_game_date
+SELECT
+  commence_time::date AS game_date,
+  COUNT(*)::bigint AS rows,
+  COUNT(DISTINCT api_game_id)::bigint AS api_games,
+  COUNT(DISTINCT requested_snapshot_time)::bigint AS requested_times,
+  COUNT(game_id)::bigint AS game_id_nonnull,
+  COUNT(player_id)::bigint AS player_id_nonnull,
+  MAX(inserted_at) AS latest_inserted_at
+FROM public.mlb_player_props_clv_snapshots
+WHERE market_key = %(market)s
+  AND requested_snapshot_time >= %(recent_start)s::timestamptz
+GROUP BY commence_time::date
+ORDER BY game_date;
+
+-- july_reason_offsets
+SELECT
+  scrape_reason,
+  target_offset_minutes,
+  COUNT(*)::bigint AS rows,
+  COUNT(DISTINCT commence_time::date)::bigint AS game_dates,
+  MIN(requested_snapshot_time) AS min_requested_snapshot_time,
+  MAX(requested_snapshot_time) AS max_requested_snapshot_time
+FROM public.mlb_player_props_clv_snapshots
+WHERE market_key = %(market)s
+  AND requested_snapshot_time >= %(july_start)s::timestamptz
+  AND requested_snapshot_time < %(aug_start)s::timestamptz
+GROUP BY scrape_reason, target_offset_minutes
+ORDER BY scrape_reason, target_offset_minutes NULLS FIRST;
+
+-- recent_pairing_by_game_date
+WITH quote_groups AS (
+  SELECT
+    commence_time::date AS game_date,
+    api_game_id,
+    bookmaker,
+    api_player_name,
+    line,
+    snapshot_time,
+    BOOL_OR(LOWER(outcome_label) = 'over') AS has_over,
+    BOOL_OR(LOWER(outcome_label) = 'under') AS has_under
+  FROM public.mlb_player_props_clv_snapshots
+  WHERE market_key = %(market)s
+    AND requested_snapshot_time >= %(recent_start)s::timestamptz
+    AND LOWER(outcome_label) IN ('over', 'under')
+  GROUP BY commence_time::date, api_game_id, bookmaker, api_player_name, line, snapshot_time
+)
+SELECT
+  game_date,
+  COUNT(*)::bigint AS quote_groups,
+  COUNT(*) FILTER (WHERE has_over AND has_under)::bigint AS paired_over_under_groups,
+  ROUND(100.0 * COUNT(*) FILTER (WHERE has_over AND has_under) / NULLIF(COUNT(*), 0), 2) AS paired_pct
+FROM quote_groups
+GROUP BY game_date
+ORDER BY game_date;
+
+-- recent_post_commence
+SELECT
+  COUNT(*)::bigint AS recent_rows_with_commence,
+  COUNT(*) FILTER (WHERE requested_snapshot_time >= commence_time)::bigint AS requested_at_or_post_commence,
+  COUNT(*) FILTER (WHERE snapshot_time >= commence_time)::bigint AS snapshot_at_or_post_commence,
+  COUNT(*) FILTER (
+    WHERE requested_snapshot_time >= commence_time OR snapshot_time >= commence_time
+  )::bigint AS either_at_or_post_commence,
+  MIN(requested_snapshot_time) FILTER (
+    WHERE requested_snapshot_time >= commence_time OR snapshot_time >= commence_time
+  ) AS first_violation_requested_time,
+  MAX(requested_snapshot_time) FILTER (
+    WHERE requested_snapshot_time >= commence_time OR snapshot_time >= commence_time
+  ) AS last_violation_requested_time
+FROM public.mlb_player_props_clv_snapshots
+WHERE market_key = %(market)s
+  AND requested_snapshot_time >= %(recent_start)s::timestamptz
+  AND commence_time IS NOT NULL;
+
+-- bind parameters (non-secret): {"aug_start": "2026-08-01", "july_start": "2026-07-01", "market": "pitcher_strikeouts", "recent_start": "2026-06-22"}
+SQL_USED_END

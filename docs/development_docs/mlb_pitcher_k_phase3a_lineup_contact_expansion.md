@@ -1,5 +1,9 @@
 # MLB Pitcher K Phase 3A: Lineup / Contact Feature Expansion
 
+> **Completed rejected experiment:** Do not use this as the active roadmap. Its evidence and
+> train/serve coverage lesson are incorporated into
+> [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md).
+
 Date: 2026-05-13
 Status: completed experiment — do not promote
 

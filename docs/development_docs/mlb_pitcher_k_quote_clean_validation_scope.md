@@ -1,5 +1,10 @@
 # MLB Pitcher K Quote-Clean Validation Scope
 
+> **Gate completed for Slice 7:** The requirements in this scope were satisfied for the
+> 2026-04-13 through 2026-06-21 baseline. Use
+> [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md) for current work;
+> retain this file as the original validation contract.
+
 Date: 2026-05-15
 Status: implementation-ready / validation-gated
 

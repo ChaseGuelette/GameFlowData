@@ -19,11 +19,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--start-id", type=int, required=True)
     parser.add_argument("--end-id", type=int, required=True)
+    parser.add_argument("--market-key", required=True)
     parser.add_argument("--table", default="mlb_player_props_clv_snapshots")
     args = parser.parse_args()
 
     remote_url = os.environ["DATABASE_URL"]
-    local_url = os.environ["LOCAL_DATABASE_URL"]
+    local_url = os.getenv("LOCAL_DATABASE_URL_AGENT") or os.environ["LOCAL_DATABASE_URL"]
     table = args.table
     t0 = time.time()
 
@@ -41,8 +42,8 @@ def main() -> int:
     try:
         with remote.cursor() as cur:
             cur.execute(
-                f'SELECT COUNT(*) FROM "{table}" WHERE id > %s AND id <= %s',
-                (args.start_id, args.end_id),
+                f'SELECT COUNT(*) FROM "{table}" WHERE id >= %s AND id <= %s AND market_key = %s',
+                (args.start_id, args.end_id, args.market_key),
             )
             count = cur.fetchone()[0]
         print(f"Remote rows in id window ({args.start_id}, {args.end_id}]: {count:,}")
@@ -52,8 +53,8 @@ def main() -> int:
         with tempfile.TemporaryFile(mode="w+b") as tmp:
             with remote.cursor() as cur:
                 copy_out = cur.mogrify(
-                    f'COPY (SELECT * FROM "{table}" WHERE id > %s AND id <= %s ORDER BY id) TO STDOUT WITH CSV HEADER',
-                    (args.start_id, args.end_id),
+                    f'COPY (SELECT * FROM "{table}" WHERE id >= %s AND id <= %s AND market_key = %s ORDER BY id) TO STDOUT WITH CSV HEADER',
+                    (args.start_id, args.end_id, args.market_key),
                 ).decode("utf-8")
                 print("Exporting remote rows...")
                 cur.copy_expert(copy_out, tmp)

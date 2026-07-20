@@ -6,6 +6,7 @@ from pathlib import Path
 from scripts.run_mlb_quote_clean_audit_suite import (
     SuiteItem,
     _sanitize_label,
+    build_audit_evidence_metadata,
     determine_gate_status,
     discover_bets_files,
     read_bets_rollup,
@@ -106,6 +107,47 @@ def test_determine_gate_status_fails_edge_ranking_ci_low() -> None:
     )
 
     assert determine_gate_status(item, {"decision": "PASS"}).startswith("FAIL: edge-ranking")
+
+
+def test_full_audit_metadata_requires_persisted_dropout_pass(tmp_path: Path) -> None:
+    summary_path = tmp_path / "dropout_audit" / "audit_summary.json"
+    metadata = build_audit_evidence_metadata(
+        skip_dropout_audit=False,
+        dry_run=False,
+        dropout_returncode=0,
+        dropout_summary_path=summary_path,
+        dropout_summary={"decision": "PASS"},
+    )
+
+    assert metadata == {
+        "audit_mode": "full",
+        "dropout_audit_ran": True,
+        "dropout_returncode": 0,
+        "dropout_summary_path": str(summary_path),
+        "dropout_output_paths": [
+            str(summary_path),
+            str(summary_path.parent / "audit_summary.md"),
+            str(summary_path.parent / "dropout_summary_by_bucket.csv"),
+            str(summary_path.parent / "dropout_rows.csv"),
+            str(summary_path.parent / "selected_clean_quotes.csv"),
+            str(summary_path.parent / "dropout_by_date.csv"),
+            str(summary_path.parent / "dropout_by_game.csv"),
+            str(summary_path.parent / "dropout_by_bookmaker.csv"),
+        ],
+        "dropout_decision": "PASS",
+        "full_audit_complete": True,
+        "full_audit_passed": True,
+    }
+
+    warning = build_audit_evidence_metadata(
+        skip_dropout_audit=False,
+        dry_run=False,
+        dropout_returncode=0,
+        dropout_summary_path=summary_path,
+        dropout_summary={"decision": "WARN"},
+    )
+    assert warning["full_audit_complete"] is True
+    assert warning["full_audit_passed"] is False
 
 
 def test_dry_run_clv_command_uses_generic_analyzer(tmp_path: Path, monkeypatch) -> None:

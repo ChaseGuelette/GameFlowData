@@ -304,12 +304,36 @@ def diagnose_clv_failure_modes(clv_output_dir: str | Path, output_dir: str | Pat
 
     horizons = _horizons_present(timing)
     timing_coverage = _timing_horizon_coverage(timing)
-    has_15 = bool(horizons & {"+15m", "15m", "+15", "15"})
-    has_30 = bool(horizons & {"+30m", "30m", "+30", "30"})
-    has_60 = bool(horizons & {"+60m", "60m", "+60", "60"})
-    if not (has_15 and has_30 and has_60):
-        failure_modes.append("timing_stability_missing")
-        reasons.append("Timing stability horizons are missing or sparse; expected +15/+30/+60 minute diagnostics.")
+    required_horizons = {
+        "+15m": {"+15m", "15m", "+15", "15"},
+        "+30m": {"+30m", "30m", "+30", "30"},
+        "+60m": {"+60m", "60m", "+60", "60"},
+    }
+    normalized_coverage = {
+        required: max(
+            (value for key, value in timing_coverage.items() if str(key).lower().replace(" ", "") in aliases),
+            default=0.0,
+        )
+        for required, aliases in required_horizons.items()
+    }
+    timing_stability_passed = all(
+        bool(horizons & aliases) and normalized_coverage[required] > 0
+        for required, aliases in required_horizons.items()
+    )
+    timing_stability = {
+        "status": "PASS" if timing_stability_passed else "FAIL",
+        "required_horizons": list(required_horizons),
+        "horizons_present": sorted(horizons),
+        "coverage_pct": {
+            horizon: coverage * 100.0
+            for horizon, coverage in normalized_coverage.items()
+        },
+        "reason": (
+            None
+            if timing_stability_passed
+            else "Timing stability horizons are missing or have zero scored coverage."
+        ),
+    }
 
     bookmaker_bad, bookmaker_reasons = _bookmaker_failures(bookmakers)
     if bookmaker_bad:
@@ -328,7 +352,7 @@ def diagnose_clv_failure_modes(clv_output_dir: str | Path, output_dir: str | Pat
     # De-duplicate while preserving order.
     failure_modes = list(dict.fromkeys(failure_modes))
 
-    data_failures = {"data_quality_failure", "same_book_coverage_failure", "timing_stability_missing"}
+    data_failures = {"data_quality_failure", "same_book_coverage_failure"}
     model_failures = {"negative_mean_clv", "edge_ranking_failure", "bookmaker_cluster_failure", "odds_band_failure", "line_movement_mismatch"}
     inconclusive_only = {"underpowered_or_inconclusive"}
 
@@ -362,6 +386,7 @@ def diagnose_clv_failure_modes(clv_output_dir: str | Path, output_dir: str | Pat
         "edge_bins_present": not edge_bins.empty,
         "timing_horizons_present": sorted(horizons),
         "timing_horizon_coverage_pct": {k: v * 100.0 for k, v in timing_coverage.items()},
+        "timing_stability": timing_stability,
         "top_unmatched_reasons": unmatched_reasons_df.head(10).to_dict("records") if not unmatched_reasons_df.empty else [],
     }
     _write_outputs(output_dir, result)

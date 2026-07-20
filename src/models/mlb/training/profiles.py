@@ -143,6 +143,27 @@ _PROFILES: dict[str, MLBTrainingProfile] = {
         default_book_routing_policy="preferred_book_first",
         min_decision_grade_bets=100,
     ),
+    "batter_rbis": MLBTrainingProfile(
+        stat_key="batter_rbis",
+        display_name="Batter RBIs",
+        train_entrypoint_kind="batter",
+        model_type="negative_binomial",
+        train_short_stat="rbis",
+        target_columns=("actual",),
+        prop_line_feature="prop_line_batter_rbis",
+        default_direction="both",
+        artifact_prefix="mlb_run_batter_rbis",
+        model_artifact_names=(
+            "batter_rbis_xgblss_booster.json",
+            "batter_rbis_negbin_meta.json",
+        ),
+        feature_families=MappingProxyType(dict(BATTER_FORCE_FEATURE_FAMILIES)),
+        locked_out_features=(),
+        default_quote_policy="slate_or_tminus",
+        default_line_source="mlb_player_props_clv_snapshots",
+        default_book_routing_policy="preferred_book_first",
+        min_decision_grade_bets=100,
+    ),
     "pitcher_strikeouts": MLBTrainingProfile(
         stat_key="pitcher_strikeouts",
         display_name="Pitcher Strikeouts",
@@ -166,6 +187,8 @@ _PROFILES: dict[str, MLBTrainingProfile] = {
 _ALIASES: dict[str, str] = {
     "hits": "batter_hits",
     "batter-hits": "batter_hits",
+    "rbis": "batter_rbis",
+    "batter-rbis": "batter_rbis",
     "pitcher_k": "pitcher_strikeouts",
     "pitcher-k": "pitcher_strikeouts",
     "pitcher_ks": "pitcher_strikeouts",
@@ -190,4 +213,4 @@ def get_training_profile(name: str) -> MLBTrainingProfile:
 
 def list_training_profiles() -> list[str]:
     """Return canonical profiles in stable implementation order."""
-    return ["batter_hits", "pitcher_strikeouts"]
+    return ["batter_hits", "batter_rbis", "pitcher_strikeouts"]

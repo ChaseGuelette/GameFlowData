@@ -1,5 +1,9 @@
 # MLB Pitcher K Two-Track Ablation Plan
 
+> **Superseded operating plan (2026-07-18):** Use
+> [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md) for current execution.
+> This file is retained as the immediate predecessor and historical rationale.
+
 Date: 2026-06-21
 Status: planning / future-run runbook
 

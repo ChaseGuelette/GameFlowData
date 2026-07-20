@@ -1,0 +1,45 @@
+experiment:
+  name: batter_hits_platoon_contact_finalist
+  profile: batter_hits
+  purpose: finalist_certification
+model:
+  base: no_prop_line
+  artifact_dir: src/models/mlb/artifacts/ablations/batter_hits_no_prop_line_include_platoon_contact_20260526_232005/mlb_run_batter_hits_20260526_232007_no_prop_line
+  sweep_dir: backtest_results/ablations/batter_hits_platoon_contact_independent_dense_20260518_20260621
+  sweep_artifact_identity_sha256: 6ffc01a2788f9b4b8c362ac5852746d593c9285f7714ed88eb325e7534f860aa
+  tune: false
+  feature_tolerance: 0.02
+  feature_controls:
+    mode: include
+    families: [platoon, contact_quality]
+    features: []
+training:
+  seasons: [2024, 2025]
+  calibration_season: 2026
+  calibration_end: 2026-04-12
+evaluation:
+  start: 2026-05-18
+  end: 2026-06-21
+  direction: both
+  edge_thresholds: [0.10, 0.12, 0.15]
+  flat_bet: 100
+  tau: [null]
+  kelly_values: [0.125]
+quotes:
+  clean: true
+  line_source: mlb_player_props_clv_snapshots
+  decision_policy: slate_or_tminus
+  relative_minutes: 60
+  routing: preferred_book_first
+  coverage_audit_note: Full finalist audit must persist passing dropout and +15/+30/+60 timing evidence before live readiness.
+audit:
+  minimum_bets: 100
+  bootstrap_samples: 1000
+  mode: full
+decision:
+  max_drawdown: 0.25
+  require_positive_roi: true
+  require_positive_mean_clv_ci_low: true
+  require_positive_ranker_ci_low: true
+  require_edge_bucket_monotonicity: true
+  require_independent_window: true

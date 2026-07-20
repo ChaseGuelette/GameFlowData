@@ -1,5 +1,10 @@
 # MLB Pitcher K Frozen Baselines
 
+> **Historical baseline-restoration record:** Current baseline status and ablation execution
+> live in [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md). The
+> statements below that dense Pitcher K CLV is missing or that variants must not start were
+> superseded after the 2026-04-13 through 2026-06-21 dense-CLV certification.
+
 Date: 2026-06-21
 Status: baseline-restoration runbook / Chase-run validation required
 

@@ -40,9 +40,9 @@ def _write_required_clv_dir(path: Path, *, summary: dict | None = None, matches:
         {"group": "draftkings", "n": 80, "n_scored": 75, "mean_clv_implied_prob": 0.03, "mean_clv_ci_low": 0.002, "mean_clv_ci_high": 0.05},
     ]).to_csv(path / "clv_by_bookmaker.csv", index=False)
     pd.DataFrame([
-        {"horizon": "+15m", "n_scored": 100, "mean_clv_implied_prob": 0.01},
-        {"horizon": "+30m", "n_scored": 100, "mean_clv_implied_prob": 0.015},
-        {"horizon": "+60m", "n_scored": 100, "mean_clv_implied_prob": 0.02},
+        {"horizon": "+15m", "horizon_clv_implied_prob": 0.01},
+        {"horizon": "+30m", "horizon_clv_implied_prob": 0.015},
+        {"horizon": "+60m", "horizon_clv_implied_prob": 0.02},
     ]).to_csv(path / "clv_timing_stability.csv", index=False)
     if matches is None:
         matches = pd.DataFrame([
@@ -117,3 +117,20 @@ def test_missing_required_columns_are_invalid(tmp_path: Path) -> None:
 
     assert result["decision_label"] == "invalid_missing_inputs"
     assert "data_quality_failure" in result["failure_modes"]
+
+
+def test_named_timing_horizons_without_values_are_reported_not_reclassified(tmp_path: Path) -> None:
+    _write_required_clv_dir(tmp_path)
+    pd.DataFrame(
+        [
+            {"horizon": "+15m", "horizon_clv_implied_prob": None},
+            {"horizon": "+30m", "horizon_clv_implied_prob": None},
+            {"horizon": "+60m", "horizon_clv_implied_prob": None},
+        ]
+    ).to_csv(tmp_path / "clv_timing_stability.csv", index=False)
+
+    result = diagnose_clv_failure_modes(tmp_path, tmp_path / "out")
+
+    assert result["decision_label"] == "pass"
+    assert result["timing_stability"]["status"] == "FAIL"
+    assert "timing_stability_missing" not in result["failure_modes"]

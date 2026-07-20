@@ -53,11 +53,24 @@ def test_pitcher_strikeouts_profile_locks_rejected_phase3a_features() -> None:
     assert "projected_lineup_k_pct" in profile.locked_out_features
 
 
+def test_batter_rbis_reuses_generic_batter_profile_contract() -> None:
+    profile = get_training_profile("batter_rbis")
+
+    assert profile.train_entrypoint_kind == "batter"
+    assert profile.train_short_stat == "rbis"
+    assert profile.model_type == "negative_binomial"
+    assert profile.model_artifact_names == (
+        "batter_rbis_xgblss_booster.json",
+        "batter_rbis_negbin_meta.json",
+    )
+    assert get_training_profile("rbis") is profile
+
+
 def test_profile_lookup_normalizes_aliases_and_lists_initial_profiles() -> None:
     assert get_training_profile("pitcher-k").stat_key == "pitcher_strikeouts"
     assert get_training_profile("pitcher_k").stat_key == "pitcher_strikeouts"
     assert get_training_profile("hits").stat_key == "batter_hits"
-    assert list_training_profiles() == ["batter_hits", "pitcher_strikeouts"]
+    assert list_training_profiles() == ["batter_hits", "batter_rbis", "pitcher_strikeouts"]
 
 
 def test_unknown_profile_fails_loudly() -> None:
