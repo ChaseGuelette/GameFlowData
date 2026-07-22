@@ -10,7 +10,8 @@
 4. run or attach an independent-window quote-clean sweep;
 5. audit decision-grade bets against CLV;
 6. run CLV ranking diagnostics;
-7. write report-only Confirm / Shelf / Exclude and paper/live posture.
+7. write report-only Confirm / Shelf / Exclude and paper/live posture;
+8. write an explicit report-only staking recommendation.
 
 It never deploys an artifact, changes production configuration, enables Kelly, or enables live trading.
 
@@ -19,13 +20,13 @@ It never deploys an artifact, changes production configuration, enables Kelly, o
 Always inspect the resolved commands first:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\run_mlb_model_lifecycle.py --config configs\mlb\batter_hits\platoon_contact_independent.yaml --dry-run
+.\venv\Scripts\python.exe scripts\run_mlb_model_lifecycle.py --config configs\mlb\batter_hits\platoon_contact_end_to_end.yaml --dry-run
 ```
 
-Run or resume the lifecycle:
+Primary batter-hits end-to-end run, launched manually by Chase only after dry-run review:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\run_mlb_model_lifecycle.py --config configs\mlb\batter_hits\platoon_contact_independent.yaml
+.\venv\Scripts\python.exe scripts\run_mlb_model_lifecycle.py --config configs\mlb\batter_hits\platoon_contact_end_to_end.yaml
 ```
 
 Resume an attached artifact/sweep at CLV audit:
@@ -60,8 +61,9 @@ Adding a stat that uses an existing architecture requires one profile declaratio
 
 ## Sample configurations
 
-- `configs/mlb/batter_hits/platoon_contact_independent.yaml`
-- `configs/mlb/batter_hits/platoon_contact_finalist.yaml` (full-audit, report-only finalist preset)
+- `configs/mlb/batter_hits/platoon_contact_end_to_end.yaml` (primary no-attach one-command workflow)
+- `configs/mlb/batter_hits/platoon_contact_independent.yaml` (attach/resume independent-window certification workflow)
+- `configs/mlb/batter_hits/platoon_contact_finalist.yaml` (attach/resume full-audit, report-only finalist preset)
 - `configs/mlb/pitcher_strikeouts/baseline_independent.yaml`
 - `configs/mlb/batter_rbis/baseline_independent.yaml`
 
@@ -73,14 +75,16 @@ The batter-hits example attaches the exact May 26 platoon/contact artifact and t
 
 This is a two-family, twenty-forced-feature candidate—not a “four-feature” model.
 
+For new batter-hits operation, use `platoon_contact_end_to_end.yaml`: it has no attached artifact, no attached sweep, and no hand-computed sweep artifact hash. Treat the independent/finalist batter-hits presets as attach/resume certification workflows.
+
 ## YAML sections
 
 - `experiment`: name, profile, purpose, optional output root.
 - `model`: base, optional artifact/sweep attachments, attached-sweep artifact SHA-256, tuning, variant, feature controls.
 - `training`: seasons and calibration cutoff.
-- `evaluation`: independent window, direction, edge/tau/Kelly grid, flat stake.
+- `evaluation`: independent window, direction, bounded edge/tau/`z_max`/`max_weight`/Kelly grid, flat stake.
 - `quotes`: quote-clean policy, dense source, T-minus/slate policy, routing, coverage note.
-- `audit`: minimum bets, bootstrap count, `clv_only` or `full` dropout audit.
+- `audit`: minimum bets, bootstrap count, `clv_only` or `full` dropout audit, and bounded config-selection policy.
 - `decision`: ROI, CLV CI, ranker CI, monotonicity, drawdown, and independence gates.
 
 Unknown profiles, unknown feature families, reversed or pre-calibration evaluation windows, incomplete artifact paths, and non-quote-clean promotion configurations fail before subprocess execution. For pitcher profiles, `base: no_prop_line` is implemented by forcing the registered pitcher prop-line feature out of training.
@@ -104,13 +108,20 @@ run_manifest.json
 stage_status.json
 commands.json
 artifact_identity.json
+audit_selection.json
 audit/
 ranker/
 promotion_decision.json
 promotion_decision.md
+staking_recommendation.json
+staking_recommendation.md
 ```
 
 Artifact files, manifests, resolved configuration, sweep evidence, and downstream stage inputs are SHA-256 identified. Artifact metadata must provide and agree on stat/profile, model type and base, training/calibration seasons, calibration cutoff, ablation variant when requested, and the exact include-versus-exclude feature controls; extra or opposite-mode controls fail identity. An attached sweep must declare `model.sweep_artifact_identity_sha256`, and execution fails if it differs from the verified artifact identity.
+
+The sweep grid is not the certification set. Discovery may use deterministic `risk_filtered_top_n`, capped by `audit.selection.max_configs` and optionally reserving a no-BL control. Independent and finalist purposes require explicit preregistered parameter cells. `audit_selection.json` records each selected config, metrics, reason, bets path, and candidate-edge path and participates in downstream identity hashing.
+
+Only selected configs feed CLV, expanded ranker diagnostics, and dropout placement-key classification. Ranker commands use `--score-set all` plus each selected config's exact `bookmaker_candidate_edges.csv`. Empty or invalid selection fails closed instead of allowing audit auto-discovery to expand across every BL cell. Full audit remains required for strict dropout and `+15m`/`+30m`/`+60m` timing certification.
 
 A zero subprocess exit code is necessary but not sufficient. Before a stage is marked completed, the runner verifies:
 
@@ -136,6 +147,8 @@ Operational posture is separate:
 - `live_ready`
 
 `live_ready` requires `purpose: finalist_certification`, `audit.mode: full`, an independent quote-clean window, a persisted passing full dropout audit, passing +15/+30/+60 timing-stability evidence for the same candidate, positive CLV and ranker confidence bounds, acceptable drawdown, and monotonic rank evidence. The positive ranker confidence bound and pass flag must occur on the same monotonic ranker row. Those finalist safety gates are mandatory even if their configurable report flags are disabled. Missing/incomplete full-audit or timing evidence shelves the candidate; explicit dropout or timing failure excludes it. Missing evidence always blocks live posture.
+
+`staking_recommendation.json` is also report-only. It emits `blocked` for dry-run, Shelf, Exclude, discovery, missing/mismatched evidence, or any non-Confirm result; `flat_paper` for Confirm independent validation with qualifying flat-paper evidence; and `capped_kelly_paper_eligible` only for Confirm finalist certification with full verified audit/timing/CLV/ranker evidence. `capped_kelly_paper_eligible` is paper-only eligibility for a separate review, not an instruction and not live eligibility. The JSON explicitly records that no deployment, live, or Kelly action was performed.
 
 ## Safety
 

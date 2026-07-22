@@ -1,7 +1,11 @@
+# Resume example: reuse a completed artifact and sweep, then run downstream evidence stages.
+# Always dry-run first. The attached paths and identity below are one concrete, verified
+# batter_hits example; replace all three together when resuming a different experiment.
 experiment:
-  name: batter_hits_platoon_contact_independent
+  name: example_resume_batter_hits_platoon_contact
   profile: batter_hits
-  purpose: independent_validation
+  purpose: finalist_certification
+
 model:
   base: no_prop_line
   artifact_dir: src/models/mlb/artifacts/ablations/batter_hits_no_prop_line_include_platoon_contact_20260526_232005/mlb_run_batter_hits_20260526_232007_no_prop_line
@@ -13,10 +17,12 @@ model:
     mode: include
     families: [platoon, contact_quality]
     features: []
+
 training:
   seasons: [2024, 2025]
   calibration_season: 2026
   calibration_end: 2026-04-12
+
 evaluation:
   start: 2026-05-18
   end: 2026-06-21
@@ -26,18 +32,21 @@ evaluation:
   tau: [null]
   z_max: [1.0]
   max_weight: [0.50]
+  # This matches the attached sweep metadata. flat_bet overrides Kelly sizing.
   kelly_values: [0.125]
+
 quotes:
   clean: true
   line_source: mlb_player_props_clv_snapshots
   decision_policy: slate_or_tminus
   relative_minutes: 60
   routing: preferred_book_first
-  coverage_audit_note: Existing independent-window sweep; linked coverage must be verified by the audit stage.
+  coverage_audit_note: Resume the verified independent-window sweep and require full linked-coverage and +15/+30/+60 timing evidence.
+
 audit:
   minimum_bets: 100
   bootstrap_samples: 1000
-  mode: clv_only
+  mode: full
   selection:
     policy: explicit
     max_configs: 1
@@ -45,6 +54,7 @@ audit:
     rank_by: sharpe_ratio
     configs:
       - {tau: null, z_max: 1.0, max_weight: 0.50, edge_threshold: 0.12, kelly_fraction: 0.125}
+
 decision:
   max_drawdown: 0.25
   require_positive_roi: true

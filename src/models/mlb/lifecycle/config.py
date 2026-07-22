@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
@@ -15,6 +16,7 @@ from src.models.mlb.training.profiles import MLBTrainingProfile, get_training_pr
 PurposeLiteral = Literal["discovery", "independent_validation", "finalist_certification"]
 ModelBase = Literal["no_prop_line", "with_prop_line"]
 AuditMode = Literal["clv_only", "full"]
+AuditSelectionPolicy = Literal["all_decision_grade", "risk_filtered_top_n", "explicit"]
 PITCHER_VARIANTS = {
     "none",
     "static_no_l30",
@@ -73,7 +75,23 @@ class EvaluationConfig(StrictModel):
     edge_thresholds: list[float] = Field(default_factory=lambda: [0.05, 0.08, 0.10])
     flat_bet: float | None = None
     tau: list[float | None] = Field(default_factory=lambda: [None])
+    z_max: list[float] = Field(default_factory=lambda: [1.0], min_length=1)
+    max_weight: list[float] = Field(default_factory=lambda: [0.50], min_length=1)
     kelly_values: list[float] = Field(default_factory=lambda: [0.125])
+
+    @field_validator("z_max")
+    @classmethod
+    def _validate_z_max(cls, values: list[float]) -> list[float]:
+        if any(not math.isfinite(value) or value <= 0 for value in values):
+            raise ValueError("evaluation.z_max values must be finite and > 0")
+        return values
+
+    @field_validator("max_weight")
+    @classmethod
+    def _validate_max_weight(cls, values: list[float]) -> list[float]:
+        if any(not math.isfinite(value) or not 0 < value <= 1 for value in values):
+            raise ValueError("evaluation.max_weight values must be finite and in (0, 1]")
+        return values
 
 
 class QuotesConfig(StrictModel):
@@ -85,10 +103,43 @@ class QuotesConfig(StrictModel):
     coverage_audit_note: str | None = None
 
 
+class AuditConfigSelector(StrictModel):
+    tau: float | None
+    z_max: float
+    max_weight: float
+    edge_threshold: float
+    kelly_fraction: float
+
+
+class AuditSelectionConfig(StrictModel):
+    policy: AuditSelectionPolicy = "all_decision_grade"
+    max_configs: int = Field(default=3, ge=1)
+    include_no_bl_control: bool = True
+    rank_by: Literal["sharpe_ratio", "roi"] = "sharpe_ratio"
+    configs: list[AuditConfigSelector] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_explicit_configs(self) -> AuditSelectionConfig:
+        if self.policy != "explicit":
+            return self
+        if not self.configs:
+            raise ValueError("explicit selectors must be nonempty")
+        keys = [
+            (item.tau, item.z_max, item.max_weight, item.edge_threshold, item.kelly_fraction)
+            for item in self.configs
+        ]
+        if len(set(keys)) != len(keys):
+            raise ValueError("Duplicate explicit audit selector")
+        if len(self.configs) > self.max_configs:
+            raise ValueError("Explicit selector count cannot exceed max_configs")
+        return self
+
+
 class AuditConfig(StrictModel):
     minimum_bets: int | None = None
     bootstrap_samples: int = 1000
     mode: AuditMode = "clv_only"
+    selection: AuditSelectionConfig = Field(default_factory=AuditSelectionConfig)
 
 
 class DecisionConfig(StrictModel):
@@ -136,6 +187,15 @@ class LifecycleConfig(StrictModel):
             raise ValueError(
                 f"Unsupported pitcher_strikeouts variant {variant!r}; "
                 f"expected one of {sorted(PITCHER_VARIANTS)}"
+            )
+        selection_policy = self.audit.selection.policy
+        if self.experiment.purpose == "discovery":
+            if selection_policy not in {"all_decision_grade", "risk_filtered_top_n", "explicit"}:
+                raise ValueError(f"Unsupported discovery audit selection policy {selection_policy!r}")
+        elif selection_policy != "explicit":
+            raise ValueError(
+                f"Purpose '{self.experiment.purpose}' requires "
+                "audit.selection.policy='explicit'"
             )
         return self
 

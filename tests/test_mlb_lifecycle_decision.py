@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 from src.models.mlb.lifecycle.config import resolve_lifecycle_config
-from src.models.mlb.lifecycle.decision import evaluate_decision
+from src.models.mlb.lifecycle.decision import evaluate_decision, recommend_staking
 
 
 def _resolved(
@@ -22,7 +22,25 @@ def _resolved(
         "training": {"seasons": [2024, 2025], "calibration_season": 2026, "calibration_end": "2026-04-12"},
         "evaluation": {"start": "2026-05-18", "end": "2026-06-21"},
         "quotes": {"clean": True},
-        "audit": {"minimum_bets": 100, "mode": audit_mode},
+        "audit": {
+            "minimum_bets": 100,
+            "mode": audit_mode,
+            "selection": {
+                "policy": "explicit",
+                "max_configs": 1,
+                "include_no_bl_control": True,
+                "rank_by": "sharpe_ratio",
+                "configs": [
+                    {
+                        "tau": None,
+                        "z_max": 1.0,
+                        "max_weight": 0.5,
+                        "edge_threshold": 0.1,
+                        "kelly_fraction": 0.125,
+                    }
+                ],
+            },
+        },
         "decision": {
             "max_drawdown": 0.25,
             "require_positive_mean_clv_ci_low": not disable_safety_gates,
@@ -456,3 +474,25 @@ def test_positive_ranker_ci_and_pass_must_be_on_same_row(tmp_path: Path) -> None
 
     assert decision.classification == "Exclude"
     assert decision.posture == "live_blocked"
+
+
+def test_staking_recommendation_maps_confirm_independent_to_flat_paper(
+    tmp_path: Path,
+) -> None:
+    sweep, suite, rank = _evidence(tmp_path)
+    resolved = _resolved(tmp_path, purpose="independent_validation", audit_mode="clv_only")
+    decision = evaluate_decision(
+        resolved,
+        sweep_summary_csv=sweep,
+        suite_manifest_csv=suite,
+        suite_manifest_json=suite.with_suffix(".json"),
+        ranking_root=rank,
+    )
+
+    recommendation = recommend_staking(resolved, decision, dry_run=False)
+
+    assert decision.classification == "Confirm"
+    assert recommendation.recommendation == "flat_paper"
+    assert recommendation.report_only is True
+    assert recommendation.live_action_performed is False
+    assert recommendation.kelly_action_performed is False

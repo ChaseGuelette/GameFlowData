@@ -1,0 +1,63 @@
+# Start-from-scratch example: train a new artifact, run a quote-clean sweep, audit
+# decision-grade configs, run ranker diagnostics, and write report-only decisions.
+# Change the experiment name and feature controls before using this as a new ablation.
+experiment:
+  name: example_start_from_scratch_batter_hits_platoon
+  profile: batter_hits
+  purpose: discovery
+
+model:
+  base: no_prop_line
+  # Omit artifact_dir, sweep_dir, and sweep_artifact_identity_sha256 so the
+  # lifecycle creates and wires a new artifact and sweep.
+  tune: false
+  feature_tolerance: 0.02
+  feature_controls:
+    mode: include
+    families: [platoon]
+    features: []
+
+training:
+  seasons: [2024, 2025]
+  calibration_season: 2026
+  calibration_end: 2026-04-12
+
+evaluation:
+  start: 2026-04-13
+  end: 2026-05-17
+  direction: under
+  edge_thresholds: [0.10, 0.12, 0.15]
+  flat_bet: 100
+  # Small BL discovery grid: 3 tau values x 1 z_max x 1 max_weight x 3 edges.
+  tau: [null, 0.50, 0.90]
+  z_max: [0.25]
+  max_weight: [0.50]
+  kelly_values: [0.0]
+
+quotes:
+  clean: true
+  line_source: mlb_player_props_clv_snapshots
+  decision_policy: slate_or_tminus
+  relative_minutes: 60
+  routing: preferred_book_first
+  coverage_audit_note: Example only - replace with the reviewed linked-coverage evidence for the selected window before a real run.
+
+audit:
+  minimum_bets: 100
+  bootstrap_samples: 1000
+  # Use clv_only for the discovery funnel; reserve full for finalists.
+  mode: clv_only
+  selection:
+    policy: risk_filtered_top_n
+    max_configs: 3
+    include_no_bl_control: true
+    rank_by: sharpe_ratio
+    configs: []
+
+decision:
+  max_drawdown: 0.25
+  require_positive_roi: true
+  require_positive_mean_clv_ci_low: true
+  require_positive_ranker_ci_low: true
+  require_edge_bucket_monotonicity: true
+  require_independent_window: false

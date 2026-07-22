@@ -154,6 +154,10 @@ def build_sweep_command(
         str(resolved.evaluation.direction),
         "--tau",
         *("none" if value is None else str(value) for value in resolved.evaluation.tau),
+        "--z-max",
+        *(str(value) for value in resolved.evaluation.z_max),
+        "--max-weight",
+        *(str(value) for value in resolved.evaluation.max_weight),
         "--edge",
         *(str(value) for value in resolved.evaluation.edge_thresholds),
         "--kelly",
@@ -227,6 +231,7 @@ def build_audit_command(
 def build_ranker_command(
     *,
     clv_matches_csv: Path,
+    candidate_edges_csv: Path,
     output_dir: Path,
     bootstrap_samples: int,
     minimum_bets: int,
@@ -242,8 +247,9 @@ def build_ranker_command(
         str(bootstrap_samples),
         "--min-n",
         str(minimum_bets),
+        "--score-set",
+        "all",
+        "--candidate-edges-csv",
+        str(candidate_edges_csv),
     ]
-    candidate_edges = clv_matches_csv.parent / "bookmaker_candidate_edges.csv"
-    if candidate_edges.exists():
-        argv.extend(["--candidate-edges-csv", str(candidate_edges)])
     return argv

@@ -30,6 +30,92 @@ class DecisionRecord:
         }
 
 
+@dataclass(frozen=True)
+class StakingRecommendation:
+    recommendation: str
+    reasons: list[str]
+    decision_classification: str
+    decision_posture: str
+    report_only: bool
+    deployment_action_performed: bool
+    live_action_performed: bool
+    kelly_action_performed: bool
+    evidence: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "recommendation": self.recommendation,
+            "reasons": list(self.reasons),
+            "decision_classification": self.decision_classification,
+            "decision_posture": self.decision_posture,
+            "report_only": self.report_only,
+            "deployment_action_performed": self.deployment_action_performed,
+            "live_action_performed": self.live_action_performed,
+            "kelly_action_performed": self.kelly_action_performed,
+            "evidence": dict(self.evidence),
+        }
+
+
+def recommend_staking(
+    resolved: ResolvedLifecycleConfig,
+    decision: DecisionRecord,
+    *,
+    dry_run: bool,
+) -> StakingRecommendation:
+    """Map report-only lifecycle evidence to a conservative paper staking posture."""
+
+    reasons: list[str] = []
+    evidence = dict(decision.evidence)
+    if dry_run:
+        reasons.append("Dry-run only; no evidence was executed")
+    if decision.classification != "Confirm":
+        reasons.append(f"Decision classification is {decision.classification}, not Confirm")
+    if decision.posture in {"live_blocked", "hypothesis_only"}:
+        reasons.append(f"Decision posture is {decision.posture}")
+
+    recommendation = "blocked"
+    if not reasons and resolved.purpose == "independent_validation":
+        recommendation = "flat_paper"
+        reasons.append("Confirm independent validation with flat-paper evidence")
+    elif not reasons and resolved.purpose == "finalist_certification":
+        dropout = evidence.get("dropout_audit", {})
+        candidate_checks = evidence.get("candidate_checks", [])
+        timing_verified = any(
+            isinstance(candidate, dict)
+            and isinstance(candidate.get("timing_stability"), dict)
+            and candidate["timing_stability"].get("verified") is True
+            for candidate in candidate_checks
+        )
+        has_ranker = int(evidence.get("ranking_summary_files") or 0) > 0
+        if (
+            evidence.get("independent_window_verified") is True
+            and isinstance(dropout, dict)
+            and dropout.get("verified") is True
+            and timing_verified
+            and has_ranker
+        ):
+            recommendation = "capped_kelly_paper_eligible"
+            reasons.append(
+                "Confirm finalist certification with verified audit, timing, CLV, and ranker evidence"
+            )
+        else:
+            reasons.append("Finalist certification evidence is incomplete for capped-Kelly paper eligibility")
+    elif not reasons:
+        reasons.append(f"Purpose {resolved.purpose} is not eligible for paper staking")
+
+    return StakingRecommendation(
+        recommendation=recommendation,
+        reasons=reasons,
+        decision_classification=decision.classification,
+        decision_posture=decision.posture,
+        report_only=True,
+        deployment_action_performed=False,
+        live_action_performed=False,
+        kelly_action_performed=False,
+        evidence=evidence,
+    )
+
+
 def _rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []

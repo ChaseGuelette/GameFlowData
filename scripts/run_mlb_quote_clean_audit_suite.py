@@ -602,6 +602,8 @@ def main() -> int:
             "--output-dir", str(output_dir / "dropout_audit"),
             "--batch-size", str(args.batch_size),
         ]
+        for bets_csv in bets_files:
+            dropout_cmd.extend(["--bets-csv", str(bets_csv)])
         if args.local:
             dropout_cmd.append("--local")
         dropout_rc = run_cmd(dropout_cmd, dry_run=args.dry_run)

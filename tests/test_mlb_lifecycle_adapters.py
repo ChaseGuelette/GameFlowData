@@ -46,6 +46,19 @@ def test_pitcher_uses_quantile_adapter() -> None:
     assert "prop_line_pitcher_strikeouts" in excluded
 
 
+def test_sweep_command_propagates_yaml_bl_bounds(tmp_path: Path) -> None:
+    resolved = _resolved("configs/mlb/examples/start_from_scratch.yaml")
+    resolved.evaluation.z_max = [0.25, 0.5]
+    resolved.evaluation.max_weight = [0.4, 0.5]
+
+    sweep = build_sweep_command(
+        resolved, artifact_dir=tmp_path / "model", output_dir=tmp_path / "sweep"
+    )
+
+    assert sweep[sweep.index("--z-max") + 1 : sweep.index("--max-weight")] == ["0.25", "0.5"]
+    assert sweep[sweep.index("--max-weight") + 1 : sweep.index("--edge")] == ["0.4", "0.5"]
+
+
 def test_sweep_and_audit_commands_match_existing_clis(tmp_path: Path) -> None:
     resolved = _resolved("configs/mlb/batter_rbis/baseline_independent.yaml")
     sweep = build_sweep_command(resolved, artifact_dir=tmp_path / "model", output_dir=tmp_path / "sweep")
@@ -66,15 +79,19 @@ def test_sweep_and_audit_commands_match_existing_clis(tmp_path: Path) -> None:
     assert "--book-routing-policy" not in audit
 
 
-def test_ranker_command_has_only_supported_arguments(tmp_path: Path) -> None:
+def test_ranker_command_routes_exact_candidate_edges_and_all_scores(tmp_path: Path) -> None:
+    candidate_edges = tmp_path / "sweep" / "config_02" / "bookmaker_candidate_edges.csv"
     command = build_ranker_command(
-        clv_matches_csv=tmp_path / "clv_matches.csv",
+        clv_matches_csv=tmp_path / "audit" / "clv" / "config_02" / "clv_matches.csv",
+        candidate_edges_csv=candidate_edges,
         output_dir=tmp_path / "ranker",
         bootstrap_samples=250,
         minimum_bets=100,
     )
     assert "--stat" not in command
     assert command[command.index("--bootstrap-samples") + 1] == "250"
+    assert command[command.index("--score-set") + 1] == "all"
+    assert Path(command[command.index("--candidate-edges-csv") + 1]) == candidate_edges
 
 
 def test_generated_commands_parse_with_real_execution_clis(tmp_path: Path) -> None:

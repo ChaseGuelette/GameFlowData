@@ -21,6 +21,8 @@ evaluation:
   edge_thresholds: [0.10, 0.12, 0.15]
   flat_bet: 100
   tau: [null]
+  z_max: [1.0]
+  max_weight: [0.50]
   kelly_values: [0.125]
 quotes:
   clean: true
@@ -33,6 +35,13 @@ audit:
   minimum_bets: 100
   bootstrap_samples: 1000
   mode: clv_only
+  selection:
+    policy: explicit
+    max_configs: 1
+    include_no_bl_control: true
+    rank_by: sharpe_ratio
+    configs:
+      - {tau: null, z_max: 1.0, max_weight: 0.50, edge_threshold: 0.12, kelly_fraction: 0.125}
 decision:
   max_drawdown: 0.25
   require_positive_roi: true

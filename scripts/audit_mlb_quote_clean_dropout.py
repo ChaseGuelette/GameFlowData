@@ -269,14 +269,21 @@ def flatten_date_lines(date_lines: dict[date, pd.DataFrame]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def collect_saved_bet_keys(sweep_output_dir: Path | None) -> set[tuple[int, int, str]]:
+def collect_saved_bet_keys(
+    sweep_output_dir: Path | None,
+    *,
+    bets_csvs: list[Path] | None = None,
+) -> set[tuple[int, int, str]]:
     keys: set[tuple[int, int, str]] = set()
-    if not sweep_output_dir:
+    if bets_csvs is not None:
+        bet_files = bets_csvs
+    elif sweep_output_dir:
+        bet_files = []
+        if (sweep_output_dir / "bets.csv").exists():
+            bet_files.append(sweep_output_dir / "bets.csv")
+        bet_files.extend(sorted(sweep_output_dir.glob("config_*/bets.csv")))
+    else:
         return keys
-    bet_files = []
-    if (sweep_output_dir / "bets.csv").exists():
-        bet_files.append(sweep_output_dir / "bets.csv")
-    bet_files.extend(sorted(sweep_output_dir.glob("config_*/bets.csv")))
     for path in bet_files:
         validate_saved_bets_columns(path)
         bets = pd.read_csv(path, usecols=["player_id", "game_id", "stat"])
@@ -285,7 +292,15 @@ def collect_saved_bet_keys(sweep_output_dir: Path | None) -> set[tuple[int, int,
     return keys
 
 
-def validate_sweep_outputs(sweep_output_dir: Path | None) -> None:
+def validate_sweep_outputs(
+    sweep_output_dir: Path | None,
+    *,
+    bets_csvs: list[Path] | None = None,
+) -> None:
+    if bets_csvs is not None:
+        for path in bets_csvs:
+            validate_saved_bets_columns(path)
+        return
     if not sweep_output_dir:
         return
     pred_files = []
@@ -638,8 +653,9 @@ def run_audit(args: argparse.Namespace) -> dict:
     clean_quotes = flatten_date_lines(date_lines)
     raw_props = fetch_props_for_predictions(engine, predictions, batch_size=args.batch_size, source_table=args.line_source)
     sweep_dir = Path(args.sweep_output_dir) if args.sweep_output_dir else None
-    validate_sweep_outputs(sweep_dir)
-    placed_keys = collect_saved_bet_keys(sweep_dir)
+    selected_bets = [Path(path) for path in args.bets_csv] if args.bets_csv else None
+    validate_sweep_outputs(sweep_dir, bets_csvs=selected_bets)
+    placed_keys = collect_saved_bet_keys(sweep_dir, bets_csvs=selected_bets)
     dropout_rows = build_dropout_rows(predictions, raw_props, clean_quotes, placed_keys, args.quote_cutoff_time_et)
     return summarize_and_write_outputs(
         dropout_rows,
@@ -661,6 +677,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local", action="store_true", help="Use local Postgres")
     parser.add_argument("--direction", choices=["over", "under", "both"], default="both", help="Documentary direction filter for the audited sweep")
     parser.add_argument("--sweep-output-dir", default=None, help="Optional existing quote-clean sweep/config output directory")
+    parser.add_argument(
+        "--bets-csv",
+        action="append",
+        default=[],
+        help="Selected bets.csv to classify as placed; repeat to restrict dropout to a certification subset",
+    )
     parser.add_argument("--edge", type=float, default=None, help="Optional edge threshold metadata")
     parser.add_argument("--tau", type=str, default=None, help="Optional BL tau metadata")
     parser.add_argument("--z-max", type=float, default=None, help="Optional BL z_max metadata")

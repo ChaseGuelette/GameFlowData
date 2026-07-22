@@ -8,11 +8,13 @@ import pytest
 from scripts.audit_mlb_quote_clean_dropout import (
     REQUIRED_SAVED_PREDICTION_COLUMNS,
     classify_prediction_dropout,
+    collect_saved_bet_keys,
     count_selected_quote_timing_violations,
     find_atomic_clean_quotes,
     resolve_model_dir,
     summarize_and_write_outputs,
     validate_saved_predictions_columns,
+    validate_sweep_outputs,
 )
 
 
@@ -234,3 +236,18 @@ def test_empty_dropout_audit_cannot_pass(tmp_path: Path) -> None:
 
     assert summary["decision"] == "WARN"
     assert summary["total_predictions"] == 0
+
+
+def test_explicit_bets_paths_limit_saved_key_collection_and_validation(tmp_path: Path) -> None:
+    selected = tmp_path / "config_01" / "bets.csv"
+    ignored = tmp_path / "config_02" / "bets.csv"
+    selected.parent.mkdir()
+    ignored.parent.mkdir()
+    selected.write_text(
+        "player_id,game_id,stat,side,line,odds,bookmaker\n1,10,batter_hits,under,0.5,-110,draftkings\n",
+        encoding="utf-8",
+    )
+    ignored.write_text("bad,column\n1,2\n", encoding="utf-8")
+
+    assert collect_saved_bet_keys(tmp_path, bets_csvs=[selected]) == {(1, 10, "batter_hits")}
+    validate_sweep_outputs(tmp_path, bets_csvs=[selected])

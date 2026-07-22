@@ -23,7 +23,11 @@ from src.models.mlb.lifecycle.adapters import (
     repo_root,
 )
 from src.models.mlb.lifecycle.config import ResolvedLifecycleConfig, resolve_lifecycle_config
-from src.models.mlb.lifecycle.decision import DecisionRecord, evaluate_decision
+from src.models.mlb.lifecycle.decision import (
+    DecisionRecord,
+    evaluate_decision,
+    recommend_staking,
+)
 
 STAGES = (
     "validate",
@@ -33,6 +37,7 @@ STAGES = (
     "audit",
     "ranker",
     "decision",
+    "staking_policy",
 )
 
 
@@ -94,6 +99,267 @@ def _decision_grade_bets(sweep_dir: Path, minimum_bets: int) -> list[Path]:
     return selected
 
 
+def _float_matches(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return left is None and right is None
+    try:
+        return math.isclose(float(left), float(right), rel_tol=1e-9, abs_tol=1e-12)
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalized_sweep_config(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "tau": payload.get("tau"),
+        "z_max": payload.get("z_max", 1.0),
+        "max_weight": payload.get("max_weight", 0.50),
+        "edge_threshold": payload.get("edge_threshold"),
+        "kelly_fraction": payload.get("kelly_fraction"),
+    }
+
+
+def _selector_matches(selector: dict[str, Any], config: dict[str, Any]) -> bool:
+    return all(_float_matches(selector.get(key), config.get(key)) for key in selector)
+
+
+def _sorted_sweep_config_dirs(sweep_dir: Path) -> list[Path]:
+    def sort_key(path: Path) -> tuple[int, str]:
+        match = re.match(r"^config_(\d+)(?:_|$)", path.name)
+        if match is None:
+            raise RuntimeError(f"Sweep config directory has no numeric index: {path}")
+        return int(match.group(1)), path.name
+
+    return sorted(
+        (path for path in sweep_dir.glob("config_*") if path.is_dir()),
+        key=sort_key,
+    )
+
+
+def _flatten_selection_metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    flattened = {
+        key: value
+        for key, value in payload.items()
+        if key != "config" and not isinstance(value, dict)
+    }
+    for section in ("betting", "risk"):
+        nested = payload.get(section)
+        if isinstance(nested, dict):
+            flattened.update(nested)
+    return flattened
+
+
+def _metric_values_match(left: Any, right: Any) -> bool:
+    try:
+        left_number = float(left)
+        right_number = float(right)
+    except (TypeError, ValueError):
+        return left == right
+    if math.isnan(left_number) and math.isnan(right_number):
+        return True
+    return left_number == right_number or math.isclose(
+        left_number, right_number, rel_tol=1e-12, abs_tol=1e-12
+    )
+
+
+def _validated_selection_metrics(
+    result: dict[str, Any],
+    persisted: dict[str, Any],
+    config_dir: Path,
+) -> dict[str, Any]:
+    result_config = _normalized_sweep_config(result.get("config", {}))
+    persisted_config_payload = persisted.get("config")
+    if not isinstance(persisted_config_payload, dict):
+        raise RuntimeError(f"Sweep config metrics are missing embedded config identity: {config_dir}")
+    persisted_config = _normalized_sweep_config(persisted_config_payload)
+    if not _selector_matches(result_config, persisted_config):
+        raise RuntimeError(
+            f"Sweep config metrics identity conflicts with sweep_results.json: {config_dir}"
+        )
+
+    result_metrics_payload = result.get("metrics")
+    if not isinstance(result_metrics_payload, dict):
+        raise RuntimeError(f"Sweep result metrics are malformed: {config_dir}")
+    result_metrics = _flatten_selection_metrics(result_metrics_payload)
+    persisted_metrics = _flatten_selection_metrics(persisted)
+    for key in ("total_bets", "roi", "max_drawdown", "sharpe_ratio"):
+        if key not in result_metrics or key not in persisted_metrics:
+            continue
+        if not _metric_values_match(result_metrics[key], persisted_metrics[key]):
+            raise RuntimeError(
+                f"Sweep config has conflicting persisted metric {key!r}: {config_dir}"
+            )
+    return result_metrics
+
+
+def _select_audit_configs(
+    resolved: ResolvedLifecycleConfig,
+    sweep_dir: Path,
+) -> dict[str, Any]:
+    """Select the bounded certification subset from persisted sweep payloads."""
+
+    results_path = sweep_dir / "sweep_results.json"
+    payload = _required_json(results_path, "audit selection")
+    results = payload.get("results")
+    config_dirs = _sorted_sweep_config_dirs(sweep_dir)
+    if not isinstance(results, list) or not results or len(results) != len(config_dirs):
+        raise RuntimeError(
+            "audit selection requires sweep_results.json results to map one-to-one to sorted config directories"
+        )
+
+    candidates: list[dict[str, Any]] = []
+    minimum_bets = int(resolved.audit.minimum_bets or 0)
+    for config_dir, result in zip(config_dirs, results, strict=True):
+        if not isinstance(result, dict) or not isinstance(result.get("config"), dict):
+            raise RuntimeError(f"audit selection found malformed sweep result for {config_dir}")
+        config = _normalized_sweep_config(result["config"])
+        persisted_metrics = _read_json(config_dir / "metrics.json", {})
+        if not isinstance(persisted_metrics, dict):
+            raise RuntimeError(f"audit selection found malformed metrics for {config_dir}")
+        metrics = _validated_selection_metrics(result, persisted_metrics, config_dir)
+        try:
+            total_bets = int(metrics.get("total_bets", metrics.get("bets", 0)) or 0)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"audit selection has invalid total_bets for {config_dir}") from exc
+        metrics["total_bets"] = total_bets
+        candidates.append(
+            {
+                "config_dir": str(config_dir),
+                "bets_csv": str(config_dir / "bets.csv"),
+                "candidate_edges_csv": str(config_dir / "bookmaker_candidate_edges.csv"),
+                "config": config,
+                "metrics": metrics,
+            }
+        )
+
+    selection = resolved.audit.selection
+    selected: list[dict[str, Any]] = []
+    if selection.policy == "explicit":
+        for selector_model in selection.configs:
+            selector = selector_model.model_dump()
+            matches = [item for item in candidates if _selector_matches(selector, item["config"])]
+            if len(matches) != 1:
+                qualifier = "missing" if not matches else "ambiguous"
+                raise RuntimeError(f"Explicit audit selector is {qualifier}: {selector}")
+            match = matches[0]
+            if match["metrics"]["total_bets"] < minimum_bets:
+                raise RuntimeError(
+                    f"Explicit audit selector is underpowered: {selector}; "
+                    f"total_bets={match['metrics']['total_bets']} < {minimum_bets}"
+                )
+            selected.append({**match, "reason": "explicit_preregistered_selector"})
+    else:
+        eligible: list[dict[str, Any]] = []
+        for item in candidates:
+            metrics = item["metrics"]
+            if metrics["total_bets"] < minimum_bets:
+                continue
+            try:
+                rank_value = float(metrics.get(selection.rank_by, math.nan))
+                roi = float(metrics.get("roi", math.nan))
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(rank_value) or not math.isfinite(roi):
+                continue
+            if selection.policy == "risk_filtered_top_n":
+                try:
+                    drawdown = float(metrics.get("max_drawdown", math.inf))
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(drawdown):
+                    continue
+                if drawdown > resolved.decision.max_drawdown:
+                    continue
+                if resolved.decision.require_positive_roi and roi <= 0:
+                    continue
+            eligible.append(item)
+
+        def rank_key(item: dict[str, Any]) -> tuple[float, float, int, str]:
+            metrics = item["metrics"]
+            try:
+                primary = float(metrics.get(selection.rank_by, -math.inf))
+            except (TypeError, ValueError):
+                primary = -math.inf
+            try:
+                roi = float(metrics.get("roi", -math.inf))
+            except (TypeError, ValueError):
+                roi = -math.inf
+            if not math.isfinite(primary):
+                primary = -math.inf
+            if not math.isfinite(roi):
+                roi = -math.inf
+            return (-primary, -roi, -int(metrics["total_bets"]), str(item["config_dir"]))
+
+        controls = sorted((item for item in eligible if item["config"]["tau"] is None), key=rank_key)
+        bl_configs = sorted((item for item in eligible if item["config"]["tau"] is not None), key=rank_key)
+        if selection.include_no_bl_control:
+            if not controls:
+                raise RuntimeError(
+                    "Audit selection requested a no-BL control but found no eligible no-BL control"
+                )
+            selected.append({**controls[0], "reason": "best_eligible_no_bl_control"})
+        remaining = selection.max_configs - len(selected)
+        pool = bl_configs if selection.include_no_bl_control else sorted(eligible, key=rank_key)
+        for item in pool[:remaining]:
+            selected.append({**item, "reason": f"top_{selection.rank_by}"})
+
+    if not selected:
+        raise RuntimeError(
+            f"Audit selection policy {selection.policy!r} produced no valid selected configs"
+        )
+    if len(selected) > selection.max_configs:
+        raise RuntimeError("Audit selection exceeded configured max_configs")
+    selected_dirs = [item["config_dir"] for item in selected]
+    if len(set(selected_dirs)) != len(selected_dirs):
+        raise RuntimeError("Audit selection produced duplicate configurations")
+    for item in selected:
+        _required_file(Path(item["bets_csv"]), "audit selection")
+        _required_file(
+            Path(item["candidate_edges_csv"]), "audit selection candidate-edge"
+        )
+
+    return {
+        "status": "selected",
+        "policy": selection.policy,
+        "max_configs": selection.max_configs,
+        "include_no_bl_control": selection.include_no_bl_control,
+        "rank_by": selection.rank_by,
+        "minimum_bets": minimum_bets,
+        "selected": selected,
+        "selected_count": len(selected),
+        "sweep_results_json": str(results_path),
+    }
+
+
+def _planned_audit_selection(resolved: ResolvedLifecycleConfig, sweep_dir: Path) -> dict[str, Any]:
+    selection = resolved.audit.selection
+    count = len(selection.configs) if selection.policy == "explicit" else selection.max_configs
+    planned = []
+    for index in range(count):
+        selector = selection.configs[index].model_dump() if selection.policy == "explicit" else None
+        config_dir = sweep_dir / f"<selected_config_{index + 1}>"
+        planned.append(
+            {
+                "config_dir": str(config_dir),
+                "bets_csv": str(config_dir / "bets.csv"),
+                "candidate_edges_csv": str(config_dir / "bookmaker_candidate_edges.csv"),
+                "config": selector,
+                "metrics": None,
+                "reason": "planned_explicit_selector" if selector else "planned_post_sweep_selection",
+            }
+        )
+    return {
+        "status": "planned",
+        "policy": selection.policy,
+        "max_configs": selection.max_configs,
+        "include_no_bl_control": selection.include_no_bl_control,
+        "rank_by": selection.rank_by,
+        "minimum_bets": int(resolved.audit.minimum_bets or 0),
+        "selected": planned,
+        "selected_count": len(planned),
+        "sweep_results_json": str(sweep_dir / "sweep_results.json"),
+    }
+
+
 def _required_file(path: Path, stage: str) -> Path:
     if not path.is_file() or path.stat().st_size == 0:
         raise RuntimeError(f"{stage} required output is missing or empty: {path}")
@@ -140,7 +406,7 @@ def _verify_sweep_outputs(sweep_dir: Path) -> dict[str, Any]:
             f"{stage} output count mismatch: {len(summary_rows)} summary rows, "
             f"{len(results)} JSON results"
         )
-    config_dirs = sorted(path for path in sweep_dir.glob("config_*") if path.is_dir())
+    config_dirs = _sorted_sweep_config_dirs(sweep_dir)
     if len(config_dirs) != len(results):
         raise RuntimeError(
             f"{stage} output count mismatch: expected {len(results)} config directories, "
@@ -152,7 +418,7 @@ def _verify_sweep_outputs(sweep_dir: Path) -> dict[str, Any]:
         if not isinstance(result.get("metrics"), dict):
             raise RuntimeError(f"{stage} result metrics are malformed: {results_path}")
         result_config = result["config"]
-        for key in ("tau", "edge_threshold", "kelly_fraction"):
+        for key in ("tau", "z_max", "max_weight", "edge_threshold", "kelly_fraction"):
             summary_value = summary_row.get(key)
             result_value = result_config.get(key)
             if summary_value in {None, ""}:
@@ -185,9 +451,15 @@ def _verify_sweep_outputs(sweep_dir: Path) -> dict[str, Any]:
                     f"directory={match.group(1)!r}, result={result_value!r}"
                 ) from exc
         metrics = _required_json(config_dir / "metrics.json", stage)
-        result_metrics = result.get("metrics", {}) if isinstance(result, dict) else {}
+        result_metrics = _validated_selection_metrics(result, metrics, config_dir)
         try:
-            persisted_bets = int(metrics.get("total_bets", metrics.get("bets", 0)) or 0)
+            flattened_persisted = _flatten_selection_metrics(metrics)
+            persisted_bets = int(
+                flattened_persisted.get(
+                    "total_bets", flattened_persisted.get("bets", 0)
+                )
+                or 0
+            )
             result_bets = int(result_metrics.get("total_bets", result_metrics.get("bets", 0)) or 0)
             requires_bets = max(persisted_bets, result_bets) > 0
         except (TypeError, ValueError) as exc:
@@ -750,18 +1022,27 @@ class LifecycleRunner:
             {"config": self.config_identity, "artifact": self.artifact_identity}, files
         )
 
-    def _audit_input_identity(self, bets_csvs: list[Path]) -> str:
+    def _audit_input_identity(self, selection_manifest: dict[str, Any]) -> str:
+        selected_files = [self.run_root / "audit_selection.json"]
+        for item in selection_manifest["selected"]:
+            selected_files.extend([Path(item["bets_csv"]), Path(item["candidate_edges_csv"])])
         return _identity(
             {
                 "config": self.config_identity,
                 "artifact": self.artifact_identity,
                 "sweep": self._sweep_evidence_identity(),
             },
-            bets_csvs,
+            selected_files,
         )
 
-    def _ranker_input_identity(self, matches: list[Path]) -> str:
-        evidence_paths: list[Path] = [self.audit_dir / "suite_manifest.csv"]
+    def _ranker_input_identity(
+        self, matches: list[Path], candidate_edges: list[Path]
+    ) -> str:
+        evidence_paths: list[Path] = [
+            self.run_root / "audit_selection.json",
+            self.audit_dir / "suite_manifest.csv",
+            *candidate_edges,
+        ]
         for match in matches:
             label = match.parent.name
             evidence_paths.extend(
@@ -957,11 +1238,18 @@ class LifecycleRunner:
                 verify_outputs=lambda: _verify_sweep_outputs(self.resolved.sweep_dir),
             )
 
-        bets_csvs = _decision_grade_bets(
-            self.resolved.sweep_dir, int(self.resolved.audit.minimum_bets or 0)
-        )
+        if (self.resolved.sweep_dir / "sweep_results.json").is_file():
+            selection_manifest = _select_audit_configs(self.resolved, self.resolved.sweep_dir)
+        elif self.dry_run:
+            selection_manifest = _planned_audit_selection(self.resolved, self.resolved.sweep_dir)
+        else:
+            raise RuntimeError("Audit selection cannot run without persisted sweep_results.json")
+        _write_json(self.run_root / "audit_selection.json", selection_manifest)
+        bets_csvs = [Path(item["bets_csv"]) for item in selection_manifest["selected"]]
+        if not bets_csvs:
+            raise RuntimeError("Audit selection produced no bets paths; refusing audit auto-discovery")
         audit_manifest = self.audit_dir / "suite_manifest.csv"
-        audit_input_identity = self._audit_input_identity(bets_csvs)
+        audit_input_identity = self._audit_input_identity(selection_manifest)
         if self._before_from_stage("audit"):
             if self.dry_run:
                 self._record("audit", "skipped", reason="before_from_stage")
@@ -1020,26 +1308,27 @@ class LifecycleRunner:
             )
 
         ranker_commands: list[list[str]] = []
-        matches = sorted(self.audit_dir.glob("clv/*/clv_matches.csv"))
-        for matches_csv in matches:
-            label = matches_csv.parent.name
+        matches: list[Path] = []
+        candidate_edges_paths: list[Path] = []
+        for selected_item in selection_manifest["selected"]:
+            label = Path(selected_item["config_dir"]).name
+            matches_csv = self.audit_dir / "clv" / label / "clv_matches.csv"
+            candidate_edges_csv = Path(selected_item["candidate_edges_csv"])
+            if not self.dry_run:
+                _required_file(matches_csv, "ranker")
+                _required_file(candidate_edges_csv, "ranker")
+            matches.append(matches_csv)
+            candidate_edges_paths.append(candidate_edges_csv)
             ranker_commands.append(
                 build_ranker_command(
                     clv_matches_csv=matches_csv,
+                    candidate_edges_csv=candidate_edges_csv,
                     output_dir=self.ranker_dir / label,
                     bootstrap_samples=self.resolved.audit.bootstrap_samples,
                     minimum_bets=int(self.resolved.audit.minimum_bets or 0),
                 )
             )
-        if self.dry_run and not ranker_commands:
-            ranker_commands.append(
-                build_ranker_command(
-                    clv_matches_csv=self.audit_dir / "clv" / "<config>" / "clv_matches.csv",
-                    output_dir=self.ranker_dir / "<config>",
-                    bootstrap_samples=self.resolved.audit.bootstrap_samples,
-                    minimum_bets=int(self.resolved.audit.minimum_bets or 0),
-                )
-            )
+
         self._record_command("ranker", ranker_commands)
         ranker_outputs_valid = bool(ranker_commands) and all(
             self._outputs_are_valid(
@@ -1049,7 +1338,7 @@ class LifecycleRunner:
             )
             for command in ranker_commands
         )
-        ranker_input_identity = self._ranker_input_identity(matches)
+        ranker_input_identity = self._ranker_input_identity(matches, candidate_edges_paths)
         if self._before_from_stage("ranker"):
             if self.dry_run:
                 self._record("ranker", "skipped", reason="before_from_stage")
@@ -1130,6 +1419,20 @@ class LifecycleRunner:
                 reasons=["Dry-run only; no evidence was executed"],
                 evidence={"dry_run": True},
             )
+            self._record_command(
+                "decision",
+                [
+                    "report-only-decision",
+                    "--sweep-summary-csv",
+                    str(sweep_summary),
+                    "--suite-manifest-csv",
+                    str(audit_manifest),
+                    "--suite-manifest-json",
+                    str(self.audit_dir / "suite_manifest.json"),
+                    "--ranking-root",
+                    str(self.ranker_dir),
+                ],
+            )
         else:
             decision = evaluate_decision(
                 self.resolved,
@@ -1152,6 +1455,7 @@ class LifecycleRunner:
         ]
         (self.run_root / "promotion_decision.md").write_text("\n".join(markdown), encoding="utf-8")
         decision_evidence_paths = [
+            self.run_root / "audit_selection.json",
             sweep_summary,
             sweep_summary.with_name("sweep_results.json"),
             audit_manifest,
@@ -1173,11 +1477,59 @@ class LifecycleRunner:
             ),
             evidence_files=[str(path) for path in decision_evidence_paths if path.is_file()],
         )
+        staking = recommend_staking(self.resolved, decision, dry_run=self.dry_run)
+        staking_payload = staking.to_dict()
+        decision_output_paths = [
+            self.run_root / "promotion_decision.json",
+            self.run_root / "promotion_decision.md",
+            *[path for path in decision_evidence_paths if path.is_file()],
+        ]
+        staking_identity = _identity(
+            {"config": self.config_identity, "artifact": self.artifact_identity},
+            decision_output_paths,
+        )
+        self._record_command(
+            "staking_policy",
+            [
+                "report-only-staking-policy",
+                "--decision-json",
+                str(self.run_root / "promotion_decision.json"),
+                "--output-json",
+                str(self.run_root / "staking_recommendation.json"),
+            ],
+        )
+        staking_payload["input_identity"] = staking_identity
+        _write_json(self.run_root / "staking_recommendation.json", staking_payload)
+        staking_markdown = [
+            f"# {self.resolved.experiment_name} staking recommendation",
+            "",
+            f"- Recommendation: **{staking.recommendation}**",
+            f"- Decision: **{staking.decision_classification}** / **{staking.decision_posture}**",
+            "- Report only: no deployment, live-trading, or Kelly action was performed.",
+            "",
+            "## Reasons",
+            *(f"- {reason}" for reason in staking.reasons),
+            "",
+        ]
+        (self.run_root / "staking_recommendation.md").write_text(
+            "\n".join(staking_markdown), encoding="utf-8"
+        )
+        self._record(
+            "staking_policy",
+            "completed",
+            recommendation=staking.recommendation,
+            input_identity=staking_identity,
+            output_files=[
+                str(self.run_root / "staking_recommendation.json"),
+                str(self.run_root / "staking_recommendation.md"),
+            ],
+        )
         return {
             "run_root": str(self.run_root),
             "artifact_dir": str(self.artifact_dir),
             "sweep_dir": str(self.resolved.sweep_dir),
             "decision": decision.to_dict(),
+            "staking": staking_payload,
             "statuses": self.statuses,
         }
 

@@ -10,22 +10,31 @@ Use `scripts/run_mlb_model_lifecycle.py` to run one MLB model experiment from a 
 4. run a quote-clean sweep or attach an existing sweep;
 5. run the CLV/dropout audit;
 6. run CLV ranker diagnostics for decision-grade configurations;
-7. write a report-only Confirm / Shelf / Exclude decision and operational posture.
+7. write a report-only Confirm / Shelf / Exclude decision and operational posture;
+8. write an explicit report-only staking recommendation: `blocked`, `flat_paper`, or `capped_kelly_paper_eligible`.
 
 The lifecycle does not deploy models, copy artifacts into production, enable Kelly staking, change production configuration, or enable live trading.
 
 Long training, sweep, and audit jobs should be launched manually by Chase from PowerShell. Always dry-run first.
 
+The YAML lifecycle is profile-driven, not batter-hits-specific. Registered profiles currently include `batter_hits`, `batter_rbis`, and `pitcher_strikeouts`. Copyable resume/start-from-scratch examples and a tested inventory of every registered feature family are available under `configs/mlb/examples/`:
+
+- `USAGE_GUIDE.md`
+- `start_from_scratch.yaml`
+- `resume_existing.yaml`
+- `FEATURE_FAMILIES.md`
+
 ## Existing presets
 
 Use an existing preset as your starting point:
 
-- `configs/mlb/batter_hits/platoon_contact_independent.yaml`
+- `configs/mlb/batter_hits/platoon_contact_end_to_end.yaml` - primary one-command batter-hits workflow; trains, sweeps, audits, ranks, decides, and writes staking policy from one YAML.
+- `configs/mlb/batter_hits/platoon_contact_independent.yaml` - attach/resume independent-window certification workflow.
 - `configs/mlb/batter_hits/platoon_contact_finalist.yaml` — full-audit finalist preset; do not run until independent evidence justifies finalist review
 - `configs/mlb/pitcher_strikeouts/baseline_independent.yaml`
 - `configs/mlb/batter_rbis/baseline_independent.yaml`
 
-The batter-hits preset attaches an existing model artifact and completed independent-window sweep, then resumes at audit/ranker. The pitcher-K and RBI presets demonstrate new training lifecycles and must have their coverage notes replaced with real verified coverage evidence before expensive execution.
+The primary batter-hits end-to-end preset intentionally has no `artifact_dir`, no `sweep_dir`, and no hand-computed `sweep_artifact_identity_sha256`. The older batter-hits independent/finalist presets attach an existing model artifact and/or completed independent-window sweep, then resume at audit/ranker. The pitcher-K and RBI presets demonstrate new training lifecycles and must have their coverage notes replaced with real verified coverage evidence before expensive execution.
 
 ## Safe first use
 
@@ -38,7 +47,7 @@ Set-Location 'C:\Users\Chase\Projects\GameFlowData'
 ### 1. Inspect the resolved experiment
 
 ```powershell
-.\venv\Scripts\python.exe scripts\run_mlb_model_lifecycle.py --config configs\mlb\batter_hits\platoon_contact_independent.yaml --dry-run
+.\venv\Scripts\python.exe scripts\run_mlb_model_lifecycle.py --config configs\mlb\batter_hits\platoon_contact_end_to_end.yaml --dry-run
 ```
 
 Expected behavior:
@@ -58,20 +67,32 @@ Review these files before launching:
 - `artifact_identity.json`
 - `run_manifest.json`
 - `stage_status.json`
+- `promotion_decision.json`
+- `staking_recommendation.json`
 
 Dry-run state is isolated from the real lifecycle root. It is subprocess/DB-safe and cannot
 overwrite completed real stage status or promotion evidence. Repeated dry-runs reuse only the
 `*_dry_run` planning root.
 
-### 2. Check existing lifecycle state
+### 2. Launch the real end-to-end command manually
+
+The real command is expensive. Chase should launch it manually only after reviewing the dry-run plan:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\run_mlb_model_lifecycle.py --config configs\mlb\batter_hits\platoon_contact_independent.yaml --status
+.\venv\Scripts\python.exe scripts\run_mlb_model_lifecycle.py --config configs\mlb\batter_hits\platoon_contact_end_to_end.yaml
+```
+
+This command remains report-only. It does not deploy, promote, enable live trading, or execute Kelly staking.
+
+### 3. Check existing lifecycle state
+
+```powershell
+.\venv\Scripts\python.exe scripts\run_mlb_model_lifecycle.py --config configs\mlb\batter_hits\platoon_contact_end_to_end.yaml --status
 ```
 
 This reads `stage_status.json` without running a stage.
 
-### 3. Run or resume the lifecycle
+### 4. Run or resume other lifecycle workflows
 
 For a new training lifecycle:
 
@@ -162,11 +183,15 @@ evaluation:
   direction: both
   edge_thresholds: [0.10, 0.12, 0.15]
   flat_bet: 100
-  tau: [null]
-  kelly_values: [0.125]
+  tau: [null, 0.50, 0.90]
+  z_max: [0.25]
+  max_weight: [0.50]
+  kelly_values: [0.0]
 ```
 
-Use flat staking for discovery and independent validation until ranker evidence supports magnitude-based sizing. The Kelly values remain part of the sweep configuration identity even when `flat_bet` overrides stake sizing.
+`tau`, `z_max`, and `max_weight` are lists because they define the Black-Litterman sweep grid. Keep these axes deliberately small. The example is three tau choices (including the raw no-BL control), one z clamp, one blend-weight cap, and three edges: nine sweep cells before downstream selection.
+
+Use flat staking for discovery, independent validation, and the batter-hits end-to-end sweep. The lifecycle may later report `capped_kelly_paper_eligible` from finalist evidence, but that is only permission for a separately reviewed paper-only experiment. It is not a live or production staking instruction.
 
 ### `quotes`
 
@@ -195,6 +220,12 @@ audit:
   minimum_bets: 100
   bootstrap_samples: 1000
   mode: clv_only
+  selection:
+    policy: risk_filtered_top_n
+    max_configs: 3
+    include_no_bl_control: true
+    rank_by: sharpe_ratio
+    configs: []
 ```
 
 Modes:
@@ -203,6 +234,14 @@ Modes:
 - `full`: requires persisted CLV, dropout/coverage, and timing-stability evidence. Use it for finalist certification.
 
 A finalist configuration must use `mode: full`. YAML intent alone is not sufficient: the lifecycle verifies the audit outputs before allowing a finalist decision.
+
+Selection policies:
+
+- `risk_filtered_top_n`: discovery only. It filters by minimum bets, drawdown, and the configured positive-ROI gate; reserves one slot for the best eligible no-BL control when requested; and fills the remaining bounded slots with eligible BL cells.
+- `all_decision_grade`: discovery compatibility mode, still capped by `max_configs`.
+- `explicit`: required for independent validation and finalist certification. List complete preregistered cells by `tau`, `z_max`, `max_weight`, `edge_threshold`, and `kelly_fraction`.
+
+The runner writes `audit_selection.json` before downstream evidence work. Only its selected `bets.csv` files are passed to CLV and dropout auditing. Expanded ranker diagnostics run with `--score-set all` and each selected cell's exact `bookmaker_candidate_edges.csv`. Empty, missing, ambiguous, duplicate, or underpowered explicit selections fail closed; the runner never falls back to auditing every sweep directory.
 
 ### `decision`
 
@@ -234,8 +273,11 @@ run_manifest.json
 stage_status.json
 commands.json
 artifact_identity.json
+audit_selection.json
 promotion_decision.json
 promotion_decision.md
+staking_recommendation.json
+staking_recommendation.md
 artifacts/                 # when training a new model
 sweep/                     # when running a new sweep
 audit/
@@ -327,6 +369,8 @@ Open:
 
 - `promotion_decision.md` for the human-readable result;
 - `promotion_decision.json` for exact evidence and gate details.
+- `staking_recommendation.md` for the human-readable paper-staking posture;
+- `staking_recommendation.json` for the durable recommendation, reasons, decision identity, and explicit `deployment_action_performed=false`, `live_action_performed=false`, and `kelly_action_performed=false` markers.
 
 Classifications:
 
@@ -345,6 +389,12 @@ Operational posture is separate from classification:
 - `live_ready`
 
 `live_ready` is fail-closed and requires finalist certification, a full persisted audit, an independent quote-clean window, passing dropout/coverage and timing-stability evidence, positive CLV and ranker confidence bounds, acceptable drawdown, and required monotonicity evidence.
+
+Staking recommendations are more conservative than operational posture:
+
+- `blocked`: dry-run, Shelf, Exclude, discovery, missing/mismatched evidence, or any non-Confirm result.
+- `flat_paper`: Confirm independent validation with qualifying flat-paper evidence.
+- `capped_kelly_paper_eligible`: Confirm finalist certification with full verified audit/timing/CLV/ranker evidence. This is paper-only eligibility for a separate review, not an instruction and not live eligibility.
 
 ## Creating a new preset
 

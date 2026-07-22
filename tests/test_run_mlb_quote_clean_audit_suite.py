@@ -186,3 +186,35 @@ def test_dry_run_clv_command_uses_generic_analyzer(tmp_path: Path, monkeypatch) 
     assert clv_calls
     assert any(part.endswith("analyze_mlb_clv.py") for part in clv_calls[0])
     assert not any(part.endswith("analyze_mlb_batter_hits_clv.py") for part in clv_calls[0])
+
+
+def test_selected_bets_paths_are_forwarded_to_dropout_only(tmp_path: Path, monkeypatch) -> None:
+    from scripts import run_mlb_quote_clean_audit_suite as suite
+
+    sweep_dir = tmp_path / "sweep"
+    selected = [sweep_dir / "config_01" / "bets.csv", sweep_dir / "config_03" / "bets.csv"]
+    ignored = sweep_dir / "config_02" / "bets.csv"
+    for path in [*selected, ignored]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("bookmaker,profit,stake\nDraftKings,1,10\n", encoding="utf-8")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(suite, "run_cmd", lambda cmd, *, dry_run=False: calls.append([str(x) for x in cmd]) or 0)
+    argv = [
+        "run_mlb_quote_clean_audit_suite.py",
+        "--sweep-output-dir", str(sweep_dir),
+        "--output-dir", str(tmp_path / "out"),
+        "--model-dir", "dummy-model",
+        "--start", "2026-04-01",
+        "--end", "2026-04-02",
+        "--stats", "batter_hits",
+        "--dry-run",
+    ]
+    for path in selected:
+        argv.extend(["--bets-csv", str(path)])
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert suite.main() == 0
+    dropout = next(cmd for cmd in calls if any(part.endswith("audit_mlb_quote_clean_dropout.py") for part in cmd))
+    forwarded = [dropout[index + 1] for index, value in enumerate(dropout) if value == "--bets-csv"]
+    assert forwarded == [str(path) for path in selected]
+    assert str(ignored) not in dropout
