@@ -101,13 +101,13 @@ Goal: determine which existing feature families carry the profitable under edge 
 
 Run one force-exclude family at a time against the same artifact lifecycle, window, quote policy, under direction, flat stake, and sweep grid.
 
-Order:
+Order and current status:
 
-1. `workload_leash` — current active run
-2. `market`
-3. `team_hook`
-4. `pitcher_stuff`
-5. `inning_fatigue`
+1. `workload_leash` — confirmed load-bearing; retain
+2. `market` — confirmed load-bearing; retain
+3. `team_hook` — confirmed load-bearing; retain; exclusion config #63 shelved as a flat-paper-only challenger
+4. `pitcher_stuff` — confirmed load-bearing; retain; exclusion rejected after the full YAML lifecycle
+5. `inning_fatigue` — next Track A family
 6. `opponent_contact`
 7. `environment`
 
