@@ -4,6 +4,7 @@ numpy==2.4.1
 optuna==4.7.0
 pandas==3.0.0
 plotly==6.5.2
+pydantic==2.12.4
 psycopg2-binary==2.9.10
 python-dotenv==1.0.1
 pytz==2025.2

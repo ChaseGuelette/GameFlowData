@@ -1,405 +1,102 @@
-# Model Pipeline Runbook
+# Model pipeline runbook
 
-Complete guide to training, backtesting, and running daily predictions.
+This runbook covers the retained NBA model workflow. MLB work uses the YAML lifecycle documented in [`development_docs/mlb_model_lifecycle_usage_guide.md`](development_docs/mlb_model_lifecycle_usage_guide.md).
 
----
+Training, sweeps, broad backfills, artifact promotion, deployment, and production DB changes are human-gated. Chase launches long jobs after reviewing a dry-run or preflight.
 
-## Pipeline Overview
+## Production artifacts
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  1. TRAIN       │ ──► │  2. BACKTEST    │ ──► │  3. DAILY RUN   │
-│  train_pipeline │     │  run_backtest   │     │  run_daily      │
-│                 │     │                 │     │                 │
-│  Outputs:       │     │  Outputs:       │     │  Outputs:       │
-│  - .joblib      │     │  - metrics.json │     │  - predictions  │
-│  - calibration  │     │  - bets.csv     │     │    CSV with     │
-│    report       │     │  - ROI / Sharpe │     │    edges        │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
+- NBA regular season: `src/models/artifacts/production/`
+- NBA playoffs: `src/models/artifacts/production_playoffs/`
+- MLB: `src/models/mlb/artifacts/production/`
 
----
+Generated `run_*` directories and backtest outputs are local/archived evidence and are not committed. Directory names are not promotion evidence.
 
-## Prerequisites
+## Non-negotiable modeling rules
 
-1. `.env` file at project root with `DATABASE_URL=postgresql://...`
-2. Database populated with scraped data (game stats, props, positions, averages)
-3. Python packages: `xgboost`, `scikit-learn`, `pandas`, `numpy`, `sqlalchemy`, `joblib`, `python-dotenv`
+- Probabilities from samples use `(samples > line).mean()`; never substitute a Gaussian CDF.
+- Never deploy global conformal recalibration offsets. Q10 behavior is edge-bearing and must not be blindly corrected.
+- Preserve temporal integrity: training and inference features use only information available before the target game/decision time.
+- Lock production hyperparameters for controlled retrains unless tuning is the explicit experiment.
+- Evaluate with flat stakes first; Kelly remains a separate optional paper-only certification lane.
+- Backtest artifacts must identify the exact model, quote source, decision-time policy, and evaluation window.
 
----
+## Environment
 
-## Step 1: Train Models
+Use the project virtual environment and a local database mirror for training/backtesting where supported. Do not print connection strings.
 
-### File
-```
-src/models/train_pipeline.py
+```powershell
+Set-Location 'C:\Users\Chase\Projects\GameFlowData'
+.\venv\Scripts\python.exe --version
 ```
 
-### Command
-```bash
-python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 22024
+## Train an NBA candidate
+
+Entrypoint: `src/models/train_pipeline.py`.
+
+Before launching, inspect the current CLI and production metadata. A typical locked-hyperparameter candidate command is:
+
+```powershell
+.\venv\Scripts\python.exe src\models\train_pipeline.py --train-seasons 22022 22023 --cal-season 22024 --hyperparams-path src\models\artifacts\production\best_hyperparams.json
 ```
 
-### Arguments
+Use current seasons/cutoffs appropriate to the intended evaluation window. Training writes an incomplete directory first and finalizes it only after all required artifacts are saved. Never promote an `_incomplete` run.
 
-| Arg | Default | Description |
-|-----|---------|-------------|
-| `--train-seasons` | `22022 22023` | NBA season IDs for training data |
-| `--cal-season` | `22024` | NBA season ID for calibration holdout |
-| `--cal-end-date` | None | Cutoff date for calibration data (YYYY-MM-DD). Reserves later dates for backtesting. |
-| `--hyperparams-path` | None | Path to existing hyperparams JSON to load (skips tuning). Use this to lock hyperparams during retrain. |
-| `--tune` | False | Enable Optuna hyperparameter tuning before training |
-| `--tuning-trials` | 50 | Number of Optuna trials |
-| `--retrain-stats` | None | Surgically retrain only these stat rate models (e.g., `--retrain-stats reb ast`). Requires `--base-model-dir`. |
-| `--retrain-minutes` | False | Surgically retrain only the minutes model. Requires `--base-model-dir`. |
-| `--base-model-dir` | None | Path to existing production pipeline for surgical retrain (e.g., `src/models/artifacts/production`). |
-| `--force-features` | None | Force-include features in all quantile lists for all models (e.g., `--force-features player_starter_prob`) |
+Do not run calibrate-only/global-offset workflows. A calibration report is diagnostic evidence, not authorization to shift production distributions.
 
-**Season ID format:** `2YYYY` where `YYYY` is the starting year. Examples:
-- `22022` = 2022-23 season
-- `22023` = 2023-24 season
-- `22024` = 2024-25 season
+## Backtest an exact candidate
 
-### Logic Flow
+Entrypoint: `src/backtesting/run_backtest.py`.
 
-```
-1. Load Training Data
-   └─ FeatureStore.get_training_dataset(train_seasons)
-      ├─ Pulls player_game_stats, rolling averages, team stats, opponent defense
-      ├─ Joins betting lines (spread/total)
-      ├─ Calculates travel/rest features
-      └─ Computes rate targets (pts_per_min, reb_per_min, etc.)
-
-2. Load Calibration Data (Holdout)
-   └─ Same query but for cal_season only
-
-3. Feature Selection (Training Data ONLY)
-   ├─ For each model (minutes, pts_rate, reb_rate, ast_rate):
-   │   ├─ Rank features via Permutation Importance (XGBoost proxy model)
-   │   └─ Optimize feature count via TimeSeriesSplit CV (avg pinball loss)
-   └─ Output: dict of selected features per model
-
-4. Train Models
-   ├─ Minutes Model: QuantileModelSuite trained on actual_minutes
-   │   └─ 5 XGBoost models (Q10, Q25, Q50, Q75, Q90)
-   └─ Rate Models (x3: pts, reb, ast): QuantileModelSuite per stat
-       └─ Each: 5 XGBoost models predicting stat_per_min
-       └─ Note: THREES model archived 2026-02-10 (poor market coverage)
-
-5. Calibration Evaluation (Holdout Season)
-   ├─ Predict quantiles on holdout data
-   ├─ Check: P(actual <= predicted_Qxx) ≈ xx%
-   ├─ FAIL if any gap > 10%
-   └─ WARN if any gap > 5%
-
-6. Sanity Check
-   ├─ Pick random player-game from holdout
-   ├─ Run full inference: FeatureStore → Pipeline → MonteCarloPredictor
-   └─ Assert: predictions positive, quantiles monotonic, values reasonable
-
-5d. Compute Copula Parameters
-   ├─ Compute Spearman ρ(minutes, rate) for each stat from training data
-   ├─ Save copula_params.json to run directory
-   └─ Used by MonteCarloPredictor for correlated sampling
-
-7. Save Artifacts
-   └─ src/models/artifacts/run_YYYYMMDD_HHMMSS/
-       ├─ minutes_model.joblib
-       ├─ pts_rate_model.joblib
-       ├─ reb_rate_model.joblib
-       ├─ ast_rate_model.joblib
-       ├─ feature_config.joblib
-       ├─ selected_features.json
-       ├─ run_config.json
-       ├─ calibration_report.json
-       ├─ copula_params.json                        # Gaussian copula Spearman ρ per stat
-       └─ combined_calibration_offsets.json (opt)    # Per-stat conformal offsets (if generated)
-
-8. Finalize (Atomic Rename)
-   └─ Directory is created as run_YYYYMMDD_HHMMSS_incomplete during training
-   └─ Renamed to run_YYYYMMDD_HHMMSS after all artifacts saved
-   └─ Prevents inference job from selecting incomplete models
+```powershell
+.\venv\Scripts\python.exe src\backtesting\run_backtest.py --model-dir src\models\artifacts\run_YYYYMMDD_HHMMSS --start YYYY-MM-DD --end YYYY-MM-DD
 ```
 
-### Calibrate-Only Mode (No Retraining)
+Use a held-out window strictly after training/calibration data. Certify flat-stake ROI, Sharpe, drawdown, volume, dropout, and timing integrity before considering paper deployment. Old backtest outputs are not trustworthy merely because they exist; verify the current harness and quote-clean path.
 
-Recompute combined calibration offsets on an existing model without retraining:
+## Daily inference
 
-```bash
-python src/models/train_pipeline.py \
-  --calibrate-only \
-  --base-model-dir src/models/artifacts/production \
-  --cal-season 22025 \
-  --cal-end-date 2026-01-15
+Production entrypoint: `src/orchestration/inference_job.py`. The persistent schedule is owned by `src/orchestration/scheduler.py`.
+
+Useful manual shapes:
+
+```powershell
+.\venv\Scripts\python.exe src\orchestration\inference_job.py --dry-run
+.\venv\Scripts\python.exe src\orchestration\inference_job.py --model-dir src\models\artifacts\production --skip-discord --skip-bets
 ```
 
-| Arg | Description |
-|-----|-------------|
-| `--calibrate-only` | Run offset computation only, no training |
-| `--base-model-dir` | Path to existing model directory |
-| `--cal-season` | Season ID for calibration data |
-| `--cal-end-date` | Optional cutoff date within the calibration season |
+A dry run may still require database reads. Confirm the command's current CLI before execution. Never run a second scheduler process just to trigger inference.
 
-Outputs `combined_calibration_offsets.json` to the base model directory. See [Monte Carlo Tuning — Combined Calibration Offsets](monte_carlo_tuning.md#combined-calibration-offsets-experimental--not-deployed) for details on this mechanism.
+## Promotion gate
 
-### What Good Calibration Looks Like
+Promotion is a separate approved change. Before touching production artifact directories:
 
-| Quantile | Target | Good (gap) | Acceptable | Fail |
-|----------|--------|------------|------------|------|
-| Q10 | 10% | <2% | <5% | >10% |
-| Q25 | 25% | <2% | <5% | >10% |
-| Q50 | 50% | <2% | <5% | >10% |
-| Q75 | 75% | <2% | <5% | >10% |
-| Q90 | 90% | <2% | <5% | >10% |
+1. identify the exact candidate and immutable evidence;
+2. verify artifact completeness and forbidden-file absence;
+3. confirm point-in-time backtest integrity;
+4. review flat-stake performance and risk metrics;
+5. verify current production consumers load the candidate;
+6. preserve rollback identity;
+7. review the scoped artifact diff;
+8. only then authorize commit/deploy separately.
 
-If Q50 actual coverage is 60% instead of 50%, the model is **underconfident** — it underestimates player stats, which means over bets look worse than they are.
+For MLB artifact functionality, run:
 
----
-
-## Step 2: Backtest
-
-### File
-```
-src/backtesting/run_backtest.py
+```powershell
+.\venv\Scripts\python.exe scripts\audit_mlb_model_artifacts.py --model-dir src\models\mlb\artifacts\production --json
 ```
 
-### Command
-```bash
-# Auto-finds latest model artifacts
-python src/backtesting/run_backtest.py --start 2024-10-22 --end 2025-01-15
+That audit does not replace quote-clean CLV, timing, dropout, or paper evidence.
 
-# Specify exact model run
-python src/backtesting/run_backtest.py --model-dir src/models/artifacts/run_20250120_143022 --start 2024-10-22 --end 2025-01-15
+## Repository verification
 
-# Custom settings (Bankroll & Kelly Staking)
-python src/backtesting/run_backtest.py \
-    --start 2024-11-01 \
-    --end 2024-12-31 \
-    --starting-bankroll 5000 \
-    --kelly-fraction 0.125 \
-    --edge-threshold 0.04
+```powershell
+.\venv\Scripts\python.exe -m compileall -q src
+.\venv\Scripts\python.exe -m pytest
 ```
 
-### Arguments
+Dashboard verification is separate and runs from `dashboard\` with `npm run lint` and `npm run build`.
 
-| Arg | Default | Description |
-|-----|---------|-------------|
-| `--start` | *required* | Start date (YYYY-MM-DD) |
-| `--end` | *required* | End date (YYYY-MM-DD) |
-| `--model-dir` | `src/models/artifacts` | Path to model artifacts (finds latest run_*) |
-| `--output-dir` | `backtest_results/bt_<timestamp>` | Where to save results |
-| `--n-samples` | `5000` | Monte Carlo samples per prediction |
-| `--stats` | `pts reb ast` | Stats to predict and bet on (THREES archived) |
-| `--edge-threshold` | `0.05` | Minimum edge (5%) to place a simulated bet |
-| `--starting-bankroll` | `10000.0` | Initial bankroll for simulation |
-| `--kelly-fraction` | `0.125` | Fraction of Kelly stake (e.g., 0.125 = 1/8th Kelly) |
-| `--bookmakers` | all available | List of bookmakers to shop lines from |
-| `--allowed-bets` | all combos | Stat:side filter (e.g., `pts:under reb:over`) |
-| `--bl-tau` | None (disabled) | Black-Litterman tau (e.g., 0.05). Enables BL blending |
+## Canonical context
 
-### Bankroll Management & Staking
-
-The backtester now supports **Dynamic Bankroll Management** using the **Kelly Criterion**.
-
--   **Dynamic Bankroll:** The simulation tracks a running bankroll. Wins increase the available capital for future bets, while losses decrease it.
--   **Kelly Staking:** Bet sizes are calculated as a fraction of the *current* bankroll based on the edge and odds.
-    -   Formula: $f^* = \frac{p(b+1) - 1}{b}$
-    -   Stake: $f^* \times \text{Kelly Fraction} \times \text{Current Bankroll}$
--   **Resolution:** Bets are resolved daily, and the bankroll is updated before the next day's bets are placed.
-
-### Logic Flow
-
-```
-1. Load Models & Copula
-   ├─ PlayerPropsModelPipeline.load_all(model_dir)
-   ├─ load_copula_params(model_dir) → copula_params.json (auto)
-   └─ MonteCarloPredictor(pipeline, copula_params=...)
-
-2. Configure Black-Litterman (Optional)
-   └─ If --bl-tau set: BlackLittermanBlender(BLConfig(tau=...))
-
-3. Get Game Dates in Range
-   └─ Query distinct game dates from player_game_stats
-
-4. For Each Game Date:
-   ├─ Resolve PENDING bets from previous day (Update Bankroll)
-   ├─ Get all games and players who played that day
-   ├─ For each player:
-   │   ├─ FeatureStore.get_player_game_features(player, game, date)
-   │   ├─ MonteCarloPredictor.predict() → distribution per stat
-   │   │   └─ Uses Gaussian copula if copula_params available
-   │   └─ Store quantile predictions
-   ├─ Fetch prop lines from ALL bookmakers (raw_player_props_combined)
-   ├─ Calculate edges (per bookmaker):
-   │   ├─ P(over) from predicted distribution
-   │   ├─ If BL enabled: blend model prob with devigged market prior
-   │   ├─ Implied prob from book odds
-   │   └─ Edge = P(over/under) - implied_prob
-   ├─ Select best line per player-stat (line shopping)
-   ├─ Place bets where |edge| > threshold
-   │   └─ Stake = Kelly Fraction * Current Bankroll
-   └─ Store bets for next day resolution
-
-5. Calculate Performance Metrics
-   ├─ ROI (total profit / total wagered)
-   ├─ Win rate
-   ├─ Sharpe ratio (annualized to 170 NBA game-days)
-   ├─ Max drawdown (% of peak equity)
-   ├─ Win/loss streaks
-   └─ Profit by stat, by edge bucket
-
-6. Save Results
-   └─ output_dir/
-       ├─ predictions.csv          (all predictions with features)
-       ├─ bets.csv                 (placed bets with outcomes)
-       ├─ metrics.json             (summary performance)
-       └─ all_bookmaker_edges.csv  (all bookmaker lines evaluated)
-```
-
-### Interpreting Results
-
-| Metric | What It Means | Target |
-|--------|---------------|--------|
-| ROI | Profit per unit wagered | >3% is good, >7% is great |
-| Win Rate | % of bets won | ~53-55% at -110 odds to profit |
-| Sharpe | Risk-adjusted return | >1.0 is strong |
-| Max Drawdown | Worst peak-to-trough loss | <20% of Peak Equity |
-
----
-
-## Step 3: Daily Predictions
-
-### File
-```
-src/orchestration/run_daily.py
-```
-
-### Command
-```bash
-# Full pipeline (scrape + process + predict)
-python src/orchestration/run_daily.py --date 2025-01-23
-
-# Predictions only (data already fresh)
-python src/orchestration/run_daily.py --date 2025-01-23 --skip-scraping --skip-processing
-
-# With optional scrapers
-python src/orchestration/run_daily.py --date 2025-01-23 --scrape-injuries --scrape-daily-props
-```
-
-### Arguments
-
-| Arg | Default | Description |
-|-----|---------|-------------|
-| `--date` | today | Target date (YYYY-MM-DD) |
-| `--skip-scraping` | false | Skip all scraping |
-| `--skip-processing` | false | Skip derived stats updates |
-| `--skip-inference` | false | Skip predictions |
-| `--model-dir` | `src/models/artifacts` | Path to model artifacts |
-| `--scrape-live-odds` | false | Scrape current game lines → `raw_game_lines_live` |
-| `--scrape-daily-props` | false | Scrape player props snapshot → `raw_player_props_combined` |
-| `--scrape-live-props` | false | Scrape live player props → `raw_player_props_live` |
-| `--scrape-injuries` | false | Scrape ESPN injury report |
-
-### Logic Flow
-
-```
-1. SCRAPING (unless --skip-scraping)
-   ├─ nba_unified_scraper.py        → Latest box scores to player_game_stats
-   ├─ daily_game_lines_scraper.py   → Game odds to raw_game_lines_staging
-   ├─ [opt] daily_player_props_scraper.py → Props to raw_player_props_combined
-   ├─ [opt] live_odds_scraper.py    → Live odds to raw_game_lines_live
-   └─ [opt] injury_scraper_job.py   → Injuries to espn_injuries
-
-2. PROCESSING (unless --skip-processing)
-   ├─ nba_linker_local.py           → Link API player IDs
-   ├─ backfill_team_ids.py          → Fill team_id gaps
-   ├─ update_player_position_history.py → Update position snapshots
-   ├─ update_league_position_averages.py → League-wide position stats
-   ├─ populate_average_stats.py     → Rolling averages (L5, L15)
-   └─ backfill_opponent_allowed.py  → Opponent positional defense stats
-
-3. INFERENCE (unless --skip-inference)
-   ├─ Load latest model from model-dir
-   ├─ Get today's games from team_game_stats
-   ├─ Get active players (avg_min_l5 >= 10)
-   ├─ Filter out injured players (if injury data available)
-   ├─ For each player:
-   │   ├─ FeatureStore.get_player_game_features()
-   │   └─ MonteCarloPredictor.predict() (10,000 samples)
-   ├─ Fetch current prop lines from raw_player_props_combined
-   ├─ Calculate edges (model prob vs implied prob)
-   └─ Save to predictions_YYYY-MM-DD.csv
-
-4. OUTPUT: predictions_YYYY-MM-DD.csv
-   Columns: player_name, stat, pred_mean, pred_median,
-            pred_q10..q90, line, over_odds, under_odds,
-            over_prob, under_prob, over_edge, under_edge
-```
-
-### Reading the Output
-
-```python
-import pandas as pd
-
-preds = pd.read_csv("predictions_2025-01-23.csv")
-
-# Filter for actionable bets (>5% edge)
-over_bets = preds[preds["over_edge"] > 0.05].sort_values("over_edge", ascending=False)
-under_bets = preds[preds["under_edge"] > 0.05].sort_values("under_edge", ascending=False)
-
-print("=== OVER BETS ===")
-print(over_bets[["player_name", "stat", "line", "over_edge", "over_odds"]].head(10))
-
-print("\n=== UNDER BETS ===")
-print(under_bets[["player_name", "stat", "line", "under_edge", "under_odds"]].head(10))
-```
-
----
-
-## Typical Workflow
-
-```bash
-# ONE TIME: Train models (takes 5-15 min depending on data size)
-python src/models/train_pipeline.py --train-seasons 22022 22023 --cal-season 22024
-
-# ONE TIME: Validate with backtest
-python src/backtesting/run_backtest.py --start 2024-10-22 --end 2025-01-15
-
-# DAILY: Generate predictions
-python src/orchestration/run_daily.py --date 2025-01-23 --scrape-injuries --scrape-daily-props
-```
-
----
-
-## Troubleshooting
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `DATABASE_URL not found` | Missing `.env` | Create `.env` with `DATABASE_URL=postgresql://user:pass@host:5432/db` |
-| `Suspiciously few rows` | Training query returns <10k rows | Check that season data is scraped and processed |
-| `Calibration failed: worst gap = X%` | Model is miscalibrated | Try different training seasons, check data quality |
-| `No run_* directories found` | No trained model exists | Run `train_pipeline.py` first |
-| `No games found for date` | No game data for that date | Verify scraping ran, check `team_game_stats` table |
-| `FeatureStore returned None` | Missing player/position data | Run full processing pipeline, check `player_position_history` |
-
----
-
-## File Reference
-
-| File | Purpose | Entry Point |
-|------|---------|-------------|
-| `src/models/train_pipeline.py` | Orchestrates training | `python -m` or direct |
-| `src/models/feature_store.py` | Feature engineering (training + inference) | Imported |
-| `src/models/quantile_trainer.py` | XGBoost quantile models | Imported |
-| `src/models/monte_carlo.py` | Samples distributions from quantiles | Imported |
-| `src/models/calibration.py` | Calibration evaluation utilities | Imported |
-| `src/models/daily_runner.py` | Daily prediction generation | Imported by run_daily |
-| `src/processing/feature_selection.py` | Automated feature selection | Imported by train_pipeline |
-| `src/backtesting/run_backtest.py` | Backtest entry point | `python -m` or direct |
-| `src/backtesting/backtest_harness.py` | Backtest orchestration | Imported |
-| `src/backtesting/bet_simulator.py` | Bet tracking and resolution | Imported |
-| `src/backtesting/performance_metrics.py` | ROI, Sharpe, drawdown calculations | Imported |
-| `src/backtesting/visualize_results.py` | HTML dashboard from backtest results | `python -m` or direct |
-| `src/models/black_litterman.py` | Black-Litterman probability blending | Imported |
-| `src/orchestration/run_daily.py` | Daily pipeline (scrape + process + predict) | `python -m` or direct |
-| `src/db/client.py` | Database connection singleton | Imported |
+Use remote GBrain before recommending architecture, feature-family, calibration, promotion, or betting-policy changes. Read `operations/hard-facts`, `operations/critical-invariants`, relevant atomic lessons, canonical model decisions, and only then recent handoffs.

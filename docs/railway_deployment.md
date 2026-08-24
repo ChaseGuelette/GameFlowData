@@ -1,258 +1,88 @@
-# Railway Deployment Guide
+# Railway deployment
 
-This guide explains how to deploy GameFlowData cron jobs to Railway.
+GameFlowData deploys one always-on Railway worker. Railway starts `/app/venv/bin/python src/orchestration/scheduler.py`; APScheduler owns all NBA/MLB timing in `America/New_York`.
 
-## Overview
+`railway.toml` does not define separate Railway cron services. Do not maintain a second schedule table in Railway or convert the worker into per-job crons without an explicit architecture change.
 
-Railway runs a single always-on worker (`scheduler.py`) with 7 APScheduler job definitions:
+## Files
 
-| Job | Schedule (ET) | Purpose | Discord |
-|-----|---------------|---------|---------|
-| Daily Stats | 11:00 AM | Scrape NBA results (CDN), update rolling averages | Always |
-| Daily Stats Retry | 11:30 AM | Auto-retry if 11 AM run failed | Always |
-| Props Only | Every 5 min, 11 AM – 11 PM | Props-only scrape + linker | Failures only |
-| Edge Refresh | Every 5 min (+2 min), 11 AM – 11 PM | Recalc edges, resolve bets, place bets | Failures only |
-| Full Lines (Noon) | 12:00 PM | Full scrape (game lines + props + injuries) | Always |
-| Inference (Noon) | 12:15 PM | Full MC inference + paper bets | Always |
-| Full Lines (4 PM) | 4:00 PM | Full scrape (catches new props) | Always |
-| Inference (4 PM) | 4:15 PM | Full MC inference (skip paper bets — already placed at noon) | Always |
+- `railway.toml` — Nixpacks builder, worker start command, restart policy.
+- `nixpacks.toml` — Python 3.11 virtual environment and native library setup.
+- `requirements.txt` — production dependencies.
+- `src/orchestration/scheduler.py` — job registrations and ET schedule authority.
+- `docs/daily_pipeline_automation.md` — operator-facing schedule summary.
 
-## Quick Start
+## Required configuration
 
-### 1. Install Railway CLI
+Set secrets through Railway variables; never commit or print their values. The retained worker needs the database connection and only the provider/Discord variables used by enabled NBA/MLB jobs. Use the Supabase session-pooler connection on port 5432 for backend writes; port 6543 can behave read-only in this environment.
 
-```bash
-# macOS/Linux
-curl -fsSL https://railway.app/install.sh | sh
+Common variable names include:
 
-# Windows (PowerShell)
-iwr https://railway.app/install.ps1 -useb | iex
+- `DATABASE_URL`
+- `ODDS_API_KEY`
+- `RAPIDAPI_KEY`
+- `DISCORD_BOT_TOKEN`
+- `DISCORD_CHANNEL_ALERTS`
+- `DISCORD_CHANNEL_PREDICTIONS`
+- `DISCORD_CHANNEL_PERFORMANCE`
+- MLB-specific Discord channel overrides when desired
+- explicit feature gates such as `NBA_FULL_LINES_ENABLED` and the dense-CLV job gate
 
-# Or via npm
-npm install -g @railway/cli
-```
+Inspect source before adding variables; retired Kalshi, Polymarket, arbitrage, and NCAAB variables are not active deployment requirements.
 
-### 2. Login and Link
+## Deployment
 
-```bash
+Deployment is a separately authorized action. After local tests and a clean-clone build pass:
+
+```powershell
 railway login
 railway link
-```
-
-### 3. Set Environment Variables
-
-In Railway dashboard or CLI:
-
-```bash
-# Core database and API keys
-railway variables set DATABASE_URL="postgresql://user:pass@host:port/db"
-railway variables set ODDS_API_KEY="your-odds-api-key"
-railway variables set RAPIDAPI_KEY="your-rapidapi-key"
-
-# Discord alerts (optional - for job notifications)
-railway variables set DISCORD_BOT_TOKEN="your-bot-token"
-railway variables set DISCORD_CHANNEL_ALERTS="channel-id-for-job-status"
-railway variables set DISCORD_CHANNEL_PREDICTIONS="channel-id-for-predictions"
-railway variables set DISCORD_CHANNEL_PERFORMANCE="channel-id-for-pnl-summary"
-```
-
-**Discord Alerts:** When configured, the scheduler sends:
-- Job success/failure notifications to `#alerts` after every scheduled job
-- Daily P&L summary to `#performance` after bet resolution
-- Top picks to `#predictions` after inference job
-
-### 4. Deploy
-
-```bash
 railway up
 ```
 
-That's it! Railway will:
-- Detect Python from `.python-version`
-- Install dependencies from `requirements.txt`
-- Create cron services from `railway.toml`
+A successful upload is not verification. Read back the deployment state and inspect startup logs to confirm:
 
-## Configuration Files
+1. the worker starts with the virtual-environment Python;
+2. scheduler startup enumerates only retained NBA/MLB and maintenance jobs;
+3. timezone is `America/New_York`;
+4. no retired job is registered;
+5. no immediate import, database, or provider failure occurs.
 
-| File | Purpose |
-|------|---------|
-| `railway.toml` | Service definitions and cron schedules |
-| `nixpacks.toml` | Build configuration (Python version, system deps) |
-| `.python-version` | Python version specification |
+## Model artifacts
 
-## Timezone Notes
+Only deployable suites are tracked:
 
-Railway cron schedules use **UTC**. The current config assumes **EST** (winter):
-- ET + 5 hours = UTC
+- `src/models/artifacts/production/`
+- `src/models/artifacts/production_playoffs/`
+- `src/models/mlb/artifacts/production/`
 
-During **EDT** (daylight saving, Mar-Nov), jobs will run 1 hour earlier ET time.
+Local `run_*`, sweep, ablation, backup, and rejected artifact directories are ignored and archived outside Git. Never promote by copying a directory based only on its name. Promotion requires artifact verification, backtest/evaluation evidence, and separate human approval.
 
-To adjust for EDT, update `railway.toml`:
-```toml
-# EDT adjustments (subtract 1 hour from UTC)
-cron = "0 13 * * *"  # 9 AM EDT (was 14:00 UTC for EST)
+MLB artifact preflight:
+
+```powershell
+.\venv\Scripts\python.exe scripts\audit_mlb_model_artifacts.py --model-dir src\models\mlb\artifacts\production --json
 ```
 
-## Model Artifacts
+The audit is an artifact/functionality gate only. Quote-clean CLV, ranking, timing stability, and paper evidence remain separate gates.
 
-Model artifacts use a **production folder** strategy:
+## Railway-specific invariants
 
-```
-src/models/artifacts/
-├── run_*/              # ← gitignored (local training runs)
-└── production/         # ← committed (deployed model)
-```
+- `daily_stats_job.py` uses `nba_unified_scraper.py --cdn-only`.
+- Never call `stats.nba.com` from Railway and never move advanced-stat scraping there.
+- Use `sys.executable` for subprocesses so jobs remain inside `/app/venv`.
+- Do not run training, sweeps, or broad backfills on this worker.
+- Do not introduce blocking index creation on `raw_player_props_combined`.
 
-### Promoting a New Model
+## Monitoring and rollback
 
-After training, promote the best model to production:
+Use the linked project/service in the Railway dashboard or CLI to inspect deployment and runtime logs. A missing job execution is not proven healthy because the worker process exists; verify scheduler registration and the job's latest completion evidence.
 
-```bash
-# List available runs
-python scripts/promote_model.py --list
+If a deployment regresses:
 
-# Promote latest run
-python scripts/promote_model.py
+1. stop or roll back the affected deployment through Railway;
+2. preserve logs and the failed deployment identity;
+3. verify the prior worker is running and schedules are restored;
+4. retest the original failure path before closing the incident.
 
-# Promote specific run
-python scripts/promote_model.py run_20260210_095220
-
-# Commit and push
-git add src/models/artifacts/production/
-git commit -m "Promote run_20260210_095220 to production"
-git push
-```
-
-Railway automatically redeploys when you push, picking up the new model.
-
-## Monitoring
-
-### View Logs
-
-```bash
-# All services
-railway logs
-
-# Specific service
-railway logs --service inference
-```
-
-### Dashboard
-
-Visit [railway.app/dashboard](https://railway.app/dashboard) to:
-- View cron execution history
-- Check service health
-- Monitor resource usage
-- Trigger manual runs
-
-### Manual Trigger
-
-To run a job manually:
-
-```bash
-# Via Railway CLI
-railway run python src/orchestration/inference_job.py
-
-# Or trigger from dashboard: Service → Deployments → Run
-```
-
-## Cost Estimate
-
-Railway pricing (as of 2024):
-- **Hobby Plan**: $5/month includes $5 usage credit
-- **Usage**: ~$0.000231/min for compute
-
-Your jobs:
-- `daily-stats`: ~5-10 min/day = ~$0.07-0.14/month
-- `lines` (3x): ~1.5 min/day total = ~$0.01/month
-- `inference`: ~0.5 min/day = ~$0.004/month
-
-**Total estimated: ~$0.10-0.20/month** (well under $5 credit)
-
-## Troubleshooting
-
-### Job Not Running
-
-1. Check cron syntax in `railway.toml`
-2. Verify service is deployed: `railway status`
-3. Check logs: `railway logs --service <name>`
-
-### Database Connection Errors
-
-1. Verify `DATABASE_URL` is set: `railway variables`
-2. Check Supabase allows Railway IPs (or use connection pooling)
-
-### Import Errors
-
-1. Ensure `PYTHONPATH` includes `/app/src`
-2. Check `requirements.txt` has all dependencies
-
-### "externally-managed-environment" or "No module named pip" Error
-
-Railway's Nixpacks builder uses an immutable Nix store. Running `ensurepip` or `pip install` directly against the system Python fails because `/nix/store` is read-only.
-
-**Fix:** Use a Python venv with `--system-site-packages` in `nixpacks.toml`:
-
-```toml
-[phases.setup]
-nixPkgs = ["python311", "python311Packages.pip", "zlib", "stdenv.cc.cc.lib"]
-
-[phases.install]
-cmds = [
-    "python3.11 -m venv --system-site-packages /app/venv",
-    "/app/venv/bin/python -m pip install -r requirements.txt"
-]
-
-[variables]
-LD_LIBRARY_PATH = "/root/.nix-profile/lib"
-
-[start]
-cmd = "/app/venv/bin/python src/orchestration/scheduler.py"
-```
-
-Key points:
-- `--system-site-packages` lets the venv inherit pip from the Nix-provided `python311Packages.pip`
-- `zlib` and `stdenv.cc.cc.lib` provide `libz.so.1` and `libstdc++.so.6` needed by numpy/scipy/xgboost C extensions
-- `LD_LIBRARY_PATH` tells the dynamic linker where to find Nix-installed shared libraries at runtime
-- All subprocess scripts must use `sys.executable` (not hardcoded `python`) to ensure the venv Python is used
-
-### "ImportError: libz.so.1" or Missing Shared Library
-
-If numpy/pandas/scipy fail at runtime with `ImportError: libz.so.1: cannot open shared object file`:
-
-1. Ensure `zlib` and `stdenv.cc.cc.lib` are in `nixPkgs` (provides the libraries)
-2. Ensure `LD_LIBRARY_PATH = "/root/.nix-profile/lib"` is set in `[variables]` (makes them findable)
-3. Ensure subprocess calls use `sys.executable` not bare `python` (uses correct Python with correct library paths)
-
-### Model Not Found
-
-1. Verify `src/models/artifacts/run_*` directories are committed
-2. Check `.gitignore` isn't excluding model files
-
-## Integration with Vercel
-
-If you have a dashboard on Vercel:
-
-```
-GitHub Repo
-    │
-    ├──► Railway (cron jobs)
-    │       └── Writes to Supabase
-    │
-    └──► Vercel (dashboard)
-            └── Reads from Supabase
-```
-
-Both deploy from the same repo. No additional configuration needed.
-
-## Off-Season Management
-
-Disable cron jobs during NBA off-season:
-
-```bash
-# In Railway dashboard: Service → Settings → Disable
-
-# Or remove cron from railway.toml and redeploy
-```
-
-Re-enable before season starts (typically late October).
+Do not combine a code deployment with a DB migration, model promotion, or broad backfill unless each action was separately approved.
