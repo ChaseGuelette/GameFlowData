@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ check.check_id }}</h1>
+<p class="status {{ check.status.value }}">{{ check.status.value }}</p>
+<p>{{ check.summary }}</p>
+<p>Source: {{ check.source }}</p>
+<p>Observed: {{ format_time(check.observed_at) }}</p>
+<p>Freshness: {{ freshness_seconds(check.observed_at) }} seconds old</p>
+<h2>Metrics</h2>
+<pre>{{ check.metrics }}</pre>
+<h2>Evidence</h2>
+{% for line in check.evidence %}
+<pre>{{ redact(line) }}</pre>
+{% else %}
+<p>No bounded evidence.</p>
+{% endfor %}
+<h2>Events</h2>
+<ul>
+{% for event in events %}
+<li>{{ format_time(event.created_at) }} {{ event.transition_type }} {{ event.status.value }}: {{ event.summary }}</li>
+{% else %}
+<li>No event history for this check.</li>
+{% endfor %}
+</ul>
+{% endblock %}

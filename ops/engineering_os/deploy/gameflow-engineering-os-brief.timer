@@ -1,0 +1,11 @@
+[Unit]
+Description=Run GameFlow Engineering OS daily brief after owner-approved schedule is selected
+
+[Timer]
+# Owner gate: replace the placeholder time only after Chase approves the daily brief time.
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+Unit=gameflow-engineering-os-brief.service
+
+[Install]
+WantedBy=timers.target

@@ -1,5 +1,15 @@
 # MLB Batter Hits Ablation Iteration Pipeline
 
+> **Superseded as the active iteration contract (2026-07-27):** Use
+> [the flat-first lifecycle plan](../../.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md).
+> The fast feature-family loop is now fixed-hyperparameter training plus the same raw/no-BL,
+> quote-clean, flat-stake sweep for the baseline and every candidate. Do not run CLV/ranker,
+> book-sensitivity, broad BL, dropout, or paper stages for every feature iteration. Select a
+> small model-finalist pool first; then run broad BL policy selection, independent-window
+> dropout/timing certification, optional nonblocking mean CLV, and frozen flat forward paper.
+> Ranker and edge-bucket monotonicity are reserved for optional Kelly certification. The
+> commands and historical evidence below remain reference material, not the default run order.
+
 **Purpose:** A repeatable, faster iteration loop for MLB `batter_hits` model reruns and feature-family ablations. This is meant to find better models without spending 4-6 hours on every candidate before we know whether it deserves full certification.
 
 **Default posture:** research / paper-only until quote-clean CLV, edge-ranking, timing, and book-routing gates pass. Do not promote from ROI alone.

@@ -1,6 +1,17 @@
 # MLB model lifecycle runner
 
+> **Pending lifecycle transition (2026-07-27):** The implementation documented below still
+> conflates flat finalist approval with CLV-ranker/Kelly readiness. Do not use its mandatory
+> ranker path as the active feature-discovery contract. The approved target is four explicit
+> purposes: `feature_discovery`, `bl_policy_selection`, `flat_certification`, and optional
+> `kelly_certification`. Until that implementation lands, use only reviewed configs/commands that
+> enforce the same separation. See the
+> [flat-first lifecycle plan](../../.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md).
+
 ## Purpose
+
+The stage sequence in this section describes the current legacy implementation, not the approved
+flat-first target. In the target contract, ranker and monotonicity run only for Kelly certification.
 
 `scripts/run_mlb_model_lifecycle.py` replaces long, stat-specific command sequences with one profile-driven YAML lifecycle:
 

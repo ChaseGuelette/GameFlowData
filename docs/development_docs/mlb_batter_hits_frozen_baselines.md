@@ -1,5 +1,13 @@
 # MLB batter_hits frozen baselines
 
+> **Current use (2026-07-27):** Treat each entry below as two separate objects: a frozen model
+> artifact and a historical betting policy. For feature-family discovery, rerun the baseline
+> artifact and every candidate under the same raw/no-BL, quote-clean, flat-$100 threshold grid;
+> do not compare a candidate against the baseline's previously selected policy. Run broad BL
+> sweeps only for the baseline/finalist artifact set. Ranker evidence is not required for flat
+> model selection or flat certification; it is retained only for optional Kelly certification.
+> See the [flat-first lifecycle plan](../../.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md).
+
 Last updated: 2026-05-26
 
 ## Purpose
@@ -210,16 +218,17 @@ Reason:
 
 For each future `batter_hits` ablation or model rerun:
 
-1. Compare against the clean no-prop-line baseline first.
-2. Use preferred-book routing as the primary operational routing policy.
-3. Use compact fixed configs first:
+1. Compare the clean no-prop-line baseline artifact and candidate under the identical raw/no-BL protocol.
+2. Use preferred-book routing as the common operational routing policy.
+3. Use the same compact fixed edge thresholds for every artifact:
    - edge 0.10
    - edge 0.12
    - edge 0.15 only if bet count remains >=100
-4. Run CLV-only selected-config audit before full dropout/bucket certification.
-5. Run ranker diagnostics before interpreting edge magnitude.
-6. Run book sensitivity only for configs that survive mean-CLV and bet-count filters.
-7. Keep live-money and Kelly/tiered sizing blocked until a ranker passes with positive block-bootstrap CI low.
+4. Select model finalists from profit, ROI, Sharpe, drawdown, volume, and side splits.
+5. Run broad BL policy selection only for the baseline/finalist artifacts.
+6. Reserve independent-window dropout/timing, optional mean CLV, and book sensitivity for policy finalists.
+7. Do not run ranker diagnostics unless explicitly opening the Kelly-certification lane.
+8. Keep live-money and Kelly/tiered sizing blocked; flat forward paper is a separate frozen-policy gate.
 
 ## Current decision summary
 

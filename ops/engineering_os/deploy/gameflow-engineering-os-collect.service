@@ -1,0 +1,10 @@
+[Unit]
+Description=GameFlow Engineering OS health collection
+
+[Service]
+Type=oneshot
+ExecStart=/home/chase/.local/share/gameflow-engineering-os/venv/bin/gfos --config /home/chase/.config/gameflow-engineering-os/engineering_os.yaml collect
+WorkingDirectory=/home/chase/projects/GameFlowData/ops/engineering_os
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=true

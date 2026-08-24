@@ -1,0 +1,65 @@
+# Downstream recovery for batter_hits_platoon_contact_ablation_from_scratch.
+# The original quote-clean sweep completed successfully, but both preregistered
+# Black-Litterman audit cells were under the hard 100-bet floor (tau=0.50: 19;
+# tau=0.90: 21 at edge=0.12). Preserve those cells as UNDERPOWERED and attach
+# the completed artifact/sweep to certify only the preregistered no-BL control.
+experiment:
+  name: batter_hits_platoon_contact_ablation_resume_no_bl_audit
+  profile: batter_hits
+  purpose: finalist_certification
+
+model:
+  base: no_prop_line
+  artifact_dir: backtest_results/lifecycle/batter_hits_platoon_contact_ablation_from_scratch/artifacts/mlb_run_batter_hits_20260722_083314_no_prop_line
+  sweep_dir: backtest_results/lifecycle/batter_hits_platoon_contact_ablation_from_scratch/sweep
+  sweep_artifact_identity_sha256: 2a48ccc5d14f46b1ea33c007981c6a8cf96326ed7915b7d45fc709f5a560eb41
+  tune: false
+  feature_tolerance: 0.02
+  feature_controls:
+    mode: include
+    families: [platoon, contact_quality]
+    features: []
+
+training:
+  seasons: [2024, 2025]
+  calibration_season: 2026
+  calibration_end: 2026-04-12
+
+evaluation:
+  start: 2026-05-18
+  end: 2026-06-21
+  direction: both
+  edge_thresholds: [0.10, 0.12, 0.15]
+  flat_bet: 100
+  tau: [null, 0.50, 0.90]
+  z_max: [0.25]
+  max_weight: [0.50]
+  kelly_values: [0.0]
+
+quotes:
+  clean: true
+  line_source: mlb_player_props_clv_snapshots
+  decision_policy: slate_or_tminus
+  relative_minutes: 60
+  routing: preferred_book_first
+  coverage_audit_note: Attach the completed quote-clean sweep after its BL cells failed the 100-bet evidence floor; run full downstream certification only for the preregistered no-BL edge-0.12 control, and retain BL cells as underpowered evidence.
+
+audit:
+  minimum_bets: 100
+  bootstrap_samples: 1000
+  mode: full
+  selection:
+    policy: explicit
+    max_configs: 1
+    include_no_bl_control: true
+    rank_by: sharpe_ratio
+    configs:
+      - {tau: null, z_max: 0.25, max_weight: 0.50, edge_threshold: 0.12, kelly_fraction: 0.0}
+
+decision:
+  max_drawdown: 0.25
+  require_positive_roi: true
+  require_positive_mean_clv_ci_low: true
+  require_positive_ranker_ci_low: true
+  require_edge_bucket_monotonicity: true
+  require_independent_window: true

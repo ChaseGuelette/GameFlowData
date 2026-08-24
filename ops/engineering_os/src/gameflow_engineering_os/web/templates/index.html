@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+{% if db_error %}<section class="banner failed">Monitor database error. Run CLI diagnostics on the host.</section>{% endif %}
+{% if empty %}<section class="banner unknown">No collector data has been persisted yet.</section>{% endif %}
+{% if stale %}<section class="banner warning">Collector data is stale.</section>{% endif %}
+<section class="brief">
+  <h1>Latest Brief</h1>
+  {% if brief %}<pre>{{ redact(brief.text) }}</pre>{% else %}<p>No daily brief is available.</p>{% endif %}
+</section>
+<section>
+  <h2>Health</h2>
+  <div class="grid">
+  {% for item in results %}
+    <a class="card {{ item.status.value }}" href="/health/{{ item.check_id }}">
+      <strong>{{ item.check_id }}</strong>
+      <span>{{ item.status.value }}</span>
+      <p>{{ item.summary }}</p>
+      <small>{{ format_time(item.observed_at) }} · {{ freshness_seconds(item.observed_at) }}s old</small>
+    </a>
+  {% endfor %}
+  </div>
+</section>
+<section>
+  <h2>Events</h2>
+  <ul>
+  {% for event in events %}
+    <li>{{ format_time(event.created_at) }} {{ event.transition_type }} {{ event.check_id }} {{ event.status.value }}: {{ event.summary }}</li>
+  {% else %}
+    <li>No recent events.</li>
+  {% endfor %}
+  </ul>
+</section>
+{% endblock %}

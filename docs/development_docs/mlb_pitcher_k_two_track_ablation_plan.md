@@ -1,5 +1,12 @@
 # MLB Pitcher K Two-Track Ablation Plan
 
+> **Additional supersession note (2026-07-27):** The current flat-first lifecycle also supersedes
+> this plan's use of the frozen BL policy and audit/ranker sequence during feature-family discovery.
+> Use identical raw/no-BL flat settings for the baseline artifact and every candidate; select model
+> finalists first; then run broad BL policy selection and independent-window dropout/timing
+> certification. Ranker diagnostics are optional Kelly work, not a flat-model gate. See
+> `.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md`.
+
 > **Superseded operating plan (2026-07-18):** Use
 > [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md) for current execution.
 > This file is retained as the immediate predecessor and historical rationale.

@@ -1,5 +1,15 @@
 # MLB Pitcher K Ablation Roadmap
 
+> **Flat-first methodology update (2026-07-27):** Apply the same separation used for Batter Hits.
+> During feature discovery, compare the frozen baseline artifact and every force-include/exclude
+> candidate under one identical raw/no-BL, quote-clean, flat-stake protocol. Do not use the frozen
+> BL policy as the causal baseline and do not run ranker/monotonicity for every family. Select a
+> small model-finalist pool from profit, ROI, Sharpe, drawdown, volume, side splits, and paired-bet
+> behavior; then run broad BL selection, independent-window dropout/timing certification, optional
+> nonblocking mean CLV, and frozen flat forward paper. Ranker and Kelly remain a separate optional
+> sizing lane. See the
+> [flat-first lifecycle plan](../../.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md).
+
 Date: 2026-07-18
 Status: canonical active roadmap
 

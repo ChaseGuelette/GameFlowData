@@ -1,0 +1,56 @@
+experiment:
+  name: pitcher_strikeouts_track_a_exclude_inning_fatigue_slice7_manual_rerun
+  profile: pitcher_strikeouts
+  purpose: discovery
+
+model:
+  base: with_prop_line
+  tune: false
+  feature_tolerance: 0.02
+  feature_controls:
+    mode: exclude
+    families: [inning_fatigue]
+    features: []
+
+training:
+  seasons: [2024, 2025]
+  calibration_season: 2026
+  calibration_end: 2026-04-12
+
+evaluation:
+  start: 2026-04-13
+  end: 2026-06-21
+  direction: under
+  edge_thresholds: [0.02, 0.03, 0.04, 0.05, 0.06, 0.08]
+  flat_bet: 100
+  tau: [null, 0.50, 0.75, 0.90]
+  z_max: [0.25, 0.50]
+  max_weight: [0.50, 0.65, 0.80]
+  kelly_values: [0.0]
+
+quotes:
+  clean: true
+  line_source: mlb_player_props_clv_snapshots
+  decision_policy: slate_or_tminus
+  relative_minutes: 60
+  routing: preferred_book_first
+  coverage_audit_note: Certified Slice 7 dense quote-clean linked-coverage window, 2026-04-13 through 2026-06-21; preserve slate_or_tminus with T-60 fallback and preferred-book routing.
+
+audit:
+  minimum_bets: 100
+  bootstrap_samples: 1000
+  mode: full
+  selection:
+    policy: risk_filtered_top_n
+    max_configs: 3
+    include_no_bl_control: true
+    rank_by: sharpe_ratio
+    configs: []
+
+decision:
+  max_drawdown: 0.25
+  require_positive_roi: true
+  require_positive_mean_clv_ci_low: true
+  require_positive_ranker_ci_low: true
+  require_edge_bucket_monotonicity: true
+  require_independent_window: false

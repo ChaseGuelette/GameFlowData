@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Brief History</h1>
+{% for brief in briefs %}
+  <article class="brief">
+    <h2>{{ brief.brief_date }}</h2>
+    <pre>{{ brief.text }}</pre>
+  </article>
+{% else %}
+  <p>No retained briefs.</p>
+{% endfor %}
+{% endblock %}

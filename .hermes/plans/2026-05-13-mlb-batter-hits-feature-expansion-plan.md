@@ -1,5 +1,13 @@
 # MLB Batter Hits Residual-First Feature Expansion Plan
 
+> **Superseded methodology notice (2026-07-27):** Preserve this file as historical evidence, but
+> do not use its CLV-ranker or edge-monotonicity gates as the default feature-family loop. Current
+> practice compares force-include/force-exclude families under the same raw/no-BL, quote-clean,
+> flat-stake protocol; selects model finalists from profit, ROI, Sharpe, drawdown, volume, and side
+> splits; then runs broad BL selection and independent-window flat certification. Ranker and
+> monotonicity belong only to optional Kelly certification. See
+> `.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md`.
+
 > **For Hermes:** This is a review draft. Do not implement phases until Chase approves the phase/spec. Use `gameflow-model-evaluation`, `gameflow-explore`, `test-driven-development`, and `subagent-driven-development` for implementation work.
 
 **Goal:** Improve the MLB `batter_hits` model without feature-shopping against a strong backtest by using residual/calibration diagnostics to select one constrained feature class per phase.

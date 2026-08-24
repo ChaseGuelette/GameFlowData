@@ -1,0 +1,63 @@
+# Fresh, end-to-end batter-hits ablation for the combined platoon and
+# contact-quality feature families. This intentionally attaches no existing
+# artifact or sweep, so the lifecycle starts at training and runs through
+# quote-clean certification and report-only staking classification.
+experiment:
+  name: batter_hits_platoon_contact_ablation_from_scratch
+  profile: batter_hits
+  purpose: finalist_certification
+
+model:
+  base: no_prop_line
+  tune: false
+  feature_tolerance: 0.02
+  feature_controls:
+    mode: include
+    families: [platoon, contact_quality]
+    features: []
+
+training:
+  seasons: [2024, 2025]
+  calibration_season: 2026
+  calibration_end: 2026-04-12
+
+evaluation:
+  start: 2026-05-18
+  end: 2026-06-21
+  direction: both
+  edge_thresholds: [0.10, 0.12, 0.15]
+  flat_bet: 100
+  tau: [null, 0.50, 0.90]
+  z_max: [0.25]
+  max_weight: [0.50]
+  kelly_values: [0.0]
+
+quotes:
+  clean: true
+  line_source: mlb_player_props_clv_snapshots
+  decision_policy: slate_or_tminus
+  relative_minutes: 60
+  routing: preferred_book_first
+  coverage_audit_note: Fresh end-to-end rerun of the partial platoon plus contact-quality batter-hits ablation; verify dense quote-clean linked coverage on the independent 2026-05-18 through 2026-06-21 window before considering any report-only paper recommendation.
+
+audit:
+  minimum_bets: 100
+  bootstrap_samples: 1000
+  mode: full
+  selection:
+    policy: explicit
+    max_configs: 3
+    include_no_bl_control: true
+    rank_by: sharpe_ratio
+    configs:
+      - {tau: null, z_max: 0.25, max_weight: 0.50, edge_threshold: 0.12, kelly_fraction: 0.0}
+      - {tau: 0.50, z_max: 0.25, max_weight: 0.50, edge_threshold: 0.12, kelly_fraction: 0.0}
+      - {tau: 0.90, z_max: 0.25, max_weight: 0.50, edge_threshold: 0.12, kelly_fraction: 0.0}
+
+decision:
+  max_drawdown: 0.25
+  require_positive_roi: true
+  require_positive_mean_clv_ci_low: true
+  require_positive_ranker_ci_low: true
+  require_edge_bucket_monotonicity: true
+  require_independent_window: true

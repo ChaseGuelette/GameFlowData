@@ -1,6 +1,17 @@
 # MLB YAML model lifecycle usage guide
 
+> **Pending lifecycle transition (2026-07-27):** The current runner still schedules ranker work as
+> part of strict finalist certification. That behavior is not the approved flat-first methodology.
+> The target separates `feature_discovery`, `bl_policy_selection`, `flat_certification`, and
+> optional `kelly_certification`; ranker/monotonicity belong only to the last purpose. Until the
+> code transition is implemented, dry-run every config and do not treat the legacy mandatory
+> ranker result as a veto on flat profitability. See the
+> [flat-first lifecycle plan](../../.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md).
+
 ## What this runner does
+
+The ordered stages below describe current legacy behavior. They are retained for command accuracy
+until the purpose-aware runner is implemented, not as the current model-selection doctrine.
 
 Use `scripts/run_mlb_model_lifecycle.py` to run one MLB model experiment from a YAML preset. The runner keeps the complete experiment contract in one place and executes these stages in order:
 

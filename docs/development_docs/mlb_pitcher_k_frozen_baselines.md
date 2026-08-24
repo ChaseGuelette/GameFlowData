@@ -1,5 +1,11 @@
 # MLB Pitcher K Frozen Baselines
 
+> **Current use (2026-07-27):** Separate each frozen model artifact from its historical BL/edge
+> policy. Feature-family discovery must rerun the baseline artifact and candidates under the same
+> raw/no-BL, quote-clean, flat-stake protocol. Broad BL selection follows only for model finalists.
+> CLV ranker evidence is not a flat-model promotion gate; it is reserved for optional Kelly sizing.
+> Historical metrics below remain evidence and must not be rewritten.
+
 > **Historical baseline-restoration record:** Current baseline status and ablation execution
 > live in [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md). The
 > statements below that dense Pitcher K CLV is missing or that variants must not start were

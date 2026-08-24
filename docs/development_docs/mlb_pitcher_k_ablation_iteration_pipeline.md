@@ -1,5 +1,11 @@
 # MLB Pitcher K Ablation Iteration Pipeline
 
+> **Additional supersession note (2026-07-27):** The flat-first lifecycle replaces the historical
+> quote-clean audit/ranker-per-variant loop below. Feature discovery now uses the same raw/no-BL,
+> quote-clean, flat-stake protocol for baseline and candidates. Broad BL, dropout/timing, and paper
+> are finalist stages; ranker/monotonicity are optional Kelly certification only. See
+> `.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md`.
+
 > **Superseded operating plan (2026-07-18):** Use
 > [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md). The fresh
 > Slice 7 baseline and dense-CLV gate were subsequently completed, so the missing-dense-data

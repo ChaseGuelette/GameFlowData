@@ -1,5 +1,16 @@
 # MLB Batter Hits Model Functionality Roadmap
 
+> **Methodology update (2026-07-27):** This roadmap's mandatory CLV-ranker-before-feature-work
+> ordering is superseded by the
+> [flat-first lifecycle plan](../../.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md).
+> Feature families are now compared rapidly under one common raw/no-BL, quote-clean, flat-stake
+> protocol. Broad BL selection happens only after model finalists are chosen. Independent-window
+> ROI/profit, adequate volume, Sharpe, drawdown, dropout/timing integrity, and frozen forward-paper
+> performance are the core flat-certification evidence. Mean CLV remains a finalist diagnostic;
+> CLV ranking, edge-bucket monotonicity, and Kelly belong to a separate optional sizing lane.
+> Historical diagnostics and failure analyses below remain valid evidence but are no longer the
+> default feature-iteration gate order.
+
 **Purpose:** A future-facing roadmap for turning MLB batter_hits research/backtests into a functional, promotion-ready model and betting policy.
 
 **Current posture:** Caution / paper-only. Dense CLV evidence suggests there may be mild average edge, but promotion is blocked by temporal-safety verification, bookmaker concentration, and edge-ranking failure.

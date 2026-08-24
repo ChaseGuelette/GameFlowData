@@ -1,5 +1,11 @@
 # MLB CLV Ranking Diagnostics Implementation Plan
 
+> **Lane status update (2026-07-27):** This is retained as an optional Kelly/sizing diagnostic,
+> not a prerequisite for feature-family discovery, BL policy selection, flat certification, or
+> flat forward paper. Mean CLV may still be inspected as nonblocking finalist evidence, but ranker
+> CI and edge-bucket monotonicity must not revoke flat approval. See
+> `.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md`.
+
 > For Hermes: Use subagent-driven-development or the GameFlow implementation-worker lane to implement this plan task-by-task after Chase approval.
 
 Goal: Build a quote-clean MLB CLV ranking diagnostic that tests whether any current score ranks CLV well enough to become a quality filter, and creates a path for adding better composite scores if no current score passes.

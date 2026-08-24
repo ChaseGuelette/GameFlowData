@@ -1,5 +1,13 @@
 # MLB Batter Hits Force Feature-Family Infrastructure Implementation Plan
 
+> **Methodology update (2026-07-27):** The force-include/force-exclude infrastructure remains
+> canonical, but “ranker-driven retrains” are no longer the default evaluation loop. Compare each
+> family and the baseline under identical raw/no-BL, quote-clean, flat-stake settings. Promote a
+> small model-finalist pool by profit, ROI, Sharpe, drawdown, volume, and side splits; defer broad
+> BL, dropout/timing certification, and paper to later stages. Ranker diagnostics are optional and
+> belong to Kelly certification. See
+> `.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md`.
+
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task.
 
 **Goal:** Add explicit force-include / force-exclude infrastructure for MLB batter model feature-family experiments so ranker-driven retrains can validate feature families as families, not as isolated selector artifacts.
