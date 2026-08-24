@@ -58,11 +58,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MLBBacktestSweep")
 
-# Stats whose sportsbook market_key in mlb_raw_player_props differs from the internal stat name
-STAT_TO_MARKET_KEY: dict[str, str] = {
-    "batter_hrr": "batter_hits_runs_rbis",
-}
-
 # Bookmakers excluded from edge calculation — mirrors mlb_daily_runner._EXCLUDED_BOOKMAKERS.
 # novig: low-vig sharp book (user cannot bet there)
 # betonlineag: offshore book (user cannot bet there)

@@ -99,7 +99,7 @@ def main():
             "pointsbetus", "fanatics", "barstool", "wynnbet",
             # US2 / us_ex markets
             "ballybet", "betopenly", "betparx", "espnbet", "fliff",
-            "hardrockbet", "novig", "polymarket", "prophetx", "rebet",
+            "hardrockbet", "novig", "prophetx", "rebet",
             "windcreek",
         ],
         help="List of bookmakers to shop lines from (default: all available)",

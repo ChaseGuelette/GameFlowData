@@ -49,7 +49,6 @@ STAT_ACTUALS: dict[str, tuple[str, str]] = {
     "batter_total_bases": ("mlb_player_game_stats_batting",  "tb"),
     "batter_rbis":        ("mlb_player_game_stats_batting",  "rbi"),
     "batter_runs_scored": ("mlb_player_game_stats_batting",  "r"),
-    "batter_hrr":         ("mlb_player_game_stats_batting",  "h + r + rbi"),
 }
 
 

@@ -1,0 +1,113 @@
+{
+    "pts": [
+        {
+            "quantile": 0.1,
+            "coverage": 0.0955,
+            "target": 0.1,
+            "gap": -0.004500000000000004,
+            "conformal_offset": 0.1003178124581735
+        },
+        {
+            "quantile": 0.25,
+            "coverage": 0.2,
+            "target": 0.25,
+            "gap": -0.04999999999999999,
+            "conformal_offset": 0.8657327766474349
+        },
+        {
+            "quantile": 0.5,
+            "coverage": 0.4465,
+            "target": 0.5,
+            "gap": -0.05349999999999999,
+            "conformal_offset": 0.7593909860688735
+        },
+        {
+            "quantile": 0.75,
+            "coverage": 0.7595,
+            "target": 0.75,
+            "gap": 0.009499999999999953,
+            "conformal_offset": -0.1642135307411392
+        },
+        {
+            "quantile": 0.9,
+            "coverage": 0.9165,
+            "target": 0.9,
+            "gap": 0.01649999999999996,
+            "conformal_offset": -0.6249719535555431
+        }
+    ],
+    "reb": [
+        {
+            "quantile": 0.1,
+            "coverage": 0.063,
+            "target": 0.1,
+            "gap": -0.037000000000000005,
+            "conformal_offset": 0.43422276650039926
+        },
+        {
+            "quantile": 0.25,
+            "coverage": 0.1735,
+            "target": 0.25,
+            "gap": -0.07650000000000001,
+            "conformal_offset": 0.4392196722729561
+        },
+        {
+            "quantile": 0.5,
+            "coverage": 0.459,
+            "target": 0.5,
+            "gap": -0.04099999999999998,
+            "conformal_offset": 0.22789204976422806
+        },
+        {
+            "quantile": 0.75,
+            "coverage": 0.755,
+            "target": 0.75,
+            "gap": 0.0050000000000000044,
+            "conformal_offset": -0.0523478195097955
+        },
+        {
+            "quantile": 0.9,
+            "coverage": 0.9175,
+            "target": 0.9,
+            "gap": 0.01749999999999996,
+            "conformal_offset": -0.337207074675063
+        }
+    ],
+    "ast": [
+        {
+            "quantile": 0.1,
+            "coverage": 0.177,
+            "target": 0.1,
+            "gap": 0.07699999999999999,
+            "conformal_offset": -0.0010623936347107764
+        },
+        {
+            "quantile": 0.25,
+            "coverage": 0.246,
+            "target": 0.25,
+            "gap": -0.0040000000000000036,
+            "conformal_offset": 0.039786652265436984
+        },
+        {
+            "quantile": 0.5,
+            "coverage": 0.4625,
+            "target": 0.5,
+            "gap": -0.03749999999999998,
+            "conformal_offset": 0.14042414286860927
+        },
+        {
+            "quantile": 0.75,
+            "coverage": 0.7615,
+            "target": 0.75,
+            "gap": 0.011499999999999955,
+            "conformal_offset": -0.07280439631117985
+        },
+        {
+            "quantile": 0.9,
+            "coverage": 0.916,
+            "target": 0.9,
+            "gap": 0.016000000000000014,
+            "conformal_offset": -0.21531529334919336
+        }
+    ]
+}

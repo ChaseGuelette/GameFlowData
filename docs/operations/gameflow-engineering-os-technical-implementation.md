@@ -628,7 +628,6 @@ Initial targeted paths must be confirmed from the live baseline. Candidate scope
 - `src/models/artifacts/`
 - `src/models/mlb/artifacts/`
 - `backtest_results/`
-- `graphify-out/`
 - approved temporary/output directories
 
 Every inventory row contains:

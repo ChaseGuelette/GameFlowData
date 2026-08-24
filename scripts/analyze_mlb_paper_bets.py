@@ -56,7 +56,6 @@ MIN_BETS_VERDICT = 30
 STAT_DIRECTION_CONTEXT = {
     "pitcher_strikeouts": "UNDER-only",
     "batter_hits": "both",
-    "batter_hrr": "both",
     "batter_rbis": "OVER-only",  # kept for historical data analysis
 }
 
@@ -769,7 +768,7 @@ def parse_args():
     parser.add_argument("--date-start", type=str, default=None, dest="date_start")
     parser.add_argument("--date-end", type=str, default=None, dest="date_end")
     parser.add_argument("--stat", type=str, default=None,
-                        choices=["pitcher_strikeouts", "batter_hits", "batter_hrr", "batter_rbis"],
+                        choices=["pitcher_strikeouts", "batter_hits", "batter_rbis"],
                         help="Filter to a single stat type")
     parser.add_argument("--direction", type=str, default=None, choices=["over", "under"],
                         help="Filter to over or under only")

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Verify MLB prediction outputs and Kalshi edge linkage.
+"""Verify MLB prediction and sample outputs.
 
-Read-only production/local audit for the trading-readiness prediction linkage lane.
-It fails loudly when scheduled MLB games have no predictions/samples, or when
-open Kalshi MLB markets exist but edge refresh did not populate model fields.
+Read-only production/local audit that fails loudly when scheduled MLB games
+have no predictions/samples or prediction rows are incomplete.
 """
 
 from __future__ import annotations
@@ -20,11 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.utils.time_windows import et_day_utc_bounds  # noqa: E402
-
-
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Verify MLB prediction and Kalshi linkage outputs")
+    parser = argparse.ArgumentParser(description="Verify MLB prediction and sample outputs")
     parser.add_argument("--date", required=True, help="Target date YYYY-MM-DD")
     parser.add_argument("--sport", default="mlb", choices=["mlb"], help="Only mlb is supported")
     parser.add_argument("--remote", action="store_true", help="Use DATABASE_URL via src.db.client.get_engine()")
@@ -54,15 +50,6 @@ def _rows(conn, sql: str, params: dict) -> list[dict]:
     return [dict(row._mapping) for row in conn.execute(text(sql), params).fetchall()]
 
 
-def _table_exists(conn, table: str) -> bool:
-    return bool(conn.execute(text("""
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = :table
-    """), {"table": table}).fetchone())
-
-
 def _columns(conn, table: str) -> set[str]:
     rows = conn.execute(text("""
         SELECT column_name
@@ -84,7 +71,6 @@ def _critical_null_condition(cols: set[str]) -> str:
 
 def run(args: argparse.Namespace) -> tuple[dict, list[str]]:
     target_date = date.fromisoformat(args.date)
-    start_utc, end_utc = et_day_utc_bounds(target_date)
     engine = _get_engine(args)
     failures: list[str] = []
     warnings: list[str] = []
@@ -92,8 +78,6 @@ def run(args: argparse.Namespace) -> tuple[dict, list[str]]:
         "date": target_date.isoformat(),
         "sport": args.sport,
         "prediction_tables": {},
-        "kalshi": {},
-        "queue_tables": {},
         "warnings": warnings,
     }
 
@@ -166,67 +150,6 @@ def run(args: argparse.Namespace) -> tuple[dict, list[str]]:
         if critical_null_rows > 0:
             failures.append(f"{critical_null_rows} prediction rows have null critical fields")
 
-        market_cols = _columns(conn, "kalshi_markets")
-        market_populated_cols = [
-            col for col in ("model_prob", "raw_edge", "bl_model_prob", "bl_edge")
-            if col in market_cols
-        ]
-        if "snapshot_time" in market_cols:
-            open_markets = _scalar(conn, """
-                SELECT COUNT(*)
-                FROM kalshi_markets
-                WHERE sport = :sport
-                  AND snapshot_time >= :start_utc
-                  AND snapshot_time < :end_utc
-                  AND market_status = 'open'
-                  AND line IS NOT NULL
-            """, {"sport": args.sport, "start_utc": start_utc, "end_utc": end_utc})
-            summary["kalshi"]["open_markets"] = open_markets
-            if market_populated_cols:
-                populated_expr = " AND ".join(f"{col} IS NOT NULL" for col in market_populated_cols)
-                populated_markets = _scalar(conn, f"""
-                    SELECT COUNT(*)
-                    FROM kalshi_markets
-                    WHERE sport = :sport
-                      AND snapshot_time >= :start_utc
-                      AND snapshot_time < :end_utc
-                      AND market_status = 'open'
-                      AND line IS NOT NULL
-                      AND {populated_expr}
-                """, {"sport": args.sport, "start_utc": start_utc, "end_utc": end_utc})
-                summary["kalshi"]["edge_populated_markets"] = populated_markets
-                summary["kalshi"]["edge_columns_checked"] = market_populated_cols
-                if open_markets > 0 and sample_count > 0 and populated_markets == 0:
-                    failures.append("Open Kalshi MLB markets and samples exist, but zero markets have populated model/edge columns")
-                if open_markets > 0 and sample_count == 0:
-                    failures.append("Open Kalshi MLB markets exist but prediction samples are missing; edge refresh cannot update model_prob")
-        else:
-            warnings.append("kalshi_markets.snapshot_time missing; skipped sargable Kalshi market window check")
-
-        for table in ("kalshi_paper_bets", "kalshi_trade_queue", "kalshi_live_orders", "paper_bets"):
-            if not _table_exists(conn, table):
-                warnings.append(f"{table} missing; skipped")
-                continue
-            cols = _columns(conn, table)
-            if "game_date" not in cols:
-                warnings.append(f"{table}.game_date missing; skipped target-date count")
-                continue
-            where = "game_date = :target_date"
-            params = {"target_date": target_date}
-            if "sport" in cols:
-                where += " AND sport = :sport"
-                params["sport"] = args.sport
-            total = _scalar(conn, f"SELECT COUNT(*) FROM {table} WHERE {where}", params)
-            model_cols = [col for col in ("model_prob", "raw_edge", "edge", "bl_model_prob", "bl_edge") if col in cols]
-            populated = None
-            if model_cols:
-                populated_condition = " AND ".join(f"{col} IS NOT NULL" for col in model_cols)
-                populated = _scalar(conn, f"SELECT COUNT(*) FROM {table} WHERE {where} AND {populated_condition}", params)
-            summary["queue_tables"][table] = {
-                "rows": total,
-                "model_edge_populated_rows": populated,
-                "columns_checked": model_cols,
-            }
 
     summary["status"] = "fail" if failures else "ok"
     summary["failures"] = failures
@@ -239,15 +162,14 @@ def main() -> None:
     if args.json:
         print(json.dumps(summary, indent=2, default=str))
     else:
-        print(f"MLB prediction/Kalshi output verification for {summary['date']}")
+        print(f"MLB prediction output verification for {summary['date']}")
         print(f"Status: {summary['status'].upper()}")
         print(f"Scheduled games: {summary.get('scheduled_games')}")
         pt = summary["prediction_tables"]
         print(f"Predictions: {pt.get('prediction_count', 0)} rows; samples: {pt.get('sample_count', 0)} rows")
         print(f"Predictions by stat: {pt.get('predictions_by_stat', [])}")
         print(f"Samples by stat: {pt.get('samples_by_stat', [])}")
-        print(f"Kalshi: {summary.get('kalshi', {})}")
-        print(f"Queue/live tables: {summary.get('queue_tables', {})}")
+
         for warning in summary.get("warnings", []):
             print(f"WARNING: {warning}")
         for failure in failures:

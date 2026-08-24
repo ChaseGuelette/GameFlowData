@@ -1,231 +1,111 @@
 # GameFlowData
 
-An NBA player prop betting analytics platform that combines machine learning predictions with real-time sportsbook odds to identify profitable betting opportunities.
+GameFlowData is a focused sports-modeling and delivery system for NBA and MLB player props.
 
-## Overview
+The repository owns five things:
 
-GameFlowData is a comprehensive data pipeline and prediction system for NBA player props. It scrapes game statistics and betting lines, trains quantile regression models with Monte Carlo simulation, and surfaces high-edge betting opportunities through a web dashboard and Discord bot.
+1. Train and load NBA/MLB models.
+2. Backtest and verify those models without temporal leakage.
+3. Ingest league, injury, lineup, and sportsbook data.
+4. Run daily prediction, paper-trading, resolution, and Discord-alert jobs.
+5. Serve the customer dashboard.
 
-## Features
+Historical experiments, raw backtest output, local knowledge mirrors, and non-production model runs do not belong in this repository.
 
-- **Data Pipeline**: Automated scraping of NBA stats, player props, and injury reports
-- **ML Predictions**: Quantile regression + Monte Carlo simulation for probability distributions
-- **Edge Detection**: Compares model probabilities against sportsbook odds to find value
-- **Paper Trading**: Simulated betting with Kelly criterion sizing and P&L tracking
-- **Web Dashboard**: Next.js app for viewing predictions, analyzing players, and tracking performance
-- **Discord Bot**: Slash commands for daily picks and automated alerts
-- **Cloud Deployment**: Railway (cron jobs) + Vercel (dashboard) + Supabase (database)
+## Supported product
 
-## Technology Stack
+| Area | Supported scope |
+|---|---|
+| Sports | NBA and MLB |
+| Models | NBA player props; MLB pitcher strikeouts and supported batter props |
+| Market data | Sportsbook and DFS lines |
+| Delivery | Website and Discord alerts |
+| Trading | Sportsbook paper/user bet tracking |
 
-| Layer | Technologies |
-|-------|-------------|
-| **Backend** | Python 3.11+, SQLAlchemy, Pandas, NumPy |
-| **ML** | XGBoost, Scikit-Learn, Optuna |
-| **Database** | PostgreSQL (Supabase) |
-| **Dashboard** | Next.js 16, TypeScript, Tailwind CSS, Recharts |
-| **Bot** | Discord.py 2.6+ |
-| **Deployment** | Railway (jobs), Vercel (dashboard) |
-| **Testing** | Pytest (575 tests, 60% coverage target) |
+Kalshi, Polymarket, cross-platform arbitrage, NCAAB, Bot Tracker, Arb Scanner, and Data Vault are retired from the active codebase.
 
-## Project Structure
+## Repository map
 
-```
-GameFlowData/
-├── src/
-│   ├── scrapers/           # Data collection (NBA API, Odds API, ESPN)
-│   ├── processing/         # Data linking, rolling averages, feature engineering
-│   ├── models/             # ML pipeline: training, inference, storage
-│   ├── backtesting/        # Historical replay and bet simulation
-│   ├── paper_trading/      # Paper bet placement and resolution
-│   ├── orchestration/      # Daily job scripts and scheduler
-│   ├── discord_bot/        # Discord bot with slash commands
-│   └── db/                 # Database client
-├── dashboard/              # Next.js web application
-├── tests/                  # Unit and integration tests
-├── docs/                   # Component documentation
-├── notebooks/              # Research notebooks
-└── database/               # SQL schema definitions
+```text
+src/models/                 NBA training, inference, simulation, and production artifacts
+src/models/mlb/             MLB training, lifecycle, feature contracts, and production artifacts
+src/backtesting/            NBA and MLB replay, sweep, and verification code
+src/scrapers/               Retained NBA/MLB/odds/injury/lineup data ingestion
+src/processing/             Retained feature and linking pipelines
+src/orchestration/          Daily jobs and scheduler
+src/paper_trading/          Sportsbook, DFS, and user-bet tracking/resolution
+src/discord_bot/            Shared Discord transport and retained alerts
+src/db/                     Python database boundary
+configs/mlb/                Configuration-driven MLB lifecycle runs
+migrations/                 Active schema contracts; applied history is archived
+scripts/                    Model audit, lifecycle, sync, and operations utilities
+tests/                      Python regression suite
+dashboard/                  Next.js customer application
+ops/engineering_os/         Private read-only operations dashboard
+docs/                       Small set of active runbooks
 ```
 
-## Quick Start
+## Model artifacts
 
-### 1. Clone and Install
+Only deployable production suites remain in Git:
 
-```bash
-git clone <repository-url>
-cd GameFlowData
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+```text
+src/models/artifacts/production/
+src/models/artifacts/production_playoffs/
+src/models/mlb/artifacts/production/
 ```
 
-### 2. Configure Environment
+Training runs, sweeps, ablations, backups, and rejected models are ignored and stored outside the repository. Never treat Git directory naming as promotion evidence; use the model/lifecycle manifests and verification outputs.
 
-Create a `.env` file:
+## Common verification
 
-```env
-DATABASE_URL=postgresql://user:password@host:port/database
-ODDS_API_KEY=your-odds-api-key
-RAPIDAPI_KEY=your-rapidapi-key
-DISCORD_BOT_TOKEN=your-discord-bot-token
+From `C:\Users\Chase\Projects\GameFlowData`:
+
+```text
+.\venv\Scripts\python.exe -m pytest
+.\venv\Scripts\python.exe scripts\audit_mlb_model_artifacts.py --model-dir src\models\mlb\artifacts\production --json
 ```
 
-### 3. Run Daily Pipeline
+From `dashboard\`:
 
-```bash
-# Scrape stats (after games complete)
-python src/orchestration/daily_stats_job.py
-
-# Scrape props and injuries (multiple times daily)
-python src/orchestration/lines_job.py
-
-# Generate predictions (before games start)
-python src/orchestration/inference_job.py
+```text
+npm run lint
+npm run build
 ```
 
-### 4. Start Dashboard
+Model training, sweeps, broad backfills, and other long jobs are launched manually by Chase after a dry-run/preflight.
 
-```bash
-cd dashboard
-npm install
-npm run dev
-# Open http://localhost:3000
+## Dashboard
+
+Retained customer surfaces:
+
+- Props dashboard
+- DFS
+- Combined Performance and History
+- Account and subscription management
+- Public picks, pricing, and legal pages
+- Ask AI, games, scoreboard, slate, and Stripe APIs
+
+`/history` redirects to `/performance`.
+
+## Critical invariants
+
+- Never deploy global conformal recalibration offsets.
+- Q10 behavior is edge-bearing; do not blindly recalibrate it.
+- Probability from samples uses `(samples > line).mean()`, never a Gaussian approximation.
+- Railway advanced-stats collection remains CDN-only; never call `stats.nba.com` from Railway.
+- Never run a blocking `CREATE INDEX` on `raw_player_props_combined`.
+- Preserve point-in-time feature and quote integrity.
+- Main-context agents do not call Supabase directly; use the isolated SQL-runner workflow.
+
+Canonical project knowledge and current decisions live in remote GBrain. `AGENTS.md` and `CLAUDE.md` define the repository safety contract.
+
+## Archive
+
+The pre-reduction source bundle, quarantined outputs, non-production artifacts, and SHA-256 manifest are stored outside the repository at:
+
+```text
+C:\Users\Chase\Archives\GameFlowData\2026-08-24-pre-prune\
 ```
 
-## Deployment
-
-### Railway (Cron Jobs)
-
-The scheduler runs all jobs automatically:
-
-| Job | Schedule (ET) | Purpose |
-|-----|---------------|---------|
-| daily_stats_job | 9:00 AM | Scrape NBA game results |
-| lines_job | 12 PM, 4 PM, 6 PM | Scrape props and injuries |
-| inference_job | 6:30 PM | Generate predictions |
-
-See `docs/railway_deployment.md` for setup guide.
-
-### Vercel (Dashboard)
-
-Dashboard deploys automatically from `/dashboard` directory.
-
-Live at: `game-flow-data.vercel.app`
-
-## Usage
-
-### Query Predictions
-
-```bash
-# Player probability at a line
-python src/tools/query_player.py --player "Cade Cunningham" --stat pts --line 25.5
-
-# Top edges for today
-python src/tools/query_player.py --top 20
-```
-
-### Paper Trading
-
-```bash
-# Place bets from predictions
-python src/paper_trading/place_bets.py --date 2026-02-15
-
-# Resolve bets after games complete
-python src/paper_trading/resolve_bets.py --date 2026-02-15
-```
-
-### Backtesting
-
-```bash
-# Run historical backtest
-python src/backtesting/run_backtest.py --start 2026-01-01 --end 2026-01-31
-
-# Parameter sweep
-python src/backtesting/run_sweep.py --start 2026-01-01 --end 2026-01-31 \
-    --tau none 0.05 0.10 --edge 0.05 0.07 --kelly 0.10 0.125
-```
-
-## Testing
-
-```bash
-pytest                          # Run all tests
-pytest tests/test_paper_trader.py -v  # Run specific test file
-pytest --cov=src --cov-report=html    # With coverage report
-```
-
-## Documentation
-
-- `ARCHITECTURE.md` — System design and data flows
-- `ACTIONITEMS.md` — Roadmap and session summaries
-- `CHANGELOG.md` — Version history
-- `docs/` — Component-level documentation
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/models/daily_runner.py` | Daily prediction pipeline |
-| `src/models/monte_carlo.py` | Monte Carlo simulation engine |
-| `src/paper_trading/paper_trader.py` | Bet selection and Kelly sizing |
-| `src/orchestration/scheduler.py` | APScheduler-based job runner |
-| `dashboard/src/app/page.tsx` | Main predictions dashboard |
-
----
-
-## Session-Driven Development
-
-This project uses [Solokit](https://github.com/anthropics/solokit) for Session-Driven Development with AI assistants.
-
-### Quick Start
-
-```bash
-sk start           # Begin a session with context briefing
-sk end             # Complete session with quality gates
-sk work-new        # Create a new work item
-sk work-list       # View all work items
-sk status          # Check current session status
-```
-
-### Session Commands
-
-| Command | Description |
-|---------|-------------|
-| `sk start [id]` | Start session with comprehensive briefing |
-| `sk end` | Complete session with quality gates |
-| `sk status` | View current session status |
-| `sk validate` | Run quality checks without ending session |
-
-### Work Item Commands
-
-| Command | Description |
-|---------|-------------|
-| `sk work-new` | Create new work item interactively |
-| `sk work-list` | List all work items |
-| `sk work-show <id>`| Show work item details |
-| `sk work-update <id>`| Update work item fields |
-| `sk work-next` | Get recommended next item |
-| `sk work-delete <id>`| Delete a work item |
-| `sk work-graph` | Visualize work item dependencies |
-
-### Learning Commands
-
-| Command | Description |
-|---------|-------------|
-| `sk learn` | Capture a learning |
-| `sk learn-show` | Browse captured learnings |
-| `sk learn-search <query>`| Search learnings by keyword |
-| `sk learn-curate` | Deduplicate and organize learnings |
-
-### Session Files
-
-The `.session/` directory contains:
-
-- **specs/** - Work item specifications
-- **briefings/** - Session context briefings
-- **history/** - Session summaries
-- **tracking/** - Work items and learnings data
-
----
-
-Adopted with Solokit v0.3.0
+This archive is rollback/evidence storage, not an active source tree.

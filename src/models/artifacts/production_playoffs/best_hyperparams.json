@@ -1,0 +1,92 @@
+{
+    "minutes": {
+        "quantiles": [
+            0.1,
+            0.25,
+            0.5,
+            0.75,
+            0.9
+        ],
+        "n_estimators": 253,
+        "max_depth": 4,
+        "learning_rate": 0.014336082489326189,
+        "subsample": 0.6553312413946164,
+        "colsample_bytree": 0.6764460371412517,
+        "min_child_weight": 3,
+        "early_stopping_rounds": 45,
+        "val_fraction": 0.15,
+        "random_state": 42
+    },
+    "pts": {
+        "quantiles": [
+            0.1,
+            0.25,
+            0.5,
+            0.75,
+            0.9
+        ],
+        "n_estimators": 292,
+        "max_depth": 3,
+        "learning_rate": 0.02224984037303315,
+        "subsample": 0.9054845679064598,
+        "colsample_bytree": 0.9308933459666727,
+        "min_child_weight": 5,
+        "early_stopping_rounds": 55,
+        "val_fraction": 0.15,
+        "random_state": 42
+    },
+    "reb": {
+        "quantiles": [
+            0.1,
+            0.25,
+            0.5,
+            0.75,
+            0.9
+        ],
+        "n_estimators": 1319,
+        "max_depth": 3,
+        "learning_rate": 0.010072985379251975,
+        "subsample": 0.6138413937099567,
+        "colsample_bytree": 0.6352134840468293,
+        "min_child_weight": 5,
+        "early_stopping_rounds": 33,
+        "val_fraction": 0.15,
+        "random_state": 42
+    },
+    "ast": {
+        "quantiles": [
+            0.1,
+            0.25,
+            0.5,
+            0.75,
+            0.9
+        ],
+        "n_estimators": 312,
+        "max_depth": 3,
+        "learning_rate": 0.017592374479503337,
+        "subsample": 0.6613291584463071,
+        "colsample_bytree": 0.699792243795425,
+        "min_child_weight": 16,
+        "early_stopping_rounds": 94,
+        "val_fraction": 0.15,
+        "random_state": 42
+    },
+    "threes": {
+        "quantiles": [
+            0.1,
+            0.25,
+            0.5,
+            0.75,
+            0.9
+        ],
+        "n_estimators": 444,
+        "max_depth": 5,
+        "learning_rate": 0.04305333100233664,
+        "subsample": 0.7099743812245247,
+        "colsample_bytree": 0.6562478544430866,
+        "min_child_weight": 5,
+        "early_stopping_rounds": 51,
+        "val_fraction": 0.15,
+        "random_state": 42
+    }
+}

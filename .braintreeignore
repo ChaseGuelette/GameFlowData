@@ -1,9 +1,0 @@
-node_modules/
-dashboard/node_modules/
-.pytest_cache/
-docs/.ipynb_checkpoints/
-.session/
-.claude/commands/
-.claude/flow_library/
-dashboard/README.md
-archive/

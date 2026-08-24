@@ -1,2 +1,0 @@
-Worst calibration gap: 6.0%
-Review before deployment.

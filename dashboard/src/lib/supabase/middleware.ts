@@ -1,9 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-const PUBLIC_ROUTES = ['/', '/picks', '/pricing', '/terms', '/privacy']
+const PUBLIC_ROUTES = ['/', '/picks', '/terms', '/privacy']
 const AUTH_ROUTES = ['/login', '/signup']
-const ADMIN_ROUTES = ['/bot-tracker']
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
@@ -70,16 +69,6 @@ export async function updateSession(request: NextRequest) {
     if (!isSubscribed) {
       const url = request.nextUrl.clone()
       url.pathname = '/subscribe'
-      return NextResponse.redirect(url)
-    }
-  }
-
-  // 5. Admin routes — require is_admin() check
-  if (ADMIN_ROUTES.some(route => pathname.startsWith(route))) {
-    const { data: isAdmin } = await supabase.rpc('is_admin')
-    if (!isAdmin) {
-      const url = request.nextUrl.clone()
-      url.pathname = '/dashboard'
       return NextResponse.redirect(url)
     }
   }

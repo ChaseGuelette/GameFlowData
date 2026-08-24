@@ -61,7 +61,6 @@ STAT_TO_SOURCE: dict[str, tuple[str, str]] = {
     "pitcher_strikeouts": ("mlb_player_game_stats_pitching", "so"),
     "batter_hits": ("mlb_player_game_stats_batting", "h"),
     "batter_rbis": ("mlb_player_game_stats_batting", "rbi"),
-    "batter_hrr": ("mlb_player_game_stats_batting", "h + r + rbi"),
 }
 
 

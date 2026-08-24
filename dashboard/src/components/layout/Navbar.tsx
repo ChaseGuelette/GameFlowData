@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter, usePathname } from 'next/navigation'
 import { useUserPreferences } from '@/lib/hooks/useUserPreferences'
-import { useAdmin } from '@/lib/hooks/useAdmin'
 import { useSport } from '@/contexts/SportContext'
 import type { Sport } from '@/lib/sport-config'
 
@@ -14,7 +13,6 @@ export function Navbar() {
   const pathname = usePathname()
   const supabase = createClient()
   const { prefs, loading: prefsLoading } = useUserPreferences()
-  const { isAdmin } = useAdmin()
   const { sport, setSport, config } = useSport()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
@@ -86,27 +84,9 @@ export function Navbar() {
                   DFS
                 </Link>
               )}
-              <Link href="/history" className={navLinkClasses('/history')}>
-                History
-              </Link>
               <Link href="/performance" className={navLinkClasses('/performance')}>
                 Performance
               </Link>
-              {config.features.statsVault && (
-                <Link href="/stats" className={navLinkClasses('/stats')}>
-                  Data Vault
-                </Link>
-              )}
-              {isAdmin && (
-                <Link href="/bot-tracker" className={navLinkClasses('/bot-tracker')}>
-                  Bot
-                </Link>
-              )}
-              {isAdmin && (
-                <Link href="/arb-scanner" className={navLinkClasses('/arb-scanner')}>
-                  Arb
-                </Link>
-              )}
             </div>
           </div>
 
@@ -164,27 +144,9 @@ export function Navbar() {
               DFS
             </Link>
           )}
-          <Link href="/history" className={mobileNavLinkClasses('/history')}>
-            History
-          </Link>
           <Link href="/performance" className={mobileNavLinkClasses('/performance')}>
             Performance
           </Link>
-          {config.features.statsVault && (
-            <Link href="/stats" className={mobileNavLinkClasses('/stats')}>
-              Data Vault
-            </Link>
-          )}
-          {isAdmin && (
-            <Link href="/bot-tracker" className={mobileNavLinkClasses('/bot-tracker')}>
-              Bot
-            </Link>
-          )}
-          {isAdmin && (
-            <Link href="/arb-scanner" className={mobileNavLinkClasses('/arb-scanner')}>
-              Arb
-            </Link>
-          )}
 
           {!prefsLoading && (
             <div className="px-3 py-2 border-t border-slate-700 mt-2 pt-2">

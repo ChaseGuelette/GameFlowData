@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { KPICard } from '@/components/performance/KPICard'
 import { BankrollChart } from '@/components/performance/BankrollChart'
@@ -9,6 +9,7 @@ import { MonthlyGrid } from '@/components/track-record/MonthlyGrid'
 import { ModelMetrics } from '@/components/track-record/ModelMetrics'
 import { CsvUpload } from '@/components/track-record/CsvUpload'
 import { ManualBetForm } from '@/components/track-record/ManualBetForm'
+import { HistoryPanel } from '@/components/performance/HistoryPanel'
 import { useTrackRecordData, type TrackRecordSource } from '@/lib/hooks/useTrackRecordData'
 import { BetSourceFilter, type BetSource } from '@/components/shared/BetSourceFilter'
 import { cn } from '@/lib/utils'
@@ -19,10 +20,9 @@ import {
   usePropsPerformance,
   useDfsPerformance,
   useMyBetsPerformance,
-  type DfsEntry,
 } from '@/lib/hooks/usePerformanceData'
 
-type PerformanceTab = 'props' | 'dfs' | 'my_bets' | 'record'
+type PerformanceTab = 'props' | 'dfs' | 'my_bets' | 'record' | 'history'
 
 interface PaperBetWithRecommended extends PaperBet {
   is_recommended?: boolean
@@ -70,11 +70,17 @@ export default function PerformancePage() {
   const [showCsvModal, setShowCsvModal] = useState(false)
   const [showBetForm, setShowBetForm] = useState(false)
 
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('tab') === 'history') {
+      setActiveTab('history')
+    }
+  }, [])
+
   // React Query hooks
-  const propsQuery = usePropsPerformance()
-  const dfsQuery = useDfsPerformance()
-  const myBetsQuery = useMyBetsPerformance()
-  const trackQuery = useTrackRecordData(trackSource)
+  const propsQuery = usePropsPerformance(activeTab === 'props')
+  const dfsQuery = useDfsPerformance(activeTab === 'dfs')
+  const myBetsQuery = useMyBetsPerformance(activeTab === 'my_bets')
+  const trackQuery = useTrackRecordData(trackSource, activeTab === 'record')
 
   const dailyData = propsQuery.data?.dailyData ?? []
   const allBets = (propsQuery.data?.allBets ?? []) as PaperBetWithRecommended[]
@@ -334,7 +340,9 @@ export default function PerformancePage() {
                 ? 'DFS Paper Trading (Market Edge)'
                 : activeTab === 'record'
                   ? 'Your verified betting history and performance'
-                  : 'Your personal bet performance'}
+                  : activeTab === 'history'
+                    ? 'Personal bets, model results, and DFS entries'
+                    : 'Your personal bet analytics'}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -349,7 +357,7 @@ export default function PerformancePage() {
                   : 'text-slate-400 hover:text-slate-200'
               )}
             >
-              My Bets
+              My Bets Analytics
             </button>
             <button
               onClick={() => setActiveTab('props')}
@@ -386,6 +394,17 @@ export default function PerformancePage() {
             >
               Record
             </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className={cn(
+                'px-3 py-1.5 rounded text-sm font-medium transition-colors',
+                activeTab === 'history'
+                  ? 'bg-cyan-700 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              )}
+            >
+              History
+            </button>
           </div>
           {/* Bet Source Filter (props only) */}
           {activeTab === 'props' && (
@@ -400,6 +419,10 @@ export default function PerformancePage() {
           {propsQuery.isLoading ? (
             <div className="flex items-center justify-center py-16">
               <div className="text-slate-400">Loading performance data...</div>
+            </div>
+          ) : propsQuery.error ? (
+            <div className="bg-red-900/30 border border-red-700 rounded-lg px-5 py-4 text-sm text-red-300">
+              Failed to load props performance: {propsQuery.error instanceof Error ? propsQuery.error.message : 'Unknown error'}
             </div>
           ) : (
             <div className="space-y-6">
@@ -437,6 +460,10 @@ export default function PerformancePage() {
           {dfsQuery.isLoading ? (
             <div className="flex items-center justify-center py-16">
               <div className="text-slate-400">Loading DFS performance data...</div>
+            </div>
+          ) : dfsQuery.error ? (
+            <div className="bg-red-900/30 border border-red-700 rounded-lg px-5 py-4 text-sm text-red-300">
+              Failed to load DFS performance: {dfsQuery.error instanceof Error ? dfsQuery.error.message : 'Unknown error'}
             </div>
           ) : (
             <div className="space-y-6">
@@ -534,6 +561,10 @@ export default function PerformancePage() {
           {myBetsQuery.isLoading ? (
             <div className="flex items-center justify-center py-16">
               <div className="text-slate-400">Loading your bet performance...</div>
+            </div>
+          ) : myBetsQuery.error ? (
+            <div className="bg-red-900/30 border border-red-700 rounded-lg px-5 py-4 text-sm text-red-300">
+              Failed to load personal bet performance: {myBetsQuery.error instanceof Error ? myBetsQuery.error.message : 'Unknown error'}
             </div>
           ) : myBets.length === 0 ? (
             <div className="flex items-center justify-center py-16">
@@ -683,6 +714,8 @@ export default function PerformancePage() {
           )}
         </>
       )}
+
+      {activeTab === 'history' && <HistoryPanel />}
     </main>
   )
 }

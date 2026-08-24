@@ -1,3 +1,0 @@
-Worst calibration gap: 27.4%
-Hard fail threshold: 10%
-DO NOT deploy without review.

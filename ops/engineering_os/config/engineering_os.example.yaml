@@ -66,4 +66,3 @@ artifacts:
     - /home/chase/projects/GameFlowData/src/models/artifacts
     - /home/chase/projects/GameFlowData/src/models/mlb/artifacts
     - /home/chase/projects/GameFlowData/backtest_results
-    - /home/chase/projects/GameFlowData/graphify-out

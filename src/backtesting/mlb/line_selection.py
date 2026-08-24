@@ -15,7 +15,6 @@ from sqlalchemy import text
 
 # Sportsbook market keys that differ from internal stat names.
 STAT_TO_MARKET_KEY: dict[str, str] = {
-    "batter_hrr": "batter_hits_runs_rbis",
 }
 
 DEFAULT_EXCLUDED_BOOKMAKERS: tuple[str, ...] = (

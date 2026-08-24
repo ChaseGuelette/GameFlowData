@@ -32,7 +32,7 @@ def test_each_batter_stat_includes_base_features():
         assert base.issubset(features), stat
 
 
-def test_prop_line_features_have_market_key_or_explicit_hrr_exception():
+def test_prop_line_features_have_market_keys():
     market_values = set(contracts.BATTER_STAT_MARKET_KEY.values()) | {"pitcher_strikeouts"}
     prop_features = [
         feature
@@ -42,7 +42,17 @@ def test_prop_line_features_have_market_key_or_explicit_hrr_exception():
     ] + [feature for feature in contracts.PITCHER_K_FEATURES if feature.startswith("prop_line_")]
     for feature in prop_features:
         market = feature.removeprefix("prop_line_")
-        assert market in market_values or market == "batter_hrr"
+        assert market in market_values
+
+
+def test_batter_contracts_only_include_retained_stats():
+    assert set(contracts.BATTER_FEATURE_MAP) == {
+        "hits",
+        "home_runs",
+        "total_bases",
+        "rbis",
+        "runs",
+    }
 
 
 def test_feature_families_cover_all_contract_features():

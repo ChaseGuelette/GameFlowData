@@ -62,19 +62,16 @@ _EXCLUDED_BOOKMAKERS: tuple[str, ...] = (
 _STAT_L5: dict[str, str] = {
     "batter_rbis": "batter_avg_rbi_l5",
     "batter_hits": "batter_avg_h_l5",
-    "batter_hrr":  "batter_avg_hrr_l5",
     "pitcher_strikeouts": "pitcher_avg_k_l5",
 }
 _STAT_SZN: dict[str, str] = {
     "batter_rbis": "batter_avg_rbi_szn",
     "batter_hits": "batter_avg_h_szn",
-    "batter_hrr":  "batter_avg_hrr_szn",
     "pitcher_strikeouts": "pitcher_avg_k_szn",
 }
 _STAT_PARK: dict[str, str | None] = {
     "batter_rbis": "park_runs_factor",
     "batter_hits": "park_hits_factor",
-    "batter_hrr":  "park_hr_factor",
     "pitcher_strikeouts": None,
 }
 

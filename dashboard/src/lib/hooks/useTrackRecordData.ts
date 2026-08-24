@@ -222,6 +222,9 @@ async function fetchMyBetsData(statTypes: string[]) {
     bookmaker: row.book_at_bet,
   })) as PaperBet[]
 
+  if (logRes.error) throw logRes.error
+  if (betsRes.error) throw betsRes.error
+
   return { dailyLog, bets }
 }
 
@@ -245,6 +248,8 @@ async function fetchPaperData(config: {
 
   const dailyLog = (logRes.data ?? []) as DailyPerformance[]
   const bets     = (betsRes.data ?? []) as PaperBet[]
+  if (logRes.error) throw logRes.error
+  if (betsRes.error) throw betsRes.error
   return { dailyLog, bets }
 }
 
@@ -284,12 +289,13 @@ async function fetchTrackRecord(
   return { dailyLog, bets, monthlyAggregates, statBreakdown, kpis }
 }
 
-export function useTrackRecordData(source: TrackRecordSource) {
+export function useTrackRecordData(source: TrackRecordSource, enabled = true) {
   const { sport, config } = useSport()
 
   return useQuery({
     queryKey: ['trackRecord', source, sport],
     queryFn: () => fetchTrackRecord(source, config),
+    enabled,
     staleTime: 10 * 60 * 1000, // 10 minutes
   })
 }

@@ -32,7 +32,6 @@ _MIN_PROB = 1e-9
 _MAX_PROB = 1.0 - 1e-9
 
 STAT_TO_MARKET_KEY = {
-    "batter_hrr": "batter_hits_runs_rbis",
 }
 
 EXCLUDED_BOOKMAKERS = (

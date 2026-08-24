@@ -145,7 +145,7 @@ class MLBCLVSnapshotScraper:
         if not exists:
             raise RuntimeError(
                 f"Target table public.{self.table_name} does not exist. "
-                "Apply database/migrations/030_mlb_clv_snapshot_table.sql first."
+                "Apply migrations/mlb_clv_snapshot_table.sql first."
             )
 
     def get_events_at_snapshot(self, snapshot_time: datetime) -> list[Event]:

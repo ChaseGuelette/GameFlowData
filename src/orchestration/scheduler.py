@@ -10,27 +10,21 @@ Schedule (ET):
     9:00 AM  - daily_stats_job
     9:00 AM  - mlb_roster_scraper_job
     9:00 AM  - mlb_daily_stats_job
-    9:00 AM  - nonsports_polymarket_scrape (2hr timeout, disabled unless ARB_SCRAPING_ENABLED=true)
     2:20 AM  - mlb_dense_clv_job (disabled unless MLB_DENSE_CLV_ENABLED=true)
     9:20 AM  - mlb_daily_stats_retry
     10:05 AM - mlb_roster_scraper_retry
-    9:15 AM  - Kalshi live resolution
     9:25 AM  - mlb_weather_forecast
     9:30 AM  - daily_stats_retry (if 9 AM failed)
     9:30 AM  - mlb_lines_job --live --props-only --extended
     9:35 AM  - mlb_lineup_scraper_job
     9:50 AM  - mlb_inference_job (early MLB pass)
 
-    10:00 AM - kalshi_daily_summary_job
     10:00 AM - lines_job --live --props-only (pre-NBA inference)
     10:15 AM - inference_job (early NBA pass)
 
     9 AM - 11 PM ET every 5 min:
         :00,:05,...,:55  - lines_job --live --props-only  (silent)
         :02,:07,...,:57  - edge_refresh_job               (silent)
-
-    9 AM - 11 PM ET every 10 min:
-        kalshi_refresh (NBA + MLB + non-sports)
 
     12:01 PM - lines_job --live (full)
     12:05 PM - mlb_lineup_scraper_job (before noon inference — catches early-posting lineups)
@@ -40,7 +34,6 @@ Schedule (ET):
 
     4:01 PM  - lines_job --live --parallel (full)
     4:15 PM  - inference_job (full MC)
-    5:00 PM  - nonsports_polymarket_scrape (2nd run, disabled unless ARB_SCRAPING_ENABLED=true)
 
     "silent" = Discord alerts only on failure.
 
@@ -95,27 +88,19 @@ JOB_NAMES = {
     "mlb_dense_clv_job.py": "MLB Dense CLV Snapshots",
     "mlb_inference_job.py": "MLB Inference",
     "mlb_edge_refresh_job.py": "MLB Edge Refresh",
-    "kalshi_refresh_job.py": "Kalshi Refresh",
     "archive_old_props_job.py": "Archive Old Props",
-    "kalshi_daily_summary_job.py": "Kalshi Daily Summary",
-    "arb_scan_job.py": "Arb Scanner",
-    "kalshi_nonsports_refresh_job.py": "Kalshi Non-Sports Refresh",
-    "kalshi_execute_approved_job.py": "Kalshi Execute Approved",
-    "kalshi_reprice_stale_job.py": "Kalshi Reprice Stale",
-    "kalshi_pending_fills_job.py": "Kalshi Pending Fills",
     "resolve_user_paper_bets.py": "User Paper Bet Resolution",
 }
 
 # These failures are currently deferred by trading-readiness policy. Keep them
-# visible in job history, but tag alerts/status so they do not block MLB/Kalshi
+# visible in job history, but tag alerts/status so they do not block MLB
 # readiness triage or look like a fresh shared-infra regression.
 DEFERRED_FAILURE_JOBS = {
     "lines_job.py": "NBA deferred — intermittent NBA lines linker failure is parked",
 }
 
 # Prevent overlapping scheduler launches for jobs that are unsafe to run
-# concurrently. Start with NBA lines only to minimize blast radius; MLB/Kalshi
-# schedules already have separate job scripts and intentional offsets.
+# concurrently. Start with NBA lines only to minimize blast radius.
 LOCKABLE_JOB_SCRIPTS = {"lines_job.py"}
 JOB_LOCKS: dict[str, threading.Lock] = {}
 JOB_LOCKS_GUARD = threading.Lock()
@@ -278,20 +263,6 @@ def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> di
         rec_match = re.search(r"Recommended picks: (\d+)", output)
         if rec_match:
             metrics["recommended"] = rec_match.group(1)
-
-    elif script_name == "kalshi_refresh_job.py":
-        # Look for edge computation counts
-        matched_match = re.search(r"(\d+) matched", output)
-        if matched_match:
-            metrics["markets_matched"] = matched_match.group(1)
-
-        updated_match = re.search(r"(\d+) updated", output)
-        if updated_match:
-            metrics["edges_updated"] = updated_match.group(1)
-
-        parsed_match = re.search(r"(\d+) parsed", output)
-        if parsed_match:
-            metrics["markets_parsed"] = parsed_match.group(1)
 
     elif script_name == "test_job.py":
         # Look for checks passed
@@ -514,7 +485,6 @@ def _validate_environment():
         ("DISCORD_CHANNEL_ALERTS", "Job notifications"),
         ("DISCORD_CHANNEL_PREDICTIONS", "Prediction alerts"),
         ("DISCORD_CHANNEL_PERFORMANCE", "P&L summaries"),
-        ("KALSHI_API_KEY", "Kalshi prediction markets"),
         ("NBA_PLAYOFF_MODE", "Use playoff model for NBA inference (set true Apr 19 - Jun 20)"),
         ("MLB_DENSE_CLV_ENABLED", "Enable bounded recurring MLB dense CLV snapshot capture"),
     ]
@@ -714,108 +684,11 @@ def run_mlb_edge_refresh():
     run_job("mlb_edge_refresh_job.py", silent_on_success=True)
 
 
-# ---- Kalshi Jobs ----
+# ---- Maintenance Jobs ----
 
 def run_archive_old_props():
     """Archive rows older than 30 days from raw_player_props_combined."""
     run_job("archive_old_props_job.py", silent_on_success=True)
-
-
-def run_kalshi_refresh():
-    """Kalshi NBA market refresh: scrape, compute edges, alert. Skips gracefully if no creds."""
-    run_job("kalshi_refresh_job.py", extra_args="--sport nba", silent_on_success=True)
-
-
-def run_kalshi_refresh_mlb():
-    """Kalshi MLB market refresh: scrape, compute edges, alert. Skips gracefully if no creds."""
-    run_job("kalshi_refresh_job.py", extra_args="--sport mlb", silent_on_success=True)
-
-
-def run_kalshi_live_resolution():
-    """Morning resolution of yesterday's live Kalshi bets."""
-    run_job("kalshi_refresh_job.py", extra_args="--resolve-only --sport nba", silent_on_success=False)
-    run_job("kalshi_refresh_job.py", extra_args="--resolve-only --sport mlb", silent_on_success=False)
-
-
-def run_kalshi_daily_summary():
-    """Daily Kalshi paper trading summary: resolve bets, P&L + analysis to Discord."""
-    run_job("kalshi_daily_summary_job.py")
-
-
-def run_kalshi_nonsports_refresh():
-    """Kalshi non-sports market refresh: scrape economics/crypto markets with sport=NULL.
-
-    Stores markets so the non-sports arb scanner can match them against Polymarket.
-    Exits gracefully if KALSHI_API_KEY is not set.
-    """
-    run_job("kalshi_nonsports_refresh_job.py", silent_on_success=True)
-
-
-def run_kalshi_execute_approved():
-    """Execute Kalshi trades that were approved on the dashboard.
-
-    Polls kalshi_trade_queue for status='approved' rows and places them via
-    the Kalshi API. Exits gracefully if KALSHI_LIVE_TRADING_ENABLED != true
-    or if there are no approved trades.
-    """
-    run_job("kalshi_execute_approved_job.py", silent_on_success=True)
-
-
-def run_kalshi_reprice_stale():
-    """Reprice stale resting Kalshi orders.
-
-    Checks for resting orders where the market price has moved and reprices
-    them if the edge is still retained. Exits gracefully if KALSHI_LIVE_TRADING_ENABLED != true.
-    """
-    run_job("kalshi_reprice_stale_job.py", silent_on_success=True)
-
-
-def run_kalshi_pending_fills():
-    """Poll Kalshi API every 5 min to catch pending orders that have since filled."""
-    run_job("kalshi_pending_fills_job.py", silent_on_success=True)
-
-
-def run_kalshi_stale_fills():
-    """Detect pending orders whose game has started and enqueue for cancellation review."""
-    run_job("kalshi_stale_fills_job.py", silent_on_success=True)
-
-
-def run_kalshi_execute_cancellations():
-    """Execute human-approved order cancellations via Kalshi API."""
-    run_job("kalshi_execute_cancellations_job.py", silent_on_success=True)
-
-
-# ---- Arbitrage Scanner Jobs ----
-
-def run_arb_scan_mlb():
-    """MLB Polymarket-Kalshi arb scan: scrape, match (props + game-level), detect, alert."""
-    extra_parts = ["--sport", "mlb", "--mode", "sport"]
-    if not env_flag("ARB_SCRAPING_ENABLED", default=False):
-        extra_parts.append("--skip-scrape")
-    if not env_flag("ARB_ALERTS_ENABLED", default=False):
-        extra_parts.append("--skip-discord")
-    if not env_flag("ARB_PAPER_TRADING_ENABLED", default=False):
-        extra_parts.append("--skip-paper")
-    run_job("arb_scan_job.py", extra_args=" ".join(extra_parts), silent_on_success=True)
-
-
-def run_arb_scan_all_categories():
-    """Non-sports Polymarket arb SCAN only (no scrape). Uses existing polymarket_markets data."""
-    extra_parts = ["--mode", "all", "--include-non-sports", "--skip-scrape"]
-    if not env_flag("ARB_ALERTS_ENABLED", default=False):
-        extra_parts.append("--skip-discord")
-    if not env_flag("ARB_PAPER_TRADING_ENABLED", default=False):
-        extra_parts.append("--skip-paper")
-    run_job("arb_scan_job.py", extra_args=" ".join(extra_parts), silent_on_success=True)
-
-
-def run_nonsports_scrape():
-    """Scrape ALL Polymarket categories into polymarket_markets (no scan/paper-trade).
-
-    Slow job (~45-90 min) — runs 2x/day with extended timeout.
-    Scan jobs read from this data via --skip-scrape.
-    """
-    run_job("arb_scan_job.py", extra_args="--mode all --scrape-only", silent_on_success=False, timeout=7200)
 
 
 def run_user_paper_bet_resolution():
@@ -1165,148 +1038,6 @@ def main():
     )
 
     # ==============================================================
-    # Kalshi Prediction Markets
-    # ==============================================================
-
-    # 9:15 AM ET - Kalshi live bet resolution (resolve yesterday's bets after stats pull)
-    scheduler.add_job(
-        run_kalshi_live_resolution,
-        CronTrigger(hour=9, minute=15, timezone=ET),
-        id="kalshi_live_resolution",
-        name="Kalshi Live Resolution (9:15 AM ET daily)",
-    )
-
-    # 10:00 AM ET - Kalshi daily summary: resolve pending bets + P&L/analysis to Discord
-    # Runs after NBA daily stats (9 AM) + first Kalshi refresh (~9:10 AM) so bets are resolved
-    # and yesterday's daily log shows accurate data.
-    scheduler.add_job(
-        run_kalshi_daily_summary,
-        CronTrigger(hour=10, minute=0, timezone=ET),
-        id="kalshi_daily_summary",
-        name="Kalshi Daily Summary (10 AM ET)",
-    )
-
-    # Every 10 min, 9 AM - 11 PM ET — scrape markets + compute edges
-    # MLB runs first (minute=0,10,...) so its bets consume exposure cap before NBA.
-    # NBA runs 2 minutes later (minute=2,12,...) so it only takes remaining cap.
-    # Job exits gracefully if KALSHI_API_KEY is not set
-    scheduler.add_job(
-        run_kalshi_refresh_mlb,
-        CronTrigger(hour='9-23', minute='0,10,20,30,40,50', timezone=ET),
-        id="kalshi_refresh_mlb",
-        name="Kalshi MLB Refresh (every 10 min on :00, 9AM-11PM ET — MLB first for exposure priority)",
-    )
-
-    scheduler.add_job(
-        run_kalshi_refresh,
-        CronTrigger(hour='9-23', minute='2,12,22,32,42,52', timezone=ET),
-        id="kalshi_refresh_nba",
-        name="Kalshi NBA Refresh (every 10 min on :02, 9AM-11PM ET — after MLB)",
-    )
-
-    # Every 10 min, 9 AM - 11 PM ET — scrape non-sports (economics/crypto) markets
-    # Stores with sport=NULL so non-sports arb scan can match vs Polymarket.
-    # Exits gracefully if KALSHI_API_KEY is not set.
-    scheduler.add_job(
-        run_kalshi_nonsports_refresh,
-        CronTrigger(hour='9-23', minute='*/10', timezone=ET),
-        id="kalshi_nonsports_refresh",
-        name="Kalshi Non-Sports Refresh (every 10 min, 9AM-11PM ET)",
-    )
-
-    # Every 2 min, 9 AM - 11 PM ET — execute dashboard-approved trades
-    # Offset from cancellation/reprice jobs to avoid DB connection spikes.
-    # Picks up rows where kalshi_trade_queue.status='approved' and places them
-    # via the Kalshi API. Exits gracefully when nothing is approved.
-    scheduler.add_job(
-        run_kalshi_execute_approved,
-        CronTrigger(hour='9-23', minute='1-59/2', timezone=ET),
-        id="kalshi_execute_approved",
-        name="Kalshi Execute Approved (every 2 min, 9AM-11PM ET)",
-    )
-
-    # Every 4 min, 9 AM - 11 PM ET — reprice stale resting Kalshi orders
-    # Offset from approved-trade and cancellation executors.
-    # Checks if market has moved from resting order price, cancels+replaces if edge retained.
-    scheduler.add_job(
-        run_kalshi_reprice_stale,
-        CronTrigger(hour='9-23', minute='2-58/4', timezone=ET),
-        id="kalshi_reprice_stale",
-        name="Kalshi Reprice Stale (every 4 min, 9AM-11PM ET)",
-    )
-
-    # Every 5 min, 9 AM - 11 PM ET — poll Kalshi API for pending order fills
-    # Exits early (zero API calls) if no pending orders exist.
-    scheduler.add_job(
-        run_kalshi_pending_fills,
-        CronTrigger(hour='9-23', minute='*/5', timezone=ET),
-        id="kalshi_pending_fills",
-        name="Kalshi Pending Fills (every 5 min, 9AM-11PM ET)",
-    )
-
-    # Stale fill detector — enqueues pending orders whose game has started for cancellation review
-    scheduler.add_job(
-        run_kalshi_stale_fills,
-        CronTrigger(hour='9-23', minute='*/5', timezone=ET),
-        id="kalshi_stale_fills",
-        name="Kalshi Stale Fill Detector (every 5 min, 9AM-11PM ET)",
-    )
-
-    # Cancellation executor — executes human-approved cancellations via Kalshi API
-    # Offset from approved-trade and reprice executors.
-    scheduler.add_job(
-        run_kalshi_execute_cancellations,
-        CronTrigger(hour='9-23', minute='0-58/4', timezone=ET),
-        id="kalshi_execute_cancellations",
-        name="Kalshi Cancel Executor (every 4 min, 9AM-11PM ET)",
-    )
-
-    # ==============================================================
-    # Polymarket-Kalshi Arbitrage Scanner
-    # Offset 5 min after Kalshi refresh to use fresh Kalshi data.
-    # ==============================================================
-
-    # Arb lane is parked by default. Re-enable intentionally with env flags.
-    arb_scanner_enabled = env_flag("ARB_SCANNER_ENABLED", default=False)
-    arb_scraping_enabled = env_flag("ARB_SCRAPING_ENABLED", default=False)
-
-    # MLB arb scan: every 10 min, 12:05 PM - 11:05 PM ET (sport-specific, game-level)
-    if arb_scanner_enabled:
-        scheduler.add_job(
-            run_arb_scan_mlb,
-            CronTrigger(hour='12-23', minute='5,15,25,35,45,55', timezone=ET),
-            id="arb_scan_mlb",
-            name="Arb Scan MLB (every 10 min, 12:05PM-11:05PM ET)",
-        )
-    else:
-        logger.info("Arb scan MLB disabled by ARB_SCANNER_ENABLED=false")
-
-    # Non-sports scrape: 2x/day (9 AM + 5 PM ET), 2-hour timeout.
-    # Fetches all 70k+ Polymarket markets and stores to polymarket_markets.
-    # The scan jobs below then read from this existing data via --skip-scrape.
-    if arb_scraping_enabled:
-        scheduler.add_job(
-            run_nonsports_scrape,
-            CronTrigger(hour='9,17', minute='0', timezone=ET),
-            id="nonsports_scrape",
-            name="Non-Sports Polymarket Scrape (9AM + 5PM ET, 2hr timeout)",
-        )
-    else:
-        logger.info("Non-sports Polymarket scrape disabled by ARB_SCRAPING_ENABLED=false")
-
-    # Non-sports arb SCAN: every 30 min, 9 AM - 11 PM ET.
-    # Fast (<2 min) — uses existing polymarket_markets data, no re-scrape.
-    # Matches Kalshi non-sports (politics, crypto, economics) vs Polymarket.
-    if arb_scanner_enabled:
-        scheduler.add_job(
-            run_arb_scan_all_categories,
-            CronTrigger(hour='9-23', minute='0,30', timezone=ET),
-            id="arb_scan_all_categories",
-            name="Arb Scan Non-Sports (every 30 min, 9AM-11PM ET, scan-only)",
-        )
-    else:
-        logger.info("Arb scan non-sports disabled by ARB_SCANNER_ENABLED=false")
-
     # Log scheduled jobs
     logger.info("Scheduled jobs:")
     for job in scheduler.get_jobs():

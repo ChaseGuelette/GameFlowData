@@ -86,7 +86,7 @@ class BacktestHarness:
         "pointsbetus", "fanatics", "barstool", "wynnbet",
         # US2 / us_ex markets
         "ballybet", "betopenly", "betparx", "espnbet", "fliff",
-        "hardrockbet", "novig", "polymarket", "prophetx", "rebet",
+        "hardrockbet", "novig", "prophetx", "rebet",
         "windcreek",
     ])
     stats: list[str] = field(default_factory=lambda: ["pts", "reb", "ast"])

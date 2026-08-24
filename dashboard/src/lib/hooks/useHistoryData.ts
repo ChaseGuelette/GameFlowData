@@ -34,10 +34,12 @@ async function fetchModelHistory(
   const predictionIds = [...new Set(bets.map(b => b.prediction_id).filter(Boolean))]
   if (predictionIds.length === 0) return bets as PaperBetWithRecommended[]
 
-  const { data: predictionsData } = await supabase
+  const { data: predictionsData, error: predictionsError } = await supabase
     .from(config.predictionsTable)
     .select('id, is_recommended, bookmaker')
     .in('id', predictionIds)
+
+  if (predictionsError) throw predictionsError
 
   const recommendedMap = new Map<string, boolean>()
   const bookmakerMap = new Map<string, string>()
@@ -59,12 +61,13 @@ async function fetchModelHistory(
   }) as PaperBetWithRecommended[]
 }
 
-export function useModelHistory(startDate: string, endDate: string) {
+export function useModelHistory(startDate: string, endDate: string, enabled = true) {
   const { sport, config } = useSport()
 
   return useQuery({
     queryKey: ['history', 'model', sport, startDate, endDate],
     queryFn: () => fetchModelHistory(config, startDate, endDate),
+    enabled,
     staleTime: 10 * 60 * 1000,
   })
 }
@@ -110,12 +113,13 @@ async function fetchMyBets(
   })) as PaperBet[]
 }
 
-export function useMyBets(startDate: string, endDate: string) {
+export function useMyBets(startDate: string, endDate: string, enabled = true) {
   const { sport, config } = useSport()
 
   return useQuery({
     queryKey: ['history', 'myBets', sport, startDate, endDate],
     queryFn: () => fetchMyBets(config.statTypes, startDate, endDate),
+    enabled,
     staleTime: 10 * 60 * 1000,
   })
 }
@@ -134,10 +138,12 @@ async function fetchDfsEntries(startDate: string, endDate: string) {
   if (!entriesData?.length) return [] as UserDfsEntryWithLegs[]
 
   const entryIds = entriesData.map(e => e.id)
-  const { data: legsData } = await supabase
+  const { data: legsData, error: legsError } = await supabase
     .from('user_dfs_legs')
     .select('*')
     .in('entry_id', entryIds)
+
+  if (legsError) throw legsError
 
   const legsByEntry = new Map<number, typeof legsData>()
   if (legsData) {
@@ -153,10 +159,11 @@ async function fetchDfsEntries(startDate: string, endDate: string) {
   })) as UserDfsEntryWithLegs[]
 }
 
-export function useDfsEntries(startDate: string, endDate: string) {
+export function useDfsEntries(startDate: string, endDate: string, enabled = true) {
   return useQuery({
     queryKey: ['history', 'dfs', startDate, endDate],
     queryFn: () => fetchDfsEntries(startDate, endDate),
+    enabled,
     staleTime: 10 * 60 * 1000,
   })
 }
@@ -176,10 +183,11 @@ async function fetchMLBModelHistory(startDate: string, endDate: string) {
   return (data ?? []) as PaperBetWithRecommended[]
 }
 
-export function useMLBModelHistory(startDate: string, endDate: string) {
+export function useMLBModelHistory(startDate: string, endDate: string, enabled = true) {
   return useQuery({
     queryKey: ['history', 'mlb_model', startDate, endDate],
     queryFn: () => fetchMLBModelHistory(startDate, endDate),
+    enabled,
     staleTime: 10 * 60 * 1000,
   })
 }

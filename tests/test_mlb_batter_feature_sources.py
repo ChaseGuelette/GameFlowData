@@ -16,8 +16,9 @@ def test_batter_rolling_query_uses_strict_previous_game_predicate():
 
 def test_batter_stat_and_market_mappings_preserved():
     assert target_for_stat("hits") == "h"
-    assert target_for_stat("hrr") == "h + bgs.r + bgs.rbi"
+    assert target_for_stat("rbis") == "rbi"
     assert market_key_for_stat("hits") == "batter_hits"
+    assert market_key_for_stat("rbis") == "batter_rbis"
 
 
 def test_batter_source_defaults_preserved_shape():

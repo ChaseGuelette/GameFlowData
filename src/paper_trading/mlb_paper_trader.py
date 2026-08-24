@@ -36,7 +36,6 @@ MLB_STAT_RESOLUTION: dict[str, tuple[str, list[str]]] = {
     "pitcher_outs":       ("mlb_player_game_stats_pitching", ["outs_recorded"]),
     "batter_hits":        ("mlb_player_game_stats_batting",  ["h"]),
     "batter_rbis":        ("mlb_player_game_stats_batting",  ["rbi"]),
-    "batter_hrr":         ("mlb_player_game_stats_batting",  ["h", "r", "rbi"]),
 }
 
 # DNP detection columns per table

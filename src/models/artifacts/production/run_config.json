@@ -1,0 +1,12 @@
+{
+    "train_seasons": [
+        "22023",
+        "22024",
+        "22025"
+    ],
+    "calibration_season": "22025",
+    "cal_end_date": "2026-03-18",
+    "timestamp": "2026-03-23T21:29:31.469275",
+    "calibration_tolerance": 0.05,
+    "calibration_hard_fail": 0.1
+}

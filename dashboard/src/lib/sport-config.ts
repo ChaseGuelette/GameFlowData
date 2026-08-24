@@ -33,7 +33,6 @@ export interface SportConfig {
   }>
   features: {
     dfs: boolean
-    statsVault: boolean
     askChat: boolean
     injuries: boolean
     scoreboard: boolean
@@ -123,7 +122,6 @@ export const NBA_CONFIG: SportConfig = {
   },
   features: {
     dfs: true,
-    statsVault: true,
     askChat: true,
     injuries: true,
     scoreboard: true,
@@ -204,7 +202,6 @@ export const MLB_CONFIG: SportConfig = {
     `https://a.espncdn.com/combiner/i?img=/i/teamlogos/mlb/500/${teamAbbrev.toLowerCase()}.png&h=40&w=40`,
   features: {
     dfs: false,
-    statsVault: true,
     askChat: true,
     injuries: false,
     scoreboard: true,

@@ -955,7 +955,7 @@ Examples:
             "pointsbetus", "fanatics", "barstool", "wynnbet",
             # US2 / us_ex markets
             "ballybet", "betopenly", "betparx", "espnbet", "fliff",
-            "hardrockbet", "novig", "polymarket", "prophetx", "rebet",
+            "hardrockbet", "novig", "prophetx", "rebet",
             "windcreek",
         ],
         help="Bookmakers to shop lines from",

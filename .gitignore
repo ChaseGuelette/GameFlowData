@@ -20,13 +20,8 @@ data/
 *.sqlite
 *.sqlite3
 
-# If you have specific large JSON dumps, ignore them too
-*.json
-!package.json
-!package-lock.json
-!vercel.json
-!tsconfig.json
-.mcp.json     # (Exception: if you want to track your tool config)
+# Do not blanket-ignore JSON: model manifests and configs are source evidence.
+# Generated JSON belongs under an ignored output/artifact directory.
 
 # --- IDE Settings ---
 .vscode/
@@ -34,6 +29,8 @@ data/
 
 # --- Logs & OS Junk ---
 *.log
+logs/
+output/
 .DS_Store
 Thumbs.db
 nul
@@ -59,25 +56,40 @@ tmpclaude*
 tmpclaude-*
 .claude/flow_library/
 .claude/glm_spec_*.md
+# Retired repo-local agent/session scaffolding
+.claude/
+.codex/
+.agents/
+.hermes/tmp/
+.hermes/audits/
+.aDelete/
+.braintree/
 # .claude
 #Gemini Files
 .gemini/
 
-# Social media generated images
-output/social/
 
 #testing outputs
 .pytest_cache/
 .ruff_cache/
 .solokit-cache/
+**/.next/
+*.egg-info/
+tmp/
+.tmp_gfos_pytest/
+backtest_resultsauditstmp*/
+linker_data/
 
 #node modules
 node_modules/
 
-# Ignore model training runs but keep production models
-src/models/artifacts/run_*/
+# Ignore every non-production model artifact; Git is not the artifact store
+src/models/artifacts/*
 !src/models/artifacts/production/
-src/models/mlb/artifacts/mlb_run_*/
+!src/models/artifacts/production/**
+!src/models/artifacts/production_playoffs/
+!src/models/artifacts/production_playoffs/**
+src/models/mlb/artifacts/*
 !src/models/mlb/artifacts/production/
 !src/models/mlb/artifacts/production/**
 
@@ -85,10 +97,8 @@ src/models/mlb/artifacts/mlb_run_*/
 backtest_results/
 **/bankroll_chart.html
 
-#kalshi generated files
-KalshiBot.txt
-# Graphify output
-graphify-out/
-src/graphify-out/
-**/GRAPH_REPORT.md
-**/"GRAPH REPORT.md"
+# Historical/generated material belongs in GBrain or cold archives
+brain/
+Handoffs/
+reports/
+notebooks/

@@ -54,7 +54,6 @@ MLB_CORE_MARKETS = [
 ]
 
 MLB_EXTENDED_MARKETS = [
-    "batter_hits_runs_rbis",
     "batter_stolen_bases",
     "batter_strikeouts",
     "batter_walks",

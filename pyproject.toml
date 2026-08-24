@@ -96,8 +96,6 @@ omit = [
     "tests/*",
     "alembic/*",
     "*/__init__.py",
-    "src/processing/archive/*",
-    "notebooks/*",
     "docs/*",
     "database/*",
 ]

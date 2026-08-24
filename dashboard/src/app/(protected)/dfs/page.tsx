@@ -24,17 +24,6 @@ const padGameId = (id: string) => id.padStart(10, '0')
 export default function DfsPage() {
   const { config } = useSport()
 
-  if (config.sport !== 'nba') {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center">
-          <h2 className="text-xl font-semibold text-slate-200 mb-2">DFS Edge Finder</h2>
-          <p className="text-slate-400">DFS analysis is currently available for NBA only.</p>
-        </div>
-      </div>
-    )
-  }
-
   const [selectedDate, setSelectedDate] = useState<string>(getToday())
   const [availableDates, setAvailableDates] = useState<string[]>([])
 
@@ -51,13 +40,15 @@ export default function DfsPage() {
   const { prefs } = useUserPreferences()
 
   // React Query hook — replaces manual fetchData + useEffect
-  const { data: dfsData, isLoading: loading } = useDfsLines(selectedDate)
+  const { data: dfsData, isLoading: loading } = useDfsLines(selectedDate, config.sport === 'nba')
   const predictions = dfsData?.predictions ?? []
   const dfsLines = dfsData?.dfsLines ?? []
   const sportsbookLines = dfsData?.sportsbookLines ?? []
 
   // Fetch available dates
   useEffect(() => {
+    if (config.sport !== 'nba') return
+
     async function fetchDates() {
       const supabase = createClient()
       const { data } = await supabase
@@ -73,7 +64,7 @@ export default function DfsPage() {
       }
     }
     fetchDates()
-  }, [])
+  }, [config.sport])
 
   // Join predictions with DFS lines and compute model comparisons
   const comparisons = useMemo<DfsComparison[]>(() => {
@@ -417,6 +408,17 @@ export default function DfsPage() {
     model: 'Model probability vs DFS break-even',
     market: 'Sharp sportsbook consensus vs DFS line',
     combined: 'Both model & market agree',
+  }
+
+  if (config.sport !== 'nba') {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-slate-200 mb-2">DFS Edge Finder</h2>
+          <p className="text-slate-400">DFS analysis is currently available for NBA only.</p>
+        </div>
+      </div>
+    )
   }
 
   return (

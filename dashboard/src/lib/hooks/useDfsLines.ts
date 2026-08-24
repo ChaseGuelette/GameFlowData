@@ -49,7 +49,7 @@ async function fetchDfsData(date: string) {
 
   // Step 2: Fetch sportsbook lines per-game in parallel
   const gameIds = [...new Set(dfsLines.map(dl => dl.game_id))]
-  let sportsbookLines: SportsbookLine[] = []
+  const sportsbookLines: SportsbookLine[] = []
 
   if (gameIds.length > 0) {
     const batchSize = 3
@@ -72,10 +72,11 @@ async function fetchDfsData(date: string) {
   return { predictions, dfsLines, sportsbookLines }
 }
 
-export function useDfsLines(date: string) {
+export function useDfsLines(date: string, enabled = true) {
   return useQuery({
     queryKey: ['dfs', 'lines', date],
     queryFn: () => fetchDfsData(date),
+    enabled,
     staleTime: 5 * 60 * 1000, // 5 minutes
   })
 }

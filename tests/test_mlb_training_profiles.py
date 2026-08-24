@@ -75,4 +75,4 @@ def test_profile_lookup_normalizes_aliases_and_lists_initial_profiles() -> None:
 
 def test_unknown_profile_fails_loudly() -> None:
     with pytest.raises(ValueError, match="Unknown MLB training profile"):
-        get_training_profile("batter_hrr")
+        get_training_profile("unsupported_stat")

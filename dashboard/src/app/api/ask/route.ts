@@ -1056,7 +1056,7 @@ export async function POST(request: NextRequest) {
 
   // --- Depth chart + injury timeline (parallel, both need playerTeamId) ---
   let depthChart: Array<Record<string, unknown>> = []
-  let injuryTimeline: Array<{ player: string; transitions: string[] }> = []
+  const injuryTimeline: Array<{ player: string; transitions: string[] }> = []
 
   if (playerTeamId) {
     const fortyFiveDaysAgo = new Date()

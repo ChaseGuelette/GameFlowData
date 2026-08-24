@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Audit MLB production model artifacts before trading promotion.
+"""Audit MLB production model artifacts before deployment.
 
-Read-only gate for trading readiness. It resolves the same model directory shape
+Read-only gate for deployment readiness. It resolves the same model directory shape
 used by the sweep/inference paths, loads the MLBModelSuite, verifies required
 stats are actually present, and prints artifact metadata/feature counts so a
 missing model cannot be hidden by the suite's graceful-skip behavior.
@@ -21,13 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DEFAULT_REQUIRED_STATS: tuple[str, ...] = ("pitcher_strikeouts", "batter_hits")
-OPTIONAL_REQUIRES_VALIDATION = {"batter_hrr"}
-KNOWN_NOT_LIVE_MLB_KALSHI_STATS = {
-    "batter_total_bases",
-    "batter_home_runs",
-    "batter_runs_scored",
-}
+DEFAULT_REQUIRED_STATS: tuple[str, ...] = ("pitcher_strikeouts", "batter_hits", "batter_rbis")
 
 
 @dataclass(frozen=True)
@@ -89,7 +83,6 @@ def _stat_model_name(stat: str) -> str:
         "batter_total_bases": "batter_total_bases",
         "batter_rbis": "batter_rbis",
         "batter_runs_scored": "batter_runs",
-        "batter_hrr": "batter_hrr",
     }
     return mapping.get(stat, stat)
 
@@ -163,7 +156,6 @@ def run_audit(
     model_dir: Path,
     required_stats: list[str],
     *,
-    validated_optional_stats: set[str] | None = None,
     resolver: Callable[[Path], Path] = _resolve_model_dir,
     suite_loader: Callable[[Path], SuiteSnapshot] = _load_suite_snapshot,
 ) -> tuple[dict[str, Any], list[str]]:
@@ -171,7 +163,6 @@ def run_audit(
 
     Dependency injection keeps tests from loading xgboost/joblib artifacts.
     """
-    validated_optional_stats = validated_optional_stats or set()
     resolved_model_dir = resolver(model_dir)
     suite = suite_loader(resolved_model_dir)
     failures: list[str] = []
@@ -181,32 +172,11 @@ def run_audit(
     if missing_stats:
         failures.append(f"Missing required loaded model stats: {missing_stats}")
 
-    for stat in required_stats:
-        if stat in OPTIONAL_REQUIRES_VALIDATION and stat not in validated_optional_stats:
-            failures.append(
-                f"{stat} was requested but is not marked validated; keep it out of live Kalshi trading until validation proof exists"
-            )
-
     extra_loaded = [stat for stat in suite.available_stats if stat not in required_stats]
     if extra_loaded:
         warnings.append(
-            "Suite loaded extra stats not required by this gate; do not treat them as live-trading support: "
+            "Suite loaded extra stats not required by this deployment gate: "
             + ", ".join(extra_loaded)
-        )
-    unvalidated_optional_loaded = sorted(
-        stat for stat in OPTIONAL_REQUIRES_VALIDATION.intersection(suite.available_stats)
-        if stat not in validated_optional_stats and stat not in required_stats
-    )
-    if unvalidated_optional_loaded:
-        warnings.append(
-            "Optional Kalshi stat artifacts are present but not validated for live support: "
-            + ", ".join(unvalidated_optional_loaded)
-        )
-    blocked_loaded = sorted(KNOWN_NOT_LIVE_MLB_KALSHI_STATS.intersection(suite.available_stats))
-    if blocked_loaded:
-        warnings.append(
-            "Known non-live/unsupported Kalshi stats are present as artifacts and must stay out of live trading: "
-            + ", ".join(blocked_loaded)
         )
 
     stats = {stat: inspect_stat_artifacts(resolved_model_dir, stat) for stat in sorted(set(required_stats + suite.available_stats))}
@@ -232,31 +202,20 @@ def run_audit(
         "failures": failures,
         "promotion_posture": (
             "artifact/functionality gate only; quote-clean CLV, ranking, dense intraday stability, "
-            "and paper/live output gates are still required before live money"
+            "and paper-trading evidence remain separate promotion gates"
         ),
     }
     return summary, failures
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Audit MLB production model artifacts for trading-readiness gates")
+    parser = argparse.ArgumentParser(description="Audit MLB production model artifacts for deployment gates")
     parser.add_argument("--model-dir", default="src/models/mlb/artifacts", help="Base or production MLB artifact dir")
     parser.add_argument(
         "--require-stat",
         action="append",
         dest="required_stats",
-        help="Required loaded model stat. Repeatable. Defaults to pitcher_strikeouts + batter_hits.",
-    )
-    parser.add_argument(
-        "--include-batter-hrr",
-        action="store_true",
-        help="Require batter_hrr too. Fails unless --validated-optional-stat batter_hrr is also supplied.",
-    )
-    parser.add_argument(
-        "--validated-optional-stat",
-        action="append",
-        default=[],
-        help="Optional stat with external validation proof, e.g. batter_hrr. Repeatable.",
+        help="Required loaded model stat. Repeatable. Defaults to pitcher_strikeouts + batter_hits + batter_rbis.",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON summary only")
     return parser.parse_args()
@@ -265,12 +224,9 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     required_stats = args.required_stats or list(DEFAULT_REQUIRED_STATS)
-    if args.include_batter_hrr and "batter_hrr" not in required_stats:
-        required_stats.append("batter_hrr")
     summary, failures = run_audit(
         Path(args.model_dir),
         required_stats,
-        validated_optional_stats=set(args.validated_optional_stat),
     )
 
     if args.json:

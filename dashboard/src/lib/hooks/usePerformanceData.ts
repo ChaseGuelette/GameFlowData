@@ -31,15 +31,20 @@ async function fetchPropsPerformance(config: {
   const dailyData = (logRes.data ?? []) as DailyPerformance[]
   const betsData = betsRes.data ?? []
 
+  if (logRes.error) throw logRes.error
+  if (betsRes.error) throw betsRes.error
+
   // Enrich bets with is_recommended
   const predictionIds = [...new Set(betsData.map(b => b.prediction_id).filter(Boolean))]
   let enrichedBets: PaperBetWithRecommended[] = betsData as PaperBetWithRecommended[]
 
   if (predictionIds.length > 0) {
-    const { data: predictionsData } = await supabase
+    const { data: predictionsData, error: predictionsError } = await supabase
       .from(config.predictionsTable)
       .select('id, is_recommended')
       .in('id', predictionIds)
+
+    if (predictionsError) throw predictionsError
 
     if (predictionsData) {
       const recommendedMap = new Map<number, boolean>()
@@ -60,12 +65,13 @@ async function fetchPropsPerformance(config: {
   return { dailyData, allBets: enrichedBets, currentBankroll }
 }
 
-export function usePropsPerformance() {
+export function usePropsPerformance(enabled = true) {
   const { sport, config } = useSport()
 
   return useQuery({
     queryKey: ['performance', 'props', sport],
     queryFn: () => fetchPropsPerformance(config),
+    enabled,
     staleTime: 10 * 60 * 1000, // 10 minutes
   })
 }
@@ -116,16 +122,20 @@ async function fetchDfsPerformance() {
       .order('entry_date', { ascending: true }),
   ])
 
+  if (entriesRes.error) throw entriesRes.error
+  if (dailyRes.error) throw dailyRes.error
+
   return {
     dfsEntries: (entriesRes.data ?? []) as DfsEntry[],
     dfsDailyData: (dailyRes.data ?? []) as DfsDailyLog[],
   }
 }
 
-export function useDfsPerformance() {
+export function useDfsPerformance(enabled = true) {
   return useQuery({
     queryKey: ['performance', 'dfs'],
     queryFn: fetchDfsPerformance,
+    enabled,
     staleTime: 10 * 60 * 1000,
   })
 }
@@ -160,12 +170,13 @@ async function fetchMyBetsPerformance(statTypes: string[]) {
   })) as PaperBet[]
 }
 
-export function useMyBetsPerformance() {
+export function useMyBetsPerformance(enabled = true) {
   const { sport, config } = useSport()
 
   return useQuery({
     queryKey: ['performance', 'myBets', sport],
     queryFn: () => fetchMyBetsPerformance(config.statTypes),
+    enabled,
     staleTime: 10 * 60 * 1000,
   })
 }
