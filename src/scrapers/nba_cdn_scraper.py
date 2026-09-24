@@ -23,7 +23,7 @@ import argparse
 import re
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -34,6 +34,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 from sqlalchemy import text
 
 from src.db.client import get_engine
+from src.models.features.nba.season import is_competitive_nba_game_id, resolve_nba_season
 
 # =============================================================================
 # Configuration
@@ -49,8 +50,6 @@ CDN_HEADERS = {
     "Origin": "https://www.nba.com",
 }
 
-DEFAULT_SEASON_ID = "22025"
-DEFAULT_SEASON = "2025-26"
 REQUEST_DELAY = 0.5  # seconds between CDN requests (be polite)
 
 # NBA team abbreviation -> team_id mapping
@@ -102,9 +101,6 @@ def get_games_by_date(schedule: dict) -> dict[str, list[dict]]:
     Excludes pre-season (001) and All-Star (003).
     date_str format: 'YYYY-MM-DD'
     """
-    # Game ID prefixes we care about
-    INCLUDED_PREFIXES = ("002", "004", "005")
-
     games_by_date = {}
     dates = schedule.get("leagueSchedule", {}).get("gameDates", [])
 
@@ -120,7 +116,7 @@ def get_games_by_date(schedule: dict) -> dict[str, list[dict]]:
         # Include regular season (002), playoffs (004), play-in (005); skip pre-season/all-star
         final_games = [
             g for g in d.get("games", [])
-            if g.get("gameId", "").startswith(INCLUDED_PREFIXES)
+            if is_competitive_nba_game_id(g.get("gameId", ""))
             and g.get("gameStatus", 0) == 3  # Final only
         ]
 
@@ -177,6 +173,7 @@ def transform_team_stats(game: dict, game_date: str) -> list[dict]:
     home = game["homeTeam"]
     away = game["awayTeam"]
     game_id = game["gameId"]
+    season = resolve_nba_season(game_id, date.fromisoformat(game_date))
 
     rows = []
     for team_data, opp_data, is_home in [(home, away, True), (away, home, False)]:
@@ -185,7 +182,7 @@ def transform_team_stats(game: dict, game_date: str) -> list[dict]:
         opp_tricode = opp_data["teamTricode"]
 
         row = {
-            "season_id": DEFAULT_SEASON_ID,
+            "season_id": season.season_id,
             "team_id": team_data["teamId"],
             "team_abbreviation": team_tricode,
             "team_name": f"{team_data['teamCity']} {team_data['teamName']}",
@@ -213,7 +210,7 @@ def transform_team_stats(game: dict, game_date: str) -> list[dict]:
             "team_tov": stats.get("turnoversTotal", stats.get("turnovers", 0)),
             "team_pf": stats.get("foulsPersonal", 0),
             "team_plus_minus": team_data["score"] - opp_data["score"],
-            "season": DEFAULT_SEASON,
+            "season": season.label,
             "opponent_id": opp_data["teamId"],
         }
         rows.append(row)
@@ -226,6 +223,7 @@ def transform_player_stats(game: dict, game_date: str) -> list[dict]:
     home = game["homeTeam"]
     away = game["awayTeam"]
     game_id = game["gameId"]
+    season = resolve_nba_season(game_id, date.fromisoformat(game_date))
 
     rows = []
     for team_data, opp_data, is_home in [(home, away, True), (away, home, False)]:
@@ -251,7 +249,7 @@ def transform_player_stats(game: dict, game_date: str) -> list[dict]:
                 comment = "DNP - Coach's Decision"
 
             row = {
-                "season_id": DEFAULT_SEASON_ID,
+                "season_id": season.season_id,
                 "player_id": player["personId"],
                 "game_id": game_id,
                 "game_date": game_date,

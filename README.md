@@ -12,6 +12,8 @@ The repository owns five things:
 
 Historical experiments, raw backtest output, local knowledge mirrors, and non-production model runs do not belong in this repository.
 
+The maintained documentation map is [`docs/README.md`](docs/README.md). Remote GBrain remains the authority for durable decisions, lessons, and current handoffs.
+
 ## Supported product
 
 | Area | Supported scope |
@@ -57,21 +59,36 @@ src/models/mlb/artifacts/production/
 
 Training runs, sweeps, ablations, backups, and rejected models are ignored and stored outside the repository. Never treat Git directory naming as promotion evidence; use the model/lifecycle manifests and verification outputs.
 
-## Common verification
+## Install and verify
 
-From `C:\Users\Chase\Projects\GameFlowData`:
+Python 3.11+ is required. `requirements.txt` and `requirements-dev.txt` are the dependency authority for the retained analytics/scheduler application. The root `pyproject.toml` currently supplies tool configuration and legacy packaging metadata; do not use `uv sync` or `pip install -e .` as a clean-checkout bootstrap until that metadata is reconciled with the requirements files.
+
+From a clean checkout at `C:\Users\Chase\Projects\GameFlowData`:
+
+```powershell
+python --version  # verify 3.11 or newer
+python -m venv venv
+.\venv\Scripts\python.exe -m pip install --upgrade pip
+.\venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
+```
+
+Run the Python verification surface:
 
 ```text
+.\venv\Scripts\python.exe -m compileall -q src
 .\venv\Scripts\python.exe -m pytest
 .\venv\Scripts\python.exe scripts\audit_mlb_model_artifacts.py --model-dir src\models\mlb\artifacts\production --json
 ```
 
-From `dashboard\`:
+The dashboard requires Node.js `>=20.9.0`. From `dashboard\`:
 
 ```text
+npm ci
 npm run lint
 npm run build
 ```
+
+The 2026-08-24 reduction certification reused the source checkout's existing Python environment; it was not proof of a fresh dependency bootstrap. The commands above are the intended clean-checkout procedure, but the dependency-manifest mismatch remains explicit until independently certified.
 
 Model training, sweeps, broad backfills, and other long jobs are launched manually by Chase after a dry-run/preflight.
 
@@ -83,10 +100,8 @@ Retained customer surfaces:
 - DFS
 - Combined Performance and History
 - Account and subscription management
-- Public picks, pricing, and legal pages
+- Public picks, subscription, and legal pages
 - Ask AI, games, scoreboard, slate, and Stripe APIs
-
-`/history` redirects to `/performance`.
 
 ## Critical invariants
 

@@ -1,18 +1,22 @@
 # MLB Pitcher K Frozen Baselines
 
+> **Archive notice (2026-08-24):** This is historical decision evidence. Referenced non-production
+> artifacts, backtest outputs, and superseded roadmap files were removed from the active checkout and
+> preserved in `C:\Users\Chase\Archives\GameFlowData\2026-08-24-pre-prune\`. Production artifacts
+> remain under `src/models/mlb/artifacts/production/`.
+
 > **Current use (2026-07-27):** Separate each frozen model artifact from its historical BL/edge
 > policy. Feature-family discovery must rerun the baseline artifact and candidates under the same
 > raw/no-BL, quote-clean, flat-stake protocol. Broad BL selection follows only for model finalists.
 > CLV ranker evidence is not a flat-model promotion gate; it is reserved for optional Kelly sizing.
 > Historical metrics below remain evidence and must not be rewritten.
 
-> **Historical baseline-restoration record:** Current baseline status and ablation execution
-> live in [`mlb_pitcher_k_ablation_roadmap.md`](mlb_pitcher_k_ablation_roadmap.md). The
+> **Historical baseline-restoration record:** The former local ablation roadmap is archived. The
 > statements below that dense Pitcher K CLV is missing or that variants must not start were
 > superseded after the 2026-04-13 through 2026-06-21 dense-CLV certification.
 
 Date: 2026-06-21
-Status: baseline-restoration runbook / Chase-run validation required
+Status: archived baseline-restoration snapshot; not a current runbook
 
 ## Purpose
 
@@ -65,7 +69,7 @@ Interpretation:
 - Follow-up debugging showed the zero-bet result was caused by the requested `--line-source mlb_player_props_clv_snapshots`: local `mlb_player_props_clv_snapshots` has 0 `pitcher_strikeouts` rows for 2026-04-13 to 2026-05-10, while `mlb_raw_player_props` has linked rows for that market/window.
 - Therefore this result is a line-source coverage failure, not proof that the artifact/model edge disappeared.
 - Quote-clean pitcher K replays should use `--line-source mlb_raw_player_props` unless/until dense CLV snapshots are populated for `pitcher_strikeouts`.
-- CLV certification remains blocked on dense CLV coverage for pitcher K; ROI replay can proceed against raw props in quote-clean/as-of mode.
+- At the time of this snapshot, CLV certification was blocked on dense CLV coverage for pitcher K. That statement was superseded by the later dense-CLV certification named in the archive notice.
 
 ## Slice 7 fresh baseline note — 2026-06-21
 
@@ -78,7 +82,7 @@ Chase retrained a fresh `--ablation-variant none` baseline under the Slice 6 tra
   - Quote-clean with `mlb_player_props_clv_snapshots`: 20 predictions, 0 precomputed line rows, 0 bets.
   - Quote-clean with `mlb_raw_player_props`: 20 predictions, 277 precomputed line rows, 7 bets at edge 0.0.
 
-Next gate is to rerun the full raw/BL quote-clean baseline checks for the fresh artifact with `--line-source mlb_raw_player_props`.
+The next gate recorded on 2026-06-21 was to rerun the full raw/BL quote-clean baseline checks for the fresh artifact with `--line-source mlb_raw_player_props`. It is preserved as history, not a current instruction.
 
 ## Freeze criteria
 
@@ -90,10 +94,12 @@ A pitcher K baseline is frozen only when all of these are true:
 4. Raw under-only quote-clean sweep has at least one config with `n_bets >= 100`.
 5. Focused BL under-only quote-clean sweep has at least one config with `n_bets >= 100`.
 6. Dropout/CLV audit suite runs on decision-grade configs.
-7. Ranker/Spearman or CLV quality diagnostics do not invert edge quality.
+7. Historical criterion: ranker/Spearman or CLV quality diagnostics did not invert edge quality. Current policy treats CLV as supporting evidence and ranker output as report-only/optional for Kelly, not as a veto of valid flat evidence.
 8. Over-only or both-direction sweep is checked before any claim that overs are safe.
 
-## What Chase should run next
+## Historical run sequence (do not execute from the reduced checkout)
+
+The commands below preserve the 2026-06-21 decision record. Their non-production artifact and output paths were archived during repository reduction. Use the current lifecycle guide and checked-in production artifacts for any new approved experiment.
 
 I did not run long training/backtests in the agent session. The safest order is below.
 
@@ -146,6 +152,6 @@ After step 5, repeat steps 2-4 with the new finalized artifact directory under `
 - If quote-clean baseline fails while legacy remains strong, pause feature work and diagnose line-selection/CLV timing before training more models.
 - If CLV/ranker diagnostics show edge ranking is inverted, keep paper-only and treat ROI as untrusted.
 
-## Current recommendation
+## Historical recommendation
 
-Do not run new feature-variant training yet. The old artifact failed the quote-clean baseline-freeze gate with 0 bets, and pitcher K has not been retrained for months. Run a fresh `--ablation-variant none` baseline first, then repeat quote-clean raw/BL validation before `hook_deep_start_l30`, `static_no_l30`, `ip_only`, or `ip_hook`.
+The 2026-06-21 recommendation was not to run new feature-variant training yet. It required a fresh `--ablation-variant none` baseline and repeated quote-clean raw/BL validation before the named variants. This recommendation is superseded and must not be treated as current authorization.

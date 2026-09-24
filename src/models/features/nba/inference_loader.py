@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.models.features.nba.requests import PlayerGameFeatureRequest
+from src.models.features.nba.season import resolve_nba_season
 
 DEPRECATED_COMPAT_FEATURES = {
     "travel_dist": 0,
@@ -78,7 +79,7 @@ class InferenceFeatureLoader:
                 "opponent_id": request.opponent_id,
                 "is_home": request.is_home if request.is_home is not None else True,
                 "position_group": position_group,
-                "season_id": "22025",
+                "season_id": resolve_nba_season(request.game_id, request.as_of_date).season_id,
             }
 
         return self.feature_store._get_context_snapshots(

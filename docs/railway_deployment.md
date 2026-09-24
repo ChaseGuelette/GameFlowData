@@ -12,6 +12,8 @@ GameFlowData deploys one always-on Railway worker. Railway starts `/app/venv/bin
 - `src/orchestration/scheduler.py` — job registrations and ET schedule authority.
 - `docs/daily_pipeline_automation.md` — operator-facing schedule summary.
 
+Deployment is Nixpacks-only. The repository intentionally has no Dockerfile.
+
 ## Required configuration
 
 Set secrets through Railway variables; never commit or print their values. The retained worker needs the database connection and only the provider/Discord variables used by enabled NBA/MLB jobs. Use the Supabase session-pooler connection on port 5432 for backend writes; port 6543 can behave read-only in this environment.
@@ -38,7 +40,10 @@ Deployment is a separately authorized action. After local tests and a clean-clon
 railway login
 railway link
 railway up
+railway status
 ```
+
+Before `railway up`, confirm the interactive link targets the intended GameFlow project, production environment, and scheduler worker service. After upload, use deployment listings/logs for that exact service; `railway status` alone does not prove startup health.
 
 A successful upload is not verification. Read back the deployment state and inspect startup logs to confirm:
 

@@ -10,15 +10,17 @@ Tables updated:
 - player_game_advanced_stats: Player advanced metrics per game
 
 Usage:
-    python nba_unified_scraper.py [--season YYYY-YY] [--season-type TYPE] [--skip-team] [--skip-advanced]
+    python nba_unified_scraper.py --cdn-only
+    python nba_unified_scraper.py --season YYYY-YY [--season-type TYPE] [--skip-team] [--skip-advanced]
 
 Examples:
-    python nba_unified_scraper.py                              # Scrape current regular season (2024-25)
+    python nba_unified_scraper.py --cdn-only                  # Railway-safe CDN-only ingestion
+    python nba_unified_scraper.py --season 2025-26            # Scrape explicit historical season locally
     python nba_unified_scraper.py --season 2023-24            # Scrape specific regular season
-    python nba_unified_scraper.py --season-type Playoffs      # Scrape current playoffs
-    python nba_unified_scraper.py --season-type PlayIn        # Scrape current play-in tournament
+    python nba_unified_scraper.py --season 2025-26 --season-type Playoffs  # Historical playoffs
+    python nba_unified_scraper.py --season 2025-26 --season-type PlayIn    # Historical play-in
     python nba_unified_scraper.py --season 2023-24 --season-type Playoffs  # Scrape 2023-24 playoffs
-    python nba_unified_scraper.py --skip-advanced             # Only fetch basic team stats
+    python nba_unified_scraper.py --season 2025-26 --skip-advanced  # Only fetch basic team stats
 """
 
 import argparse
@@ -62,9 +64,6 @@ LONG_PAUSE_MAX = 60
 BAN_COOLDOWN = 120  # 2 minutes if rate limited (was 10 — too aggressive)
 MAX_RETRIES = 5
 REQUEST_TIMEOUT = 120  # seconds per request (nba_api default is 30)
-
-# Current season default
-DEFAULT_SEASON = "2025-26"
 
 # Proxy (IPRoyal) - loaded from .env PROXY_URL
 PROXY_URL = os.getenv("PROXY_URL")
@@ -915,8 +914,7 @@ def main():
     parser.add_argument(
         "--season",
         type=str,
-        default=DEFAULT_SEASON,
-        help=f"Season to scrape (default: {DEFAULT_SEASON})",
+        help="Season to scrape in non-CDN mode (YYYY-YY); required outside --cdn-only",
     )
     parser.add_argument(
         "--season-type",
@@ -939,6 +937,8 @@ def main():
     parser.add_argument("--no-proxy", action="store_true", help="Disable proxy even if PROXY_URL is set")
 
     args = parser.parse_args()
+    if not args.cdn_only and not args.season:
+        parser.error("--season is required outside --cdn-only mode")
 
     # Resolve proxy setting
     global PROXY_URL
@@ -948,7 +948,7 @@ def main():
     print("=" * 60)
     print("NBA UNIFIED STATS SCRAPER")
     print("=" * 60)
-    print(f"Season: {args.season}")
+    print(f"Season: {'from CDN game IDs' if args.cdn_only else args.season}")
     print(f"Season Type: {args.season_type}")
     print(f"Skip Team Stats: {args.skip_team}")
     print(f"Skip Traditional Stats: {args.skip_traditional}")  # Diag
@@ -965,7 +965,7 @@ def main():
         print(f"❌ Database connection failed: {e}")
         sys.exit(1)
 
-    seasons = [args.season]
+    seasons = [args.season] if args.season else []
     cdn_fallback_used = False
     new_games = 0
 

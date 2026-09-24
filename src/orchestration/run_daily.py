@@ -39,6 +39,7 @@ def run_command(command, description):
 def main():
     parser = argparse.ArgumentParser(description="Daily Orchestration Script")
     parser.add_argument("--date", type=str, default=str(date.today()), help="Target date for predictions (YYYY-MM-DD)")
+    parser.add_argument("--season", type=str, help="Explicit NBA season (YYYY-YY) for local stats.nba.com scraping")
     parser.add_argument("--skip-scraping", action="store_true", help="Skip the scraping step")
     parser.add_argument(
         "--scrape-live-odds", action="store_true", help="Scrape LIVE odds (current lines) into raw_game_lines_live"
@@ -58,6 +59,8 @@ def main():
     parser.add_argument("--model-dir", type=str, default="src/models/artifacts", help="Path to model artifacts")
 
     args = parser.parse_args()
+    if not args.skip_scraping and not args.season:
+        parser.error("--season is required for local non-CDN scraping (or pass --skip-scraping)")
     target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
 
     logger.info("=" * 60)
@@ -66,8 +69,11 @@ def main():
 
     # 1. Scraping (Get latest game results)
     if not args.skip_scraping:
-        # Run nba_unified_scraper for current season
-        run_command(f"{sys.executable} src/scrapers/nba_unified_scraper.py", "Scraping Latest Game Results")
+        # Local stats.nba.com scraping uses an explicit season, never a stale default.
+        run_command(
+            f"{sys.executable} src/scrapers/nba_unified_scraper.py --season {args.season}",
+            "Scraping Latest Game Results",
+        )
 
         # Scrape Daily Game Lines (Odds)
         run_command(

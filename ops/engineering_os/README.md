@@ -17,9 +17,12 @@ Edit `/home/chase/.config/gameflow-engineering-os/engineering_os.yaml` for the a
 
 ## Validation
 
+Return to the repository root before using repository-relative test paths:
+
 ```bash
-pytest ops/engineering_os/tests -q
-python -m compileall -q ops/engineering_os/src
+cd /home/chase/projects/GameFlowData
+/home/chase/.local/share/gameflow-engineering-os/venv/bin/python -m pytest ops/engineering_os/tests -q
+/home/chase/.local/share/gameflow-engineering-os/venv/bin/python -m compileall -q ops/engineering_os/src
 /home/chase/.local/share/gameflow-engineering-os/venv/bin/gfos --help
 /home/chase/.local/share/gameflow-engineering-os/venv/bin/gfos --config /home/chase/.config/gameflow-engineering-os/engineering_os.yaml check --json
 /home/chase/.local/share/gameflow-engineering-os/venv/bin/gfos --config /home/chase/.config/gameflow-engineering-os/engineering_os.yaml brief --generate
@@ -85,3 +88,5 @@ Preserve `/home/chase/.local/state/gameflow-engineering-os` for diagnosis. Remov
 ## Certification Limits
 
 Unit and local smoke tests do not certify seven daily briefs, phone access, host reboot recovery, or tailnet availability. Record those outcomes separately after the approved real-world certification window.
+
+Current certification evidence is tracked in `docs/operations/evidence/engineering-os-mvp0-certification.md`. The daily timer remains owner-gated until Chase chooses the schedule.

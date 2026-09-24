@@ -1,5 +1,7 @@
 # Engineering OS MVP 0 Live Baseline
 
+Status: historical point-in-time evidence. Use the live dashboard and current certification log for present runtime health.
+
 Observed: 2026-07-27 21:56–22:00 America/New_York
 Host: `gameflow-agent` (`gameflow-agent.tailc24acb.ts.net`, `100.126.253.6`)
 Method: read-only non-login SSH from the Windows GameFlowData workstation.

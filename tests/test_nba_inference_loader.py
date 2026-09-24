@@ -91,7 +91,7 @@ def test_inference_loader_scheduled_context_uses_position_lookup_and_default_hom
     result = loader.load(
         PlayerGameFeatureRequest(
             player_id=1,
-            game_id="g1",
+            game_id="0022400001",
             as_of_date=date(2025, 1, 1),
             team_id=11,
             opponent_id=22,
@@ -102,8 +102,26 @@ def test_inference_loader_scheduled_context_uses_position_lookup_and_default_hom
     assert result["opponent_id"] == 22
     assert result["is_home"] is True
     assert result["position_group"] == "W"
-    assert result["season_id"] == "22025"
+    assert result["season_id"] == "22024"
     store._get_context_snapshots.assert_not_called()
+
+
+def test_scheduled_context_uses_target_game_season_after_rollover():
+    store, _conn = _store_with_connection()
+    _stub_sources(store)
+    store._get_player_position = Mock(return_value="W")
+
+    result = InferenceFeatureLoader(store).load(
+        PlayerGameFeatureRequest(
+            player_id=1,
+            game_id="0022600001",
+            as_of_date=date(2026, 10, 20),
+            team_id=11,
+            opponent_id=22,
+        )
+    )
+
+    assert result["season_id"] == "22026"
 
 
 def test_feature_store_player_game_facade_delegates_to_inference_loader(monkeypatch):

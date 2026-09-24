@@ -1,36 +1,94 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GameFlow dashboard
 
-## Getting Started
+Status: active source-backed setup guide. Reconciled 2026-08-24.
 
-First, run the development server:
+The retained Next.js application is the customer-facing NBA/MLB dashboard. It uses the App Router, Supabase authentication/RLS, server/API routes, and optional Stripe subscription flows.
 
-```bash
+## Requirements
+
+- Node.js `>=20.9.0` (the engine required by the locked Next.js 16.1.6 package)
+- npm and the committed `package-lock.json`
+- Supabase client configuration for real authenticated data
+
+Install and validate from `dashboard/`:
+
+```powershell
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run lint
+npm run build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000` for local development.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Core Supabase client variables:
 
-## Learn More
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
-To learn more about Next.js, take a look at the following resources:
+Server-only/optional product variables:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUBSCRIPTION_REQUIRED`
+- `NEXT_PUBLIC_SITE_URL`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_PRICE_MONTHLY`
+- `STRIPE_PRICE_ANNUAL`
+- `NEXT_PUBLIC_STRIPE_PRICE_MONTHLY`
+- `NEXT_PUBLIC_STRIPE_PRICE_ANNUAL`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Never expose the service-role or Stripe secret/webhook values to browser code. Placeholder Supabase values permit build-time rendering but do not prove an authenticated runtime works.
 
-## Deploy on Vercel
+## Retained pages
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Public/authenticated route groups currently provide:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- landing, public picks, privacy, and terms;
+- login and signup;
+- dashboard, DFS, combined performance/history, account, and subscription pages.
+
+There is no standalone `/history`, `/pricing`, Bot Tracker, Arb Scanner, Data Vault, Kalshi, Polymarket, or NCAAB page in the reduced tree.
+
+## Retained API surface
+
+- Ask AI and Ask history
+- games and scoreboard
+- slate
+- Stripe checkout, portal, and webhook
+- authentication callback
+
+The production build route listing is the final route authority.
+
+## Data and authorization boundary
+
+- Browser/dashboard queries use the authenticated Supabase client and RLS.
+- Service-role access is restricted to server-only code paths that need it.
+- Python backend jobs use their separate backend database role; do not copy that connection into dashboard variables.
+- Subscription enforcement activates only when `SUBSCRIPTION_REQUIRED=true`.
+
+## Validation
+
+A clean dashboard verification is:
+
+```powershell
+npm ci
+npm run lint
+npm run build
+```
+
+Lint warnings must be reported even when the command exits successfully. A successful static build does not replace end-to-end validation of Supabase auth, Stripe webhooks, protected navigation, or real API data.
+
+## Deployment
+
+Vercel is the intended dashboard host. The supported Vercel project root is `dashboard`, so `dashboard/vercel.json` is the applicable configuration; the repository-root `vercel.json` is not used by that setup. Do not treat the generic Next.js “Deploy” flow as sufficient: set the required environment variables and verify the protected/authenticated path after deployment.
+
+The Railway worker documented in `../docs/railway_deployment.md` is a separate Python service and does not host this Next.js application.
+
+## Related documentation
+
+- [Project README](../README.md)
+- [Documentation index](../docs/README.md)
+- [Railway worker](../docs/railway_deployment.md)

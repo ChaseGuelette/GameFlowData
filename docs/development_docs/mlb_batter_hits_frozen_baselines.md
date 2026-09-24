@@ -1,12 +1,17 @@
 # MLB batter_hits frozen baselines
 
+> **Archive notice (2026-08-24):** This is historical decision evidence. Referenced run artifacts,
+> reports, and the former local lifecycle plan were removed from the active checkout and preserved
+> in `C:\Users\Chase\Archives\GameFlowData\2026-08-24-pre-prune\`. Do not treat a missing local path
+> as missing evidence or as a request to recreate the old run.
+
 > **Current use (2026-07-27):** Treat each entry below as two separate objects: a frozen model
 > artifact and a historical betting policy. For feature-family discovery, rerun the baseline
 > artifact and every candidate under the same raw/no-BL, quote-clean, flat-$100 threshold grid;
 > do not compare a candidate against the baseline's previously selected policy. Run broad BL
 > sweeps only for the baseline/finalist artifact set. Ranker evidence is not required for flat
 > model selection or flat certification; it is retained only for optional Kelly certification.
-> See the [flat-first lifecycle plan](../../.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md).
+> The flat-first policy is canonical in remote GBrain; the archived local plan is not an active link.
 
 Last updated: 2026-05-26
 

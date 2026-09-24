@@ -2,6 +2,8 @@
 
 > **For Hermes:** Use `subagent-driven-development` to implement this plan task-by-task after Chase approves the relevant MVP. Do not implement future MVPs early. Use the GameFlow human approval gates and independently verify worker output.
 
+> **Active-scope boundary (2026-08-24):** Only the read-only MVP 0 package under `ops/engineering_os` is implemented and active. Later worker, artifact, incident, manager-console, growth, and selective-autonomy sections are unapproved plan history; they are not an implementation queue or authorization.
+
 **Goal:** Build a low-touch GameFlow management control plane with a private Tailscale dashboard as Chase's primary review surface, a daily executive brief, durable worker/reviewer flows, and later artifact, debt, incident, and growth governance.
 
 **Architecture:** Start with script-first, read-only collectors plus a small server-rendered website on the existing `gameflow-agent` droplet. Expose the site only through Tailscale and reuse Kanban, GitHub, GBrain, and existing worker/reviewer profiles as authorities rather than rebuilding them. Expand the dashboard only after real managed workflows prove which additional views and actions are useful.
@@ -171,16 +173,14 @@ ops/engineering_os/
       artifact_inventory.py
       debt_prioritization.py
   tests/
-    fixtures/
+    conftest.py
     test_config.py
     test_models.py
-    test_runner.py
-    test_render.py
-    test_state.py
-    test_events.py
-    test_web.py
-    test_collectors_*.py
-    test_artifact_inventory.py
+    test_runner_render_state_events.py
+    test_cli_web.py
+    test_collectors_kanban_backup.py
+    test_collectors_gateway_gbrain_git_scheduler_disk_artifacts.py
+    test_subprocesses.py
   deploy/
     gameflow-engineering-os-web.service
     gameflow-engineering-os-brief.service
@@ -491,7 +491,7 @@ review_recommendation: approve | rework | shelf
 **Files:**
 
 - Create: `ops/engineering_os/src/gameflow_engineering_os/render.py`
-- Test: `ops/engineering_os/tests/test_render.py`
+- Test: `ops/engineering_os/tests/test_runner_render_state_events.py`
 
 **Required tests:**
 
@@ -513,8 +513,7 @@ review_recommendation: approve | rework | shelf
 
 - Create: `ops/engineering_os/src/gameflow_engineering_os/state.py`
 - Create: `ops/engineering_os/src/gameflow_engineering_os/events.py`
-- Test: `ops/engineering_os/tests/test_state.py`
-- Test: `ops/engineering_os/tests/test_events.py`
+- Test: `ops/engineering_os/tests/test_runner_render_state_events.py`
 
 **Required tests:**
 
@@ -532,7 +531,7 @@ review_recommendation: approve | rework | shelf
 **Files:**
 
 - Create web files under `ops/engineering_os/src/gameflow_engineering_os/web/`.
-- Test: `ops/engineering_os/tests/test_web.py`.
+- Test: `ops/engineering_os/tests/test_cli_web.py`.
 
 **Requirements:**
 
@@ -554,7 +553,7 @@ review_recommendation: approve | rework | shelf
 
 - Create: `ops/engineering_os/src/gameflow_engineering_os/cli.py`
 - Create: `ops/engineering_os/src/gameflow_engineering_os/runner.py`
-- Test: `ops/engineering_os/tests/test_runner.py`
+- Test: `ops/engineering_os/tests/test_runner_render_state_events.py`
 
 **Commands to support:**
 
@@ -675,7 +674,7 @@ Do not pre-create cleanup implementation. The shape of cleanup depends on T1/T2 
 
 ### 8.1 Subsystem catalog
 
-`ops/engineering_os/config/subsystem_catalog.yaml` becomes the machine-readable routing layer. Each entry includes:
+Planned, not yet implemented: a future `subsystem_catalog.yaml` under `ops/engineering_os/config/` becomes the machine-readable routing layer. Each entry includes:
 
 ```yaml
 id: mlb-model-lifecycle

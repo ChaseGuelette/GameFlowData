@@ -2,6 +2,8 @@
 
 **Status:** MVP 0 is implemented and operational on `gameflow-agent`; seven-day, phone, and host-reboot certification remain open, so MVP 1 is not yet promoted.
 
+> **Active-scope boundary (2026-08-24):** Only the separately deployed, read-only MVP 0 monitor is an active repository surface. MVP 1–7 sections are unapproved future-plan context, not current implementation instructions. Do not start them without a new owner decision and gate review.
+
 **Purpose:** Move GameFlow from ad hoc agent-assisted development to a low-touch, human-gated operating system that Chase can manage through daily briefs, concise approval packets, and verified results without routinely opening Kanban, GBrain, or SSH.
 
 **Companion technical plan:** [`gameflow-engineering-os-technical-implementation.md`](gameflow-engineering-os-technical-implementation.md)

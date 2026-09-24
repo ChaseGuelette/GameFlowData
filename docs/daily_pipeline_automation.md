@@ -7,7 +7,8 @@ The production scheduler is `src/orchestration/scheduler.py`. It runs as one APS
 - Railway NBA result collection invokes `src/scrapers/nba_unified_scraper.py --cdn-only` from `daily_stats_job.py`.
 - Never add `stats.nba.com` calls to Railway jobs.
 - Long backfills, training, and sweeps are not scheduler jobs; Chase launches them after a dry-run/preflight.
-- Scheduled model work uses the three retained MLB production stats: `pitcher_strikeouts`, `batter_hits`, and `batter_rbis`.
+- The deployed MLB artifact inventory contains `pitcher_strikeouts`, `batter_hits`, and `batter_rbis`, but the scheduler does not derive its runtime stat list from that inventory. `mlb_inference_job.py` defaults to the keys in `src/models/mlb/mlb_stat_config.py::MLB_STATS`.
+- As reconciled on 2026-08-24, `MLB_STATS` contains `pitcher_strikeouts`, `pitcher_outs`, and `batter_hits`; it omits `batter_rbis`. This is an unresolved source/config mismatch, not an endorsed production contract. Verify and separately approve a code/config correction before claiming the scheduler runs exactly the retained artifact set.
 - Job execution history is best-effort persisted to `job_executions`; a persistence failure does not convert a failed job into success.
 
 ## NBA jobs
@@ -50,8 +51,12 @@ The production scheduler is `src/orchestration/scheduler.py`. It runs as one APS
 - NBA: `daily_stats_job.py`, `lines_job.py`, `inference_job.py`, `edge_refresh_job.py`.
 - MLB: `mlb_daily_stats_job.py`, `mlb_lines_job.py`, `mlb_inference_job.py`, `mlb_edge_refresh_job.py`, lineup/roster/weather/umpire jobs, and `mlb_dense_clv_job.py`.
 - Maintenance: `archive_old_props_job.py`, `resolve_user_paper_bets.py`.
+- `run_daily.py` is a separate manual all-in-one orchestration CLI; it is not the production schedule authority.
+- `scheduler.py --run-test` invokes `test_job.py`; use its `--skip-discord` and `--verbose` options only for intentional infrastructure checks.
 
 All paths above are under `src/orchestration/`.
+
+`scripts/setup_windows_tasks.ps1` and its `.bat` targets are retained local automation helpers, not a second production schedule authority. Do not install them alongside the Railway worker without reviewing every trigger for overlap; they include local advanced-stat collection that must never be moved to Railway.
 
 ## Local dry checks
 

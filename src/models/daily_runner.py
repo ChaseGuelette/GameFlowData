@@ -12,6 +12,7 @@ from sqlalchemy import bindparam, text
 
 from src.config.combo_config import MARKET_TO_STAT, STAT_TO_MARKET
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
+from src.models.features.nba.season import is_competitive_nba_game_id
 from src.models.monte_carlo import derive_combo_samples
 
 logger = logging.getLogger(__name__)
@@ -410,6 +411,8 @@ class DailyPredictionRunner:
 
             games = []
             for _, row in game_header.iterrows():
+                if not is_competitive_nba_game_id(str(row["GAME_ID"])):
+                    continue
                 games.append({
                     "game_id": row["GAME_ID"],
                     "home_team_id": int(row["HOME_TEAM_ID"]),
@@ -452,8 +455,7 @@ class DailyPredictionRunner:
                 if game_date_entry.get("gameDate") == target_str:
                     for game in game_date_entry.get("games", []):
                         game_id_str = str(game.get("gameId", ""))
-                        is_playoff = game_id_str.startswith("004")
-                        if game.get("weekNumber", 0) > 0 or is_playoff:  # Regular season + playoffs
+                        if is_competitive_nba_game_id(game_id_str):
                             home_abbrev = game["homeTeam"]["teamTricode"]
                             away_abbrev = game["awayTeam"]["teamTricode"]
                             games.append({
@@ -485,7 +487,11 @@ class DailyPredictionRunner:
 
         with self.engine.connect() as conn:
             result = conn.execute(query, {"target_date": target_date})
-            return [dict(row._mapping) for row in result]
+            return [
+                dict(row._mapping)
+                for row in result
+                if is_competitive_nba_game_id(str(row._mapping["game_id"]))
+            ]
 
     def _enrich_game_times(self, games: list[dict], target_date: date) -> list[dict]:
         """Add game_time to games from odds API (raw_game_lines_staging).

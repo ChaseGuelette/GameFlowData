@@ -1,6 +1,6 @@
 # Engineering OS MVP 0 Certification Log
 
-Status: initial implementation operational; seven-day and host-reboot gates remain open.
+Status: historical point-in-time certification evidence. It does not prove present service health. At the observation date, initial implementation was operational while seven-day, phone, and host-reboot gates remained open.
 
 Started: 2026-07-27 America/New_York
 Host: `gameflow-agent`

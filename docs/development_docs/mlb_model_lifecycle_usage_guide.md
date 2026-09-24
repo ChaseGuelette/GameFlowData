@@ -1,17 +1,18 @@
 # MLB YAML model lifecycle usage guide
 
-> **Pending lifecycle transition (2026-07-27):** The current runner still schedules ranker work as
-> part of strict finalist certification. That behavior is not the approved flat-first methodology.
-> The target separates `feature_discovery`, `bl_policy_selection`, `flat_certification`, and
-> optional `kelly_certification`; ranker/monotonicity belong only to the last purpose. Until the
-> code transition is implemented, dry-run every config and do not treat the legacy mandatory
-> ranker result as a veto on flat profitability. See the
-> [flat-first lifecycle plan](../../.hermes/plans/2026-07-27_204057-flat-first-model-selection-lifecycle.md).
+> **Repository-reduction reconciliation (2026-08-24):** This page documents the checked-in
+> lifecycle runner. Its accepted purposes remain `discovery`, `independent_validation`, and
+> `finalist_certification`, and its decision code can require ranker evidence. That implementation
+> is stricter than the canonical flat-first operating policy: use raw/no-BL flat stakes for feature
+> discovery and flat certification, run small BL grids only for finalists, and reserve ranker/Kelly
+> evidence for optional paper-sizing review. Do not let a legacy ranker gate veto otherwise valid
+> flat evidence. Durable policy and lessons live in remote GBrain; the deleted local lifecycle plan
+> is available only in the verified pre-reduction source bundle.
 
 ## What this runner does
 
-The ordered stages below describe current legacy behavior. They are retained for command accuracy
-until the purpose-aware runner is implemented, not as the current model-selection doctrine.
+The ordered stages below describe current checked-in behavior for command accuracy, not a replacement
+for the canonical flat-first model-selection policy.
 
 Use `scripts/run_mlb_model_lifecycle.py` to run one MLB model experiment from a YAML preset. The runner keeps the complete experiment contract in one place and executes these stages in order:
 
@@ -438,7 +439,7 @@ For independent validation:
 2. `purpose: independent_validation`
 3. quote-clean fixed timing/routing
 4. flat stakes
-5. require positive CLV/ranker evidence before paper candidacy
+5. report CLV as supporting evidence; keep ranker evidence report-only/optional for Kelly and do not let it veto a valid flat-stake model result
 
 For finalist certification:
 
@@ -446,7 +447,7 @@ For finalist certification:
 2. `audit.mode: full`
 3. independent quote-clean window
 4. persisted dropout/coverage and timing-stability PASS evidence
-5. positive CLV and ranker confidence bounds
+5. positive/supportive CLV evidence where coverage is decision-grade; report ranker confidence bounds separately for optional Kelly analysis
 6. acceptable drawdown and monotonicity
 7. manually review the report before any separate production change
 

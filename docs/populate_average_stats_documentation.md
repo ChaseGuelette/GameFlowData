@@ -1,97 +1,81 @@
-# Populate Average Stats Documentation
+# NBA rolling-average population
 
-## Overview
-Computes rolling averages for player and team stats (L5, L15, season-to-date) and writes
-results into:
+Status: active source-backed reference. Reconciled 2026-08-24.
+
+The NBA rolling-average pipeline owns point-in-time player and team summary tables used by the feature store.
+
+## Entrypoints
+
+- Full rebuild: `src/processing/populate_average_stats.py`
+- Daily incremental update: `src/processing/populate_average_stats_incremental.py`
+
+Run the full rebuild as a module from the repository root. Direct script execution cannot resolve the project package imports in a clean checkout.
+
+```powershell
+.\venv\Scripts\python.exe -m src.processing.populate_average_stats --help
+.\venv\Scripts\python.exe -m src.processing.populate_average_stats --table all
+.\venv\Scripts\python.exe -m src.processing.populate_average_stats --season 2024-25 --table player
+.\venv\Scripts\python.exe -m src.processing.populate_average_stats --from-year 2021 --table player_advanced
+
+.\venv\Scripts\python.exe -m src.processing.populate_average_stats_incremental --help
+.\venv\Scripts\python.exe -m src.processing.populate_average_stats_incremental
+.\venv\Scripts\python.exe -m src.processing.populate_average_stats_incremental --date 2026-02-09
+```
+
+The full path supports `player`, `player_advanced`, `team`, or `all`. The incremental path updates the players active on the selected date.
+
+## Tables
+
+The full pipeline populates:
+
 - `player_average_game_stats`
 - `player_average_advanced_stats`
 - `team_average_game_stats`
 
-## Inputs and Dependencies
-- Player tables: `player_game_stats`, `player_game_advanced_stats`
-- Team table: `team_game_stats`
-- Uses shift(1) to ensure no data leakage from the current game.
+Inputs are `player_game_stats`, `player_game_advanced_stats`, and `team_game_stats`.
 
-## Output
-Each table includes:
-- `game_number`, `games_l5`, `games_l15`, `games_szn`
-- Rolling averages for basic and advanced metrics (prefixed with `avg_`)
-- B2/B3/B4 features (see below)
+## Temporal contract
 
-## Key Logic
-- `calculate_games_in_window` counts prior games in each window.
-- `rolling_with_groupby` computes group-safe rolling means (supports `agg` parameter: `"mean"`, `"std"`, `"min"`, `"sum"`).
-- `calculate_b2_b3_b4_features(df)` computes 14 new columns using shift(1) no-leakage pattern.
-- `_count_games_in_window(df, group_cols, days)` counts calendar-window prior games.
-- Insert functions use DELETE + batch INSERT with fresh connections per batch (PgBouncer-compatible).
+Rolling feature inputs are shifted by one game before aggregation. Therefore the average row labeled with game date X contains only information from games before X. Feature-store joins may safely select that precomputed row with `<= game_date`.
 
-## Minimum-Minutes Filter (`MIN_MINUTES_FOR_STATS = 8`)
+`MIN_MINUTES_FOR_STATS = 8` masks short player appearances from rolling stat values. Schedule counters still count all appearances:
 
-Games where a player played fewer than 8 minutes (injury exits, garbage-time-only appearances) are NaN-masked before computing rolling averages. This prevents short appearances from dragging down L5 averages and corrupting min_floor. Raised from 5 to 8 in Session 86 (2026-03-23) to exclude garbage-time cameos while still allowing the minutes model to predict low-minutes games correctly.
+- `rest_days`
+- games in the preceding seven calendar days
+- window/season game counts
 
-**What is filtered:**
-- All rolling stat averages (L5, L15, SZN)
-- L3 rolling averages (B3 features)
-- L5 standard deviations (B3/B4 features)
-- `min_floor_l5` (B4 feature)
-- `games_started_l5` (B4 feature)
+## Derived families
 
-**What is NOT filtered (schedule features count all games):**
-- `rest_days` — days since last game regardless of minutes
-- `games_last_7d` — calendar-window game count
-- `games_l5` / `games_l15` / `games_szn` — game counts in each window
+The pipeline calculates:
 
-**Implementation:** A boolean mask `min_mask = shifted_min >= 8` is applied via `.where(min_mask)` to the shifted stat values before rolling window computation. NaN values from masking are naturally skipped by pandas rolling functions (`min_periods` still applies to non-NaN values). If all prior games in a window are < 8 min, the rolling average is NaN (handled by feature store's COALESCE defaults).
+- L5, L15, and season averages
+- L3 recent-form averages
+- L5 standard deviations
+- rest and schedule density
+- minimum-minute floor
+- recent starter count and starter probability inputs
 
-## B2/B3/B4 Features (14 columns)
+The exact columns and stable model memberships are owned by the implementation and `src/models/features/nba/contracts.py`; see the [NBA feature catalog](nba_feature_catalog.md).
 
-### B2: Rest & Schedule
-- `rest_days` — days since player's last game, clipped [0,7], default 3 for first game
-- `games_last_7d` — calendar-window count of games in prior 7 days
+## Full versus incremental
 
-### B3: Short-Window Trends
-- `avg_{min,pts,reb,ast,fg3m}_l3` — L3 rolling average (5 columns)
-- `std_{min,pts,reb,ast,fg3m}_l5` — L5 rolling standard deviation (5 columns)
+Use the incremental path for ordinary daily processing. It limits work to active players, fetches their required history, and upserts into `player_average_game_stats`.
 
-### B4: Minutes Stability
-- `min_floor_l5` — minimum minutes in last 5 games
-- `games_started_l5` — count of games started in last 5. Uses actual `started` column from `player_game_stats` (populated from CDN boxscore `starter` field) with fallback to minutes proxy (`min >= 20`) when `started` is NULL. Historical data backfilled via `backfill_starter_data.py`.
+The full path can delete/repopulate broad table slices and is appropriate only for intentional rebuilds. Chase launches broad backfills after a scoped preflight; do not treat a documentation example as authorization to run one.
 
-All computed with `shift(1)` to ensure no data leakage from the current game.
+## Validation
 
-## Usage
-```bash
-# Full recalculation (historical backfills)
-python src/processing/populate_average_stats.py
-python src/processing/populate_average_stats.py --season 2024-25
-python src/processing/populate_average_stats.py --table player
-python src/processing/populate_average_stats.py --table player_advanced
-python src/processing/populate_average_stats.py --table team
-python src/processing/populate_average_stats.py --table player --from-year 2021
+After changing rolling logic:
 
-# Incremental update (daily cron jobs) — see populate_average_stats_incremental.py
-python src/processing/populate_average_stats_incremental.py                    # Today's games
-python src/processing/populate_average_stats_incremental.py --date 2026-02-09  # Specific date
-```
+1. run focused processing tests;
+2. verify first-game null/default behavior;
+3. verify shift(1) with a small known player sequence;
+4. exercise an NBA feature-store date load and single-player inference path;
+5. verify incremental upserts do not change unrelated dates.
 
-## Incremental Version
+## Related documentation
 
-For daily cron jobs, use `populate_average_stats_incremental.py` instead of the full script:
-
-**Key optimizations:**
-- Only processes players who played on the target date (vs all ~4000 players)
-- Fetches last 20 games per player (vs full history)
-- Uses batch UPSERT (`conn.execute(text(sql), records)`) instead of TRUNCATE + reload (Session 43: converted from row-by-row `iterrows()`)
-- Queries actual season game count per player for correct `games_szn` (Session 43: fixed off-by-one where `games_szn` was capped at 19 due to `LOOKBACK_GAMES = 20`)
-- **Performance: ~1 second vs ~28 minutes (1700x speedup)**
-
-The incremental version computes the same rolling averages (L5, L15, season-to-date) and B2/B3/B4 features, but only for players who had games on the target date. Results are upserted into `player_average_game_stats` using `ON CONFLICT (player_id, game_id) DO UPDATE`.
-
-## Notes
-- The first game of a season will have null averages (no prior history).
-- Advanced stat column names are mapped via `PLAYER_ADVANCED_MAPPING`.
-- `game_date` from the DB arrives as Python `date` objects — converted to `datetime64` via `pd.to_datetime()` before date arithmetic.
-
-## Related Documentation
-- [Documentation Index](index.md)
-- [Feature Store](feature_store_documentation.md)
+- [Documentation index](README.md)
+- [NBA feature store](feature_store_documentation.md)
+- [NBA feature catalog](nba_feature_catalog.md)
+- [Daily pipeline automation](daily_pipeline_automation.md)

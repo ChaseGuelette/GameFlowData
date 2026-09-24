@@ -1,4 +1,6 @@
-# GameFlow Repository Archival and Reduction Plan
+# GameFlowData Repository Archival and Reduction Plan
+
+> **Status (2026-08-24): completed historical execution plan.** Removed paths below document the pre-reduction inventory and are not clean-checkout dependencies. Current scope and operating instructions live in `README.md`, `docs/README.md`, and GBrain handoffs 124–125.
 
 > **For Hermes:** Use `gameflow-implementation-worker` or `subagent-driven-development` to execute this plan one independently reviewable slice at a time. Every archive/removal slice requires manifest/readback verification before `git rm`. Do not launch model training, sweeps, broad DB work, deployments, or live-provider actions.
 

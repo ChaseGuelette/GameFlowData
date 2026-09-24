@@ -1,76 +1,74 @@
-# Player Prop Scraper Documentation
+# Historical NBA player-prop scraper
 
-## Overview
-Scrapes historical NBA player prop markets from The Odds API and writes raw snapshots into
-`raw_player_props_staging_v2`. It captures multiple daily snapshots to support opening and
-closing line analysis.
+Status: active manual backfill reference. Reconciled 2026-08-24.
 
-## Inputs and Dependencies
-- Environment variables: `DATABASE_URL`, `ODDS_API_KEY`
-- API endpoints:
-  - `/v4/historical/sports/basketball_nba/events`
-  - `/v4/historical/sports/basketball_nba/events/{eventId}/odds`
-- Local progress file: `scrape_progress.json` (stores processed IDs)
+`src/scrapers/player_prop_scraper.py` downloads historical NBA player-prop snapshots from The Odds API and inserts every valid quote into `raw_player_props_combined`.
 
-## Output
-Writes rows to `raw_player_props_staging_v2` with the following key fields:
-- `api_game_id`, `api_player_name`, `bookmaker`, `market_key`, `outcome_label`
-- `line`, `odds_american`, `commence_time`, `home_team`, `away_team`
-- `snapshot_time`, `market_last_update`, `bookmaker_last_update`, `bookmaker_name`
+This is a credit-consuming manual backfill tool. It is not the Railway live-lines job.
 
-## Key Logic
-- `get_events_for_date` fetches event IDs for a snapshot timestamp with retry handling.
-- `scrape_event_props` fetches player props for target markets and handles 422/429/401 cases.
-- `parse_and_store` inserts every valid snapshot row; skips outcomes missing player names.
-- `generate_snapshot_timestamps` builds the seasonal snapshot schedule and skips Jul-Sep.
+## Requirements
 
-## Market Selection
-- `CORE_MARKETS`: player_points, player_rebounds, player_assists, player_threes, player_blocks, player_steals, player_turnovers
-- `COMBO_MARKETS`: player_points_rebounds_assists, player_points_rebounds, player_points_assists, player_rebounds_assists, player_double_double, player_triple_double
-- `ADDITIONAL_MARKETS` (available but not in defaults): player_blocks_steals, player_field_goals, player_frees_made, player_frees_attempts
+The module validates these variables during import, including for `--dry-run`:
 
-## Data Status (as of 2026-02-05)
-`raw_player_props_combined` contains ~25M rows:
-- Core markets: Full historical coverage (2021-present)
-- Combo markets (PRA, P+R, P+A, R+A, blocks+steals, field_goals): Added 2026-01-31 (~35K rows for 6 games)
+- `DATABASE_URL`
+- `ODDS_API_KEY`
 
-## Resume Capability
-- Progress file format: `{"markets": "<sorted_markets_key>", "processed": [[ts, eid], ...]}`
-- Market-aware: different market sets use independent progress tracking. If the markets key differs from the stored file, progress is discarded and scraping starts fresh.
-- Events already in `processed_ids` are skipped in the main loop.
-- Progress is saved after each snapshot and on interrupt/error for reliable resumption.
-- `--no-resume` flag deletes the progress file before starting.
+The progress file is `scrape_progress.json` in the current working directory. Keep separate working directories or explicitly manage that file when running different backfill lanes.
 
-## Usage
-```bash
-# Full backfill with core markets (default)
-python src/scrapers/player_prop_scraper.py
+## Markets
 
-# Core + combo markets
-python src/scrapers/player_prop_scraper.py --combos
+Default core markets:
 
-# Only combo markets
-python src/scrapers/player_prop_scraper.py --combos-only
+- points, rebounds, assists, threes
+- blocks, steals, turnovers
 
-# Specific markets
-python src/scrapers/player_prop_scraper.py --markets player_double_double player_triple_double
+Optional combo markets:
 
-# Date range + dry run (credit estimation)
-python src/scrapers/player_prop_scraper.py --start-date 2025-01-01 --end-date 2025-06-30 --dry-run
+- PRA, points+rebounds, points+assists, rebounds+assists
+- double-double, triple-double
 
-# Resume from where you left off (default behavior)
-python src/scrapers/player_prop_scraper.py --combos
+`--markets` accepts an explicit list and overrides the presets.
 
-# Start fresh (ignore progress file)
-python src/scrapers/player_prop_scraper.py --combos --no-resume
+## Commands
+
+Run from the repository root:
+
+```powershell
+.\venv\Scripts\python.exe src\scrapers\player_prop_scraper.py --help
+.\venv\Scripts\python.exe src\scrapers\player_prop_scraper.py --start-date 2025-01-01 --end-date 2025-06-30 --dry-run
+.\venv\Scripts\python.exe src\scrapers\player_prop_scraper.py --combos --start-date 2025-01-01
+.\venv\Scripts\python.exe src\scrapers\player_prop_scraper.py --combos-only --start-date 2024-10-22 --end-date 2025-04-15
+.\venv\Scripts\python.exe src\scrapers\player_prop_scraper.py --markets player_double_double player_triple_double
 ```
 
-## Notes
-- Rate limiting is enforced with sleep calls and exponential backoff on 429 responses.
-- 401 with "OUT_OF_USAGE_CREDITS" triggers save_progress and raises an exception.
-- Credit cost: ~10 credits per market per event per region call.
+Use `--no-resume` only when intentionally discarding the progress file. It deletes `scrape_progress.json` before the run.
 
-## Related Documentation
-- [Documentation Index](index.md)
-- [NBA Linker Local](nba_linker_local_documentation.md)
-- [Game Lines Scraper](game_lines_scraper_documentation.md)
+## Resume behavior
+
+Progress is keyed by the sorted market set and stores `(snapshot_timestamp, event_id)` pairs. A different market set does not reuse prior progress. Events are marked processed even when The Odds API returns no prop data, preventing endless retries of empty/422 responses.
+
+Progress is written after each snapshot and on interrupt/error.
+
+## Time range limitation
+
+`generate_snapshot_timestamps()` contains an explicit season calendar ending with the 2025-26 playoffs in June 2026. `--start-date` and `--end-date` filter that built-in calendar; they do not create dates outside it. Extend and review the calendar before using this tool for a later season.
+
+## Output contract
+
+Inserted fields include game/player/book identifiers, market/outcome, line and American odds, commence time, teams, request snapshot time, market update time, bookmaker update time, and bookmaker display name.
+
+The script inserts raw snapshots directly into `raw_player_props_combined`; documentation referring to `raw_player_props_staging_v2` is obsolete.
+
+## Safety
+
+- Start with `--dry-run` and review estimated API credits.
+- Chase launches broad/credit-heavy backfills.
+- Do not print the API key or database URL.
+- Do not run blocking index creation on `raw_player_props_combined`.
+- Preserve pregame/as-of timestamps; downstream quote-clean work depends on them.
+
+## Related documentation
+
+- [Documentation index](README.md)
+- [Daily pipeline automation](daily_pipeline_automation.md)
+- [NBA feature store](feature_store_documentation.md)

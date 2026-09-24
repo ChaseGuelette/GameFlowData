@@ -1,46 +1,90 @@
 # Documentation index
 
-This repository documents the active NBA/MLB product only. Remote GBrain is the authority for durable decisions, modeling lessons, current handoffs, and the Engineering OS roadmap. Git documentation is limited to commands and contracts that must stay aligned with the checked-in code.
+Status: authoritative map of every tracked Markdown surface. Reconciled 2026-08-24.
 
-## Start here
+This repository documents the active NBA/MLB sportsbook product plus the separately deployed read-only Engineering OS. Canonical decisions, lessons, roadmap state, and handoffs live in remote GBrain (`source=gameflow`). Repository documentation explains the checked-in implementation and must not revive retired product lanes.
 
-- [`../README.md`](../README.md) — supported product boundary, repository map, verification, and archive location.
-- [`daily_pipeline_automation.md`](daily_pipeline_automation.md) — current APScheduler jobs and operator checks.
-- [`railway_deployment.md`](railway_deployment.md) — single-worker Railway deployment contract.
-- [`model_pipeline_runbook.md`](model_pipeline_runbook.md) — NBA train/backtest/inference workflow and safety gates.
-- [`development_docs/mlb_model_lifecycle_usage_guide.md`](development_docs/mlb_model_lifecycle_usage_guide.md) — YAML-driven MLB experiment workflow.
-- [`discord_bot_development.md`](discord_bot_development.md) — retained Discord commands and alert transport.
-- [`../migrations/README.md`](../migrations/README.md) — active schema contracts and migration policy.
+## Status classes
 
-## Data and feature references
+- **Active:** source-backed setup, operation, or contract documentation.
+- **Canonical mirror:** checked-in mirror of an active remote GBrain page.
+- **Historical evidence:** preserved result/plan context; missing archived paths are intentional and its commands are not current operating instructions.
+- **Agent contract:** always-loaded safety/workflow policy, not a product runbook.
 
-- [`feature_store_documentation.md`](feature_store_documentation.md)
-- [`nba_feature_catalog.md`](nba_feature_catalog.md)
-- [`mlb_feature_catalog.md`](mlb_feature_catalog.md)
-- [`mlb_processing_pipeline_documentation.md`](mlb_processing_pipeline_documentation.md)
-- [`player_prop_scraper_documentation.md`](player_prop_scraper_documentation.md)
-- [`populate_average_stats_documentation.md`](populate_average_stats_documentation.md)
-- [`db_client_documentation.md`](db_client_documentation.md)
-- [`mlb_fangraphs_scraper_documentation.md`](mlb_fangraphs_scraper_documentation.md)
+## Root and subsystem guides
 
-These references describe retained implementation areas but are subordinate to current source and tests. If a command or path disagrees with the code, treat the code as current and correct the document.
+| File | Status | Purpose |
+|---|---|---|
+| [`../README.md`](../README.md) | Active | Product boundary, setup, validation, and retained surfaces |
+| [`../AGENTS.md`](../AGENTS.md) | Agent contract | GameFlow safety and context-routing rules |
+| [`../CLAUDE.md`](../CLAUDE.md) | Agent contract | Slim mirror for Claude Code users |
+| [`../dashboard/README.md`](../dashboard/README.md) | Active | Next.js dashboard setup, env, routes, and validation |
+| [`../migrations/README.md`](../migrations/README.md) | Active | Retained schema contracts and archive boundary |
+| [`../ops/engineering_os/README.md`](../ops/engineering_os/README.md) | Active | Engineering OS MVP 0 setup, validation, services, and rollback |
+| [`../configs/mlb/examples/USAGE_GUIDE.md`](../configs/mlb/examples/USAGE_GUIDE.md) | Active | MLB lifecycle YAML operator workflow |
+| [`../configs/mlb/examples/FEATURE_FAMILIES.md`](../configs/mlb/examples/FEATURE_FAMILIES.md) | Active | Test-covered lifecycle family inventory |
 
-## Engineering OS
+## Active operations
 
-`operations/` documents the separately deployed, private read-only Engineering OS. It is not part of customer production and is not proof of current runtime health. MVP 0 is implemented; seven-day, phone, host-reboot, and owner-acceptance gates remain open.
+- [NBA 2026–27 core-product restart plan](operations/nba-core-product-restart-plan.md) — current session-resume anchor, scope, sequencing, and approval boundaries.
+- [NBA data-readiness audit](operations/nba-data-readiness-audit-2026-09-24.md) — combined source, feature, odds/linkage, and temporal-integrity assessment.
+- [NBA audit lane evidence](operations/audits/) — detailed read-only reports with exact queries, paths, tests, and caveats.
+- [Daily pipeline automation](daily_pipeline_automation.md) — APScheduler timing and job boundaries.
+- [Railway deployment](railway_deployment.md) — one always-on Python scheduler worker.
+- [Discord integration](discord_bot_development.md) — retained NBA/MLB alerts and optional commands.
+- [Database client](db_client_documentation.md) — remote/local engines and pooling behavior.
+- [Historical NBA prop scraper](player_prop_scraper_documentation.md) — manual Odds API backfill.
+- [NBA rolling averages](populate_average_stats_documentation.md) — full/incremental point-in-time summaries.
+- [MLB FanGraphs scraper](mlb_fangraphs_scraper_documentation.md) — local-only point-in-time advanced snapshots.
+- [MLB processing pipeline](mlb_processing_pipeline_documentation.md) — linking, averages, matchup context, and active production profiles.
+
+## Active model references
+
+- [NBA feature store](feature_store_documentation.md)
+- [NBA feature-contract catalog](nba_feature_catalog.md)
+- [MLB feature-contract catalog](mlb_feature_catalog.md)
+- [NBA model pipeline runbook](model_pipeline_runbook.md)
+- [MLB lifecycle operator guide](development_docs/mlb_model_lifecycle_usage_guide.md)
+
+Exact contract membership lives in source constants and artifact manifests. Lifecycle docs govern workflow but never authorize long training/sweeps; Chase launches those jobs.
+
+## Engineering OS canonical mirrors
+
+- [Roadmap and usage](operations/gameflow-engineering-os-roadmap-and-usage.md)
+- [Technical implementation](operations/gameflow-engineering-os-technical-implementation.md)
+
+MVP 0 remains deployed read-only, but Engineering OS work is paused while NBA core-product readiness is the active priority. Do not resume certification or later MVPs without a new owner decision.
 
 ## Historical evidence
 
-`development_docs/*_frozen_baselines.md` and `operations/evidence/` are retained evidence. Paths to removed artifacts or reports refer to the verified pre-reduction archive, not to files expected in a clean checkout.
+- [Engineering OS MVP 0 baseline](operations/evidence/engineering-os-mvp0-baseline.md)
+- [Engineering OS MVP 0 certification log](operations/evidence/engineering-os-mvp0-certification.md)
+- [Frozen Batter Hits baselines](development_docs/mlb_batter_hits_frozen_baselines.md)
+- [Frozen Pitcher K baselines](development_docs/mlb_pitcher_k_frozen_baselines.md)
+- [Repository reduction plan](../.hermes/plans/2026-08-24_142813-gameflow-repository-archival-and-reduction.md)
+
+These pages preserve evidence. Paths removed by the reduction are not broken clean-checkout dependencies.
 
 ## Retired scope
 
-Kalshi, Polymarket, cross-platform arbitrage, NCAAB, Bot Tracker, Arb Scanner, Data Vault, and their runtime/UI documentation are not active repository scope. Historical context remains in GBrain and the verified source bundle under `C:\Users\Chase\Archives\GameFlowData\2026-08-24-pre-prune\`.
+The active repository does not contain or operate:
 
-## Documentation rules
+- Kalshi or Polymarket trading;
+- cross-platform arbitrage;
+- NCAAB;
+- Bot Tracker, Arb Scanner, or Data Vault dashboard surfaces;
+- unsupported MLB stat lanes removed during repository reduction.
 
-1. Do not add session logs, generated reports, local brain mirrors, or copied handoffs to Git.
-2. Keep executable commands PowerShell-safe when they are intended for Chase to run locally.
-3. Never document global conformal offsets as deployable; Q10 behavior is edge-bearing.
-4. Keep Railway advanced-stat collection CDN-only; no `stats.nba.com` calls from Railway.
-5. Treat training, sweeps, broad backfills, DB changes, deployment, and promotion as separately approved actions.
+Historical GBrain handoffs may discuss those systems. They are archive context, not build instructions.
+
+## Verification contract
+
+For documentation-only changes:
+
+1. every tracked Markdown link must resolve or be an explicit external/GBrain reference;
+2. referenced repository paths in active docs must exist;
+3. command help/dry-runs should be exercised where safe;
+4. `git diff --check` must pass;
+5. source-backed counts and route lists must be generated from current code/build output rather than old handoffs.
+
+For a full clean-checkout verification, follow [`../README.md`](../README.md).

@@ -48,7 +48,7 @@ Keep tokens and channel IDs in the runtime environment, never in Git:
 - `DISCORD_MLB_CHANNEL_PREDICTIONS` (optional override)
 - `DISCORD_MLB_CHANNEL_PERFORMANCE` (optional override)
 
-`DISCORD_ENABLED` can disable alert sending where supported. Missing channel configuration should produce a warning and a skipped alert, not a fabricated success.
+There is no retained `DISCORD_ENABLED` gate. Alert delivery is skipped when the required token/channel configuration is absent; that skip should produce a warning, not a fabricated success.
 
 ## Run the slash-command bot
 
@@ -58,6 +58,8 @@ This is optional and separate from scheduler-triggered alerts:
 Set-Location 'C:\Users\Chase\Projects\GameFlowData'
 .\venv\Scripts\python.exe -m src.discord_bot.run_bot
 ```
+
+`scripts/run_discord_bot.bat` is the retained Windows wrapper for an intentional local/Task Scheduler launch. It does not replace the module entrypoint or prove that the bot is running.
 
 Running it requires valid Discord credentials and performs an external connection, so use it only when intentionally testing the bot.
 

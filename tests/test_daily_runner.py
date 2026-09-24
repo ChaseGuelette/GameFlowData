@@ -51,24 +51,26 @@ def test_init(runner, mock_engine, mock_feature_store, mock_pipeline, mock_predi
 
 
 def test_get_games_for_date(runner, mock_engine):
-    """Test _get_games_for_date falls back to DB when NBA API returns empty."""
+    """Test _get_games_for_date falls back to DB when NBA sources return empty."""
     target_date = date(2023, 10, 25)
 
     # Mock DB result
     mock_result = MagicMock()
     row1 = MagicMock()
-    row1._mapping = {"game_id": "g1", "home_team_id": 1, "away_team_id": 2}
+    row1._mapping = {"game_id": "0022300001", "home_team_id": 1, "away_team_id": 2}
     mock_result.__iter__.return_value = [row1]
 
     conn = mock_engine.connect.return_value.__enter__.return_value
     conn.execute.return_value = mock_result
 
-    # Patch NBA API to return empty (triggers DB fallback)
-    with patch.object(runner, "_get_games_from_nba_api", return_value=[]):
+    # Do not call the live CDN in a unit test.
+    with patch.object(runner, "_get_games_from_nba_api", return_value=[]), patch.object(
+        runner, "_get_games_from_cdn", return_value=[]
+    ):
         games = runner._get_games_for_date(target_date)
 
     assert len(games) == 1
-    assert games[0]["game_id"] == "g1"
+    assert games[0]["game_id"] == "0022300001"
 
     # Verify DB query execution
     conn.execute.assert_called_once()

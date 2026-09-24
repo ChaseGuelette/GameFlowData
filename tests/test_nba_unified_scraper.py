@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
+import pytest
 
 # Add src to path for imports
 SRC_PATH = Path(__file__).parent.parent / "src"
@@ -20,6 +21,33 @@ sys.modules["nba_api.stats"] = mock_nba_api.stats
 sys.modules["nba_api.stats.endpoints"] = mock_nba_api.stats.endpoints
 
 from src.scrapers import nba_unified_scraper
+
+
+def test_non_cdn_mode_requires_explicit_historical_season_before_db(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["nba_unified_scraper.py"])
+    get_engine = Mock(side_effect=AssertionError("must validate before database connection"))
+    monkeypatch.setattr(nba_unified_scraper, "get_engine", get_engine)
+
+    with pytest.raises(SystemExit) as exc:
+        nba_unified_scraper.main()
+
+    assert exc.value.code == 2
+    get_engine.assert_not_called()
+
+
+def test_cdn_only_mode_never_calls_stats_nba_with_or_without_season(monkeypatch):
+    for extra_args in ([], ["--season", "2024-25"]):
+        monkeypatch.setattr(sys, "argv", ["nba_unified_scraper.py", "--cdn-only", *extra_args])
+        monkeypatch.setattr(nba_unified_scraper, "get_engine", Mock(return_value=Mock()))
+        cdn_scrape = Mock(return_value=(1, 0))
+        monkeypatch.setattr(nba_unified_scraper, "scrape_games_cdn", cdn_scrape)
+        for name in ("scrape_team_game_stats", "scrape_traditional_stats", "scrape_advanced_stats"):
+            monkeypatch.setattr(
+                nba_unified_scraper, name, Mock(side_effect=AssertionError(f"{name} called in CDN-only mode"))
+            )
+
+        nba_unified_scraper.main()
+        cdn_scrape.assert_called_once()
 
 # =============================================================================
 # Helper Function Tests

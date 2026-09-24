@@ -1,93 +1,66 @@
-# MLB FanGraphs Scraper Documentation
+# MLB FanGraphs advanced-stat scraper
 
-## Overview
+Status: active local-only ingestion reference. Reconciled 2026-08-24.
 
-`src/scrapers/mlb/mlb_fangraphs_scraper.py` fetches season-level advanced stats from FanGraphs via `pybaseball` and upserts into `mlb_player_season_advanced`.
+`src/scrapers/mlb/mlb_fangraphs_scraper.py` fetches qualified season-level batting and pitching statistics through `pybaseball`.
 
-## Data Source
+Never schedule this scraper on Railway. FanGraphs/pybaseball collection is workstation-only, consistent with the broader rule that blocked advanced-stat sources do not run from datacenter infrastructure.
 
-**pybaseball** functions:
-- `batting_stats(season, qual=50)` — returns all qualified batters with FanGraphs advanced stats
-- `pitching_stats(season, qual=10)` — returns all qualified pitchers
+## Output tables
 
-## Player ID Resolution
+Each successful row is written to both:
 
-FanGraphs uses its own player IDs. Resolution strategy:
+- `mlb_player_season_advanced`: latest-value compatibility table, upserted by `(player_id, season, player_type)`.
+- `mlb_player_season_advanced_history`: dated snapshot table, inserted by `(player_id, season, player_type, as_of_date)`.
 
-1. **Direct name match** — lowercase match against `mlb_players.player_name`
-2. **Name variation handling** — tries with/without Jr., Sr., II, III, IV suffixes
-3. **Crosswalk fallback** — `pybaseball.playerid_reverse_lookup([fg_id], key_type="fangraphs")` maps FanGraphs ID → MLBAM ID
-4. **Auto-insert** — if a player is resolved but not in `mlb_players`, inserts a stub record
+Model features must use the history table with strict `as_of_date < game_date`. The latest-value table is not temporally safe for historical training by itself.
 
-Match rates improve significantly after running the boxscore backfill (which populates `mlb_players` with all active players).
+When `--as-of-date` is omitted, the scraper uses yesterday so the snapshot represents statistics through the preceding day.
 
-## Stats Collected
+## Player resolution
 
-### Batting
+Resolution uses:
 
-| Column | FanGraphs Source | Description |
-|--------|-----------------|-------------|
-| `wrc_plus` | `wRC+` | Weighted Runs Created Plus (park/league adjusted) |
-| `woba` | `wOBA` | Weighted On-Base Average |
-| `iso` | `ISO` | Isolated Power (SLG - AVG) |
-| `war` | `WAR` | Wins Above Replacement |
-| `babip` | `BABIP` | Batting Average on Balls In Play |
-| `bb_pct` | `BB%` | Walk rate |
-| `k_pct` | `K%` | Strikeout rate |
-| `hard_pct` | `Hard%` | Hard contact rate |
-| `avg/obp/slg/ops` | Standard | Slash line stats |
-| `pa` | `PA` | Plate appearances (sample size) |
+1. normalized direct name matching against `mlb_players`;
+2. suffix variations;
+3. FanGraphs-to-MLBAM reverse lookup through `pybaseball`;
+4. a stub player insert when an MLBAM identity resolves but is absent locally.
 
-### Pitching
+Populate MLB players from game/boxscore ingestion before a broad FanGraphs run to improve match coverage.
 
-| Column | FanGraphs Source | Description |
-|--------|-----------------|-------------|
-| `fip` | `FIP` | Fielding Independent Pitching |
-| `xfip` | `xFIP` | Expected FIP (normalizes HR/FB) |
-| `xera` | `xERA` | Expected ERA |
-| `siera` | `SIERA` | Skill-Interactive ERA |
-| `era` | `ERA` | Earned Run Average |
-| `war` | `WAR` | Wins Above Replacement |
-| `lob_pct` | `LOB%` | Left On Base percentage |
-| `gb_pct` | `GB%` | Ground ball rate |
-| `k_per_9` | `K/9` | Strikeouts per 9 innings |
-| `bb_per_9` | `BB/9` | Walks per 9 innings |
-| `hr_per_9` | `HR/9` | Home runs per 9 innings |
-| `ip` | `IP` | Innings pitched (sample size) |
+## Commands
 
-## Usage
+Run locally from the repository root:
 
-```bash
-# Single season
-python -m src.scrapers.mlb.mlb_fangraphs_scraper --season 2025
-
-# All seasons (2022-2025)
-python -m src.scrapers.mlb.mlb_fangraphs_scraper --all-seasons
-
-# Batting or pitching only
-python -m src.scrapers.mlb.mlb_fangraphs_scraper --season 2024 --batting-only
-python -m src.scrapers.mlb.mlb_fangraphs_scraper --season 2024 --pitching-only
+```powershell
+.\venv\Scripts\python.exe -m src.scrapers.mlb.mlb_fangraphs_scraper --help
+.\venv\Scripts\python.exe -m src.scrapers.mlb.mlb_fangraphs_scraper --season 2025 --as-of-date 2025-09-01
+.\venv\Scripts\python.exe -m src.scrapers.mlb.mlb_fangraphs_scraper --season 2025 --batting-only
+.\venv\Scripts\python.exe -m src.scrapers.mlb.mlb_fangraphs_scraper --season 2025 --pitching-only
+.\venv\Scripts\python.exe -m src.scrapers.mlb.mlb_fangraphs_scraper --all-seasons
 ```
 
-## Database Table
+`--all-seasons` uses the implementation's `DEFAULT_SEASONS`; inspect that constant before assuming a newly completed season is included.
 
-### `mlb_player_season_advanced`
-- PK: `(player_id, season, player_type)` where `player_type` is `'batter'` or `'pitcher'`
-- FK: `player_id → mlb_players(player_id)`
-- Includes `fangraphs_id` for cross-reference
-- `ON CONFLICT DO UPDATE` upserts — safe to re-run for updated stats
+## Collected families
 
-## Dependencies
+Batting includes WAR, BABIP, wRC+, wOBA, ISO, walk/strikeout/hard-contact rates, slash-line statistics, plate appearances, and FanGraphs identity.
 
-- `pybaseball>=2.2.7`
-- `numpy` (for NaN handling)
-- `sqlalchemy` (via `src.db.client`)
+Pitching includes WAR, BABIP, FIP/xFIP/xERA/SIERA/ERA, strand/ground-ball/strikeout/walk rates, K/9, BB/9, HR/9, innings pitched, and FanGraphs identity.
 
-## Backfill Order
+The exact column mapping in the scraper is authoritative.
 
-Run the boxscore backfill FIRST to populate `mlb_players`, then FanGraphs:
+## Safety and validation
 
-```bash
-python -m src.scrapers.mlb.mlb_backfill --seasons 2022 2023 2024 2025
-python -m src.scrapers.mlb.mlb_fangraphs_scraper --all-seasons
-```
+- This command performs network and database writes; it is not a dry run.
+- Broad history collection is a Chase-launched job.
+- Review unmatched-player logs before treating a row count as complete.
+- Validate the history-table `as_of_date` coverage before training.
+- Do not substitute the latest-value table for point-in-time history.
+- Do not expose connection strings in logs.
+
+## Related documentation
+
+- [MLB processing pipeline](mlb_processing_pipeline_documentation.md)
+- [MLB feature catalog](mlb_feature_catalog.md)
+- [Railway deployment](railway_deployment.md)
