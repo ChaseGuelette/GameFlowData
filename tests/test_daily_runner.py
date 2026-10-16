@@ -1,5 +1,6 @@
 import logging
-from datetime import date
+from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -50,45 +51,132 @@ def test_init(runner, mock_engine, mock_feature_store, mock_pipeline, mock_predi
     assert runner.predictor == mock_predictor
 
 
-def test_get_games_for_date(runner, mock_engine):
-    """Test _get_games_for_date falls back to DB when NBA sources return empty."""
-    target_date = date(2023, 10, 25)
+def _schedule_row(*, fresh: bool = True):
+    return SimpleNamespace(
+        _mapping={
+            "game_id": "0022600001",
+            "home_team_id": 1610612738,
+            "away_team_id": 1610612752,
+            "game_time": datetime(2026, 10, 20, 23, 30, tzinfo=UTC),
+            "is_fresh": fresh,
+        }
+    )
 
-    # Mock DB result
-    mock_result = MagicMock()
-    row1 = MagicMock()
-    row1._mapping = {"game_id": "0022300001", "home_team_id": 1, "away_team_id": 2}
-    mock_result.__iter__.return_value = [row1]
 
+def test_get_games_for_date_prioritizes_fresh_schedule_db(runner, mock_engine):
+    target_date = date(2026, 10, 20)
     conn = mock_engine.connect.return_value.__enter__.return_value
-    conn.execute.return_value = mock_result
+    conn.execute.return_value = [_schedule_row()]
 
-    # Do not call the live CDN in a unit test.
-    with patch.object(runner, "_get_games_from_nba_api", return_value=[]), patch.object(
-        runner, "_get_games_from_cdn", return_value=[]
-    ):
+    with patch.object(runner, "_get_games_from_cdn") as cdn, patch.object(
+        runner, "_get_games_from_nba_api"
+    ) as nba_api, patch.object(runner, "_enrich_game_times") as enrich:
         games = runner._get_games_for_date(target_date)
 
-    assert len(games) == 1
-    assert games[0]["game_id"] == "0022300001"
+    assert games == [
+        {
+            "game_id": "0022600001",
+            "home_team_id": 1610612738,
+            "away_team_id": 1610612752,
+            "game_time": datetime(2026, 10, 20, 23, 30, tzinfo=UTC),
+        }
+    ]
+    cdn.assert_not_called()
+    nba_api.assert_not_called()
+    enrich.assert_not_called()
+    query, params = conn.execute.call_args.args
+    query_text = str(query)
+    assert "nba_game_schedule" in query_text
+    assert "observed_at" in query_text
+    assert "game_type IN" in query_text
+    assert "source_updated_at" in query_text
+    assert params == {"target_date": target_date, "max_age_minutes": 48 * 60}
 
-    # Verify DB query execution
-    conn.execute.assert_called_once()
-    call_args = conn.execute.call_args
-    assert "SELECT DISTINCT game_id" in str(call_args[0][0])
-    assert call_args[0][1]["target_date"] == target_date
+
+def test_today_schedule_requires_recent_ingest(runner, mock_engine):
+    from zoneinfo import ZoneInfo
+
+    target_date = datetime.now(ZoneInfo("America/New_York")).date()
+    conn = mock_engine.connect.return_value.__enter__.return_value
+    conn.execute.return_value = [_schedule_row()]
+    runner._get_games_from_schedule_db(target_date)
+    assert conn.execute.call_args.args[1]["max_age_minutes"] == 90
 
 
-def test_get_games_for_date_nba_api_primary(runner):
-    """Test _get_games_for_date uses NBA API when available."""
-    target_date = date(2023, 10, 25)
-    api_games = [{"game_id": "g1", "home_team_id": 1, "away_team_id": 2}]
+def test_get_games_for_date_stale_schedule_falls_back_to_cdn(runner, mock_engine):
+    target_date = date(2026, 10, 20)
+    conn = mock_engine.connect.return_value.__enter__.return_value
+    conn.execute.return_value = [_schedule_row(fresh=False)]
+    cdn_games = [{"game_id": "0022600002", "home_team_id": 1, "away_team_id": 2, "game_time": None}]
 
-    with patch.object(runner, "_get_games_from_nba_api", return_value=api_games):
+    with patch.object(runner, "_get_games_from_cdn", return_value=cdn_games) as cdn, patch.object(
+        runner, "_get_games_from_nba_api"
+    ) as nba_api, patch.object(runner, "_enrich_game_times") as enrich:
         games = runner._get_games_for_date(target_date)
 
-    assert len(games) == 1
-    assert games[0]["game_id"] == "g1"
+    assert games == cdn_games
+    cdn.assert_called_once_with(target_date)
+    nba_api.assert_not_called()
+    enrich.assert_not_called()
+
+
+def test_get_games_for_date_missing_table_falls_back_to_cdn(runner, mock_engine):
+    target_date = date(2026, 10, 20)
+    conn = mock_engine.connect.return_value.__enter__.return_value
+    conn.execute.side_effect = RuntimeError("relation does not exist")
+    cdn_games = [{"game_id": "0022600002", "home_team_id": 1, "away_team_id": 2, "game_time": None}]
+
+    with patch.object(runner, "_get_games_from_cdn", return_value=cdn_games):
+        assert runner._get_games_for_date(target_date) == cdn_games
+
+
+def test_get_games_for_date_missing_schedule_date_checks_cdn(runner, mock_engine):
+    target_date = date(2026, 10, 21)
+    conn = mock_engine.connect.return_value.__enter__.return_value
+    conn.execute.return_value = []
+    cdn_games = [{"game_id": "0022600002", "home_team_id": 1, "away_team_id": 2, "game_time": datetime(2026, 10, 21, tzinfo=UTC)}]
+
+    with patch.object(runner, "_get_games_from_cdn", return_value=cdn_games) as cdn:
+        assert runner._get_games_for_date(target_date) == cdn_games
+
+    cdn.assert_called_once_with(target_date)
+
+
+def test_get_games_for_date_partially_stale_schedule_uses_complete_cdn(runner, mock_engine):
+    target_date = date(2026, 10, 20)
+    conn = mock_engine.connect.return_value.__enter__.return_value
+    stale = _schedule_row(fresh=False)
+    stale._mapping["game_id"] = "0022600002"
+    conn.execute.return_value = [_schedule_row(), stale]
+    cdn_games = [{"game_id": "0022600003", "home_team_id": 1, "away_team_id": 2, "game_time": datetime(2026, 10, 20, tzinfo=UTC)}]
+
+    with patch.object(runner, "_get_games_from_cdn", return_value=cdn_games) as cdn:
+        assert runner._get_games_for_date(target_date) == cdn_games
+
+    cdn.assert_called_once_with(target_date)
+
+
+def test_get_games_for_date_tbd_schedule_checks_cdn_for_team_updates(runner, mock_engine):
+    target_date = date(2026, 10, 20)
+    conn = mock_engine.connect.return_value.__enter__.return_value
+    tbd = _schedule_row()
+    tbd._mapping["home_team_id"] = None
+    conn.execute.return_value = [tbd]
+    cdn_games = [{"game_id": "0022600001", "home_team_id": 1, "away_team_id": 2, "game_time": datetime(2026, 10, 20, tzinfo=UTC)}]
+
+    with patch.object(runner, "_get_games_from_cdn", return_value=cdn_games):
+        assert runner._get_games_for_date(target_date) == cdn_games
+
+
+def test_get_games_for_date_fails_closed_when_db_and_cdn_unavailable(runner, mock_engine, caplog):
+    target_date = date(2026, 10, 20)
+    conn = mock_engine.connect.return_value.__enter__.return_value
+    conn.execute.side_effect = RuntimeError("DB unavailable")
+
+    with patch.object(runner, "_get_games_from_cdn", return_value=[]), caplog.at_level(logging.WARNING):
+        assert runner._get_games_for_date(target_date) == []
+
+    assert "No valid NBA schedule games available" in caplog.text
 
 
 def test_get_players_for_games_empty(runner):
@@ -96,7 +184,8 @@ def test_get_players_for_games_empty(runner):
 
 
 def test_get_players_for_games_success(runner, mock_engine):
-    games = [{"game_id": "g1", "home_team_id": 1, "away_team_id": 2}]
+    game_time = datetime(2026, 10, 20, 23, 30, tzinfo=UTC)
+    games = [{"game_id": "g1", "home_team_id": 1, "away_team_id": 2, "game_time": game_time}]
     target_date = date(2023, 10, 25)
 
     # Mock DB result
@@ -117,10 +206,12 @@ def test_get_players_for_games_success(runner, mock_engine):
     p1 = next(p for p in players if p["player_id"] == 101)
     assert p1["game_id"] == "g1"
     assert p1["opponent_id"] == 2
+    assert p1["game_time"] == game_time
 
     p2 = next(p for p in players if p["player_id"] == 102)
     assert p2["game_id"] == "g1"
     assert p2["opponent_id"] == 1
+    assert p2["game_time"] == game_time
 
     conn.execute.assert_called_once()
 

@@ -1,0 +1,12 @@
+{
+  "included_games": 1206,
+  "excluded_006": 1,
+  "tbd_games": 6,
+  "missing_utc": 0,
+  "postponed_games": 0,
+  "date_start": "2026-10-20",
+  "date_end": "2027-04-11",
+  "observed_at": "2026-09-24T17:52:03.929864+00:00",
+  "source_meta_time_raw": "2026-09-24T13:44:49.4449Z",
+  "source_updated_at": "2026-09-24T17:44:49.444900+00:00"
+}

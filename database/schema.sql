@@ -745,3 +745,37 @@ create table public.teams (
   constraint pk_teams primary key (team_id)
 ) TABLESPACE pg_default;
 
+-- Current NBA schedule authority. The approved production migration is
+-- database/migrations/20260924_nba_game_schedule.sql; keep both in sync.
+create table public.nba_game_schedule (
+  game_id text not null,
+  season_id text not null,
+  season text not null,
+  game_type text not null,
+  game_date date not null,
+  commence_time_utc timestamp with time zone null,
+  home_team_id bigint null,
+  away_team_id bigint null,
+  game_status smallint null,
+  status_text text null,
+  postponed_status text null,
+  venue_name text null,
+  source text not null,
+  source_updated_at timestamp with time zone null,
+  observed_at timestamp with time zone not null,
+  updated_at timestamp with time zone not null default now(),
+  constraint pk_nba_game_schedule primary key (game_id),
+  constraint ck_nba_game_schedule_game_type check (game_type in ('002', '004', '005')),
+  constraint ck_nba_game_schedule_distinct_teams check (
+    home_team_id is null or away_team_id is null or home_team_id <> away_team_id
+  ),
+  constraint fk_nba_game_schedule_home_team foreign key (home_team_id) references public.teams (team_id),
+  constraint fk_nba_game_schedule_away_team foreign key (away_team_id) references public.teams (team_id)
+) TABLESPACE pg_default;
+
+create index IF not exists idx_nba_game_schedule_date on public.nba_game_schedule using btree (game_date, game_id) TABLESPACE pg_default;
+
+alter table public.nba_game_schedule enable row level security;
+grant select on public.nba_game_schedule to authenticated;
+create policy nba_game_schedule_authenticated_read on public.nba_game_schedule for select to authenticated using (true);
+

@@ -26,7 +26,7 @@ import logging
 import sys
 import unicodedata
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -52,6 +52,9 @@ def _progress_apply(df, func, desc="Processing", **kwargs):
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.db.client import get_engine  # noqa: E402
+from src.models.features.nba.season import is_competitive_nba_game_id  # noqa: E402
+from src.scrapers.nba_cdn_scraper import TEAM_ID_TO_ABBREV, fetch_schedule  # noqa: E402
+from src.scrapers.nba_schedule import parse_schedule, validate_source_freshness  # noqa: E402
 
 # ============================================================================
 # CONFIG
@@ -934,43 +937,88 @@ def _fetch_upcoming_games_from_nba_api(target_date: date | None = None) -> list[
     return games
 
 
-def _fetch_upcoming_games_from_cdn(target_date: date | None = None) -> list[dict]:
-    """Fallback: fetch games from cdn.nba.com schedule when stats.nba.com is blocked."""
+def _linkable_schedule_games(rows: list[dict], target_date: date) -> list[dict]:
+    """Map competitive schedule rows to the existing props-linker contract."""
+    end_date = target_date + timedelta(days=3)
+    games = []
+    for row in rows:
+        game_date = row["game_date"]
+        if isinstance(game_date, str):
+            game_date = date.fromisoformat(game_date)
+        if not target_date <= game_date < end_date:
+            continue
+        game_id = str(row["game_id"])
+        status_text = (row.get("status_text") or "").lower()
+        if (
+            not is_competitive_nba_game_id(game_id)
+            or row.get("game_status") == 4
+            or "cancel" in status_text
+            or "postpon" in status_text
+            or row.get("postponed_status") not in (None, "", "N")
+            or row.get("commence_time_utc") is None
+        ):
+            continue
+        home_id = row.get("home_team_id")
+        away_id = row.get("away_team_id")
+        home = TEAM_ID_TO_ABBREV.get(home_id) if isinstance(home_id, int) else None
+        away = TEAM_ID_TO_ABBREV.get(away_id) if isinstance(away_id, int) else None
+        if home and away and home != away:
+            games.append({
+                "game_id": game_id,
+                "home_team": home,
+                "away_team": away,
+                "game_date": game_date.isoformat(),
+            })
+    return games
+
+
+def _fetch_upcoming_games_from_schedule(
+    engine, target_date: date | None = None, *, observed_at: datetime | None = None,
+) -> list[dict]:
+    """Use recent persisted CDN schedule rows, falling back to direct CDN."""
+    target_date = target_date or datetime.now(EASTERN).date()
+    now = observed_at or datetime.now(UTC)
+    query = text("""
+        SELECT game_id, game_date, home_team_id, away_team_id, commence_time_utc,
+               game_status, status_text, postponed_status, observed_at, source_updated_at
+        FROM public.nba_game_schedule
+        WHERE game_date >= :target_date AND game_date < :end_date
+          AND game_type IN ('002', '004', '005')
+        ORDER BY game_date, game_id
+    """)
     try:
-        import requests
+        with engine.connect() as conn:
+            rows = [dict(row._mapping) for row in conn.execute(
+                query, {"target_date": target_date, "end_date": target_date + timedelta(days=3)}
+            )]
+    except Exception as exc:
+        logging.warning("NBA schedule DB read failed; using CDN: %s", exc)
+        return _fetch_upcoming_games_from_cdn(target_date)
+    if not rows:
+        return _fetch_upcoming_games_from_cdn(target_date)
+    for row in rows:
+        max_age = timedelta(minutes=90) if row["game_date"] <= now.astimezone(EASTERN).date() else timedelta(hours=48)
+        timestamps = (row.get("observed_at"), row.get("source_updated_at"))
+        if any(ts is None or ts.tzinfo is None or not -timedelta(minutes=15) <= now - ts <= max_age for ts in timestamps):
+            logging.warning("NBA schedule snapshot is stale or incomplete; using CDN")
+            return _fetch_upcoming_games_from_cdn(target_date)
+        if row.get("game_status") != 4 and row.get("postponed_status") in (None, "", "N"):
+            if row.get("home_team_id") is None or row.get("away_team_id") is None or row.get("commence_time_utc") is None:
+                return _fetch_upcoming_games_from_cdn(target_date)
+    return _linkable_schedule_games(rows, target_date)
 
-        if target_date is None:
-            target_date = datetime.now(EASTERN).date()
 
-        url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-
-        games = []
-        for days_ahead in range(3):
-            check_date = target_date + timedelta(days=days_ahead)
-            date_str = check_date.strftime("%m/%d/%Y 00:00:00")
-
-            for gd in data.get("leagueSchedule", {}).get("gameDates", []):
-                if gd.get("gameDate") == date_str:
-                    for g in gd.get("games", []):
-                        if g.get("weekNumber", 0) > 0:
-                            home_abbrev = g["homeTeam"]["teamTricode"]
-                            away_abbrev = g["awayTeam"]["teamTricode"]
-                            games.append({
-                                "game_id": str(g["gameId"]).zfill(10),
-                                "home_team": home_abbrev,
-                                "away_team": away_abbrev,
-                                "game_date": check_date.strftime("%Y-%m-%d"),
-                            })
-                    break
-
-        logging.info(f"Fetched {len(games)} upcoming games from CDN fallback")
+def _fetch_upcoming_games_from_cdn(target_date: date | None = None) -> list[dict]:
+    """Railway-safe direct CDN fallback for upcoming competitive games."""
+    target_date = target_date or datetime.now(EASTERN).date()
+    try:
+        rows = parse_schedule(fetch_schedule())
+        validate_source_freshness(rows, datetime.now(UTC))
+        games = _linkable_schedule_games(rows, target_date)
+        logging.info("Fetched %d upcoming games from CDN", len(games))
         return games
-
-    except Exception as e:
-        logging.warning(f"CDN fallback also failed: {e}")
+    except Exception as exc:
+        logging.warning("CDN schedule fallback failed: %s", exc)
         return []
 
 
@@ -1140,9 +1188,9 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None, days: in
 
     print(f"  Historical games from DB: {historical_count}")
 
-    # Source 2: Upcoming games from NBA API (today + next 2 days)
+    # Source 2: Upcoming games from the durable CDN schedule (today + next 2 days)
     # This is critical for linking props for games that haven't been played yet
-    upcoming_games = _fetch_upcoming_games_from_nba_api()
+    upcoming_games = _fetch_upcoming_games_from_schedule(engine)
     upcoming_count = 0
     for game in upcoming_games:
         home_norm = normalize_team(game["home_team"])
@@ -1155,7 +1203,7 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None, days: in
             props_game_lookup[(home_norm, away_norm)].append((game_id, game_date))
             upcoming_count += 1
 
-    print(f"  Upcoming games from NBA API: {upcoming_count}")
+    print(f"  Upcoming games from NBA schedule: {upcoming_count}")
     print(f"  Built game lookup with {len(props_game_lookup)} unique matchups")
 
     # 2. Count unlinked records (scoped to recent window)

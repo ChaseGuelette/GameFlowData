@@ -79,6 +79,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # Job display names for alerts
 JOB_NAMES = {
     "daily_stats_job.py": "Daily Stats",
+    "nba_schedule_job.py": "NBA Schedule Refresh",
     "lines_job.py": "Lines Scraper",
     "inference_job.py": "Inference",
     "edge_refresh_job.py": "Edge Refresh",
@@ -100,8 +101,8 @@ DEFERRED_FAILURE_JOBS = {
 }
 
 # Prevent overlapping scheduler launches for jobs that are unsafe to run
-# concurrently. Start with NBA lines only to minimize blast radius.
-LOCKABLE_JOB_SCRIPTS = {"lines_job.py"}
+# concurrently. Schedule refreshes must not overlap each other.
+LOCKABLE_JOB_SCRIPTS = {"lines_job.py", "nba_schedule_job.py"}
 JOB_LOCKS: dict[str, threading.Lock] = {}
 JOB_LOCKS_GUARD = threading.Lock()
 
@@ -517,6 +518,14 @@ def run_daily_stats():
     run_job("daily_stats_job.py")
 
 
+def run_nba_schedule_ingest():
+    """Refresh CDN schedule only after migration approval and opt-in."""
+    if not env_flag("NBA_SCHEDULE_INGEST_ENABLED", default=False):
+        logger.info("NBA schedule ingest disabled by NBA_SCHEDULE_INGEST_ENABLED=false")
+        return
+    run_job("nba_schedule_job.py", silent_on_success=True, timeout=180)
+
+
 def run_daily_stats_retry():
     """Re-run daily stats if the 11 AM run failed or didn't run."""
     status = JOB_STATUS.get("daily_stats_job.py", {})
@@ -742,6 +751,29 @@ def main():
         id="daily_stats_retry",
         name="Daily Stats Retry (9:30 AM ET)",
     )
+
+    # Opt-in refreshes precede the 10:15, 12:15, and 16:15 NBA inference windows.
+    if env_flag("NBA_SCHEDULE_INGEST_ENABLED", default=False):
+        scheduler.add_job(
+            run_nba_schedule_ingest,
+            CronTrigger(hour=9, minute=45, timezone=ET),
+            id="nba_schedule_945am",
+            name="NBA Schedule Refresh (9:45 AM ET)",
+        )
+        scheduler.add_job(
+            run_nba_schedule_ingest,
+            CronTrigger(hour=12, minute=5, timezone=ET),
+            id="nba_schedule_1205pm",
+            name="NBA Schedule Refresh (12:05 PM ET)",
+        )
+        scheduler.add_job(
+            run_nba_schedule_ingest,
+            CronTrigger(hour=16, minute=5, timezone=ET),
+            id="nba_schedule_405pm",
+            name="NBA Schedule Refresh (4:05 PM ET)",
+        )
+    else:
+        logger.info("NBA schedule ingest disabled by NBA_SCHEDULE_INGEST_ENABLED=false")
 
     # 9:30 AM ET - Resolve pending user paper bets against actual game stats
     scheduler.add_job(

@@ -13,25 +13,42 @@ def _runner():
     return DailyPredictionRunner(engine=MagicMock(), feature_store=Mock(), model_pipeline=Mock(), predictor=Mock())
 
 
-def test_cdn_discovery_excludes_preseason_and_keeps_play_in():
-    schedule = {"leagueSchedule": {"gameDates": [{
-        "gameDate": "10/20/2026 00:00:00",
-        "games": [
-            {
-                "gameId": game_id,
-                "weekNumber": 1,
-                "homeTeam": {"teamTricode": "BOS"},
-                "awayTeam": {"teamTricode": "NYK"},
-            }
-            for game_id in ("0012600001", "0022600001", "0032600001", "0042600001", "0052600001")
-        ],
-    }]}}
+def test_cdn_discovery_uses_shared_parser_and_excludes_006():
+    schedule = {
+        "meta": {"time": "2026-09-24T13:19:02.192Z"},
+        "leagueSchedule": {
+            "gameDates": [
+                {
+                    "gameDate": "10/20/2026 00:00:00",
+                    "games": [
+                        {
+                            "gameId": game_id,
+                            "gameStatus": 1,
+                            "gameStatusText": "Scheduled",
+                            "gameDateTimeUTC": "2026-10-20T23:30:00Z",
+                            "homeTeam": {"teamId": 1},
+                            "awayTeam": {"teamId": 2},
+                        }
+                        for game_id in (
+                            "0012600001",
+                            "0022600001",
+                            "0032600001",
+                            "0042600001",
+                            "0052600001",
+                            "0062600001",
+                        )
+                    ],
+                }
+            ]
+        },
+    }
 
-    with patch("requests.get") as get:
-        get.return_value.json.return_value = schedule
+    with patch("src.models.daily_runner.fetch_schedule", return_value=schedule) as fetch:
         games = _runner()._get_games_from_cdn(date(2026, 10, 20))
 
+    fetch.assert_called_once_with()
     assert [game["game_id"] for game in games] == ["0022600001", "0042600001", "0052600001"]
+    assert games[0]["game_time"].isoformat() == "2026-10-20T23:30:00+00:00"
 
 
 def test_nba_api_discovery_excludes_preseason_and_all_star():

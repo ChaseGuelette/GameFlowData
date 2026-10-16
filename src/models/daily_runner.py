@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -14,6 +14,8 @@ from src.config.combo_config import MARKET_TO_STAT, STAT_TO_MARKET
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
 from src.models.features.nba.season import is_competitive_nba_game_id
 from src.models.monte_carlo import derive_combo_samples
+from src.scrapers.nba_cdn_scraper import fetch_schedule
+from src.scrapers.nba_schedule import NBA_TIMEZONE, parse_schedule, validate_source_freshness
 
 logger = logging.getLogger(__name__)
 
@@ -368,28 +370,76 @@ class DailyPredictionRunner:
         return {int(tid): team_abbrev.get(int(tid), 'UNK') for tid in opp_ids if tid}
 
     def _get_games_for_date(self, target_date: date) -> list[dict]:
-        """Get all games for target date via NBA API ScoreboardV2.
-
-        Falls back to team_game_stats DB query for past dates if the
-        NBA API is unavailable.
-        """
-        # Primary: NBA API ScoreboardV2 (works for scheduled/future games)
-        games = self._get_games_from_nba_api(target_date)
-        if games:
-            # Enrich with game times from odds API (NBA API doesn't provide scheduled start times)
-            games = self._enrich_game_times(games, target_date)
+        """Get games from the persisted CDN schedule, with direct CDN fallback."""
+        db_state, games = self._get_games_from_schedule_db(target_date)
+        if db_state == "fresh":
             return games
+        logger.warning(f"NBA schedule {db_state} for {target_date}; trying CDN schedule")
 
-        # Fallback 1: CDN schedule (works for scheduled/future games)
-        logger.warning("NBA API unavailable, trying CDN schedule...")
         games = self._get_games_from_cdn(target_date)
         if games:
-            games = self._enrich_game_times(games, target_date)
             return games
 
-        # Fallback 2: DB query (only works for past dates with box score data)
-        logger.warning("CDN schedule also failed, falling back to team_game_stats query")
-        return self._get_games_from_db(target_date)
+        logger.warning(f"No valid NBA schedule games available for {target_date}; failing closed")
+        return []
+
+    def _get_games_from_schedule_db(self, target_date: date) -> tuple[str, list[dict]]:
+        """Return (state, games) from the persisted schedule snapshot."""
+        max_age_minutes = 90 if target_date <= datetime.now(NBA_TIMEZONE).date() else 48 * 60
+        query = text("""
+            SELECT
+                game_id,
+                home_team_id,
+                away_team_id,
+                commence_time_utc AS game_time,
+                game_status,
+                status_text,
+                postponed_status,
+                observed_at >= NOW() - make_interval(mins => :max_age_minutes)
+                    AND source_updated_at >= NOW() - make_interval(mins => :max_age_minutes) AS is_fresh
+            FROM public.nba_game_schedule
+            WHERE game_date = :target_date
+              AND game_type IN ('002', '004', '005')
+            ORDER BY commence_time_utc NULLS LAST, game_id
+        """)
+        try:
+            with self.engine.connect() as conn:
+                rows = [
+                    dict(row._mapping)
+                    for row in conn.execute(query, {"target_date": target_date, "max_age_minutes": max_age_minutes})
+                ]
+        except Exception as exc:
+            logger.warning(f"NBA schedule DB query failed for {target_date}: {exc}")
+            return "unavailable", []
+
+        if not rows:
+            return "empty", []
+
+        if any(not row.get("is_fresh") for row in rows):
+            return "stale", []
+        if any(not is_competitive_nba_game_id(str(row.get("game_id", ""))) for row in rows):
+            return "invalid", []
+
+        games = []
+        for row in rows:
+            status_text = (row.get("status_text") or "").lower()
+            if (
+                row.get("game_status") == 4
+                or "cancel" in status_text
+                or "postpon" in status_text
+                or row.get("postponed_status") not in (None, "", "N")
+            ):
+                continue
+            if row.get("home_team_id") is None or row.get("away_team_id") is None or row.get("game_time") is None:
+                return "incomplete", []
+            games.append({
+                "game_id": str(row["game_id"]),
+                "home_team_id": row["home_team_id"],
+                "away_team_id": row["away_team_id"],
+                "game_time": row["game_time"],
+            })
+        logger.info(f"Found {len(games)} games in fresh NBA schedule snapshot")
+        return "fresh", games
 
     def _get_games_from_nba_api(self, target_date: date) -> list[dict]:
         """Fetch today's games from NBA API ScoreboardV2."""
@@ -428,51 +478,44 @@ class DailyPredictionRunner:
             return []
 
     def _get_games_from_cdn(self, target_date: date) -> list[dict]:
-        """Fallback: get games from cdn.nba.com schedule (works when stats.nba.com is blocked)."""
+        """Get valid games from the shared CDN schedule parser."""
         try:
-            import requests
-
-            # NBA team ID mapping (abbreviation -> nba team_id)
-            TEAM_ABBREV_TO_ID = {
-                "ATL": 1610612737, "BOS": 1610612738, "BKN": 1610612751, "CHA": 1610612766,
-                "CHI": 1610612741, "CLE": 1610612739, "DAL": 1610612742, "DEN": 1610612743,
-                "DET": 1610612765, "GSW": 1610612744, "HOU": 1610612745, "IND": 1610612754,
-                "LAC": 1610612746, "LAL": 1610612747, "MEM": 1610612763, "MIA": 1610612748,
-                "MIL": 1610612749, "MIN": 1610612750, "NOP": 1610612740, "NYK": 1610612752,
-                "OKC": 1610612760, "ORL": 1610612753, "PHI": 1610612755, "PHX": 1610612756,
-                "POR": 1610612757, "SAC": 1610612758, "SAS": 1610612759, "TOR": 1610612761,
-                "UTA": 1610612762, "WAS": 1610612764,
-            }
-
-            url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-
-            target_str = target_date.strftime("%m/%d/%Y 00:00:00")
-            games = []
-            for game_date_entry in data.get("leagueSchedule", {}).get("gameDates", []):
-                if game_date_entry.get("gameDate") == target_str:
-                    for game in game_date_entry.get("games", []):
-                        game_id_str = str(game.get("gameId", ""))
-                        if is_competitive_nba_game_id(game_id_str):
-                            home_abbrev = game["homeTeam"]["teamTricode"]
-                            away_abbrev = game["awayTeam"]["teamTricode"]
-                            games.append({
-                                "game_id": game["gameId"],
-                                "home_team_id": TEAM_ABBREV_TO_ID.get(home_abbrev),
-                                "away_team_id": TEAM_ABBREV_TO_ID.get(away_abbrev),
-                                "game_time": None,
-                            })
-                    break
-
-            if games:
-                logger.info(f"Found {len(games)} games via CDN schedule")
-            return games
-
-        except Exception as e:
-            logger.warning(f"CDN schedule failed: {e}")
+            rows = parse_schedule(fetch_schedule())
+            validate_source_freshness(rows, datetime.now(UTC))
+        except Exception as exc:
+            logger.warning(f"CDN schedule failed: {exc}")
             return []
+
+        games = []
+        for row in rows:
+            if row["game_date"] != target_date:
+                continue
+            status_text = (row.get("status_text") or "").lower()
+            if (
+                row.get("game_status") == 4
+                or "cancel" in status_text
+                or "postpon" in status_text
+                or row.get("postponed_status") not in (None, "", "N")
+            ):
+                continue
+            if (
+                row.get("home_team_id") is None
+                or row.get("away_team_id") is None
+                or row.get("commence_time_utc") is None
+            ):
+                continue
+            games.append(
+                {
+                    "game_id": row["game_id"],
+                    "home_team_id": row["home_team_id"],
+                    "away_team_id": row["away_team_id"],
+                    "game_time": row["commence_time_utc"],
+                }
+            )
+
+        if games:
+            logger.info(f"Found {len(games)} games via CDN schedule")
+        return games
 
     def _get_games_from_db(self, target_date: date) -> list[dict]:
         """Fallback: get games from team_game_stats (only works for past dates)."""
