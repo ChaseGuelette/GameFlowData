@@ -122,6 +122,8 @@ Proposed owners: `src/backtesting/nba/sweep_config.py`, `sweep_runner.py`, `run_
 
 ## Batch F — Evidence audits and evaluation parity
 
+**Slice 6 checkpoint — November 2, 2026:** Complete for the owner-approved simpler saved-artifact scope: **SPEC PASS / QUALITY APPROVED**, 68 existing scoped tests and bounded API/CLI/export/mutation checks pass. Source is uncommitted in `repair/nba-evidence-audits`, based on integrated main `3aa73a5`: new `src/backtesting/nba/evidence.py` plus the owner-approved lazy `src/backtesting/__init__.py`; no producer/test/DB/model changes. Output checks flag observed changes without native locks or a race-proof guarantee. See the [decision/evidence record](nba-evidence-slice6-2026-11-01.md) and [explanation](../understanding/nba-evidence-audits.md). Unsupported closing/source observations remain blocked. Integration and historical/model acceptance remain separate; no later-slice execution is authorized.
+
 **Can build before sync:** schemas, artifact-only analyzers and command adapters; actual source joins wait.
 
 Proposed owner: `src/backtesting/nba/evidence.py`; specific scripts only after inventorying existing diagnostics to avoid duplicate analyzers.
