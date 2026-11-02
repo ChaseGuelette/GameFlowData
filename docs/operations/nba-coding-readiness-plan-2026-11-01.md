@@ -6,7 +6,7 @@
 
 **Tech stack:** Existing Python, pandas, NumPy, SQLAlchemy, Pydantic/PyYAML and pytest/Ruff. No new infrastructure is proposed.
 
-**Status:** Slices 1–2 are scoped-implementation verified in isolated `repair/nba-cli-preflight`: slice 2 passed independent spec/quality review, 72 controlled checks and all 117 existing scoped tests after separately owner-approved fixture adaptations. No new cases or changed assertions; this lane is not committed/integrated, and real-data/platform limitations remain explicit in [slice 2 evidence](nba-artifact-slice2-2026-11-01.md). See the [eight-slice overview](../understanding/nba-training-evaluation-slices.md). Slice 4's separately approved merge is present in main as `f81170f` (source `b2fb86f`); pure primitives only, no historical policy activation or consumer wiring. Slices 3 and 5–8 remain pending. No automatic commits or long jobs are authorized by this lane.
+**Status:** Slices **1–2 completed**, scoped-implementation verified in `repair/nba-cli-preflight`: independent reviews, 72 slice-2 controlled checks and 117 existing scoped tests green; no new cases or changed assertions. Source remains uncommitted/unintegrated there. **Slice 3 is in progress** in separate `repair/nba-flat-replay`; do not duplicate its writer. Slice 4 is merged in main as `f81170f`; no historical policy activation or consumer wiring. Slices 5–8 remain pending. Main `10d9c22` committed docs/sync changes, not slice 1–2 source; inspect content before integration. See [slice 2 evidence](nba-artifact-slice2-2026-11-01.md) and the [eight-slice overview](../understanding/nba-training-evaluation-slices.md). Real-data/platform gates, integration and long jobs remain separate.
 
 ## Chat decisions and scope
 
@@ -103,6 +103,8 @@ Eventual consumers: training/date-range loaders and both NBA replay line-loading
 **Acceptance before sync:** controlled records exercise DST-aware boundaries, after-decision/at-tip rejection, incompatible sides and duplicates. Clearly label them controlled inputs, not historical API data. Production SQL integration is S2/S3/S4-gated.
 
 ## Batch E — Shared replay inputs and sweep execution
+
+**Implementation checkpoint — November 1, 2026:** Chase authorized proceeding against available slice-3 plumbing while final review finishes; historical S1 remains deferred. The [approved isolated implementation scope](nba-shared-input-sweep-slice5-2026-11-01.md) uses flat-only, process-local shared inputs and existing corrected harness/simulator methods, not the legacy sweep fast path. `repair/nba-shared-input-sweep` contains hashed read-only harness/simulator and artifact-validator prerequisites, not a merged slices-1–3 base. Implementation/review is in progress; dependency drift checks, final acceptance and integration remain open. No merge or historical acceptance is implied.
 
 **Can build before sync:** orchestration/cache layer with controlled inputs. **Real historical comparisons wait.**
 

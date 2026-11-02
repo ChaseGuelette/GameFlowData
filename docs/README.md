@@ -2,6 +2,8 @@
 
 ## Kick off immediately — November 1, 2026
 
+Wrap-up status: **coding slices 1–2 completed; slice 3 in progress** in separate `repair/nba-flat-replay`. Do not relaunch slice 3. Main `10d9c22` is a docs/sync checkpoint, not source integration of slices 1–2; preserve their verified `nba-cli-preflight` worktree. See the [roadmap](understanding/nba-training-evaluation-slices.md).
+
 NBA slices 1–2 are scoped-implementation verified: slice 2 passed independent spec/quality review, 72 controlled checks and all 117 existing scoped tests after owner-approved fixture adaptations. No new cases or changed assertions. This lane is not committed/integrated; real-data/platform limitations remain explicit. Slice 4's pure primitives were separately approved and merged into main as `f81170f`, without consumer wiring or historical policy activation. Start with the [eight-slice wiki](understanding/nba-training-evaluation-slices.md), [artifact wiki](understanding/nba-artifact-identity.md) and [slice 2 evidence](operations/nba-artifact-slice2-2026-11-01.md). S1 remains isolated. The October monitoring instructions below are historical, not a request to restart the failed watcher or sync.
 
 ## Kick off immediately — NBA, October 16, 2026

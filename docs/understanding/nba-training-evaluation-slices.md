@@ -4,13 +4,15 @@
 
 This is the plain-English map of the code we are completing while data sync is repaired.
 
-- This chat: slices 1–2 are scoped-implementation verified in isolated `repair/nba-cli-preflight`; slice 2 passed independent spec/quality review, 72 controlled checks and all 117 existing scoped tests after owner-approved fixture adaptations. This lane is not committed/integrated.
-- Other chat: slice 4's pure observation/quote primitives were separately owner-approved and merged into main as `f81170f` (source `b2fb86f`); no consumer wiring or historical policy activation. Sync recovery and S1 remain separate responsibilities; do not overlap their files.
+- This chat: wrap up completed slices 1–2, verified in isolated `repair/nba-cli-preflight` with independent reviews, 72 slice-2 controlled checks and all 117 existing scoped tests green. Source remains uncommitted/unintegrated there.
+- Other chat: slice 3 is in progress in `repair/nba-flat-replay`; do not start a duplicate writer. Slice 4's pure primitives are merged as `f81170f`, without consumer wiring or historical policy activation. Sync recovery and S1 remain separate responsibilities.
 - You: read the [artifact identity wiki](nba-artifact-identity.md) and [approved scope](../operations/nba-artifact-slice2-2026-11-01.md). Slice 2 approval does not authorize integration, training or later slices.
 
 ## Where we are
 
 The command can now be checked safely; the next job is ensuring a saved model cannot masquerade as a complete, reproducible run.
+
+Wrap-up checkpoint — November 1, 2026: Chase confirmed slices **1–2 completed** and **slice 3 in progress**. The slice 3 scope lives in `C:/Users/Chase/Projects/GameFlowData-worktrees/nba-flat-replay/docs/operations/nba-flat-replay-slice3-2026-11-01.md`. Main commit `10d9c22` contains this lane's docs and a sync script, not the slice 1–2 source/helpers/tests; its title does not establish source integration. Preserve the completed code in `nba-cli-preflight` and coordinate any later CLI integration with the slice 3 owner.
 
 Slice 1: independent specification/quality reviews passed, 20 CLI/safety checks passed, and the existing scoped suite is now **117 passed** after Chase approved adapting the three existing replay fixtures. No new test cases or weakened assertions were added. Changes remain in the isolated worktree, not main.
 
@@ -24,9 +26,9 @@ Each slice has a useful outcome; completing the code is different from validatin
 | --- | --- | --- | --- |
 | 1 — CLI/preflight (Batch A) | Check a command before it starts work | Importable entrypoints, DB-free JSON dry-run, parameter/file checks, configurable training output root | Implemented and scoped checks green; not integrated |
 | 2 — Artifact identity/completion (Batch B) | Know exactly which model was saved and whether saving really finished | Versioned manifest, file hashes, ordered feature/config identity, safe finalization and failed-run state | Scoped implementation verified: reviews, 72 controlled checks and 117 existing tests passed; integration/real-data acceptance remain separate |
-| 3 — Flat-first replay correctness (Batch C) | Make simulated betting match the declared rules | Flat stake CLI, chosen-direction preservation, no zero-dollar bets, empirical-sample-only probabilities and effective configuration metadata | Coding/controlled verification before sync; coordinate harness overlap with S1 |
+| 3 — Flat-first replay correctness (Batch C) | Make simulated betting match the declared rules | Flat stake CLI, chosen-direction preservation, no zero-dollar bets, empirical-sample-only probabilities and effective configuration metadata | In progress in separate `nba-flat-replay` worktree; completion/review not claimed; coordinate CLI overlap with slices 1–2 and harness overlap with S1 |
 | 4 — Observation/quote primitives (Batch D) | Express what was known when a historical decision was made | Explicit timezone-aware cutoffs, quote pairing, provenance and rejection reasons | Implemented/controlled-input verified and separately merged into main; consumer wiring and historical policy still gated |
-| 5 — Shared-input sweep harness (Batch E) | Compare settings without repeatedly generating different predictions | One prediction/sample input set, identity-bound caching, per-configuration outputs and raw/flat control | Controlled execution before sync; real comparisons after source/policy gates |
+| 5 — Shared-input sweep harness (Batch E) | Compare settings without repeatedly generating different predictions | One prediction/sample input set, identity-bound caching, per-configuration outputs and raw/flat control | [Isolated implementation authorized/in progress](../operations/nba-shared-input-sweep-slice5-2026-11-01.md) against hashed slice-3/slice-2 prerequisites; final review/integration remain open. S1 deferred. [Explanation](nba-shared-input-sweep.md) |
 | 6 — Evidence audits (Batch F) | Detect misleading or incomplete result bundles | Count/identity checks, quote/dropout/timing/book/side diagnostics and reusable analyzer adapters | Artifact-only mechanics before sync; real-source measurements later |
 | 7 — Lifecycle runner (Batch G) | Make the working commands one inspectable, resumable workflow | Strict YAML, command plans, stage status, evidence-aware resume and report-only decisions | After upstream command contracts exist; never success-returning stubs |
 | 8 — Historical integration/validation (Batch H) | Prove the complete path works on the approved dataset and policy | Shared loader/replay semantics, real bounded feature/model/quote checks and a frozen baseline command | Needs stable sync, policy approval and separately scoped implementation |

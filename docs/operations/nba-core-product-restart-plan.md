@@ -2,6 +2,8 @@
 
 ## Resume checkpoint — November 1, 2026
 
+Wrap-up: Chase confirmed **coding slices 1–2 completed** and **coding slice 3 in progress** in `repair/nba-flat-replay`; do not relaunch that lane. Source integration of slices 1–2 is still pending: main commit `10d9c22` contains docs and sync changes but no slice 1–2 source/helpers/tests. Preserve the verified `nba-cli-preflight` worktree and reconcile its CLI changes with slice 3 before any separately approved integration. Historical S1–S5 remains a distinct gate sequence.
+
 Slices 1–2 are scoped-implementation verified in `repair/nba-cli-preflight`: slice 2 passed independent spec/quality review, 72 controlled checks and all 117 existing scoped tests after separately owner-approved fixture adaptations; no new cases or changed assertions. This lane remains uncommitted/unintegrated; real-data and platform limitations are recorded separately. Slice 4's pure primitives were separately approved and merged into main as `f81170f`, without consumer wiring or historical policy activation. Read [slice 2 evidence](nba-artifact-slice2-2026-11-01.md), the [artifact wiki](../understanding/nba-artifact-identity.md) and [all eight coding slices](../understanding/nba-training-evaluation-slices.md). S1 changes, model runs, this lane's integration and later slices remain gated.
 
 Chase is repairing the failed NBA sync in another chat. Do not restart or compete with it. The October 16 waiting instructions below are historical; the unattended S2 audit stopped at a failed sync, not a completed data audit.

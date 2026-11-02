@@ -14,6 +14,8 @@ Scope amendment: after the initial implementation/reviews, Chase explicitly appr
 
 ## Workspace and baseline
 
+Wrap-up checkpoint: slices 1–2 completed and verified; slice 3 is in progress in separate `repair/nba-flat-replay`. Main commit `10d9c22` includes docs/sync only, not this source implementation. Preserve this worktree's source and approved fixtures pending content-reviewed, separately approved integration; coordinate `run_backtest.py` overlap with the slice 3 owner.
+
 Continue sequentially in `C:/Users/Chase/Projects/GameFlowData-worktrees/nba-cli-preflight`, branch `repair/nba-cli-preflight`. Do not commit slice 1 merely to obtain a base. Its reviewed uncommitted files are the baseline and must be preserved.
 
 Baseline snapshots: `C:/Users/Chase/AppData/Local/hermes/cache/scratch/nba-slice2-baseline-20261101/` (five known source/test files, hashes and scoped slice 1 diff). Base Git HEAD is `d478458`; HEAD-to-working-tree diff contains both slices, so review slice 2 against snapshots as well as scoped Git diff.
