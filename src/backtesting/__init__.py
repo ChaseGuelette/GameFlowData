@@ -7,9 +7,7 @@ This module provides:
 - PerformanceMetrics: ROI, Sharpe, calibration metrics
 """
 
-from src.backtesting.backtest_harness import BacktestHarness, BacktestResult
-from src.backtesting.bet_simulator import Bet, BetSimulator
-from src.backtesting.performance_metrics import PerformanceMetrics
+from importlib import import_module
 
 __all__ = [
     "BacktestHarness",
@@ -18,3 +16,25 @@ __all__ = [
     "Bet",
     "PerformanceMetrics",
 ]
+
+_EXPORT_MODULES = {
+    "BacktestHarness": "src.backtesting.backtest_harness",
+    "BacktestResult": "src.backtesting.backtest_harness",
+    "BetSimulator": "src.backtesting.bet_simulator",
+    "Bet": "src.backtesting.bet_simulator",
+    "PerformanceMetrics": "src.backtesting.performance_metrics",
+}
+
+
+def __getattr__(name: str):
+    """Preserve public exports without loading replay machinery for audit CLIs."""
+    module = _EXPORT_MODULES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
