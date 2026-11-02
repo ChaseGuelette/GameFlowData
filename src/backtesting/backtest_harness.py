@@ -6,14 +6,16 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from numbers import Real
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import joblib
+import numpy as np
 import pandas as pd
-import scipy.stats as stats
 from sqlalchemy import bindparam, text
 
 from src.backtesting.bet_simulator import BetSimulator
@@ -26,6 +28,108 @@ if TYPE_CHECKING:
     from src.config.stat_config import StatConfigSet
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_samples(samples: object) -> tuple[np.ndarray | None, str]:
+    """Accept only nonempty, finite real vectors; never coerce malformed evidence."""
+    if samples is None:
+        return None, "missing"
+    if not isinstance(samples, np.ndarray | Sequence) or isinstance(samples, str | bytes | np.ma.MaskedArray):
+        return None, "non_real_numeric"
+    try:
+        vector = np.asarray(samples)
+    except (TypeError, ValueError):
+        return None, "non_real_numeric"
+    if vector.ndim != 1:
+        return None, "not_one_dimensional"
+    if vector.size == 0:
+        return None, "empty"
+    if vector.dtype.kind not in "iuf":
+        return None, "non_real_numeric"
+    if not isinstance(samples, np.ndarray) and any(
+        isinstance(value, bool) or not isinstance(value, Real) for value in samples
+    ):
+        return None, "non_real_numeric"
+    if not np.isfinite(vector).all():
+        return None, "nonfinite"
+    return vector, "valid"
+
+
+def _derive_replay_combo_samples(
+    prediction_samples: dict, predictions_list: list[dict]
+) -> tuple[list[dict], dict]:
+    """Derive each eligible combo independently, retaining declared bad components.
+
+    Absent stats still do not create combos. Rejected declared bundles retain
+    metadata/reasons for the all-candidate path, but never receive sample arrays.
+    The shared helper owns all valid combo math; inputs are not modified here.
+    """
+    metadata = {(p["player_id"], p["game_id"], p["stat"]): p for p in predictions_list}
+    declared = dict.fromkeys([*prediction_samples, *metadata])
+    player_games = dict.fromkeys((pid, gid) for pid, gid, _ in declared)
+    validated = {key: _validate_samples(prediction_samples.get(key)) for key in declared}
+    combo_predictions, combo_samples = [], {}
+    for pid, gid in player_games:
+        for stat, definition in COMBO_DEFINITIONS.items():
+            components = definition["components"]
+            keys = [(pid, gid, component) for component in components]
+            if any(key not in declared for key in keys):
+                continue
+            context = {
+                component: {"status": validated[key][1],
+                            "length": int(validated[key][0].size) if validated[key][0] is not None else None}
+                for component, key in zip(components, keys)
+            }
+            reason = None
+            if any(validated[key][0] is None for key in keys):
+                reason = "invalid_components"
+            elif len({validated[key][0].size for key in keys}) != 1:
+                reason = "unequal_lengths"
+            if reason is None:
+                eligible: dict[tuple, np.ndarray] = {
+                    key: vector for key in keys if (vector := validated[key][0]) is not None
+                }
+                try:
+                    with np.errstate(over="raise", invalid="raise"):
+                        # NumPy integer addition silently wraps. Compare each
+                        # integer intermediate with exact Python-integer sums,
+                        # including before a later float component can hide it.
+                        vectors = list(eligible.values())
+                        total = vectors[0]
+                        exact_integer_total = total.astype(object) if total.dtype.kind in "iu" else None
+                        for vector in vectors[1:]:
+                            added = total + vector
+                            if exact_integer_total is not None and vector.dtype.kind in "iu":
+                                exact_integer_total = exact_integer_total + vector.astype(object)
+                                if not np.array_equal(added.astype(object), exact_integer_total):
+                                    reason = (
+                                        "arithmetic_precision_loss" if added.dtype.kind == "f"
+                                        else "arithmetic_overflow"
+                                    )
+                                    break
+                            else:
+                                exact_integer_total = None
+                            total = added
+                        if reason is None:
+                            derived, samples = derive_combo_samples(eligible, predictions_list)
+                            _, derived_status = _validate_samples(samples[(pid, gid, stat)])
+                            if derived_status != "valid":
+                                reason = "invalid_derived_samples"
+                                context["derived"] = {"status": derived_status}
+                except FloatingPointError:
+                    reason = "arithmetic_overflow"
+            if reason is not None:
+                meta = metadata.get(keys[0], {})
+                combo_predictions.append({
+                    "player_id": pid, "game_id": gid, "stat": stat,
+                    **{name: meta.get(name) for name in ("player_name", "team_id", "game_time")},
+                    "combo_rejection_reason": reason,
+                    "combo_component_evidence": json.dumps(context, sort_keys=True, allow_nan=False),
+                })
+                continue
+            combo_predictions.extend(p for p in derived if p["stat"] == stat)
+            combo_samples[(pid, gid, stat)] = samples[(pid, gid, stat)]
+    return combo_predictions, combo_samples
 
 
 @dataclass
@@ -341,7 +445,7 @@ class BacktestHarness:
             return None, pd.DataFrame()
 
         # Derive combo predictions from MC samples
-        combo_preds, combo_samps = derive_combo_samples(prediction_samples, predictions_list)
+        combo_preds, combo_samps = _derive_replay_combo_samples(prediction_samples, predictions_list)
         predictions_list.extend(combo_preds)
         prediction_samples.update(combo_samps)
 
@@ -388,6 +492,13 @@ class BacktestHarness:
         if predictions_df.empty:
             return predictions_df
 
+        # Keep rejected evidence at the calculation seam, never in line shopping.
+        if "sample_status" in predictions_df.columns:
+            predictions_df = predictions_df.loc[predictions_df["sample_status"] == "valid"]
+        predictions_df = predictions_df.dropna(subset=["over_edge", "under_edge"], how="all")
+        if predictions_df.empty:
+            return predictions_df.copy()
+
         dedup_key = ["player_id", "game_id", "stat"]
 
         # Stage 1: Line Shopping — best over and best under independently per player/game/stat
@@ -420,9 +531,21 @@ class BacktestHarness:
             )
             candidates = predictions_df[mask]
             if edge_row["best_side"] == "over":
-                best = candidates.sort_values("over_edge", ascending=False).iloc[0]
+                best = candidates.sort_values("over_edge", ascending=False).iloc[0].copy()
             else:
-                best = candidates.sort_values("under_edge", ascending=False).iloc[0]
+                best = candidates.sort_values("under_edge", ascending=False).iloc[0].copy()
+            previous_side = best.get("selected_side")
+            if not isinstance(previous_side, str) or previous_side != edge_row["best_side"]:
+                # A pre-existing selection may describe the opposite quote. Keep
+                # side-specific evidence, not its stale selected provenance.
+                for suffix in ("snapshot_time", "market_last_update", "bookmaker_last_update", "bookmaker"):
+                    best[f"selected_{suffix}"] = best.get(f"{edge_row['best_side']}_{suffix}")
+                best["selected_decision_time"] = best.get(
+                    f"{edge_row['best_side']}_decision_time", best.get("bet_decision_time")
+                )
+            best["selected_side"] = edge_row["best_side"]
+            best["selected_line"] = best.get("line")
+            best["selected_price"] = best.get(f"{edge_row['best_side']}_odds")
             rows.append(best)
 
         if not rows:
@@ -690,6 +813,14 @@ class BacktestHarness:
             how="left",
         )
 
+        sample_keys = list(merged[["player_id", "game_id", "stat"]].itertuples(index=False, name=None))
+        sample_bundles = {key: _validate_samples(prediction_samples.get(key)) for key in sample_keys}
+        merged["sample_status"] = [sample_bundles[key][1] for key in sample_keys]
+        if merged.empty:
+            for col in ("over_prob", "under_prob", "implied_over", "implied_under", "over_edge", "under_edge"):
+                merged[col] = pd.Series(dtype=float)
+            return merged
+
         # Convert odds to implied probability (raw, with vig — used as baseline when BL is off)
         def odds_to_prob(odds):
             if pd.isna(odds):
@@ -709,21 +840,21 @@ class BacktestHarness:
             # Uses devigged market probs, per-prediction confidence, and log-odds blending.
             bl_results = []
             for _, row in merged.iterrows():
-                if pd.isna(row.get("line")) or pd.isna(row.get("over_odds")) or pd.isna(row.get("under_odds")):
+                samples, _ = sample_bundles[(row["player_id"], row["game_id"], row["stat"])]
+                if samples is None or pd.isna(row.get("line")) or pd.isna(row.get("over_odds")) or pd.isna(row.get("under_odds")):
                     bl_results.append({
-                        "model_over": None, "model_under": None,
-                        "market_over": None, "market_under": None,
-                        "confidence": None,
-                        "posterior_over": None, "posterior_under": None,
+                        "model_over": np.nan, "model_under": np.nan,
+                        "market_over": np.nan, "market_under": np.nan,
+                        "confidence": np.nan,
+                        "posterior_over": np.nan, "posterior_under": np.nan,
                         "bl_enabled": False,
                     })
                     continue
 
                 stat = row["stat"]
                 blender = self._get_blender_for_stat(stat)
-                samples = prediction_samples.get((row["player_id"], row["game_id"], stat))
 
-                if blender is not None and samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
+                if blender is not None:
                     result = blender.blend_prediction(
                         samples=samples,
                         line=row["line"],
@@ -731,28 +862,9 @@ class BacktestHarness:
                         under_odds=int(row["under_odds"]),
                     )
                     result["bl_enabled"] = True
-                elif blender is not None:
-                    # BL enabled but no samples — fall back to market prior (no bet will be placed)
-                    try:
-                        mkt_over, mkt_under = blender.devig(
-                            int(row["over_odds"]), int(row["under_odds"])
-                        )
-                    except Exception:
-                        mkt_over, mkt_under = 0.5, 0.5
-
-                    result = {
-                        "model_over": 0.5, "model_under": 0.5,
-                        "market_over": mkt_over, "market_under": mkt_under,
-                        "confidence": 0.0,
-                        "posterior_over": mkt_over, "posterior_under": mkt_under,
-                        "bl_enabled": True,
-                    }
                 else:
                     # No BL for this stat — use raw empirical CDF
-                    if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
-                        over_prob = float((samples > row["line"]).mean())
-                    else:
-                        over_prob = 0.5
+                    over_prob = float((samples > row["line"]).mean())
 
                     result = {
                         "model_over": over_prob, "model_under": 1.0 - over_prob,
@@ -793,22 +905,13 @@ class BacktestHarness:
             # ── Original path (no BL) ──
             def estimate_over_prob(row):
                 if pd.isna(row.get("line")):
-                    return None
+                    return np.nan
 
                 line = row["line"]
-                samples = prediction_samples.get((row["player_id"], row["game_id"], row["stat"]))
-
-                if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
-                    prob_over = float((samples > line).mean())
-                else:
-                    mean_pred = row.get("pred_mean")
-                    std_dev = row.get("pred_std")
-
-                    if pd.isna(mean_pred) or pd.isna(std_dev) or std_dev == 0:
-                        return 0.5
-
-                    z_score = (line - mean_pred) / std_dev
-                    prob_over = stats.norm.sf(z_score)
+                samples, _ = sample_bundles[(row["player_id"], row["game_id"], row["stat"])]
+                if samples is None:
+                    return np.nan
+                prob_over = float((samples > line).mean())
 
                 return min(max(prob_over, 0.05), 0.90)
 
@@ -828,32 +931,24 @@ class BacktestHarness:
             if self.bl_sizing_blender is not None:
                 sizing_results = []
                 for _, row in merged.iterrows():
-                    if pd.isna(row.get("line")) or pd.isna(row.get("over_odds")) or pd.isna(row.get("under_odds")):
+                    samples, _ = sample_bundles[(row["player_id"], row["game_id"], row["stat"])]
+                    if samples is None or pd.isna(row.get("line")) or pd.isna(row.get("over_odds")) or pd.isna(row.get("under_odds")):
                         sizing_results.append({
-                            "sizing_prob_over": None,
-                            "sizing_prob_under": None,
+                            "sizing_prob_over": np.nan,
+                            "sizing_prob_under": np.nan,
                         })
                         continue
 
-                    samples = prediction_samples.get((row["player_id"], row["game_id"], row["stat"]))
-
-                    if samples is not None and hasattr(samples, "__len__") and len(samples) > 0:
-                        result = self.bl_sizing_blender.blend_prediction(
-                            samples=samples,
-                            line=row["line"],
-                            over_odds=int(row["over_odds"]),
-                            under_odds=int(row["under_odds"]),
-                        )
-                        sizing_results.append({
-                            "sizing_prob_over": result["posterior_over"],
-                            "sizing_prob_under": result["posterior_under"],
-                        })
-                    else:
-                        # No samples — fall back to raw model probs
-                        sizing_results.append({
-                            "sizing_prob_over": row["over_prob"],
-                            "sizing_prob_under": row["under_prob"],
-                        })
+                    result = self.bl_sizing_blender.blend_prediction(
+                        samples=samples,
+                        line=row["line"],
+                        over_odds=int(row["over_odds"]),
+                        under_odds=int(row["under_odds"]),
+                    )
+                    sizing_results.append({
+                        "sizing_prob_over": result["posterior_over"],
+                        "sizing_prob_under": result["posterior_under"],
+                    })
 
                 sizing_df = pd.DataFrame(sizing_results)
                 merged["sizing_prob_over"] = sizing_df["sizing_prob_over"].values
