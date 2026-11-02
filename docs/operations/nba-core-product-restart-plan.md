@@ -1,5 +1,9 @@
 # NBA Core Product Restart Plan — 2026–27 Season
 
+## Data/incident checkpoint — November 2, 2026 UTC
+
+The props sync completed, and [bounded independent checks 1–2](nba-post-sync-checks-2026-11-02.md) were executed: check 1 transfer parity passed; check 2 historical coverage/linkage, archive inclusion and support freshness have blockers. Do not restart the full sync or interpret the older waiting instructions as current. [The scraper/reconciliation investigation](nba-reconciliation-incident-2026-11-02.md) confirms repeated scheduler hard timeouts and truncated Daily Stats errors; Railway full logs/deployed commit remain blocked on reauthentication. The proposed reconciliation-tool scope awaits explicit approval after an unanswered approval prompt. No production repair, archive bulk transfer, pruning, source-policy activation or training was performed. Coding-slice integration and historical S1/S2 gates below remain separate.
+
 ## Resume checkpoint — November 1, 2026
 
 Wrap-up: Chase confirmed **coding slices 1–2 completed** and **coding slice 3 in progress** in `repair/nba-flat-replay`; do not relaunch that lane. Source integration of slices 1–2 is still pending: main commit `10d9c22` contains docs and sync changes but no slice 1–2 source/helpers/tests. Preserve the verified `nba-cli-preflight` worktree and reconcile its CLI changes with slice 3 before any separately approved integration. Historical S1–S5 remains a distinct gate sequence.

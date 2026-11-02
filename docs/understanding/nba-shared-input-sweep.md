@@ -2,9 +2,9 @@
 
 ## Current state
 
-Chase approved implementation using the available slice-3 plumbing on November 1, 2026. Work is isolated in `repair/nba-shared-input-sweep`, at `C:/Users/Chase/Projects/GameFlowData-worktrees/nba-shared-input-sweep`. Implementation/review is in progress, not accepted or merged.
+Chase approved implementation using the available slice-3 plumbing on November 1, 2026. Work is complete and controlled-path verified in `repair/nba-shared-input-sweep`, at `C:/Users/Chase/Projects/GameFlowData-worktrees/nba-shared-input-sweep`: independent **SPEC PASS / QUALITY APPROVED**. It remains uncommitted and unmerged; this is not historical/model certification.
 
-The starting checkout is main `10d9c22` plus exact read-only copies of slice-3 `backtest_harness.py` and `bet_simulator.py`, and slice-2 `nba_artifacts.py`. These are inherited prerequisites, not completed source integration. Upstream source identities must be checked again before acceptance because slice 3's final repair/review is still active. S1 remains deferred and untouched.
+The starting checkout is main `10d9c22` plus exact read-only copies of slice-3 `backtest_harness.py` and `bet_simulator.py`, and slice-2 `nba_artifacts.py`. The harness snapshot was refreshed after a slice-3 precision fix; all three dependencies match upstream at final acceptance. These are inherited prerequisites, not slice-5 edits. Main separately advanced to `79a7443` with slice 3 merged while this work ran; this lane did not perform that integration. S1 remains deferred and untouched.
 
 ## Why shared inputs matter
 
@@ -35,4 +35,4 @@ Controlled offline probes can prove call reuse, selected-side/flat behavior, inv
 
 ## Exact scope and next gate
 
-See [slice 5 implementation plan](../operations/nba-shared-input-sweep-slice5-2026-11-01.md) and the [eight-slice map](nba-training-evaluation-slices.md). Finish implementation, independently review specification then quality, rerun actual checks and recheck upstream dependency hashes. Reconciliation/commit/merge and real-data execution remain separately authorized.
+See [slice 5 implementation/evidence record](../operations/nba-shared-input-sweep-slice5-2026-11-01.md) and the [eight-slice map](nba-training-evaluation-slices.md). Final coordinator checks passed 78 existing tests, 551 contract-repair checks, seven parity/failure groups including 24 guarded CLI cases, and 27 output-location safety checks. The independent review gates are closed. Reconciliation/commit/merge, artifact-validator integration and real-data execution remain separately authorized; do not overwrite newer main with old dependency files.

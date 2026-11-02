@@ -12,11 +12,11 @@ Tech stack: existing Python, pandas, NumPy, argparse, artifact validation, pytes
 
 - November 1, 2026: Chase requested scoping/setup now, with implementation waiting for coding slice 3 to complete.
 - Historical S1 is deferred by Chase. Do not merge, modify, copy or make S1 integration a prerequisite for this slice.
-- This is a prepared implementation scope, not approved numerical policies, implementation launch, merge, or historical-data certification.
-- Coding slices 1–2 remain uncommitted in `repair/nba-cli-preflight`; slice 3 remains active in `repair/nba-flat-replay`. Main currently does not contain their complete source. Completion of slice 3 alone does not make main a usable launch base.
+- Current delivery: implementation complete and controlled-path verified; independent **SPEC PASS / QUALITY APPROVED**. Source remains uncommitted in the isolated worktree, not merged. Numerical/source-policy decisions, real-data acceptance and long runs remain gated.
+- Initial planning snapshot: coding slices 1–2 were uncommitted in `repair/nba-cli-preflight` and slice 3 was active in `repair/nba-flat-replay`; main lacked their complete source. Slice 3 was subsequently merged during this task; see the final integration boundary below. Slices 1–2 remain separately owned.
 - All grid values are operator inputs, not recommended trading parameters. Raw/no-BL and flat staking are the comparison controls. BL experiments remain optional and finalist-only for model evaluation.
 
-## Launch gates — STOP until all pass
+## Original launch gates — superseded for isolated implementation below
 
 ### Owner authorization update — November 1, 2026
 
@@ -151,4 +151,34 @@ Canonical Hard Facts, Critical Invariants, lesson-tag inventory and keyword sear
 
 ## Next action
 
-Review/approve this scope. Wait for final slice 3 and explicit slices-1–3 integration checkpoint; refresh exact APIs/base SHA, then prepare the worker launch prompt and start only after owner authorization. Do not schedule an automatic launch or treat this document as an implementation receipt.
+Review and separately authorize source integration when ready. Preserve the four reviewed new files and identify inherited prerequisite files separately; do not copy older whole replay/trainer files over newer main. Main advanced to `79a7443` with slice 3 merged during this work; slices 1–2/artifact-validator integration and this slice's commit/merge remain separate. S1 stays deferred. Real historical execution is not authorized by this delivery.
+
+## Implementation/review checkpoint — November 1, 2026
+
+Owner authorization above supersedes the original waiting/approval instructions for isolated implementation. The first worker created only the four allowed new source files; coordinator reran its seven controlled probe groups successfully after refreshing the inherited slice-3 harness combo-precision fix. The refreshed prerequisite hashes match upstream at review time; original snapshot receipts are preserved separately. First-pass existing suites: 78 passed with an existing deprecation warning. No permanent tests were added or edited.
+
+Independent specification review returned **SPEC FAIL** despite green first-pass checks. Blocking contract gaps: direct API config/plan/shared binding, dry-run destination-name parity, unclassified expected calendar dates, incomplete empty-file schemas, and subset-only effective-config validation. Coordinator independently reproduced changed-seed/book/filter/sample-count acceptance against stale inputs. The normal CLI rebuilding its plan does not excuse the direct API contract gap.
+
+A repair worker is authorized only for the two new owners `sweep_config.py` and `sweep_runner.py`, preserving all numerical/protected dependencies and tests. Required checks include adversarial reproductions for all five findings, full existing probe parity, unchanged existing suites and independent specification re-review before quality review. Implementation is not accepted, committed or merged. Historical/model/source completeness remains unverified.
+
+### Specification closure
+
+All five findings were repaired in the two allowed new owners. Coordinator independently reran 551 repair checks in five groups, the original seven groups/24 guarded CLI cases through a separate ordering-only driver, the four stale-config reproductions (all now rejected), and the 78 unchanged existing tests. Ruff/compile passed. The original scratch driver/receipts remain preserved; its separate repaired driver runs identity checks before export because planning now correctly rejects an existing destination. No existing assertion was weakened.
+
+Independent specification re-review returned **SPEC PASS**, reran both probe drivers and added 36 independent adversarial checks. Evidence: `C:/Users/Chase/AppData/Local/hermes/cache/scratch/nba-slice5/spec-rereview-20261102/spec-rereview-findings.json`. At this checkpoint all three inherited source snapshots still match upstream, and the four new source hashes match the reviewed receipt. Code-quality review is now in progress; do not call this full acceptance or historical certification.
+
+### Quality finding and targeted repair
+
+Quality review found one P1 defect: a sweep output nested inside the exact artifact directory passed planning, then its incomplete directory poisoned strict artifact validation at completion. The reviewer reproduced this only against a disposable controlled bundle; no trained artifact was used. Other reviewed bootstrap, numerical, serialization and publication paths had no blocking findings. Repeated full-bundle hashing and retained feature-frame copies were recorded as optional performance work, not permission to refactor this slice.
+
+Coordinator added a narrow location guard in `sweep_config.py`, called during configuration and each planning preflight. Resolved final and literal/resolved incomplete destinations must be outside the resolved model bundle; equality/descendants are rejected before runtime/output effects. Twenty-seven exact regression checks passed, including actual guarded CLI dry-run/execution, unchanged artifact bytes/strict validation and native Windows directory-junction final/incomplete/late-alias paths. The final source also passed 551 repair checks, seven original parity groups/24 CLI scenarios, 78 unchanged existing tests and Ruff/compile. Targeted independent quality/spec-regression re-review remains open until its verdict is recorded.
+
+### Final controlled-path acceptance
+
+Targeted independent re-review returned **QUALITY APPROVED / SPEC regression PASS**, explicitly closing the quality gate. It independently reran all 27 nested-output checks, including real Windows junction cases, and proved that only the new output-location helper and its two calls changed since the prior SPEC PASS. Final source hashes match its read-back record at `C:/Users/Chase/AppData/Local/hermes/cache/scratch/nba-slice5/quality-rereview-20261102-final-findings.json`. Coordinator verified all three inherited dependencies still match their refreshed baseline and current upstream; test files remain unchanged.
+
+Final implementation files: `src/backtesting/nba/__init__.py`, `sweep_config.py`, `sweep_runner.py`, `run_nba_sweep.py`. `sweep_config.py` SHA-256: `5c7be28fc84949b82c0ce0822a9fdf802595cc30bdf4b2a9b540e8746b02a76c`; runner SHA-256: `47c319f4eabcaa3aa928860c4eb63e84db7d4cc2e27a9c5611229ac6008e5ba4`. CLI/package-init remain unchanged from SPEC PASS.
+
+Actual final coordinator reruns: **78 existing tests passed** (one existing asyncio deprecation warning), **551 repair checks**, **seven parity/failure probe groups with 24 guarded CLI invocations**, and **27 nested-output regression checks** passed; Ruff, compile and scoped hygiene passed. The earlier independent 36-case specification expansion remains supporting evidence; the final targeted review verified its only subsequent source delta. These counts describe separate suites, not an additive unique-test total.
+
+No production/trained artifact was loaded, no DB/network/training or full sweep was run, no tests were created/edited, and no commit/push/merge occurred in this lane. Controlled dummy artifacts prove mechanics only. Historical timing, source completeness, real artifact inference and promotion remain unverified. Optional future resource work: reduce redundant full-bundle digest passes/feature-frame retention without weakening integrity; not part of this delivery.
