@@ -1,6 +1,5 @@
 """Tests for run_backtest module."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -59,6 +58,14 @@ class TestFindLatestModelDir:
 class TestMainArgParsing:
     """Tests for main() argument parsing and flow."""
 
+    @pytest.fixture(autouse=True)
+    def _model_artifacts(self, tmp_path):
+        """Supply nonempty legacy file inputs; model deserialization stays mocked."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        for filename in ("minutes_model.joblib", "feature_config.joblib", "pts_rate_model.joblib", "reb_rate_model.joblib"):
+            (model_dir / filename).write_bytes(b"Controlled artifact bytes, not a serialized model")
+
     @patch("src.backtesting.run_backtest.argparse.ArgumentParser.parse_args")
     @patch("src.backtesting.run_backtest.find_latest_model_dir")
     @patch("src.backtesting.run_backtest.get_engine")
@@ -89,8 +96,9 @@ class TestMainArgParsing:
         mock_parse_args.return_value = Namespace(
             start="2024-01-01",
             end="2024-01-31",
-            model_dir="src/models/artifacts",
+            model_dir=str(tmp_path / "model"),
             output_dir=str(output_dir),
+            allow_legacy_artifacts=True,
             n_samples=100,
             stats=["pts"],
             edge_threshold=["0.05"],
@@ -104,7 +112,7 @@ class TestMainArgParsing:
             bl_tau=None,
             bl_sizing_tau=None,
         )
-        mock_find_model.return_value = Path("fake/path")
+        mock_find_model.return_value = tmp_path / "model"
 
         args = mock_parse_args.return_value
         mock_mc_cls.return_value = MonteCarloPredictor(object(), n_samples=args.n_samples)
@@ -169,8 +177,9 @@ class TestMainArgParsing:
         mock_parse_args.return_value = Namespace(
             start="2024-01-01",
             end="2024-01-31",
-            model_dir="src/models/artifacts",
+            model_dir=str(tmp_path / "model"),
             output_dir=str(tmp_path),
+            allow_legacy_artifacts=True,
             n_samples=100,
             stats=["pts", "reb"],
             edge_threshold=["0.05"],
@@ -184,7 +193,7 @@ class TestMainArgParsing:
             bl_tau=None,
             bl_sizing_tau=None,
         )
-        mock_find_model.return_value = Path("fake/path")
+        mock_find_model.return_value = tmp_path / "model"
         args = mock_parse_args.return_value
         mock_mc_cls.return_value = MonteCarloPredictor(object(), n_samples=args.n_samples)
         mock_harness_cls.return_value = BacktestHarness(
@@ -250,8 +259,9 @@ class TestMainArgParsing:
         mock_parse_args.return_value = Namespace(
             start="2024-01-01",
             end="2024-01-31",
-            model_dir="src/models/artifacts",
+            model_dir=str(tmp_path / "model"),
             output_dir=None,
+            allow_legacy_artifacts=True,
             n_samples=100,
             stats=["pts"],
             edge_threshold=["0.05"],
@@ -265,7 +275,7 @@ class TestMainArgParsing:
             bl_tau=None,
             bl_sizing_tau=None,
         )
-        mock_find_model.return_value = Path("fake/path")
+        mock_find_model.return_value = tmp_path / "model"
         args = mock_parse_args.return_value
         mock_mc_cls.return_value = MonteCarloPredictor(object(), n_samples=args.n_samples)
         mock_harness_cls.return_value = BacktestHarness(
