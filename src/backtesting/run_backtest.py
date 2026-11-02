@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import sys
 from datetime import date, datetime
@@ -24,8 +25,15 @@ from src.backtesting.backtest_harness import BacktestHarness
 from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
-from src.models.monte_carlo import MonteCarloPredictor, load_combined_calibration_offsets, load_copula_params
+from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
+from src.models.nba_artifacts import ArtifactInspection, resolve_artifact_for_execution
 from src.models.quantile_trainer import PlayerPropsModelPipeline
+from src.models.training_preflight import (
+    SUPPORTED_MODEL_STATS,
+    validate_finite_number,
+    validate_output_path,
+    validate_positive_int,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,7 +69,7 @@ def find_latest_model_dir(base_dir: str) -> Path:
     return runs[-1]
 
 
-def main():
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Backtest on Historical Data")
     parser.add_argument("--start", type=parse_date, required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=parse_date, required=True, help="End date (YYYY-MM-DD)")
@@ -127,39 +135,180 @@ def main():
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
 
-    args = parser.parse_args()
+    parser.add_argument(
+        "--dry-run",
+        "--preflight",
+        dest="dry_run",
+        action="store_true",
+        help="Validate filesystem/config inputs and print a JSON execution plan without replaying",
+    )
+    parser.add_argument(
+        "--allow-legacy-artifacts",
+        action="store_true",
+        help="Permit complete pre-manifest bundles as legacy/unverified artifacts",
+    )
+    return parser
 
-    # Build StatConfigSet from CLI args
+
+def _namespace_value(args: argparse.Namespace, name: str, default=None):
+    """Read an optional CLI field without inventing a value for omitted fields."""
+    return vars(args).get(name, default)
+
+
+def _resolve_complete_model_dir(
+    base_dir: str,
+    stats: list[str],
+    *,
+    allow_legacy: bool = False,
+) -> ArtifactInspection:
+    """Resolve the newest valid execution artifact without changing discovery behavior."""
+    return resolve_artifact_for_execution(base_dir, stats, allow_legacy=allow_legacy)
+
+
+def _validate_backtest_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> dict:
     try:
+        if args.start > args.end:
+            raise ValueError("--start must be on or before --end")
+        unsupported = sorted(set(args.stats) - set(SUPPORTED_MODEL_STATS))
+        if unsupported:
+            raise ValueError(f"Unsupported --stats values: {', '.join(unsupported)}")
+        if len(set(args.stats)) != len(args.stats):
+            raise ValueError("--stats must not contain duplicates")
+
+        validate_positive_int(args.n_samples, "--n-samples")
+        validate_finite_number(args.starting_bankroll, "--starting-bankroll", minimum=0.0, strict_minimum=True)
+        validate_finite_number(args.kelly_fraction, "--kelly-fraction", minimum=0.0, maximum=1.0, strict_minimum=True)
+        if args.max_bet_pct is not None:
+            validate_finite_number(args.max_bet_pct, "--max-bet-pct", minimum=0.0, maximum=1.0, strict_minimum=True)
+        if args.bl_sizing_tau is not None:
+            validate_finite_number(args.bl_sizing_tau, "--bl-sizing-tau", minimum=0.0)
+
         stat_config = StatConfigSet.from_cli_args(
             edge_values=args.edge_threshold,
             tau_values=args.bl_tau,
             stats=args.stats,
         )
-    except ValueError as e:
-        parser.error(str(e))
+        configured_stats = set(stat_config.configs)
+        unknown_config_stats = sorted(configured_stats - set(args.stats))
+        if unknown_config_stats:
+            raise ValueError(
+                "Per-stat edge/tau configuration must be a subset of --stats: "
+                + ", ".join(unknown_config_stats)
+            )
+        validate_finite_number(
+            stat_config.global_edge_threshold,
+            "global edge threshold",
+            minimum=0.0,
+            maximum=1.0,
+        )
+        if stat_config.global_bl_tau is not None:
+            validate_finite_number(stat_config.global_bl_tau, "global BL tau", minimum=0.0)
+        for stat in args.stats:
+            validate_finite_number(
+                stat_config.get_edge_threshold(stat),
+                f"{stat} edge threshold",
+                minimum=0.0,
+                maximum=1.0,
+            )
+            tau = stat_config.get_bl_tau(stat)
+            if tau is not None:
+                validate_finite_number(tau, f"{stat} BL tau", minimum=0.0)
 
-    # Validate BL sizing tau (still global-only for now)
-    if args.bl_sizing_tau is not None and args.bl_sizing_tau < 0:
-        parser.error("--bl-sizing-tau must be non-negative (0.0 or greater)")
+        allowed_bets = None
+        if args.allowed_bets:
+            allowed_bets = []
+            for pair in args.allowed_bets:
+                parts = pair.lower().split(":")
+                if len(parts) != 2 or parts[1] not in ("over", "under"):
+                    raise ValueError(f"Invalid --allowed-bets value '{pair}'. Use format stat:side (e.g., pts:under)")
+                if parts[0] not in args.stats:
+                    raise ValueError(f"Allowed bet stat '{parts[0]}' must be included in --stats")
+                allowed_bets.append((parts[0], parts[1]))
 
-    # Validate max_bet_pct
-    if args.max_bet_pct is not None and (args.max_bet_pct <= 0 or args.max_bet_pct > 1):
-        parser.error("--max-bet-pct must be between 0 and 1 (e.g., 0.025 for 2.5%)")
+        artifact = _resolve_complete_model_dir(
+            args.model_dir,
+            args.stats,
+            allow_legacy=bool(_namespace_value(args, "allow_legacy_artifacts", False)),
+        )
+        model_path = artifact.path
+        if args.output_dir:
+            output_dir = validate_output_path(args.output_dir)
+            planned_output_name = output_dir.name
+        else:
+            output_root = validate_output_path("backtest_results")
+            output_dir = output_root / "nba_bt_<runtime_timestamp>"
+            planned_output_name = "nba_bt_<runtime_timestamp>"
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
 
-    # Parse allowed_bets from "stat:side" strings to list of tuples
-    allowed_bets = None
-    if args.allowed_bets:
-        allowed_bets = []
-        for pair in args.allowed_bets:
-            parts = pair.lower().split(":")
-            if len(parts) != 2 or parts[1] not in ("over", "under"):
-                parser.error(f"Invalid --allowed-bets value '{pair}'. Use format stat:side (e.g., pts:under)")
-            allowed_bets.append((parts[0], parts[1]))
+    return {
+        "stat_config": stat_config,
+        "allowed_bets": allowed_bets,
+        "model_path": model_path,
+        "artifact": artifact,
+        "output_dir": output_dir,
+        "planned_output_name": planned_output_name,
+    }
 
-    # Resolve model directory
-    model_path = find_latest_model_dir(args.model_dir)
+
+def _backtest_plan(args: argparse.Namespace, validated: dict) -> dict:
+    stat_config = validated["stat_config"]
+    effective = {
+        stat: {
+            "edge_threshold": stat_config.get_edge_threshold(stat),
+            "bl_tau": stat_config.get_bl_tau(stat),
+        }
+        for stat in args.stats
+    }
+    return {
+        "command": "nba-historical-replay",
+        "status": "preflight_only",
+        "mode": "historical_replay",
+        "execution": False,
+        "quote_clean_readiness": {"checked": False, "status": "not_checked"},
+        "database_target": "LOCAL" if _namespace_value(args, "local", False) else "REMOTE",
+        "date_range": {"start": str(args.start), "end": str(args.end)},
+        "stats": args.stats,
+        "n_samples": args.n_samples,
+        "model_directory": str(validated["model_path"].resolve(strict=False)),
+        "artifact_identity": validated["artifact"].to_plan_dict(),
+        "bankroll": {
+            "starting": args.starting_bankroll,
+            "kelly_fraction": args.kelly_fraction,
+            "max_bet_pct": args.max_bet_pct,
+        },
+        "configuration": {
+            "effective_by_stat": effective,
+            "bl_sizing_tau": args.bl_sizing_tau,
+            "allowed_bets": (
+                None if validated["allowed_bets"] is None
+                else [f"{stat}:{side}" for stat, side in validated["allowed_bets"]]
+            ),
+            "bookmakers": args.bookmakers,
+        },
+        "output": {
+            "path": str(validated["output_dir"].resolve(strict=False)),
+            "planned_directory_name": validated["planned_output_name"],
+            "created": False,
+        },
+    }
+
+
+def main(argv=None):
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+
+    validated = _validate_backtest_args(parser, args)
+    stat_config = validated["stat_config"]
+    allowed_bets = validated["allowed_bets"]
+    model_path = validated["model_path"]
+    if _namespace_value(args, "dry_run", False):
+        print(json.dumps(_backtest_plan(args, validated), indent=2, sort_keys=True))
+        return 0
+
     logger.info(f"Using model artifacts from: {model_path}")
+    if validated["artifact"].state == "legacy_unverified":
+        logger.warning("Legacy/unverified artifact %s; file hashes only, not decision-grade", validated["artifact"].identity)
 
     # Setup output directory
     if args.output_dir:
@@ -170,8 +319,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize components
-    engine = get_engine(local=args.local)
-    if args.local:
+    use_local = bool(_namespace_value(args, "local", False))
+    engine = get_engine(local=use_local)
+    if use_local:
         logger.info("Using LOCAL database")
     feature_store = FeatureStore(engine)
 
@@ -185,16 +335,9 @@ def main():
     else:
         logger.info("No copula_params.json found, using legacy correlation adjustment")
 
-    combined_cal_offsets = load_combined_calibration_offsets(str(model_path))
-    if combined_cal_offsets:
-        logger.info(f"Loaded combined calibration offsets for: {list(combined_cal_offsets.keys())}")
-    else:
-        logger.info("No combined_calibration_offsets.json found, skipping combined recalibration")
-
     logger.info(f"Initializing Monte Carlo predictor (n_samples={args.n_samples})...")
     predictor = MonteCarloPredictor(
         pipeline, n_samples=args.n_samples, copula_params=copula_params,
-        combined_calibration_offsets=combined_cal_offsets,
     )
 
     # Log per-stat configuration
@@ -256,6 +399,8 @@ def main():
     logger.info(f"Sharpe ratio: {metrics.sharpe_ratio:.3f}")
     logger.info(f"Max drawdown: {metrics.max_drawdown:.2%}")
     logger.info(f"Results saved to: {output_dir}")
+
+    return 0
 
 
 if __name__ == "__main__":
