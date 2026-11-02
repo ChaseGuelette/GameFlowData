@@ -1,5 +1,9 @@
 # NBA rebuild wiki: data to trustworthy retraining
 
+## Batch C — flat-first replay correctness
+
+Coding slice 3 is complete and controlled-path verified in isolated `repair/nba-flat-replay`: **SPEC PASS / QUALITY APPROVED**, 34 existing tests and all bounded probes pass. It covers flat-size CLI/config evidence, chosen-direction preservation, stake suppression and empirical-sample rejection across raw/BL paths, plus owner-approved fixture repairs and replay-local combo validation. S1 `run` remains unchanged; `_run_date` changes only at the separately approved immediate combo-call seam. Slices 1/2, sync recovery and historical policies remain separately owned. Read the [slice 3 explainer](nba-flat-replay.md) and [scope/evidence record](../operations/nba-flat-replay-slice3-2026-11-01.md). Changes are uncommitted; integration and real-data acceptance remain separate gates.
+
 ## Batch D — observation and quote primitives
 
 Chase approved Batch D / coding slice 4, its pairing/duplicate contract and its merge into main from `repair/nba-observation-primitives` (`b2fb86f`). Implementation and bounded controlled verification are complete; real-data acceptance and consumer integration remain open. This is not historical repair stage S4. Read the [decision and evidence record](../operations/nba-batch-d-observation-primitives.md). Coordinator reruns passed the 77-assertion worker probe, adversarial and review-resolution probes, 10 existing inventory tests, lint/compile/type checks and file-scope checks. No new unit tests were created.

@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
+from math import isfinite
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -28,6 +29,26 @@ def _row_get(row: pd.Series, key: str, default: object = None) -> object:
         return default
     value = row.get(key)
     return value if _present(value) else default
+
+
+def _selected_quote(row: pd.Series, side: str) -> dict:
+    """Bind selected metadata to the branch actually wagered, not the other side."""
+    explicitly_selected = _row_get(row, "selected_side") == side
+
+    def side_value(suffix: str, default: object = None) -> object:
+        selected = _row_get(row, f"selected_{suffix}", default) if explicitly_selected else default
+        return _row_get(row, f"{side}_{suffix}", selected)
+
+    return {
+        "selected_side": side,
+        "selected_line": row["line"],
+        "selected_price": row[f"{side}_odds"],
+        "selected_bookmaker": side_value("bookmaker", _row_get(row, "bookmaker")),
+        "selected_snapshot_time": side_value("snapshot_time"),
+        "selected_market_last_update": side_value("market_last_update"),
+        "selected_bookmaker_last_update": side_value("bookmaker_last_update"),
+        "selected_decision_time": side_value("decision_time", _row_get(row, "bet_decision_time")),
+    }
 
 
 class BetSide(Enum):
@@ -169,11 +190,19 @@ class BetSimulator:
         Uses day-start bankroll for Kelly sizing so all bets within a day
         are sized from the same capital base (realistic for simultaneous bets).
         """
+        if not isfinite(self.current_bankroll) or self.current_bankroll <= 0:
+            return 0.0
         # Flat bet sizing: fixed dollar amount per bet
         if self.flat_bet_size is not None:
+            if not isfinite(self.flat_bet_size) or self.flat_bet_size <= 0:
+                return 0.0
             return min(self.flat_bet_size, self.current_bankroll)
 
-        if odds == 0:
+        if (
+            not isfinite(odds) or odds == 0 or not isfinite(model_prob)
+            or not isfinite(self.kelly_fraction) or self.kelly_fraction <= 0
+            or not isfinite(self._day_start_bankroll) or self._day_start_bankroll <= 0
+        ):
             return 0.0
 
         # Convert American odds to net fractional odds (Kelly 'b')
@@ -188,15 +217,19 @@ class BetSimulator:
         # Apply fraction
         f_fractional = f * self.kelly_fraction
 
-        if f_fractional <= 0:
+        if not isfinite(f_fractional) or f_fractional <= 0:
             return 0.0
 
         # Apply max bet cap if configured
         if self.max_bet_pct is not None:
+            if not isfinite(self.max_bet_pct) or self.max_bet_pct <= 0:
+                return 0.0
             f_fractional = min(f_fractional, self.max_bet_pct)
 
         # Size off day-start bankroll (all bets in a night use same capital base)
         stake = f_fractional * self._day_start_bankroll
+        if not isfinite(stake) or stake <= 0:
+            return 0.0
 
         # But can't bet more than we actually have remaining
         return min(stake, self.current_bankroll)
@@ -218,6 +251,8 @@ class BetSimulator:
             return False
 
         if pd.isna(model_prob) or pd.isna(implied_prob) or pd.isna(odds):
+            return False
+        if not isfinite(model_prob) or not isfinite(implied_prob) or not isfinite(odds):
             return False
 
         edge = model_prob - implied_prob
@@ -263,18 +298,24 @@ class BetSimulator:
         under_bookmaker_last_update: object | None = None,
         over_bookmaker: str | None = None,
         under_bookmaker: str | None = None,
-    ) -> Bet:
+    ) -> Bet | None:
         """Create and record a bet.
 
         Args:
             sizing_prob: Optional BL-blended probability for Kelly sizing.
                          When provided, used instead of model_prob for stake calculation.
         """
+        if not isfinite(self.current_bankroll) or self.current_bankroll <= 0:
+            return None
         # Calculate stake if not provided
         # Use sizing_prob for Kelly when available, else use model_prob
         if stake is None:
             kelly_prob = sizing_prob if sizing_prob is not None else model_prob
             stake = self._calculate_stake(odds, kelly_prob)
+
+        # Reject before clamping: infinity must not turn into an all-in wager.
+        if not isfinite(stake) or stake <= 0:
+            return None
 
         # Ensure we have funds (double check)
         if stake > self.current_bankroll:
@@ -332,8 +373,16 @@ class BetSimulator:
         """
         new_bets = []
 
+        # Validate the entire explicit-direction contract before placing any bets.
+        if "selected_side" in predictions_df.columns:
+            for value in predictions_df["selected_side"]:
+                if _present(value) and (not isinstance(value, str) or value not in ("over", "under")):
+                    raise ValueError(f"Invalid selected_side {value!r}; expected 'over', 'under', or null")
+
         # Snapshot bankroll at day start — all bets tonight are sized from
         # the same capital base (realistic for simultaneous placement)
+        if not isfinite(self.current_bankroll) or self.current_bankroll <= 0:
+            return new_bets
         self._day_start_bankroll = self.current_bankroll
 
         for _, row in predictions_df.iterrows():
@@ -345,120 +394,48 @@ class BetSimulator:
                 break
 
             stat = row["stat"]
-
-            # Check over bet (skip if not in allowlist)
-            if self.allowed_bets is None or (stat, "over") in self.allowed_bets:
-                if self.should_bet(
-                    model_prob=row.get("over_prob"),
-                    implied_prob=row.get("implied_over"),
-                    odds=row.get("over_odds"),
+            if "sample_status" in row.index and row["sample_status"] != "valid":
+                continue
+            selected_side = _row_get(row, "selected_side")
+            sides = (selected_side,) if selected_side is not None else ("over", "under")
+            for side in sides:
+                if self.allowed_bets is not None and (stat, side) not in self.allowed_bets:
+                    continue
+                if not self.should_bet(
+                    model_prob=row.get(f"{side}_prob"),
+                    implied_prob=row.get(f"implied_{side}"),
+                    odds=row.get(f"{side}_odds"),
                     stat=stat,
                 ):
-                    # Get sizing prob for Kelly when BL sizing is enabled
-                    sizing_prob = None
-                    if self.use_bl_for_sizing and "sizing_prob_over" in row.index:
-                        sizing_prob = row.get("sizing_prob_over")
-                        if pd.isna(sizing_prob):
-                            sizing_prob = None
-
-                    bet = self.place_bet(
-                        player_id=row["player_id"],
-                        game_id=row["game_id"],
-                        game_date=game_date,
-                        stat=stat,
-                        side=BetSide.OVER,
-                        line=row["line"],
-                        odds=int(row["over_odds"]),
-                        model_prob=row["over_prob"],
-                        implied_prob=row["implied_over"],
-                        sizing_prob=sizing_prob,
-                        selected_snapshot_time=_row_get(row, "selected_snapshot_time"),
-                        over_snapshot_time=_row_get(row, "over_snapshot_time"),
-                        under_snapshot_time=_row_get(row, "under_snapshot_time"),
-                        selected_market_last_update=_row_get(row, "selected_market_last_update", _row_get(row, "over_market_last_update")),
-                        selected_bookmaker_last_update=_row_get(row, "selected_bookmaker_last_update", _row_get(row, "over_bookmaker_last_update")),
-                        selected_decision_time=_row_get(row, "selected_decision_time", _row_get(row, "bet_decision_time")),
-                        selected_line=_row_get(row, "selected_line", row["line"]),
-                        selected_price=_row_get(row, "selected_price", row["over_odds"]),
-                        selected_side=_row_get(row, "selected_side", "over"),
-                        selected_bookmaker=_row_get(row, "selected_bookmaker", _row_get(row, "over_bookmaker", _row_get(row, "bookmaker"))),
-                        quote_decision_policy=_row_get(row, "quote_decision_policy"),
-                        over_market_last_update=_row_get(row, "over_market_last_update"),
-                        under_market_last_update=_row_get(row, "under_market_last_update"),
-                        over_bookmaker_last_update=_row_get(row, "over_bookmaker_last_update"),
-                        under_bookmaker_last_update=_row_get(row, "under_bookmaker_last_update"),
-                        over_bookmaker=_row_get(row, "over_bookmaker"),
-                        under_bookmaker=_row_get(row, "under_bookmaker"),
-                    )
-                    # Store bookmaker if available (line shopping)
-                    if bet.selected_bookmaker is not None:
-                        bet.bookmaker = bet.selected_bookmaker
-                    elif "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
-                        bet.bookmaker = row["bookmaker"]
-                    # Store BL posterior if available
-                    if "posterior_over" in row.index and not pd.isna(row.get("posterior_over")):
-                        bet.posterior_prob = row["posterior_over"]
-                    # Also store sizing_prob as posterior when using BL sizing
-                    elif sizing_prob is not None:
-                        bet.posterior_prob = sizing_prob
-                    new_bets.append(bet)
-
-            # Check under bet (skip if not in allowlist)
-            if self.allowed_bets is None or (stat, "under") in self.allowed_bets:
-                if self.should_bet(
-                    model_prob=row.get("under_prob"),
-                    implied_prob=row.get("implied_under"),
-                    odds=row.get("under_odds"),
+                    continue
+                sizing_prob = _row_get(row, f"sizing_prob_{side}") if self.use_bl_for_sizing else None
+                bet = self.place_bet(
+                    player_id=row["player_id"],
+                    game_id=row["game_id"],
+                    game_date=game_date,
                     stat=stat,
-                ):
-                    # Get sizing prob for Kelly when BL sizing is enabled
-                    sizing_prob = None
-                    if self.use_bl_for_sizing and "sizing_prob_under" in row.index:
-                        sizing_prob = row.get("sizing_prob_under")
-                        if pd.isna(sizing_prob):
-                            sizing_prob = None
-
-                    bet = self.place_bet(
-                        player_id=row["player_id"],
-                        game_id=row["game_id"],
-                        game_date=game_date,
-                        stat=stat,
-                        side=BetSide.UNDER,
-                        line=row["line"],
-                        odds=int(row["under_odds"]),
-                        model_prob=row["under_prob"],
-                        implied_prob=row["implied_under"],
-                        sizing_prob=sizing_prob,
-                        selected_snapshot_time=_row_get(row, "selected_snapshot_time"),
-                        over_snapshot_time=_row_get(row, "over_snapshot_time"),
-                        under_snapshot_time=_row_get(row, "under_snapshot_time"),
-                        selected_market_last_update=_row_get(row, "selected_market_last_update", _row_get(row, "under_market_last_update")),
-                        selected_bookmaker_last_update=_row_get(row, "selected_bookmaker_last_update", _row_get(row, "under_bookmaker_last_update")),
-                        selected_decision_time=_row_get(row, "selected_decision_time", _row_get(row, "bet_decision_time")),
-                        selected_line=_row_get(row, "selected_line", row["line"]),
-                        selected_price=_row_get(row, "selected_price", row["under_odds"]),
-                        selected_side=_row_get(row, "selected_side", "under"),
-                        selected_bookmaker=_row_get(row, "selected_bookmaker", _row_get(row, "under_bookmaker", _row_get(row, "bookmaker"))),
-                        quote_decision_policy=_row_get(row, "quote_decision_policy"),
-                        over_market_last_update=_row_get(row, "over_market_last_update"),
-                        under_market_last_update=_row_get(row, "under_market_last_update"),
-                        over_bookmaker_last_update=_row_get(row, "over_bookmaker_last_update"),
-                        under_bookmaker_last_update=_row_get(row, "under_bookmaker_last_update"),
-                        over_bookmaker=_row_get(row, "over_bookmaker"),
-                        under_bookmaker=_row_get(row, "under_bookmaker"),
-                    )
-                    # Store bookmaker if available (line shopping)
-                    if bet.selected_bookmaker is not None:
-                        bet.bookmaker = bet.selected_bookmaker
-                    elif "bookmaker" in row.index and not pd.isna(row.get("bookmaker")):
-                        bet.bookmaker = row["bookmaker"]
-                    # Store BL posterior if available
-                    if "posterior_under" in row.index and not pd.isna(row.get("posterior_under")):
-                        bet.posterior_prob = row["posterior_under"]
-                    # Also store sizing_prob as posterior when using BL sizing
-                    elif sizing_prob is not None:
-                        bet.posterior_prob = sizing_prob
-                    new_bets.append(bet)
+                    side=BetSide(side),
+                    line=row["line"],
+                    odds=int(row[f"{side}_odds"]),
+                    model_prob=row[f"{side}_prob"],
+                    implied_prob=row[f"implied_{side}"],
+                    sizing_prob=sizing_prob,
+                    **_selected_quote(row, side),
+                    over_snapshot_time=_row_get(row, "over_snapshot_time"),
+                    under_snapshot_time=_row_get(row, "under_snapshot_time"),
+                    quote_decision_policy=_row_get(row, "quote_decision_policy"),
+                    over_market_last_update=_row_get(row, "over_market_last_update"),
+                    under_market_last_update=_row_get(row, "under_market_last_update"),
+                    over_bookmaker_last_update=_row_get(row, "over_bookmaker_last_update"),
+                    under_bookmaker_last_update=_row_get(row, "under_bookmaker_last_update"),
+                    over_bookmaker=_row_get(row, "over_bookmaker"),
+                    under_bookmaker=_row_get(row, "under_bookmaker"),
+                )
+                if bet is None:
+                    continue
+                bet.bookmaker = bet.selected_bookmaker
+                bet.posterior_prob = _row_get(row, f"posterior_{side}", sizing_prob)
+                new_bets.append(bet)
 
         return new_bets
 

@@ -13,14 +13,21 @@ Usage:
 """
 
 import argparse
+import hashlib
+import json
 import logging
+import math
 import sys
+from dataclasses import asdict
 from datetime import date, datetime
+from numbers import Real
 from pathlib import Path
+from typing import cast
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.backtesting.backtest_harness import BacktestHarness
+from src.config.combo_config import COMBO_DEFINITIONS
 from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
@@ -61,6 +68,102 @@ def find_latest_model_dir(base_dir: str) -> Path:
     return runs[-1]
 
 
+def _positive_dollars(value: str | float) -> float:
+    """Validate flat controls during parsing, before any execution side effects."""
+    if isinstance(value, bool) or not isinstance(value, str | Real):
+        raise argparse.ArgumentTypeError("--flat-bet-size must be finite and strictly positive dollars")
+    try:
+        amount = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("--flat-bet-size must be finite and strictly positive dollars") from exc
+    if not math.isfinite(amount) or amount <= 0:
+        raise argparse.ArgumentTypeError("--flat-bet-size must be finite and strictly positive dollars")
+    return amount
+
+
+def _effective_cli_config(harness: BacktestHarness, model_path: Path, requested_stats: list[str]) -> dict:
+    """Describe CLI execution only; identity evidence is not artifact-policy validation.
+
+    Direct harness.run() enrichment belongs to S1 integration. This baseline still
+    discovers legacy artifacts and loads offsets without slice 2's manifest gate.
+    """
+    simulator = harness._simulator
+    predictor = cast(MonteCarloPredictor, harness.predictor)
+    flat = simulator.flat_bet_size is not None
+    # Inherited calculation routing computes optional sizing posteriors only
+    # when edge BL is off, even for a non-BL stat in a mixed run.
+    edge_bl_enabled = harness.bl_blender is not None or any(
+        harness._get_blender_for_stat(stat) is not None for stat in harness.stats
+    )
+    requested = set(harness.stats)
+    derivable_combos = {
+        stat for stat, definition in COMBO_DEFINITIONS.items()
+        if set(definition["components"]).issubset(requested)
+    }
+    effective_stats = requested | derivable_combos
+    per_stat = {}
+    for stat in sorted(effective_stats):
+        blender = harness._get_blender_for_stat(stat)
+        per_stat[stat] = {
+            "edge_threshold": simulator._get_edge_threshold(stat),
+            "bl_config": asdict(blender.config) if blender is not None else None,
+        }
+    # Hash only manifest bytes actually present, without asserting a schema,
+    # accepted policy, model-file digest, or validated artifact identity.
+    manifests = [
+        {"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        for path in sorted(model_path.glob("*manifest*.json")) if path.is_file()
+    ]
+    evidence = {
+        "config_evidence_scope": "cli_export_only",
+        "flat_bet_size": simulator.flat_bet_size,
+        "sizing": {
+            "mode": "flat" if flat else "kelly",
+            "flat_bet_size": simulator.flat_bet_size,
+            "bankroll_limited": True,
+            "kelly_fraction": None if flat else simulator.kelly_fraction,
+            "max_bet_pct": None if flat else simulator.max_bet_pct,
+            "bl_sizing_applies": not flat and simulator.use_bl_for_sizing and not edge_bl_enabled,
+            "bl_sizing_status": (
+                "disabled" if not simulator.use_bl_for_sizing else
+                "not_applicable_flat" if flat else
+                "ignored_when_edge_bl_enabled_inherited_routing" if edge_bl_enabled else "enabled"
+            ),
+        },
+        "requested_stats": sorted(requested_stats),
+        "effective_stat_config": per_stat,
+        "effective_stat_config_scope": "requested_and_derived_combo_stats",
+        "effective_allowed_bets": (
+            sorted(f"{stat}:{side}" for stat, side in simulator.allowed_bets)
+            if simulator.allowed_bets is not None else None
+        ),
+        "effective_bl_sizing_config": (
+            asdict(harness.bl_sizing_blender.config) if harness.bl_sizing_blender is not None else None
+        ),
+        "predictor_settings": {
+            "n_samples": predictor.n_samples,
+            "use_correlated_sampling": predictor.use_correlated_sampling,
+            "correlation_config": predictor.correlation_config,
+            "variance_inflation": predictor.variance_inflation,
+            "tail_adjustment": predictor.tail_adjustment,
+            "blowout_config": predictor.blowout_config,
+            "copula_params": predictor.copula_params,
+            "combined_calibration_offsets": predictor.combined_calibration_offsets,
+        },
+        "artifact_identity": {
+            "resolved_model_dir": str(model_path.resolve()),
+            "manifests": manifests,
+            "identity_status": "manifest_bytes_hashed_unvalidated" if manifests else "path_only_manifest_absent",
+            "manifest_validation": "not_performed_slice2_not_integrated",
+            "model_file_digests": None,
+            "historical_readiness": "unverified_not_decision_grade",
+            "legacy_discovery_and_offset_loading": "inherited_unchanged_not_certified",
+        },
+    }
+    # Deterministic nested mappings/lists with real JSON types, not stringified mocks.
+    return json.loads(json.dumps(evidence, sort_keys=True, allow_nan=False))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run Backtest on Historical Data")
     parser.add_argument("--start", type=parse_date, required=True, help="Start date (YYYY-MM-DD)")
@@ -80,6 +183,10 @@ def main():
         help="Minimum edge to place bet. Global (0.05) or per-stat (pts=0.10 reb=0.07)",
     )
     parser.add_argument("--starting-bankroll", type=float, default=10000.0, help="Starting bankroll amount")
+    parser.add_argument(
+        "--flat-bet-size", type=_positive_dollars, default=None,
+        help="Fixed finite positive dollar stake, capped by remaining bankroll; overrides Kelly sizing and cap.",
+    )
     parser.add_argument(
         "--kelly-fraction", type=float, default=0.125, help="Kelly Criterion fraction (e.g., 0.125 for 1/8th)"
     )
@@ -128,6 +235,13 @@ def main():
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
 
     args = parser.parse_args()
+
+    # Also validate programmatic callers supplying a namespace rather than parsing.
+    if args.flat_bet_size is not None:
+        try:
+            args.flat_bet_size = _positive_dollars(args.flat_bet_size)
+        except argparse.ArgumentTypeError as exc:
+            parser.error(str(exc))
 
     # Build StatConfigSet from CLI args
     try:
@@ -227,6 +341,7 @@ def main():
         starting_bankroll=args.starting_bankroll,
         kelly_fraction=args.kelly_fraction,
         max_bet_pct=args.max_bet_pct,
+        flat_bet_size=args.flat_bet_size,
         bookmakers=args.bookmakers,
         allowed_bets=allowed_bets,
         bl_blender=bl_blender,
@@ -240,6 +355,9 @@ def main():
         logger.info(f"Allowed bets filter: {[f'{s}:{side}' for s, side in allowed_bets]}")
     logger.info(f"Running backtest from {args.start} to {args.end}...")
     result = harness.run(start_date=args.start, end_date=args.end)
+
+    # Preserve legacy config keys. This enrichment does not change harness.run().
+    result.config.update(_effective_cli_config(harness, model_path, args.stats))
 
     # Save results
     result.to_csv(str(output_dir))
