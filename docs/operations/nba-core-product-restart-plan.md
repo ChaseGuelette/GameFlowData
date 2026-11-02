@@ -1,7 +1,39 @@
 # NBA Core Product Restart Plan — 2026–27 Season
 
-**Status:** Active — data audit complete; rebuild Layers 1–4 approved as the design direction
+## Resume checkpoint — November 1, 2026
+
+Slices 1–2 are scoped-implementation verified in `repair/nba-cli-preflight`: slice 2 passed independent spec/quality review, 72 controlled checks and all 117 existing scoped tests after separately owner-approved fixture adaptations; no new cases or changed assertions. This lane remains uncommitted/unintegrated; real-data and platform limitations are recorded separately. Slice 4's pure primitives were separately approved and merged into main as `f81170f`, without consumer wiring or historical policy activation. Read [slice 2 evidence](nba-artifact-slice2-2026-11-01.md), the [artifact wiki](../understanding/nba-artifact-identity.md) and [all eight coding slices](../understanding/nba-training-evaluation-slices.md). S1 changes, model runs, this lane's integration and later slices remain gated.
+
+Chase is repairing the failed NBA sync in another chat. Do not restart or compete with it. The October 16 waiting instructions below are historical; the unattended S2 audit stopped at a failed sync, not a completed data audit.
+
+Read [next steps and parallel work](nba-restart-next-steps-2026-11-01.md) for this chat's decision summary. After a verified stable sync: complete S1 real-data acceptance and S2 source evidence, obtain explicit policy approval, then separately scope S3 historical parity, S4 quote-clean replay and S5 owner-launched training. S1 integration remains separately gated.
+
+Chase has redirected this lane toward coding readiness: mirror the canonical MLB lifecycle/harness contracts and complete NBA training/evaluation plumbing while the other chat repairs sync. Read the [coding readiness plan](nba-coding-readiness-plan-2026-11-01.md), which supersedes the earlier documentation-first recommendation. Recommended first source slice: DB-free training/replay CLI, dry-run and preflight; then artifact gates, flat-first replay, policy-ready shared selectors, sweeps, audits and lifecycle orchestration. Exact multi-file scopes still require approval; historical source policy and real-data validation remain gated. Keep chat decisions and unresolved approvals in linked Markdown summaries for Chase.
+
+## Kick off immediately — current handoff, October 16, 2026
+
+- You: let the already-running [NBA-only sync](nba-sync-inventory-2026-10-16.md) finish; do not start a second/all-sports sync. Real-data readiness remains open until its completion summary is verified.
+- Other chat: S1 is delivered with the owner-approved `_run_date` extension; preserve its worktree pending [coordinator review/acceptance](nba-s1-coordinator-review-2026-10-16.md). No integration yet.
+- This chat: own S2 read-only source/timestamp research, policy recommendations and independent review. No concurrent writes to S1's files.
+- You: review the S1 coordinator packet, [wiki](../understanding/nba-rebuild.md) and [research report](nba-historical-readiness-2026-10-16.md) while independent review progresses. Do not relaunch S1 or training.
+
+### Current checkpoint, overriding stale next-action text
+
+I’m now arranging an unattended read-only audit: wait for the successful NBA sync, verify the historical evidence, and leave Chase a reviewable summary before any implementation decision.
+
+Chase authorized three-minute local sync checks and the full S2 audit while away. Follow [watch status](nba-s2-watch-status-2026-10-16.md) and [audit progress](nba-s2-audit-progress-2026-10-16.md); the return summary will distinguish research completion from unresolved source/policy signoff. Every review section starts with a plain-English purpose/conclusion. No S3/training/repair/integration authorization is implied.
+
+S1 independent existing checks and controlled probes passed; real-data/artifact acceptance awaits the running sync. S2 [source-clock research](nba-s2-source-clock-review-2026-10-16.md) is published; refreshed-data reconciliation and policy approval remain open. Do not interpret source-only progress as training or integration readiness.
+
+- Layer 1 season resolver is committed as `23f335c`. Layer 2 schedule code/migration/preflight is committed in `d478458`; no longer describe it as uncommitted. Migration application, Railway canary, ingest/deployment and production readiness were not verified by the October 16 historical-data package.
+- Three initial agents plus a targeted follow-up completed: data sample, current-code blockers and reconciled repair specification. The 12 missing sampled advanced/rolling keys were all zero-minute DNPs; all 202 sampled appearances with at least five minutes were covered. This does not certify whole historical periods.
+- Historical training readiness and current-slate publication readiness are separate gates. Source/contract/cohort repairs can justify a historical retrain without waiting for new-season results; frontend/Engineering OS and current-roster deployment are not automatic training dependencies.
+- References below to fixtures/tests are verification requirements, not permission to create new unit tests. Chase's current instruction is no new unit tests; preserve existing coverage and use bounded real-path/data checks.
+- This is a documentation/research checkpoint, not blanket approval for source edits, DB work, training, deployment or promotion. Chase can review packets asynchronously; material decisions and implementation remain explicitly gated.
+
+**Status:** Active — initial September audit and October sampled verification complete; historical training readiness still blocked by source/policy/parity/completeness work; rebuild Layers 1–4 remain the approved product design direction
 **Effective date:** 2026-09-24
+**Last reconciled:** 2026-10-16
 **Owner:** Chase
 **Primary goal:** Restore a dependable NBA data/model pipeline and ship the minimum viable customer frontend.
 
@@ -19,9 +51,9 @@ Current direction:
 - Engineering OS is paused. Do not expand, certify, or promote MVP 1+ unless Chase explicitly reactivates it.
 - Preserve the existing read-only Engineering OS deployment if it remains harmless; do not spend core-product time dismantling it.
 - NBA core-product readiness is the active priority.
-- The 2026–27 NBA season has not started. There is no new-season performance data available for a meaningful refreshed model retrain.
+- The September 24 audit was performed before new-season performance evidence was available. Do not treat that dated observation as a current source-data check; verify actual coverage for any proposed run.
 - Existing production models are outdated reference artifacts. Use them as templates for feature contracts, training configuration, artifact structure, and runtime integration—not as assumed production candidates.
-- Do not retrain every existing model merely against the same historical dataset. Training resumes only when the approved historical cohort/exclusion policy and new-season evidence make the run decision useful.
+- Do not retrain every existing model merely against unchanged history. Training resumes when an approved data/feature-contract/cohort repair or sufficient new-season evidence gives the run a meaningful purpose, with frozen splits and a trustworthy validation path.
 - The combined readiness assessment is `docs/operations/nba-data-readiness-audit-2026-09-24.md`; its four lane reports live under `docs/operations/audits/`.
 - Chase approved rebuild Layers 1–4 below as the design direction. Implement each layer as a separately reviewed slice.
 
@@ -414,9 +446,9 @@ Before the next training run, produce an evidence-backed inclusion/exclusion pol
 
 Do not choose an arbitrary “last X games” exclusion without profiling the data. Compare minutes distributions, starter participation, inactive/rest labels where available, and rotation stability by date. Then freeze a deterministic rule that can be reproduced in training and evaluation.
 
-### C3. No immediate baseline retrain
+### C3. No unchanged-history timestamp-only retrain
 
-Because no 2026–27 data exists yet, do not retrain every model against unchanged historical data merely to generate newer timestamps.
+Do not retrain every model against unchanged historical data merely to generate newer timestamps. The September audit's lack-of-new-season-data observation is historical, not a new live-data assertion. A material approved historical repair can justify the first meaningful retrain once its readiness gates pass.
 
 Near-term model work is limited to:
 
@@ -454,10 +486,12 @@ Every future run remains Chase-launched and must preserve exact artifact identit
 - Separate code repairs, data catch-up, deployment fixes, and owner-gated DB/backfill work.
 - Choose the smallest path that restores one dependable NBA daily slate.
 
-### Milestone 3 — Restore the minimum data path
+### Milestone 3 — Restore historical training/replay and the minimum daily data path
 
 - Repair source/derived/odds/linking blockers in dependency order.
-- Validate every repair through inference and frontend consumption.
+- Historical-training lane: S1 completeness, S2 observation/source policy, shared historical feature parity and quote-clean replay, then a meaningful owner-launched baseline. See the reviewed repair spec.
+- Publication lane: retain Layer 1 → Layer 2 → Layer 3 → Layer 4 dependencies for season/slate/roster/current-serving readiness; verify the real inference/frontend consumers before customer activation.
+- Do not hold a valid historical retrain behind unrelated frontend work, and do not treat a successful retrain as authorization to publish picks.
 - Keep production mutations, broad backfills, and DDL separately approved.
 
 ### Milestone 4 — Restore the frontend MVP
@@ -477,11 +511,15 @@ Every future run remains Chase-launched and must preserve exact artifact identit
 
 ## Current next action
 
-Implement **Layer 1 — season identity and rollover** as a code-and-test-only slice. Then prepare the Layer 2 schedule source/schema proposal and read-only canary for review before any migration or production write.
+Other chat: **S1 — completeness handling** is delivered in its isolated worktree, including Chase's approved `_run_date` extension. Preserve it pending [coordinator acceptance](nba-s1-coordinator-review-2026-10-16.md); do not relaunch or integrate. Layer 1 and Layer 2 source preparation already landed in Git; do not rebuild them from the old September next-action note.
+
+This chat: own S2 source/timestamp evidence and proposed historical policies while Chase reads/reviews. S1 and read-only S2 can proceed in parallel without conflicting writes. No decision-time rule, injury fallback, cohort split or broader implementation is silently approved.
+
+You: review the wiki/evidence, approve material policies, and launch training only after the frozen historical readiness/validation gates pass.
 
 Implementation boundaries remain:
 
 - one layer per reviewable slice;
 - no schema migration, remote write, deployment, broad backfill, index, or long model run without separate approval;
-- preserve the approved Layer 1 → Layer 2 → Layer 3 → Layer 4 dependency order;
+- preserve the approved Layer 1 → Layer 2 → Layer 3 → Layer 4 dependency order for product publication; historical training work follows the separately scoped S1-S5 gates;
 - verify each layer through its real consumers before moving to the next.

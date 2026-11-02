@@ -6,7 +6,7 @@
 
 **Tech stack:** Existing Python, pandas, NumPy, SQLAlchemy, Pydantic/PyYAML and pytest/Ruff. No new infrastructure is proposed.
 
-**Status:** Batch A/slice 1 is verified in isolated `repair/nba-cli-preflight`: independent reviews, 20 CLI/safety checks and 117 existing scoped tests passed. Batch B/slice 2 has [explicitly approved execution scope](nba-artifact-slice2-2026-11-01.md) and implementation is in progress in the same sequential worktree, preserving slice 1. No tests will be written or edited for slice 2. Batch D/coding slice 4 is implemented and controlled-input verified; Chase approved its merge into main. See the [eight-slice educational overview](../understanding/nba-training-evaluation-slices.md). Batches C and E-H remain proposals; no historical policy activation, consumer wiring or long jobs are authorized by the Batch D merge.
+**Status:** Slices 1–2 are scoped-implementation verified in isolated `repair/nba-cli-preflight`: slice 2 passed independent spec/quality review, 72 controlled checks and all 117 existing scoped tests after separately owner-approved fixture adaptations. No new cases or changed assertions; this lane is not committed/integrated, and real-data/platform limitations remain explicit in [slice 2 evidence](nba-artifact-slice2-2026-11-01.md). See the [eight-slice overview](../understanding/nba-training-evaluation-slices.md). Slice 4's separately approved merge is present in main as `f81170f` (source `b2fb86f`); pure primitives only, no historical policy activation or consumer wiring. Slices 3 and 5–8 remain pending. No automatic commits or long jobs are authorized by this lane.
 
 ## Chat decisions and scope
 
