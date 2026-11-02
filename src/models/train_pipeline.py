@@ -14,9 +14,27 @@ import numpy as np
 
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
+from src.models.features.nba.contracts import NBA_FEATURE_LISTS, validate_feature_lists
 from src.models.hyperparameter_tuner import QuantileHyperparameterTuner
 from src.models.monte_carlo import MonteCarloPredictor, compute_copula_params_from_data
+from src.models.nba_artifacts import (
+    build_diagnostic_manifest,
+    build_training_manifest,
+    create_exclusive_incomplete_dir,
+    finalize_diagnostic_bundle,
+    finalize_training_bundle,
+    observed_dataframe_provenance,
+    source_git_state,
+    validate_artifact_bundle,
+)
 from src.models.quantile_trainer import PlayerPropsModelPipeline
+from src.models.training_preflight import (
+    validate_existing_directory,
+    validate_finite_number,
+    validate_hyperparams_file,
+    validate_output_path,
+    validate_positive_int,
+)
 from src.processing.feature_selection import FeatureSelector, get_candidate_columns
 
 # Configure logging
@@ -58,8 +76,9 @@ class TrainingOrchestrator:
         self.timestamp = datetime.now()
         timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
         self._final_run_dir_name = f"nba_run_{timestamp_str}"
-        self.run_dir = Path(base_artifacts_dir) / f"nba_run_{timestamp_str}_incomplete"
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.run_dir, self.final_run_dir = create_exclusive_incomplete_dir(
+            base_artifacts_dir, self._final_run_dir_name
+        )
 
         self.feature_config_path = self.run_dir / "selected_features.json"
         self.hyperparams_config_path = self.run_dir / "best_hyperparams.json"
@@ -134,13 +153,20 @@ class TrainingOrchestrator:
             json.dump(selected_features, f, indent=4)
 
         # 7. Sanity Check (End-to-End Inference)
-        self._run_sanity_check(pipeline, cal_df)
+        sanity = self._run_sanity_check(pipeline, cal_df)
 
-        # 8. Finalize: Rename directory to remove _incomplete suffix
-        # This atomic rename ensures inference job only sees complete models
-        final_run_dir = self.run_dir.parent / self._final_run_dir_name
-        self.run_dir.rename(final_run_dir)
-        self.run_dir = final_run_dir
+        # 8. Finalize only after explicit sanity success and byte-level identity.
+        self._finalize_training_run(
+            pipeline=pipeline,
+            mode="full",
+            requested_stats=["pts", "reb", "ast"],
+            sanity=sanity,
+            train_df=train_df,
+            cal_df=cal_df,
+            train_seasons=train_seasons,
+            calibration_season=calibration_season,
+            cal_end_date=cal_end_date,
+        )
         logger.info(f"Training pipeline completed successfully. Artifacts in {self.run_dir}")
 
     def run_partial(
@@ -153,6 +179,7 @@ class TrainingOrchestrator:
         retrain_minutes: bool = False,
         reselect_features: bool = False,
         force_features: list[str] | None = None,
+        allow_legacy_artifacts: bool = False,
     ):
         """
         Surgical retrain: load an existing pipeline, retrain only specified
@@ -196,7 +223,16 @@ class TrainingOrchestrator:
         if cal_end_date:
             logger.info(f"Calibration End Date: {cal_end_date} (exclusive)")
 
-        # 1. Load existing pipeline from base_model_dir
+        # 1. Validate the existing bundle before any model deserialization.
+        parent_artifact = validate_artifact_bundle(
+            base_model_dir,
+            requested_stats=["pts", "reb", "ast"],
+            allow_legacy=allow_legacy_artifacts,
+        )
+        if parent_artifact.state == "legacy_unverified":
+            logger.warning("Legacy/unverified parent %s; file hashes only, not decision-grade", parent_artifact.identity)
+
+        # Load existing pipeline from base_model_dir
         logger.info(f"Loading existing pipeline from {base_model_dir}...")
         pipeline = PlayerPropsModelPipeline.load_all(base_model_dir, self.feature_store)
         logger.info("Loaded existing pipeline (frozen models preserved)")
@@ -277,13 +313,84 @@ class TrainingOrchestrator:
             json.dump(feature_config, f, indent=4)
 
         # 10. Sanity check
-        self._run_sanity_check(pipeline, cal_df)
+        sanity = self._run_sanity_check(pipeline, cal_df)
 
-        # 11. Finalize: rename _incomplete → final
-        final_run_dir = self.run_dir.parent / self._final_run_dir_name
-        self.run_dir.rename(final_run_dir)
-        self.run_dir = final_run_dir
+        # 11. Finalize with parent identity and no replacement semantics.
+        self._finalize_training_run(
+            pipeline=pipeline,
+            mode="partial",
+            requested_stats=list(retrain_stats or []),
+            sanity=sanity,
+            train_df=train_df,
+            cal_df=cal_df,
+            train_seasons=train_seasons,
+            calibration_season=calibration_season,
+            cal_end_date=cal_end_date,
+            parent={
+                "identity": parent_artifact.identity,
+                "state": parent_artifact.state,
+                "path": str(parent_artifact.path),
+            },
+        )
         logger.info(f"Surgical retrain complete. Artifacts in {self.run_dir}")
+
+    def _finalize_training_run(
+        self,
+        *,
+        pipeline: PlayerPropsModelPipeline,
+        mode: str,
+        sanity: dict,
+        train_df: pd.DataFrame,
+        cal_df: pd.DataFrame,
+        train_seasons: list[str],
+        calibration_season: str,
+        cal_end_date: date | None,
+        parent: dict | None = None,
+        requested_stats: list[str] | None = None,
+    ) -> None:
+        with self.feature_config_path.open(encoding="utf-8") as handle:
+            effective_features = json.load(handle)
+        available_stats = [stat for stat in ["pts", "reb", "ast"] if stat in pipeline.rate_models]
+        if requested_stats is None:
+            if mode == "partial":
+                raise ValueError("Partial finalization requires the actual requested stat set")
+            requested_stats = available_stats
+        saved_feature_config = {"minutes_features": pipeline.minutes_features}
+        saved_feature_config.update({f"{stat}_rate_features": pipeline.rate_features[stat] for stat in available_stats})
+        # JSON evidence uses the same stringified quantile keys as the existing
+        # selected_features writer; joblib serialization itself stays untouched.
+        if effective_features != json.loads(json.dumps(saved_feature_config, allow_nan=False)):
+            raise ValueError("Selected features differ from the pipeline configuration actually saved")
+        manifest = build_training_manifest(
+            self.run_dir,
+            mode=mode,
+            requested_stats=requested_stats,
+            available_stats=available_stats,
+            effective_features=effective_features,
+            sanity=sanity,
+            train_settings={
+                "train_seasons": list(train_seasons),
+                "tune_hyperparams": self.tune_hyperparams,
+                "tuning_trials": self.tuning_trials,
+                "tuning_timeout": self.tuning_timeout,
+                "tuning_per_quantile": self.tuning_per_quantile,
+                "feature_tolerance": self.feature_tolerance,
+            },
+            calibration_settings={
+                "season": calibration_season,
+                "end_date_exclusive": str(cal_end_date) if cal_end_date else None,
+                "tolerance": self.CALIBRATION_TOLERANCE,
+                "hard_fail": self.CALIBRATION_HARD_FAIL,
+            },
+            data_provenance={
+                "training": observed_dataframe_provenance(train_df),
+                "calibration": observed_dataframe_provenance(cal_df),
+            },
+            parent=parent,
+            source=source_git_state(Path(__file__).resolve().parents[2]),
+        )
+        inspection = finalize_training_bundle(self.run_dir, self.final_run_dir, manifest)
+        self.run_dir = inspection.path
 
     def _resolve_hyperparams_partial(
         self,
@@ -966,63 +1073,73 @@ class TrainingOrchestrator:
         logger.info(f"Saved copula parameters to {self.run_dir / 'copula_params.json'}")
         return copula_params
 
-    def _run_sanity_check(self, pipeline: PlayerPropsModelPipeline, df: pd.DataFrame):
-        """
-        Run a single prediction using FeatureStore.get_player_game_features
-        to ensure end-to-end inference connectivity.
-        """
+    def _run_sanity_check(self, pipeline: PlayerPropsModelPipeline, df: pd.DataFrame) -> dict:
+        """Run canonical no-global-offset inference and return explicit evidence."""
         logger.info("\n=== Sanity Check: Single Game Inference ===")
 
-        # Pick a random game from the holdout set
         if df.empty:
             logger.error("Calibration dataframe is empty. Cannot run sanity check.")
-            return
+            return {"passed": False, "reason": "empty_calibration_dataframe"}
 
         sample = df.sample(1).iloc[0]
         player_id = sample["player_id"]
         game_id = sample["game_id"]
-        game_date = sample["game_date"]  # This is usually a date object or string
+        game_date = sample["game_date"]
 
         logger.info(f"Testing inference for Player {player_id}, Game {game_id}, Date {game_date}")
 
         try:
-            # Fetch features "as of" game time
             features = self.feature_store.get_player_game_features(
                 player_id=int(player_id), game_id=str(game_id), as_of_date=game_date
             )
 
             if not features:
                 logger.error("FeatureStore returned None for valid game. Check data availability.")
-                # We don't fail hard here because sometimes data gaps happen,
-                # but in a strict pipeline maybe we should.
-                return
+                return {"passed": False, "reason": "missing_inference_features"}
 
-            # Predict using Monte Carlo
-            # Reduced samples for sanity check speed, production uses more (e.g. 10000)
+            # Deliberately omit combined/global conformal offsets. Embedded per-model
+            # calibration and the optional copula path remain unchanged.
             mc = MonteCarloPredictor(pipeline, n_samples=100)
             preds = mc.predict(player_id, game_id, features, stats=["pts", "reb", "ast"])
 
+            checked_stats = []
+            prediction_evidence = {}
             for stat, p in preds.items():
                 logger.info(
                     f"  {stat.upper()}: Median={p.median:.2f}, Mean={p.mean:.2f}, Q10={p.q10:.2f}, Q90={p.q90:.2f}"
                 )
-
-                # Bounds checks
+                values = {key: float(getattr(p, key)) for key in ("mean", "median", "q10", "q90")}
+                if not all(np.isfinite(value) for value in values.values()):
+                    raise ValueError(f"Nonfinite sanity prediction for {stat}")
                 if p.mean < 0:
                     raise ValueError(f"Negative mean for {stat}: {p.mean}")
                 if p.q10 > p.q90:
                     raise ValueError(f"Quantile inversion for {stat}: Q10={p.q10} > Q90={p.q90}")
                 if p.median > 100:
                     raise ValueError(f"Unreasonably high median for {stat}: {p.median}")
+                checked_stats.append(stat)
+                prediction_evidence[stat] = values
+
+            if set(checked_stats) != {"pts", "reb", "ast"}:
+                raise ValueError("Sanity inference did not return every requested stat")
 
             logger.info("Sanity check PASSED.")
+            return {
+                "passed": True,
+                "predictor": "canonical_no_global_offsets",
+                "player_id": int(player_id),
+                "game_id": str(game_id),
+                "game_date": str(game_date),
+                "checked_stats": checked_stats,
+                "predictions": prediction_evidence,
+            }
 
         except Exception as e:
             logger.error(f"Sanity check FAILED: {e}", exc_info=True)
-            raise  # Re-raise to fail the pipeline
+            raise
 
 
-if __name__ == "__main__":
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train Player Props Models")
     parser.add_argument("--train-seasons", nargs="+", default=["22023", "22024"], help="Seasons for training")
     parser.add_argument("--cal-season", default="22025", help="Season for calibration (holdout)")
@@ -1049,7 +1166,17 @@ if __name__ == "__main__":
         "--calibrate-only",
         action="store_true",
         help="Compute combined calibration offsets on an existing model without retraining. "
-             "Requires --base-model-dir. Saves combined_calibration_offsets.json to the model directory.",
+             "Requires --base-model-dir. Writes a separate non-deployable diagnostic bundle.",
+    )
+    parser.add_argument(
+        "--diagnostics-output-dir",
+        default=None,
+        help="Root for calibration-only diagnostic bundles (default: <base-model-parent>/diagnostics)",
+    )
+    parser.add_argument(
+        "--allow-legacy-artifacts",
+        action="store_true",
+        help="Permit complete pre-manifest base bundles as legacy/unverified inputs",
     )
 
     # Surgical retrain options
@@ -1092,9 +1219,27 @@ if __name__ == "__main__":
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
 
-    args = parser.parse_args()
+    parser.add_argument(
+        "--artifacts-dir",
+        default="src/models/artifacts",
+        help="Root directory for timestamped training artifacts (default: src/models/artifacts)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        "--preflight",
+        dest="dry_run",
+        action="store_true",
+        help="Validate filesystem/config inputs and print a JSON execution plan without training",
+    )
+    return parser
 
-    # Determine mode: calibrate-only vs surgical retrain vs full retrain
+
+def _namespace_value(args: argparse.Namespace, name: str, default=None):
+    """Read an optional CLI field without inventing a value for omitted fields."""
+    return vars(args).get(name, default)
+
+
+def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> dict:
     is_partial = args.retrain_stats is not None or args.retrain_minutes
     is_calibrate_only = args.calibrate_only
 
@@ -1108,17 +1253,148 @@ if __name__ == "__main__":
     elif args.base_model_dir and not is_partial and not is_calibrate_only:
         parser.error("--base-model-dir requires --retrain-stats, --retrain-minutes, or --calibrate-only")
 
-    cal_end = datetime.strptime(args.cal_end_date, "%Y-%m-%d").date() if args.cal_end_date else None
+    try:
+        if args.diagnostics_output_dir and not is_calibrate_only:
+            raise ValueError("--diagnostics-output-dir requires --calibrate-only")
+        if args.allow_legacy_artifacts and not args.base_model_dir:
+            raise ValueError("--allow-legacy-artifacts requires --base-model-dir")
+        if args.force_features and not is_partial:
+            raise ValueError("--force-features requires partial retraining")
+        if args.retrain_stats:
+            unsupported = sorted(set(args.retrain_stats) - {"pts", "reb", "ast"})
+            if unsupported:
+                raise ValueError(f"Unsupported --retrain-stats values: {', '.join(unsupported)}")
+
+        base_model_dir = None
+        base_artifact = None
+        if args.base_model_dir:
+            base_model_dir = validate_existing_directory(args.base_model_dir, "Base model directory")
+            base_artifact = validate_artifact_bundle(
+                base_model_dir,
+                requested_stats=["pts", "reb", "ast"],
+                allow_legacy=bool(_namespace_value(args, "allow_legacy_artifacts", False)),
+            )
+
+        hyperparams_path = None
+        if args.hyperparams_path:
+            hyperparams_path, _ = validate_hyperparams_file(args.hyperparams_path)
+
+        validate_positive_int(args.tuning_trials, "--tuning-trials")
+        if args.tuning_timeout is not None:
+            validate_positive_int(args.tuning_timeout, "--tuning-timeout")
+        validate_finite_number(args.feature_tolerance, "--feature-tolerance", minimum=0.0)
+
+        validate_feature_lists()
+        known_features = {feature for features in NBA_FEATURE_LISTS.values() for feature in features}
+        unknown_features = sorted(set(args.force_features or []) - known_features)
+        if unknown_features:
+            raise ValueError(f"Unknown --force-features values: {', '.join(unknown_features)}")
+
+        cal_end = datetime.strptime(args.cal_end_date, "%Y-%m-%d").date() if args.cal_end_date else None
+        if is_calibrate_only:
+            if base_model_dir is None:
+                raise ValueError("--base-model-dir is required for calibration-only output")
+            diagnostics_root = _namespace_value(args, "diagnostics_output_dir", None)
+            if diagnostics_root is None:
+                diagnostics_root = base_model_dir.parent / "diagnostics"
+            diagnostics_dir = validate_output_path(diagnostics_root)
+            if diagnostics_dir == base_model_dir or base_model_dir in diagnostics_dir.parents:
+                raise ValueError("Diagnostic output must be outside the attached source-model directory")
+            artifacts_dir = None
+        else:
+            artifacts_root = _namespace_value(args, "artifacts_dir", "src/models/artifacts")
+            if not isinstance(artifacts_root, str | Path):
+                raise ValueError("--artifacts-dir must be a filesystem path")
+            artifacts_dir = validate_output_path(artifacts_root)
+            diagnostics_dir = None
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+
+    return {
+        "mode": "calibration-only" if is_calibrate_only else "partial" if is_partial else "full",
+        "is_partial": is_partial,
+        "is_calibrate_only": is_calibrate_only,
+        "cal_end": cal_end,
+        "base_model_dir": base_model_dir,
+        "base_artifact": base_artifact,
+        "hyperparams_path": hyperparams_path,
+        "artifacts_dir": artifacts_dir,
+        "diagnostics_dir": diagnostics_dir,
+    }
+
+
+def _training_plan(args: argparse.Namespace, validated: dict) -> dict:
+    mode = validated["mode"]
+    output_root = validated["diagnostics_dir"] if mode == "calibration-only" else validated["artifacts_dir"]
+    planned_name = "nba_calibration_<runtime_timestamp>" if mode == "calibration-only" else "nba_run_<runtime_timestamp>"
+    return {
+        "command": "nba-training",
+        "status": "preflight_only",
+        "mode": mode,
+        "execution": False,
+        "training_authorized": False,
+        "data_readiness": {"checked": False, "status": "not_checked"},
+        "database_target": "LOCAL" if _namespace_value(args, "local", False) else "REMOTE",
+        "train_seasons": args.train_seasons,
+        "calibration": {
+            "season": args.cal_season,
+            "end_date_exclusive": str(validated["cal_end"]) if validated["cal_end"] else None,
+        },
+        "base_model_dir": str(validated["base_model_dir"]) if validated["base_model_dir"] else None,
+        "base_artifact_identity": (
+            validated["base_artifact"].to_plan_dict() if validated["base_artifact"] else None
+        ),
+        "output": {
+            "root": str(output_root),
+            "planned_directory_name": planned_name,
+            "created": False,
+        },
+        "retrain": {
+            "stats": args.retrain_stats or [],
+            "minutes": bool(args.retrain_minutes),
+            "reselect_features": bool(args.reselect_features),
+            "force_features": args.force_features or [],
+        },
+        "tuning": {
+            "enabled": bool(args.tune),
+            "trials": args.tuning_trials,
+            "timeout_seconds": args.tuning_timeout,
+            "per_quantile": bool(args.tuning_per_quantile),
+            "hyperparams_path": str(validated["hyperparams_path"]) if validated["hyperparams_path"] else None,
+            "feature_tolerance": args.feature_tolerance,
+        },
+    }
+
+
+def main(argv=None):
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    validated = _validate_training_args(parser, args)
+
+    if _namespace_value(args, "dry_run", False):
+        print(json.dumps(_training_plan(args, validated), indent=2, sort_keys=True))
+        return 0
+
+    is_partial = validated["is_partial"]
+    is_calibrate_only = validated["is_calibrate_only"]
+    cal_end = validated["cal_end"]
 
     if is_calibrate_only:
         # Calibrate-only mode: load existing model, compute combined calibration offsets, save, exit
-        from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
+        from src.models.monte_carlo import load_copula_params
 
         logger.info("=== Calibrate-Only Mode ===")
         logger.info(f"Base model: {args.base_model_dir}")
         logger.info(f"Calibration Season: {args.cal_season}")
+        if validated["base_artifact"].state == "legacy_unverified":
+            logger.warning("Legacy/unverified diagnostic source %s", validated["base_artifact"].identity)
         if cal_end:
             logger.info(f"Calibration End Date: {cal_end} (exclusive)")
+
+        diagnostic_name = f"nba_calibration_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        diagnostic_incomplete, diagnostic_final = create_exclusive_incomplete_dir(
+            validated["diagnostics_dir"], diagnostic_name
+        )
 
         engine = get_engine(local=args.local)
         feature_store = FeatureStore(engine)
@@ -1141,8 +1417,7 @@ if __name__ == "__main__":
         if copula_params:
             logger.info(f"Loaded copula params: { {k: f'{v:.4f}' for k, v in copula_params.items()} }")
 
-        # Create a temporary orchestrator just for the evaluation method
-        # We need its run_dir to point to the base model directory for saving offsets
+        # Minimal output adapter for the existing numerical diagnostic routine.
         class _CalOnlyOrchestrator:
             """Minimal wrapper to reuse _evaluate_combined_calibration."""
             CALIBRATION_TOLERANCE = TrainingOrchestrator.CALIBRATION_TOLERANCE
@@ -1156,17 +1431,36 @@ if __name__ == "__main__":
                 with open(self.run_dir / filename, "w") as f:
                     json.dump(reports, f, indent=4)
 
-        cal_orch = _CalOnlyOrchestrator(args.base_model_dir)
+        cal_orch = _CalOnlyOrchestrator(diagnostic_incomplete)
 
-        # Run combined calibration evaluation (this saves offsets to model dir)
+        # Run diagnostic evaluation. Canonical replay never consumes these offsets.
         TrainingOrchestrator._evaluate_combined_calibration(
             cal_orch, pipeline, cal_df, copula_params=copula_params
         )
-
-        logger.info(f"Calibrate-only complete. Offsets saved to {args.base_model_dir}/combined_calibration_offsets.json")
+        source_after = validate_artifact_bundle(
+            validated["base_model_dir"], ["pts", "reb", "ast"], allow_legacy=args.allow_legacy_artifacts
+        )
+        if source_after.identity != validated["base_artifact"].identity:
+            raise ValueError("Attached model changed during calibration diagnostics")
+        diagnostic_manifest = build_diagnostic_manifest(
+            diagnostic_incomplete,
+            source_model=validated["base_artifact"],
+            config={
+                "calibration_season": args.cal_season,
+                "calibration_end_date_exclusive": str(cal_end) if cal_end else None,
+                "observed_data": observed_dataframe_provenance(cal_df),
+                "global_offsets": "diagnostic_only_non_deployable",
+            },
+            completed=True,
+        )
+        diagnostic_path = finalize_diagnostic_bundle(
+            diagnostic_incomplete, diagnostic_final, diagnostic_manifest
+        )
+        logger.info(f"Calibrate-only diagnostic complete: {diagnostic_path}")
 
     else:
         orchestrator = TrainingOrchestrator(
+            base_artifacts_dir=str(validated["artifacts_dir"]),
             tune_hyperparams=args.tune,
             tuning_trials=args.tuning_trials,
             tuning_timeout=args.tuning_timeout,
@@ -1186,6 +1480,7 @@ if __name__ == "__main__":
                 retrain_minutes=args.retrain_minutes,
                 reselect_features=args.reselect_features,
                 force_features=args.force_features,
+                allow_legacy_artifacts=args.allow_legacy_artifacts,
             )
         else:
             orchestrator.run(
@@ -1193,3 +1488,9 @@ if __name__ == "__main__":
                 calibration_season=args.cal_season,
                 cal_end_date=cal_end,
             )
+
+    return 0
+
+
+if __name__ == "__main__":
+    main()

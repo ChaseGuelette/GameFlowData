@@ -1,6 +1,7 @@
 """Tests for train_pipeline module (TrainingOrchestrator)."""
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -634,7 +635,6 @@ class TestRunIntegration:
             "pts_rate_features": {"0.5": ["avg_minutes_10"]},
             "reb_rate_features": {"0.5": ["avg_minutes_10"]},
             "ast_rate_features": {"0.5": ["avg_minutes_10"]},
-            "threes_rate_features": {"0.5": ["avg_minutes_10"]},
         }
 
         # Mock pipeline returned by _train_models
@@ -648,6 +648,20 @@ class TestRunIntegration:
         mock_pipeline = MagicMock()
         mock_pipeline.minutes_model = mock_model
         mock_pipeline.rate_models = {"pts": mock_model, "reb": mock_model, "ast": mock_model}
+        mock_pipeline.minutes_features = feature_config["minutes_features"]
+        mock_pipeline.rate_features = {
+            stat: feature_config[f"{stat}_rate_features"] for stat in mock_pipeline.rate_models
+        }
+
+        def save_artifact_files(output_dir):
+            # Exercise presence/hash/finalization, not model deserialization.
+            for filename in (
+                "minutes_model.joblib", "feature_config.joblib",
+                "pts_rate_model.joblib", "reb_rate_model.joblib", "ast_rate_model.joblib",
+            ):
+                (Path(output_dir) / filename).write_bytes(b"Controlled artifact bytes, not a serialized model")
+
+        mock_pipeline.save_all.side_effect = save_artifact_files
 
         # Mock MC predictions — must set ALL quantile attrs as floats
         # because _evaluate_combined_calibration accesses q10/q25/q50/q75/q90/mean
