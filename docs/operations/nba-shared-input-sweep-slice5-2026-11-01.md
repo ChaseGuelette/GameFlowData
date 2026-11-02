@@ -12,7 +12,7 @@ Tech stack: existing Python, pandas, NumPy, argparse, artifact validation, pytes
 
 - November 1, 2026: Chase requested scoping/setup now, with implementation waiting for coding slice 3 to complete.
 - Historical S1 is deferred by Chase. Do not merge, modify, copy or make S1 integration a prerequisite for this slice.
-- Current delivery: implementation complete and controlled-path verified; independent **SPEC PASS / QUALITY APPROVED**. Source remains uncommitted in the isolated worktree, not merged. Numerical/source-policy decisions, real-data acceptance and long runs remain gated.
+- Current delivery: implementation complete and controlled-path verified; independent **SPEC PASS / QUALITY APPROVED**. Exact reviewed source checkpoint `8da6176` is integrated on main `a44b09a`, with the slice-2 artifact-validator dependency reconciled. See [integration evidence](nba-reviewed-source-integration-2026-11-01.md). Numerical/source-policy decisions, real-data acceptance and long runs remain gated.
 - Initial planning snapshot: coding slices 1–2 were uncommitted in `repair/nba-cli-preflight` and slice 3 was active in `repair/nba-flat-replay`; main lacked their complete source. Slice 3 was subsequently merged during this task; see the final integration boundary below. Slices 1–2 remain separately owned.
 - All grid values are operator inputs, not recommended trading parameters. Raw/no-BL and flat staking are the comparison controls. BL experiments remain optional and finalist-only for model evaluation.
 

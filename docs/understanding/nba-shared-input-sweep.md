@@ -2,7 +2,7 @@
 
 ## Current state
 
-Chase approved implementation using the available slice-3 plumbing on November 1, 2026. Work is complete and controlled-path verified in `repair/nba-shared-input-sweep`, at `C:/Users/Chase/Projects/GameFlowData-worktrees/nba-shared-input-sweep`: independent **SPEC PASS / QUALITY APPROVED**. It remains uncommitted and unmerged; this is not historical/model certification.
+Chase approved implementation using the available slice-3 plumbing on November 1, 2026. Work is complete and controlled-path verified: independent **SPEC PASS / QUALITY APPROVED**. Exact reviewed source `8da6176` and the slice-2 artifact validator are now integrated on main `a44b09a`; actual-main combined checks passed. See the [integration record](../operations/nba-reviewed-source-integration-2026-11-01.md). This is not historical/model certification; S1 remains deferred.
 
 The starting checkout is main `10d9c22` plus exact read-only copies of slice-3 `backtest_harness.py` and `bet_simulator.py`, and slice-2 `nba_artifacts.py`. The harness snapshot was refreshed after a slice-3 precision fix; all three dependencies match upstream at final acceptance. These are inherited prerequisites, not slice-5 edits. Main separately advanced to `79a7443` with slice 3 merged while this work ran; this lane did not perform that integration. S1 remains deferred and untouched.
 

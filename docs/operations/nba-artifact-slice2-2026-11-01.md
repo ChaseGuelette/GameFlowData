@@ -2,6 +2,8 @@
 
 ## Kick off immediately
 
+**Source integration closed:** Chase subsequently authorized completing this gate and pushing reviewed work, with historical S1 excluded. Source checkpoint `9db47d2` was neutrally reconciled with final slice 3 and integrated into main `a44b09a`. Independent SPEC PASS / QUALITY APPROVED; actual-main 186-test suite and bounded strict/legacy/flat CLI checks passed. The artifact validator now serves replay and the integrated slice-5 sweep. [Integration evidence](nba-reviewed-source-integration-2026-11-01.md). Earlier uncommitted/no-integration instructions below describe the original scope, not the current source state; real trained-model/data/platform acceptance remains unverified.
+
 This is the executable specification authorized by Chase's request to scope and proceed with slice 2. Implement only this artifact boundary; do not expand to replay sizing or historical policy.
 
 - This chat: one implementation worker, followed by independent spec/quality review and coordinator bounded execution checks.
