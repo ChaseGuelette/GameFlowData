@@ -1135,15 +1135,18 @@ def _read_linker_records(conn, query: str, params: dict[str, Any] | None = None)
     return [dict(row._mapping) for row in conn.execute(text(query), params or {})]
 
 
-def _window_fixture_dates(engine, cursor: int, high_water: int) -> tuple[date, date]:
-    """Return the exact ET fixture-date interval for a bounded PK window."""
+def _window_fixture_dates(engine, cursor: int, high_water: int, *, row_limit: int | None = None) -> tuple[date, date]:
+    """Return ET fixture dates for only the next processable PK rows."""
     with engine.begin() as conn:
         _set_linker_timeouts(conn)
         row = conn.execute(text("""
             SELECT MIN(commence_time) AS min_time, MAX(commence_time) AS max_time
-            FROM raw_player_props_combined
-            WHERE staging_id > :cursor AND staging_id <= :high_water
-        """), {"cursor": cursor, "high_water": high_water}).one()
+            FROM (
+                SELECT commence_time FROM raw_player_props_combined
+                WHERE staging_id > :cursor AND staging_id <= :high_water
+                ORDER BY staging_id LIMIT :row_limit
+            ) bounded
+        """), {"cursor": cursor, "high_water": high_water, "row_limit": row_limit}).one()
     if row.min_time is None:
         today = datetime.now(EASTERN).date()
         return today, today + timedelta(days=1)
@@ -1466,7 +1469,7 @@ def _run_resume_linker(
                     "SELECT MAX(staging_id) FROM raw_player_props_combined"
                 )).scalar_one()
                 high_water = max(current, int(source_high) if source_high is not None else current)
-        fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water))
+        fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water), row_limit=batch_size * max_batches)
         context = _load_linker_context(engine, fixture_start, fixture_end) if current < int(high_water) else {
             "schedule_status": {"reference_available": None}
         }
@@ -1523,7 +1526,7 @@ def _run_resume_linker(
                     completed_cycle = True
 
             if current < int(high_water):
-                fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water))
+                fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water), row_limit=batch_size * max_batches)
                 context = _load_linker_context(engine, fixture_start, fixture_end)
             else:
                 context = {"schedule_status": {"reference_available": None}}
@@ -1663,7 +1666,7 @@ def link_incremental(
             )
         assert cursor is not None and high_water is not None
         fixed_cursor, fixed_high_water = cursor, high_water
-        fixture_start, fixture_end = _window_fixture_dates(engine, fixed_cursor, fixed_high_water)
+        fixture_start, fixture_end = _window_fixture_dates(engine, fixed_cursor, fixed_high_water, row_limit=batch_size * max_batches)
         context = _load_linker_context(engine, fixture_start, fixture_end)
         return _run_fixed_linker(
             engine, context, cursor=fixed_cursor, high_water=fixed_high_water, batch_size=batch_size,
@@ -2307,6 +2310,12 @@ def main():
             logging.error("Incremental linker failed: %s", exc, exc_info=True)
             return 1
         if summary and summary.get("status") == "incomplete":
+            if (args.resume and not args.dry_run and summary.get("rows_scanned", 0) > 0
+                    and summary.get("identity_ready") and summary.get("conflict_count") == 0
+                    and summary.get("reference_unverified_count") == 0):
+                logging.warning("Bounded resume batch committed successfully; historical backlog remains at cursor=%s high_water=%s",
+                                summary["cursor"], summary["high_water"])
+                return 0
             return 2
     return 0
 
