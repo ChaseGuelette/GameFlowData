@@ -96,6 +96,10 @@ def calculate_and_insert_snapshot(engine, season_start_date, snapshot_date):
             SELECT position_group FROM player_position_history ph
             WHERE ph.player_id = pgs.player_id
               AND ph.snapshot_date < tgs.game_date::DATE
+              AND (ph.primary_position, ph.position_group) IN (
+                  ('G', 'G'), ('G-F', 'W'), ('F-G', 'W'), ('F', 'W'),
+                  ('C', 'B'), ('C-F', 'B'), ('F-C', 'B')
+              )
             ORDER BY ph.snapshot_date DESC LIMIT 1
         ) ph ON TRUE
 

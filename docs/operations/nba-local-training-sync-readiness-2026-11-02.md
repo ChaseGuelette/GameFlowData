@@ -87,6 +87,8 @@ Existing journals are refused; use fresh descriptive filenames for reruns. The O
 
 ## Related context
 
+Latest follow-up: [November 3 position repair and retraining-readiness gates](nba-position-repair-and-retraining-readiness-2026-11-03.md) records the successful owner transfer, subsequent advanced catch-up, local position guard correction and exact historical-repair candidates. Earlier counts above are historical audit evidence, not current post-catch-up coverage.
+
 ### Consumer inventory checked during implementation
 
 `src/models/features/nba/training_loader.py:301-369` directly consumes player/team game stats, player position history, player basic/advanced averages, team averages and opponent-allowed rows. `src/models/features/nba/injury_context.py:217-258` additionally consumes injuries. These eight non-quote physical sources are covered by the selected support-table allowlist. The other five support tables serve reference/upstream needs rather than direct reads in this inspected loader.

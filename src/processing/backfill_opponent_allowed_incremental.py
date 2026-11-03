@@ -155,7 +155,7 @@ def backfill_opponent_allowed_incremental(
 
 
 def fetch_raw_allowed_stats_incremental(engine, start_date: date, end_date: date | None = None) -> pd.DataFrame:
-    """Fetch complete history for seasons represented in the requested target range."""
+    """Fetch season history, excluding players without a valid pre-game position."""
     if end_date is None:
         end_date = date.today()
     query = text("""
@@ -184,9 +184,13 @@ def fetch_raw_allowed_stats_incremental(engine, start_date: date, end_date: date
             ON tgs.game_id = pgs.game_id AND tgs.team_id != pgs.team_id AND pgs.min > 0
         JOIN player_game_advanced_stats adv
             ON pgs.game_id = adv.game_id AND pgs.player_id = adv.player_id
-        LEFT JOIN LATERAL (
+        JOIN LATERAL (
             SELECT position_group FROM player_position_history ph
             WHERE ph.player_id = pgs.player_id AND ph.snapshot_date < tgs.game_date::DATE
+              AND (ph.primary_position, ph.position_group) IN (
+                  ('G', 'G'), ('G-F', 'W'), ('F-G', 'W'), ('F', 'W'),
+                  ('C', 'B'), ('C-F', 'B'), ('F-C', 'B')
+              )
             ORDER BY ph.snapshot_date DESC LIMIT 1
         ) ph ON TRUE
         WHERE tgs.game_date::DATE <= :end_date

@@ -63,7 +63,7 @@ def update_snapshot(engine, snapshot_date: date):
                AND adv.player_id = box.player_id
             WHERE box.game_date::DATE BETWEEN (CAST(:snap_date AS DATE) - INTERVAL '1 year')
                                           AND CAST(:snap_date AS DATE)
-              AND adv.position IS NOT NULL
+              AND adv.position IN ('G', 'G-F', 'F-G', 'F', 'C', 'C-F', 'F-C')
               AND (adv.did_not_play = FALSE OR adv.did_not_play IS NULL)
         ),
         latest_team_info AS (
@@ -118,7 +118,8 @@ def update_snapshot(engine, snapshot_date: date):
             CASE
                 WHEN position = 'G' THEN 'G'
                 WHEN position IN ('G-F', 'F-G', 'F') THEN 'W'
-                ELSE 'B'
+                WHEN position IN ('C', 'C-F', 'F-C') THEN 'B'
+                ELSE NULL
             END,
             games_at_pos::NUMERIC / NULLIF(total_games, 0),
             total_games
@@ -182,7 +183,7 @@ def backfill_all_snapshots(engine):
             JOIN public.player_game_stats box
                 ON adv.game_id = box.game_id
                AND adv.player_id = box.player_id
-            WHERE adv.position IS NOT NULL
+            WHERE adv.position IN ('G', 'G-F', 'F-G', 'F', 'C', 'C-F', 'F-C')
               AND (adv.did_not_play = FALSE OR adv.did_not_play IS NULL)
         ),
         player_windows AS (
@@ -254,7 +255,8 @@ def backfill_all_snapshots(engine):
             CASE
                 WHEN position = 'G' THEN 'G'
                 WHEN position IN ('G-F', 'F-G', 'F') THEN 'W'
-                ELSE 'B'
+                WHEN position IN ('C', 'C-F', 'F-C') THEN 'B'
+                ELSE NULL
             END,
             games_at_pos::NUMERIC / NULLIF(total_games, 0),
             total_games

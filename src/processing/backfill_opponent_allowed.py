@@ -38,7 +38,7 @@ def fetch_raw_allowed_stats(engine, seasons):
     query = text("""
         SELECT
             tgs.team_id, tgs.game_id, tgs.game_date::DATE as game_date, tgs.season_id,
-            COALESCE(ph.position_group, 'U') as position_group,
+            ph.position_group,
 
             -- Core Stats
             COALESCE(SUM(pgs.pts), 0) as pts,
@@ -62,9 +62,13 @@ def fetch_raw_allowed_stats(engine, seasons):
             ON tgs.game_id = pgs.game_id AND tgs.team_id != pgs.team_id AND pgs.min > 0
         JOIN player_game_advanced_stats adv
             ON pgs.game_id = adv.game_id AND pgs.player_id = adv.player_id
-        LEFT JOIN LATERAL (
+        JOIN LATERAL (
             SELECT position_group FROM player_position_history ph
             WHERE ph.player_id = pgs.player_id AND ph.snapshot_date < tgs.game_date::DATE
+              AND (ph.primary_position, ph.position_group) IN (
+                  ('G', 'G'), ('G-F', 'W'), ('F-G', 'W'), ('F', 'W'),
+                  ('C', 'B'), ('C-F', 'B'), ('F-C', 'B')
+              )
             ORDER BY ph.snapshot_date DESC LIMIT 1
         ) ph ON TRUE
         WHERE tgs.season_id IN :seasons
