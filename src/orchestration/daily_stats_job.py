@@ -313,6 +313,7 @@ def run_command(
     timeout: int = 600,
     max_retries: int = 0,
     retry_delay: int = 15,
+    retry_only_if: str | None = None,
 ) -> bool:
     """Run argv from the project root and retain a sanitized final failure."""
     global last_command_error
@@ -366,6 +367,8 @@ def run_command(
             logger.error("  %s", final_error)
 
         if attempt < attempts:
+            if retry_only_if is not None and retry_only_if not in final_error:
+                break
             delay = retry_delay * (2 ** (attempt - 1))
             logger.info(f"  Retrying in {delay}s (attempt {attempt + 1}/{attempts})...")
             time.sleep(delay)
@@ -713,6 +716,8 @@ def main():
                     [python, "src/processing/nba_linker_local.py", "incremental", "--resume", "--repair-game-conflicts",
                      "--batch-size", "500", "--max-batches", "20"],
                     "Linking Props (Bounded Durable Resume)", timeout=600,
+                    max_retries=4, retry_delay=30,
+                    retry_only_if="another production props linker invocation holds the durable checkpoint lock",
                 ):
                     fail(last_command_error or "Bounded props linking failed or remains incomplete")
         except Exception as exc:
