@@ -1244,6 +1244,7 @@ def _resolve_linker_page(
 ) -> dict[str, Any]:
     proposed = {"player_id": 0, "game_id": 0, "team_id": 0}
     corrected_game_ids = 0
+    corrected_team_ids = 0
     conflicts: set[int] = set()
     reference_unverified: set[int] = set()
     resolved: list[
@@ -1336,14 +1337,14 @@ def _resolve_linker_page(
         game_correction = bool(
             repair_candidate
             and team_id is not None
-            and (old["team_id"] is None or int(old["team_id"]) == int(team_id))
         )
         if repair_candidate and not game_correction:
             game_id = old["game_id"]
             conflicts.add(staging_id)
             if team_id is None:
                 reference_unverified.add(staging_id)
-        if old["team_id"] is not None:
+        team_correction = bool(game_correction and team_id is not None and old["team_id"] is not None and int(old["team_id"]) != int(team_id))
+        if old["team_id"] is not None and not game_correction:
             if team_id is None:
                 reference_unverified.add(staging_id)
             elif int(old["team_id"]) != int(team_id):
@@ -1356,15 +1357,19 @@ def _resolve_linker_page(
             proposed[column] += 1
         if game_correction:
             corrected_game_ids += 1
+        if team_correction:
+            corrected_team_ids += 1
         effective = {column: old[column] if old[column] is not None else new[column] for column in proposed}
         if game_correction:
             effective["game_id"] = game_id
+            effective["team_id"] = team_id
         if any(value is None for value in effective.values()):
             unresolved_ids.append(staging_id)
         if fills or game_correction:
             updates.append({
                 "id": staging_id,
                 "repair_game": game_correction,
+                "repair_team": team_correction,
                 **new,
                 **{f"old_{column}": value for column, value in old.items()},
                 **{column: row.get(column) for column in (
@@ -1378,7 +1383,7 @@ def _resolve_linker_page(
             UPDATE raw_player_props_combined
             SET player_id = COALESCE(player_id, :player_id),
                 game_id = CASE WHEN :repair_game THEN :game_id ELSE COALESCE(game_id, :game_id) END,
-                team_id = COALESCE(team_id, :team_id)
+                team_id = CASE WHEN :repair_team THEN :team_id ELSE COALESCE(team_id, :team_id) END
             WHERE staging_id = :id
               AND player_id IS NOT DISTINCT FROM :old_player_id
               AND game_id IS NOT DISTINCT FROM :old_game_id
@@ -1398,6 +1403,7 @@ def _resolve_linker_page(
         "proposed": proposed,
         "corrected_game_ids": corrected_game_ids,
         "changed": changed,
+        "corrected_team_ids": corrected_team_ids,
         "conflicts": sorted(conflicts),
         "reference_unverified": sorted(reference_unverified),
         "first_unresolved_id": min(
@@ -1418,6 +1424,7 @@ def _run_fixed_linker(
     current = cursor
     totals = {"player_id": 0, "game_id": 0, "team_id": 0}
     scanned = changed = batches = corrected_game_ids = 0
+    corrected_team_ids = 0
     first_unresolved = None
     conflict_ids: set[int] = set()
     unverified_ids: set[int] = set()
@@ -1445,6 +1452,7 @@ def _run_fixed_linker(
         scanned += len(rows)
         changed += result["changed"]
         corrected_game_ids += result["corrected_game_ids"]
+        corrected_team_ids += result["corrected_team_ids"]
         for column in totals:
             totals[column] += result["proposed"][column]
         if result["first_unresolved_id"] is not None:
@@ -1464,6 +1472,7 @@ def _run_fixed_linker(
         "rows_updated": changed,
         "fill_candidates": totals,
         "corrected_game_ids": corrected_game_ids,
+        "corrected_team_ids": corrected_team_ids,
         "first_unresolved_id": first_unresolved,
         "identity_ready": first_unresolved is None,
         "conflict_count": len(conflict_ids),
@@ -1522,9 +1531,11 @@ def _run_resume_linker(
 
     totals = {"player_id": 0, "game_id": 0, "team_id": 0}
     scanned = changed = batches = corrected_game_ids = 0
+    corrected_team_ids = 0
     conflict_ids: set[int] = set()
     unverified_ids: set[int] = set()
     completed_cycle = False
+    batch_identity_ready = True
 
     with engine.connect() as conn:
         _set_linker_timeouts(conn, local=False)
@@ -1596,6 +1607,7 @@ def _run_resume_linker(
                         current = int(rows[-1]["staging_id"])
                         page_unresolved = page_result["first_unresolved_id"]
                         if page_unresolved is not None:
+                            batch_identity_ready = False
                             first_unresolved = min(int(first_unresolved), page_unresolved) if first_unresolved is not None else page_unresolved
                     if not dry_run:
                         if current >= int(high_water):
@@ -1623,6 +1635,7 @@ def _run_resume_linker(
                     scanned += len(rows)
                     changed += page_result["changed"]
                     corrected_game_ids += page_result["corrected_game_ids"]
+                    corrected_team_ids += page_result["corrected_team_ids"]
                     for column in totals:
                         totals[column] += page_result["proposed"][column]
                     conflict_ids.update(page_result["conflicts"])
@@ -1643,8 +1656,10 @@ def _run_resume_linker(
                 "rows_updated": changed,
                 "fill_candidates": totals,
                 "corrected_game_ids": corrected_game_ids,
+                "corrected_team_ids": corrected_team_ids,
                 "first_unresolved_id": first_unresolved,
                 "identity_ready": first_unresolved is None,
+                "batch_identity_ready": batch_identity_ready,
                 "scanned_window_complete": complete,
                 "cycle_checkpoint_rotated": completed_cycle and not dry_run,
                 "conflict_count": len(conflict_ids),
@@ -2372,7 +2387,7 @@ def main():
             return 1
         if summary and summary.get("status") == "incomplete":
             if (args.resume and not args.dry_run and summary.get("rows_scanned", 0) > 0
-                    and summary.get("identity_ready") and summary.get("conflict_count") == 0
+                    and summary.get("batch_identity_ready", summary.get("identity_ready")) and summary.get("conflict_count") == 0
                     and summary.get("reference_unverified_count") == 0):
                 logging.warning("Bounded resume batch committed successfully; historical backlog remains at cursor=%s high_water=%s",
                                 summary["cursor"], summary["high_water"])
