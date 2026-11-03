@@ -11,6 +11,8 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
 
+from src.models.nba_training_chronology import temporal_split
+
 from .feature_store import (
     MINUTES_FEATURES,
     RATE_FEATURES_AST,
@@ -95,6 +97,7 @@ class QuantileModelSuite:
         y: pd.Series,
         feature_names_per_quantile: dict[float, list[str]],
         sample_weight: pd.Series | None = None,
+        dates=None,
     ) -> dict:
         """
         Train separate models for each quantile using per-quantile feature sets.
@@ -114,8 +117,9 @@ class QuantileModelSuite:
         if sample_weight is not None:
             arrays.append(sample_weight)
 
-        split_results = train_test_split(
+        split_results = temporal_split(
             *arrays,
+            dates=dates,
             test_size=self.config.val_fraction,
             shuffle=False,
         )
@@ -350,7 +354,8 @@ class PlayerPropsModelPipeline:
         # rate_features: {"pts": {0.1: [...], ...}, "reb": {...}, ...}
         self.rate_features: dict[str, dict[float, list[str]]] = {}
 
-    def train_minutes_model(self, df: pd.DataFrame, hyperparams: dict | None = None) -> dict:
+    def train_minutes_model(self, df: pd.DataFrame, hyperparams: dict | None = None,
+                            *, chronological_dates: bool = False) -> dict:
         """Train the minutes prediction model with per-quantile features."""
         print("\n" + "=" * 60)
         print("TRAINING MINUTES MODEL")
@@ -394,7 +399,8 @@ class PlayerPropsModelPipeline:
 
         # Train
         self.minutes_model = QuantileModelSuite(config)
-        results = self.minutes_model.train(X, y, per_q_available)
+        split_kwargs = {'dates': df.loc[valid_mask, 'game_date']} if chronological_dates else {}
+        results = self.minutes_model.train(X, y, per_q_available, **split_kwargs)
 
         return results
 
@@ -404,6 +410,7 @@ class PlayerPropsModelPipeline:
         stats: list[str] | None = None,
         sample_weight: pd.Series | None = None,
         hyperparams: dict | None = None,
+        *, chronological_dates: bool = False,
     ) -> dict:
         """Train rate models for each stat with per-quantile features."""
         stats = stats or ["pts", "reb", "ast"]
@@ -465,7 +472,8 @@ class PlayerPropsModelPipeline:
 
             # Train regular quantile model suite
             model_suite = QuantileModelSuite(config)
-            results = model_suite.train(X, y, per_q_available, sample_weight=w)
+            split_kwargs = {'dates': df.loc[valid_mask, 'game_date']} if chronological_dates else {}
+            results = model_suite.train(X, y, per_q_available, sample_weight=w, **split_kwargs)
             self.rate_models[stat] = model_suite
             all_results[stat] = results
 

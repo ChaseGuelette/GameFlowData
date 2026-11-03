@@ -69,10 +69,14 @@ class FeatureStore:
     - Opponent stats derived via join on opponent_id
     """
 
-    def __init__(self, engine, config: FeatureConfig | None = None, *, historical_sources=None):
+    def __init__(self, engine, config: FeatureConfig | None = None, *, historical_sources=None,
+                 acquisition_limits=None):
         self.engine = engine
         self.config = config or FeatureConfig()
         self.historical_sources = historical_sources
+        from src.models.features.nba.acquisition import AcquisitionBudget
+
+        self.acquisition_budget = AcquisitionBudget(acquisition_limits) if acquisition_limits is not None else None
 
     def get_player_game_features(
         self,
@@ -131,9 +135,11 @@ class FeatureStore:
         return DateRangeFeatureLoader(self).load(request, chunk_size=chunk_size)
 
     def get_training_dataset(self, seasons: list[str], *, historical_policy: HistoricalPolicy | None = None,
-                             historical_evidence: tuple = (), controlled_historical_evidence: bool = False) -> pd.DataFrame:
+                             historical_evidence: tuple = (), controlled_historical_evidence: bool = False,
+                             historical_role: str | None = None) -> pd.DataFrame:
         """Build complete training dataset."""
         request = TrainingFeatureRequest(seasons=seasons, historical_policy=historical_policy,
+                                         historical_role=historical_role,
                                          historical_evidence=historical_evidence,
                                          controlled_historical_evidence=controlled_historical_evidence)
         return TrainingFeatureLoader(self).load(request)

@@ -282,7 +282,8 @@ def bootstrap_runtime(config: SweepConfig, plan: dict) -> Runtime:
     historical = config.historical
     policy = recheck_attachment(historical)
     engine = get_engine(local=config.local)
-    store = (FeatureStore(engine, historical_sources=make_sources(engine, historical))
+    store = (FeatureStore(engine, historical_sources=make_sources(engine, historical),
+                          acquisition_limits=config.acquisition_limits)
              if historical else FeatureStore(engine))
     pipeline = PlayerPropsModelPipeline.load_all(plan["artifact"]["path"], store)
     predictor = MonteCarloPredictor(pipeline, **copy.deepcopy(plan["predictor_settings"]))
@@ -358,6 +359,9 @@ def acquire_shared_inputs(config: SweepConfig, plan: dict, runtime: Runtime) -> 
                 raise ValueError('Historical runtime policy or source mode mismatch')
             if store.historical_sources is None:
                 raise ValueError('Historical runtime source reader missing')
+            if (store.acquisition_budget is None
+                    or store.acquisition_budget.limits != config.acquisition_limits):
+                raise ValueError('Historical runtime acquisition limits mismatch')
         stage = "game_dates"
         dates = harness._get_game_dates(config.start, config.end)
         if (not isinstance(dates, list) or any(type(value) is not date or not config.start <= value <= config.end

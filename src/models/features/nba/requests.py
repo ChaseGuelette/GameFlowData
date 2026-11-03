@@ -58,3 +58,4 @@ class TrainingFeatureRequest:
     historical_policy: HistoricalPolicy | None = None
     historical_evidence: tuple[HistoricalPlayerEvidence, ...] = ()
     controlled_historical_evidence: bool = False
+    historical_role: str | None = None

@@ -617,8 +617,14 @@ class TestRunIntegration:
     @patch("src.models.train_pipeline.MonteCarloPredictor")
     def test_full_run_completes(self, mock_mc_cls, orchestrator, sample_df):
         """Test that run() executes all steps without error."""
-        # Mock feature_store
-        orchestrator.feature_store.get_training_dataset.return_value = sample_df
+        # Use distinct, chronologically ordered fit/calibration populations.
+        train_df = sample_df.copy()
+        train_df["season_id"] = "22023"
+        train_df["game_id"] = [f"00223{i:05d}" for i in range(len(train_df))]
+        train_df["game_date"] = pd.date_range("2023-10-22", periods=len(train_df), freq="D")
+        cal_df = sample_df.copy()
+        cal_df["season_id"] = "22024"
+        orchestrator.feature_store.get_training_dataset.side_effect = [train_df, cal_df]
         orchestrator.feature_store.get_player_game_features.return_value = {
             "avg_minutes_10": 28.0,
         }

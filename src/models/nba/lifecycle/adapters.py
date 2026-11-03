@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from src.models.features.nba.acquisition import limits_argv
 from src.models.nba.lifecycle.config import ResolvedConfig, repo_root
 
 __all__ = ["repo_root", "build_training_command", "build_sweep_command", "build_audit_command"]
@@ -23,7 +24,20 @@ def build_training_command(resolved: ResolvedConfig, *, artifact_root: Path) -> 
         argv += ["--tune"]
     if resolved.hyperparams_path is not None:
         argv += ["--hyperparams-path", str(resolved.hyperparams_path)]
-    return argv
+    return argv + _historical_arguments(resolved)
+
+
+def _historical_arguments(resolved):
+    historical = resolved.historical_attachment
+    if historical is None:
+        return []
+    from src.backtesting.nba.historical_execution import recheck_attachment
+
+    recheck_attachment(historical)
+    argv = ['--historical-policy', historical['policy']['path']]
+    if historical['source_metadata']['path'] is not None:
+        argv += ['--historical-source-metadata', historical['source_metadata']['path']]
+    return argv + limits_argv(resolved.acquisition_limits)
 
 
 def build_sweep_command(resolved: ResolvedConfig, *, artifact_dir: Path, output_dir: Path) -> list[str]:
@@ -38,12 +52,7 @@ def build_sweep_command(resolved: ResolvedConfig, *, artifact_dir: Path, output_
         values = getattr(evaluation, name)
         if values:
             argv += ["--" + name.replace("_", "-"), *(str(value) for value in values)]
-    historical = resolved.historical_attachment
-    if historical is not None:
-        argv += ['--historical-policy', historical['policy']['path']]
-        if historical['source_metadata']['path'] is not None:
-            argv += ['--historical-source-metadata', historical['source_metadata']['path']]
-    return argv + ["--local", "--diagnostic-history"]
+    return argv + _historical_arguments(resolved) + ["--local", "--diagnostic-history"]
 
 
 def build_audit_command(resolved: ResolvedConfig, *, sweep_dir: Path, output_dir: Path) -> list[str]:

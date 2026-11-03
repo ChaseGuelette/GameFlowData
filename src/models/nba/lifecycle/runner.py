@@ -26,6 +26,7 @@ from src.models.nba.lifecycle.decision import build_decision, decision_markdown
 from src.models.nba_artifacts import canonical_sha256, sha256_file, validate_artifact_bundle
 
 LIFECYCLE_FILES = (
+    "src/models/nba_training_chronology.py", "src/models/features/nba/acquisition.py",
     "src/models/nba/__init__.py", "src/models/nba/lifecycle/__init__.py",
     "src/models/nba/lifecycle/config.py", "src/models/nba/lifecycle/adapters.py",
     "src/models/nba/lifecycle/decision.py", "src/models/nba/lifecycle/runner.py",
@@ -192,6 +193,19 @@ def inspect_artifact(resolved: ResolvedConfig, path: Path) -> dict:
              "requested_training_metadata_mismatch")
         same(manifest["calibration"]["season"], training.calibration_season, "calibration_season_mismatch")
         same(cutoff.isoformat(), training.calibration_end.isoformat(), "calibration_end_mismatch")
+        if resolved.historical_attachment is not None:
+            from src.backtesting.nba.historical_execution import recheck_attachment, validate_training_provenance
+
+            receipt = resolved.historical_attachment
+            recheck_attachment(receipt)
+            try:
+                proof = validate_training_provenance(manifest['data_provenance'], receipt, resolved.acquisition_limits)
+            except ValueError:
+                raise LifecycleError('historical_training_provenance_mismatch', 'blocked') from None
+            same(proof['training']['seasons'], sorted(training.train_seasons), 'actual_fitting_seasons_mismatch')
+            same(proof['calibration']['seasons'], [training.calibration_season], 'actual_calibration_seasons_mismatch')
+            same(read_json(path / 'run_config.json').get('execution'),
+                 manifest['data_provenance']['training']['execution'], 'training_provenance_config_mismatch')
         if resolved.hyperparams_path is not None:
             hp = read_json(resolved.hyperparams_path)
             receipt = {"sha256": sha256_file(resolved.hyperparams_path), "canonical_sha256": canonical_sha256(hp)}

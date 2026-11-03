@@ -30,6 +30,9 @@ HISTORICAL_SOURCE_FILES = (
     "src/models/features/nba/line_sources.py",
     "src/models/features/nba/injury_context.py",
 )
+BOUNDED_HISTORICAL_SOURCE_FILES = (
+    "src/models/nba_training_chronology.py", "src/models/features/nba/acquisition.py",
+)
 
 
 def _unique(pairs):
@@ -163,6 +166,67 @@ def source_policy(receipt):
     return {'schema_version': 2, 'attachment': receipt,
             'policy_id': receipt['policy']['content_id'],
             'metadata_identity': canonical_sha256(receipt['source_metadata']), 'watermark': None}
+
+
+def validate_training_window(receipt, train_seasons, calibration_season, cal_end):
+    """Training has no artifact yet; validate only explicit cohort/window intent."""
+    from src.models.nba_training_chronology import validate_seasons
+
+    validate_seasons(train_seasons, calibration_season)
+    if receipt is None:
+        return
+    validate_saved_attachment(receipt)
+    cohort = receipt['policy']['payload']['authorities']['cohort_split']['value']
+    if any(s not in cohort['seasons'] for s in [*train_seasons, calibration_season]):
+        raise ValueError('Requested training/calibration seasons disagree with historical cohort')
+    if cal_end != date.fromisoformat(cohort['calibration_end_exclusive']):
+        raise ValueError('Calibration cutoff must equal historical policy exclusive end')
+
+
+def validate_training_provenance(provenance, receipt, limits=None, *, train_seasons=None, calibration_season=None):
+    """Fail closed on legacy/foreign parent or lifecycle training history."""
+    validate_saved_attachment(receipt)
+    envelope = provenance.get('training', {}).get('execution', {})
+    proof = envelope.get('chronology', {})
+    if (envelope.get('historical_attachment') != receipt
+            or proof.get('strict_fit_before_calibration') is not True
+            or proof.get('source_verified') is not False or proof.get('decision_grade') is not False):
+        raise ValueError('Historical training provenance missing or incompatible')
+    if limits is not None and envelope.get('acquisition_limits') != limits.to_dict():
+        raise ValueError('Historical training acquisition limits mismatch')
+    cohort = receipt['policy']['payload']['authorities']['cohort_split']['value']
+    fit, cal = proof.get('training', {}), proof.get('calibration', {})
+    if train_seasons is not None or calibration_season is not None:
+        from src.models.nba_training_chronology import validate_seasons
+
+        if train_seasons is None or calibration_season is None:
+            raise ValueError('Both requested training and calibration seasons are required')
+        validate_seasons(train_seasons, calibration_season)
+        if (fit.get('seasons') != sorted(train_seasons)
+                or cal.get('seasons') != [calibration_season]):
+            raise ValueError('Historical parent/requested training populations differ')
+    try:
+        valid = (cohort['train_start'] <= fit['start'] <= fit['end'] <= cohort['train_end']
+                 < cohort['calibration_start'] <= cal['start'] <= cal['end']
+                 < cohort['calibration_end_exclusive'] <= cohort['oos_start'])
+        for population in (fit, cal):
+            valid = valid and all(type(population[key]) is int and population[key] > 0
+                                  for key in ('rows', 'games', 'dates'))
+            valid = valid and re.fullmatch('[0-9a-f]{64}', population['keys_sha256']) is not None
+            valid = valid and (type(population['seasons']) is list and bool(population['seasons'])
+                               and len(set(population['seasons'])) == len(population['seasons'])
+                               and all(s in cohort['seasons'] for s in population['seasons']))
+        valid = valid and not set(fit['seasons']).intersection(cal['seasons'])
+        for role, population in (('training', fit), ('calibration', cal)):
+            observed = provenance[role]
+            valid = valid and (observed['row_count'] == population['rows']
+                               and observed['game_date_min'][:10] == population['start']
+                               and observed['game_date_max'][:10] == population['end'])
+    except (KeyError, TypeError):
+        valid = False
+    if not valid:
+        raise ValueError('Historical training chronology absent or overlaps evaluation')
+    return proof
 
 
 def make_sources(engine, receipt):

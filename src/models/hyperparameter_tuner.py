@@ -27,7 +27,8 @@ import pandas as pd
 import xgboost as xgb
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
-from sklearn.model_selection import train_test_split
+
+from src.models.nba_training_chronology import temporal_split
 
 from .quantile_trainer import QuantileModelConfig
 
@@ -250,6 +251,7 @@ class QuantileHyperparameterTuner:
         y: pd.Series,
         quantiles: tuple[float, ...] = (0.10, 0.25, 0.50, 0.75, 0.90),
         feature_names: list[str] | None = None,
+        *, dates=None,
     ) -> QuantileModelConfig:
         """Run hyperparameter tuning study."""
 
@@ -261,8 +263,8 @@ class QuantileHyperparameterTuner:
         logger.info(f"Samples: {len(X):,}")
 
         # Temporal train/val split (no shuffle to preserve time order)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=self.val_fraction, shuffle=False, random_state=self.random_state
+        X_train, X_val, y_train, y_val = temporal_split(
+            X, y, dates=dates, test_size=self.val_fraction, shuffle=False, random_state=self.random_state
         )
 
         logger.info(f"Train: {len(X_train):,}, Val: {len(X_val):,}")
@@ -315,6 +317,7 @@ class QuantileHyperparameterTuner:
         y: pd.Series,
         quantiles: tuple[float, ...] = (0.10, 0.25, 0.50, 0.75, 0.90),
         feature_names: list[str] | None = None,
+        *, dates=None,
     ) -> dict[float, QuantileModelConfig]:
         """Run separate tuning study for each quantile."""
 
@@ -325,8 +328,8 @@ class QuantileHyperparameterTuner:
         logger.info(f"Trials per quantile: {self.n_trials}")
 
         # Temporal train/val split
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=self.val_fraction, shuffle=False, random_state=self.random_state
+        X_train, X_val, y_train, y_val = temporal_split(
+            X, y, dates=dates, test_size=self.val_fraction, shuffle=False, random_state=self.random_state
         )
 
         configs = {}

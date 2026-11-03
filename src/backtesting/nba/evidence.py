@@ -25,6 +25,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, cast
 
 from src.backtesting.nba.historical_execution import (
+    BOUNDED_HISTORICAL_SOURCE_FILES,
     HISTORICAL_SOURCE_FILES,
     source_policy,
     validate_saved_attachment,
@@ -462,7 +463,17 @@ def _saved_plan(plan: Any) -> dict:
     _readiness(plan)
     fixed = plan["fixed_config"]
     historical = plan['schema_version'] == 2
-    _keys(fixed, FIXED_KEYS | ({'historical'} if historical else set()), "fixed_config_keys")
+    bounded = historical and 'acquisition_limits' in fixed
+    _keys(fixed, FIXED_KEYS | ({'historical'} if historical else set())
+          | ({'acquisition_limits'} if bounded else set()), "fixed_config_keys")
+    if bounded:
+        from src.models.features.nba.acquisition import AcquisitionLimits
+
+        try:
+            AcquisitionLimits(**fixed['acquisition_limits']).check_span(
+                date.fromisoformat(fixed['start']), date.fromisoformat(fixed['end']))
+        except (TypeError, ValueError):
+            raise EvidenceError('acquisition_limits') from None
     if historical:
         try:
             validate_saved_attachment(fixed['historical'])
@@ -512,7 +523,8 @@ def _saved_plan(plan: Any) -> dict:
             cell = {"edge_threshold": edge, "tau": tau, "z_max": z_max, "max_weight": weight, "raw_control": tau is None}
             cells.append({"cell_id": "cell_" + canonical_sha256(cell), **cell})
     _same(plan["cells"], cells, "cell_grid_identity")
-    _same(plan["acquisition_settings"], {key: fixed[key] for key in ACQUISITION_KEYS}, "acquisition_settings")
+    acquisition_keys = [*ACQUISITION_KEYS, *(['acquisition_limits'] if bounded else [])]
+    _same(plan["acquisition_settings"], {key: fixed[key] for key in acquisition_keys}, "acquisition_settings")
     _saved_acquisition_metadata(plan, fixed)
     acquisition = {"settings": plan["acquisition_settings"], "artifact": plan["artifact"], "predictor": plan["predictor_settings"],
                    "features": plan["ordered_features"], "source": plan["source"], "policy": plan["source_policy"]}
@@ -584,6 +596,8 @@ def _saved_acquisition_metadata(plan: dict, fixed: dict) -> None:
     expected.add("src/config/combo_config.py")
     if plan['schema_version'] == 2:
         expected.update(HISTORICAL_SOURCE_FILES)
+        if 'acquisition_limits' in fixed:
+            expected.update(BOUNDED_HISTORICAL_SOURCE_FILES)
     _keys(source["files"], expected, "source_file_inventory")
     for digest in source["files"].values():
         _digest(digest)
