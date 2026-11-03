@@ -275,7 +275,7 @@ def main():
 
     if not args.skip_linker:
         group_a.append((
-            f"{exe} src/processing/nba_linker_local.py incremental --resume "
+            f"{exe} src/processing/nba_linker_local.py incremental --resume --repair-game-conflicts "
             f"--batch-size {args.linker_batch_size} --max-batches {args.linker_max_batches}",
             "Linking Props (Durable Bounded Resume)",
         ))

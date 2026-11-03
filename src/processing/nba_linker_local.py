@@ -1239,12 +1239,16 @@ def _unique_reference(values: set[Any]) -> Any | None:
 
 
 def _resolve_linker_page(
-    conn, rows: list[dict[str, Any]], context: dict[str, Any], *, apply_updates: bool
+    conn, rows: list[dict[str, Any]], context: dict[str, Any], *, apply_updates: bool,
+    repair_game_conflicts: bool = False,
 ) -> dict[str, Any]:
     proposed = {"player_id": 0, "game_id": 0, "team_id": 0}
+    corrected_game_ids = 0
     conflicts: set[int] = set()
     reference_unverified: set[int] = set()
-    resolved: list[tuple[dict[str, Any], dict[str, Any], Any, Any, tuple[str, str, str]]] = []
+    resolved: list[
+        tuple[dict[str, Any], dict[str, Any], Any, Any, tuple[Any, Any, Any], bool]
+    ] = []
     team_eligible: set[int] = set()
 
     for row in rows:
@@ -1270,25 +1274,37 @@ def _resolve_linker_page(
         key = (normalize_team(row.get("home_team")), normalize_team(row.get("away_team")), game_date)
         expected_game = _unique_reference(context["by_match"].get(key, set()))
         game_id = old["game_id"] if old["game_id"] is not None else expected_game
-        game_verified = (
-            isinstance(game_id, str)
-            and is_competitive_nba_game_id(game_id)
-            and expected_game is not None
-            and game_id == expected_game
-            and len(context["by_game"].get(game_id, set())) == 1
+        expected_game_verified = (
+            isinstance(expected_game, str)
+            and is_competitive_nba_game_id(expected_game)
+            and len(context["by_game"].get(expected_game, set())) == 1
+        )
+        game_verified = expected_game_verified and game_id == expected_game
+        repair_candidate = bool(
+            repair_game_conflicts
+            and old["game_id"] is not None
+            and old["game_id"] != expected_game
+            and expected_game_verified
+            and candidate_player is not None
+            and old["player_id"] is not None
+            and int(candidate_player) == int(old["player_id"])
+            and player_verified
         )
         if expected_game is None:
             reference_unverified.add(staging_id)
-        elif old["game_id"] is not None and not game_verified:
+        elif old["game_id"] is not None and not game_verified and not repair_candidate:
             conflicts.add(staging_id)
         if old["game_id"] is None and not game_verified:
             game_id = None
+        elif repair_candidate:
+            game_id = expected_game
+            game_verified = True
         if player_verified and game_verified:
             team_eligible.add(staging_id)
-        resolved.append((row, old, player_id, game_id, key))
+        resolved.append((row, old, player_id, game_id, key, repair_candidate))
 
     pairs = sorted(
-        {(int(player_id), game_id) for row, _, player_id, game_id, _ in resolved
+        {(int(player_id), game_id) for row, _, player_id, game_id, _, _ in resolved
          if int(row["staging_id"]) in team_eligible}
     )
     relations: defaultdict[tuple[int, str], set[int]] = defaultdict(set)
@@ -1308,7 +1324,7 @@ def _resolve_linker_page(
 
     updates: list[dict[str, Any]] = []
     unresolved_ids: list[int] = []
-    for row, old, player_id, game_id, key in resolved:
+    for row, old, player_id, game_id, key, repair_candidate in resolved:
         staging_id = int(row["staging_id"])
         team_id = None
         if staging_id in team_eligible:
@@ -1317,6 +1333,16 @@ def _resolve_linker_page(
             away_id = _unique_reference(context["team_ids"].get(key[1], set()))
             if home_id is None or away_id is None or home_id == away_id or team_id not in (home_id, away_id):
                 team_id = None
+        game_correction = bool(
+            repair_candidate
+            and team_id is not None
+            and (old["team_id"] is None or int(old["team_id"]) == int(team_id))
+        )
+        if repair_candidate and not game_correction:
+            game_id = old["game_id"]
+            conflicts.add(staging_id)
+            if team_id is None:
+                reference_unverified.add(staging_id)
         if old["team_id"] is not None:
             if team_id is None:
                 reference_unverified.add(staging_id)
@@ -1328,12 +1354,17 @@ def _resolve_linker_page(
         fills = [column for column in proposed if old[column] is None and new[column] is not None]
         for column in fills:
             proposed[column] += 1
+        if game_correction:
+            corrected_game_ids += 1
         effective = {column: old[column] if old[column] is not None else new[column] for column in proposed}
+        if game_correction:
+            effective["game_id"] = game_id
         if any(value is None for value in effective.values()):
             unresolved_ids.append(staging_id)
-        if fills:
+        if fills or game_correction:
             updates.append({
                 "id": staging_id,
+                "repair_game": game_correction,
                 **new,
                 **{f"old_{column}": value for column, value in old.items()},
                 **{column: row.get(column) for column in (
@@ -1346,7 +1377,7 @@ def _resolve_linker_page(
         result = conn.execute(text("""
             UPDATE raw_player_props_combined
             SET player_id = COALESCE(player_id, :player_id),
-                game_id = COALESCE(game_id, :game_id),
+                game_id = CASE WHEN :repair_game THEN :game_id ELSE COALESCE(game_id, :game_id) END,
                 team_id = COALESCE(team_id, :team_id)
             WHERE staging_id = :id
               AND player_id IS NOT DISTINCT FROM :old_player_id
@@ -1365,10 +1396,13 @@ def _resolve_linker_page(
 
     return {
         "proposed": proposed,
+        "corrected_game_ids": corrected_game_ids,
         "changed": changed,
         "conflicts": sorted(conflicts),
         "reference_unverified": sorted(reference_unverified),
-        "first_unresolved_id": min(unresolved_ids) if unresolved_ids else None,
+        "first_unresolved_id": min(
+            [*unresolved_ids, *conflicts, *reference_unverified], default=None
+        ),
     }
 
 
@@ -1378,11 +1412,12 @@ def _summary_json(summary: dict[str, Any]) -> None:
 
 def _run_fixed_linker(
     engine, context: dict[str, Any], *, cursor: int, high_water: int,
-    batch_size: int, max_batches: int, dry_run: bool, mode: str = "fixed_window"
+    batch_size: int, max_batches: int, dry_run: bool, mode: str = "fixed_window",
+    repair_game_conflicts: bool = False,
 ) -> dict[str, Any]:
     current = cursor
     totals = {"player_id": 0, "game_id": 0, "team_id": 0}
-    scanned = changed = batches = 0
+    scanned = changed = batches = corrected_game_ids = 0
     first_unresolved = None
     conflict_ids: set[int] = set()
     unverified_ids: set[int] = set()
@@ -1401,11 +1436,15 @@ def _run_fixed_linker(
             if not rows:
                 current = high_water
                 break
-            result = _resolve_linker_page(conn, rows, context, apply_updates=not dry_run)
+            result = _resolve_linker_page(
+                conn, rows, context, apply_updates=not dry_run,
+                repair_game_conflicts=repair_game_conflicts,
+            )
             current = int(rows[-1]["staging_id"])
         batches += 1
         scanned += len(rows)
         changed += result["changed"]
+        corrected_game_ids += result["corrected_game_ids"]
         for column in totals:
             totals[column] += result["proposed"][column]
         if result["first_unresolved_id"] is not None:
@@ -1424,6 +1463,7 @@ def _run_fixed_linker(
         "rows_scanned": scanned,
         "rows_updated": changed,
         "fill_candidates": totals,
+        "corrected_game_ids": corrected_game_ids,
         "first_unresolved_id": first_unresolved,
         "identity_ready": first_unresolved is None,
         "conflict_count": len(conflict_ids),
@@ -1455,7 +1495,8 @@ def _load_resume_state(conn, *, for_update: bool = False) -> dict[str, Any]:
 
 
 def _run_resume_linker(
-    engine, *, batch_size: int, max_batches: int, dry_run: bool
+    engine, *, batch_size: int, max_batches: int, dry_run: bool,
+    repair_game_conflicts: bool = False,
 ) -> dict[str, Any]:
     if dry_run:
         # Snapshot the checkpoint without advisory/row locks or state mutation.
@@ -1476,10 +1517,11 @@ def _run_resume_linker(
         return _run_fixed_linker(
             engine, context, cursor=current, high_water=int(high_water),
             batch_size=batch_size, max_batches=max_batches, dry_run=True, mode="resume_preview",
+            repair_game_conflicts=repair_game_conflicts,
         )
 
     totals = {"player_id": 0, "game_id": 0, "team_id": 0}
-    scanned = changed = batches = 0
+    scanned = changed = batches = corrected_game_ids = 0
     conflict_ids: set[int] = set()
     unverified_ids: set[int] = set()
     completed_cycle = False
@@ -1547,7 +1589,10 @@ def _run_resume_linker(
                         current = int(high_water)
                         page_result = None
                     else:
-                        page_result = _resolve_linker_page(conn, rows, context, apply_updates=not dry_run)
+                        page_result = _resolve_linker_page(
+                            conn, rows, context, apply_updates=not dry_run,
+                            repair_game_conflicts=repair_game_conflicts,
+                        )
                         current = int(rows[-1]["staging_id"])
                         page_unresolved = page_result["first_unresolved_id"]
                         if page_unresolved is not None:
@@ -1577,6 +1622,7 @@ def _run_resume_linker(
                     batches += 1
                     scanned += len(rows)
                     changed += page_result["changed"]
+                    corrected_game_ids += page_result["corrected_game_ids"]
                     for column in totals:
                         totals[column] += page_result["proposed"][column]
                     conflict_ids.update(page_result["conflicts"])
@@ -1596,6 +1642,7 @@ def _run_resume_linker(
                 "rows_scanned": scanned,
                 "rows_updated": changed,
                 "fill_candidates": totals,
+                "corrected_game_ids": corrected_game_ids,
                 "first_unresolved_id": first_unresolved,
                 "identity_ready": first_unresolved is None,
                 "scanned_window_complete": complete,
@@ -1620,6 +1667,7 @@ def link_incremental(
     batch_size: int = 50000, limit: int | None = None, days: int = 30, *,
     dry_run: bool = False, cursor: int | None = None, high_water: int | None = None,
     max_batches: int | None = None, resume: bool = False, local: bool = False,
+    repair_game_conflicts: bool = False,
 ) -> dict[str, Any] | None:
     """
     Incremental linker: bounded recent-window smoke with --limit, legacy/unbounded otherwise.
@@ -1636,6 +1684,8 @@ def link_incremental(
     if batch_size <= 0 or (limit is not None and not 1 <= limit <= 5000):
         raise ValueError("batch_size must be positive; bounded --limit must be between 1 and 5000")
     fixed_requested = cursor is not None or high_water is not None or max_batches is not None
+    if repair_game_conflicts and not (resume or fixed_requested):
+        raise ValueError("--repair-game-conflicts requires bounded --resume or fixed-window mode")
     if local and (resume or not fixed_requested):
         raise ValueError("--local requires explicit fixed-window bounds; local resume/legacy modes are not supported")
     if (resume or fixed_requested) and batch_size > 5000:
@@ -1662,7 +1712,8 @@ def link_incremental(
                 _load_resume_state(conn)
         if resume:
             return _run_resume_linker(
-                engine, batch_size=batch_size, max_batches=max_batches, dry_run=dry_run
+                engine, batch_size=batch_size, max_batches=max_batches, dry_run=dry_run,
+                repair_game_conflicts=repair_game_conflicts,
             )
         assert cursor is not None and high_water is not None
         fixed_cursor, fixed_high_water = cursor, high_water
@@ -1670,7 +1721,8 @@ def link_incremental(
         context = _load_linker_context(engine, fixture_start, fixture_end)
         return _run_fixed_linker(
             engine, context, cursor=fixed_cursor, high_water=fixed_high_water, batch_size=batch_size,
-            max_batches=max_batches, dry_run=dry_run
+            max_batches=max_batches, dry_run=dry_run,
+            repair_game_conflicts=repair_game_conflicts,
         )
 
     print("Target: canonical DATABASE_URL (local processing, NOT automatic LOCAL_DATABASE_URL selection)")
@@ -2247,6 +2299,10 @@ def main():
     parser.add_argument("--resume", action="store_true", help="Use the pre-provisioned durable production checkpoint")
     parser.add_argument("--local", action="store_true", help="Target LOCAL_DATABASE_URL; explicit fixed-window incremental mode only")
     parser.add_argument(
+        "--repair-game-conflicts", action="store_true",
+        help="Strictly repair qualified nonnull game_id conflicts in bounded fixed-window/resume mode",
+    )
+    parser.add_argument(
         "--days",
         type=int,
         default=30,
@@ -2259,7 +2315,9 @@ def main():
     if args.local and (args.command != "incremental" or args.resume or args.cursor is None or args.high_water is None):
         parser.error("--local requires incremental --cursor and --high-water; production resume is not supported locally")
     production_flags = args.resume or args.cursor is not None or args.high_water is not None or args.max_batches is not None
-    if args.command != "incremental" and (args.dry_run or args.limit is not None or production_flags):
+    if args.command != "incremental" and (
+        args.dry_run or args.limit is not None or production_flags or args.repair_game_conflicts
+    ):
         parser.error("incremental scope flags are only valid with the incremental command")
     if args.command == "incremental":
         if args.batch_size <= 0:
@@ -2280,6 +2338,8 @@ def main():
             parser.error("fixed-window bounds require 0 <= cursor <= high-water")
         if args.dry_run and args.limit is None and not production_flags:
             parser.error("--dry-run requires --limit, --resume, or fixed-window bounds")
+        if args.repair_game_conflicts and not production_flags:
+            parser.error("--repair-game-conflicts requires bounded --resume or fixed-window mode")
 
     if args.command == "download":
         download_tables()
@@ -2305,6 +2365,7 @@ def main():
                 max_batches=args.max_batches,
                 resume=args.resume,
                 local=args.local,
+                repair_game_conflicts=args.repair_game_conflicts,
             )
         except Exception as exc:
             logging.error("Incremental linker failed: %s", exc, exc_info=True)

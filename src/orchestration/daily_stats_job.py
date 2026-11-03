@@ -640,12 +640,8 @@ def main():
                         f"missing dates remain beyond the {args.max_catchup_dates}-date cap"
                     )
 
-                if not run_command(
-                    [python, "src/processing/backfill_team_ids_incremental.py", "--days-back", "7"],
-                    "Backfilling Team IDs (Incremental)",
-                    timeout=300,
-                ):
-                    logger.warning("Non-critical step failed: %s", last_command_error)
+                # The bounded durable linker below owns game-specific team fills.
+                # Do not run the legacy date-scan/latest-team backfill here.
 
                 through_date = latest_completed_source_date(engine, season_id)
                 if through_date is None:
@@ -714,7 +710,7 @@ def main():
                             logger.warning("Non-critical step failed: %s", message)
                 # Linking is independent of advanced availability and always bounded.
                 if not run_command(
-                    [python, "src/processing/nba_linker_local.py", "incremental", "--resume",
+                    [python, "src/processing/nba_linker_local.py", "incremental", "--resume", "--repair-game-conflicts",
                      "--batch-size", "500", "--max-batches", "20"],
                     "Linking Props (Bounded Durable Resume)", timeout=600,
                 ):
