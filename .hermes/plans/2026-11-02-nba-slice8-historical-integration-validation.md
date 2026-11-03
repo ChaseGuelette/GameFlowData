@@ -1,5 +1,7 @@
 # NBA Coding Slice 8 — Historical Integration and Validation Plan
 
+Completion lane: see [confirmed owner decisions and remaining gates](../../docs/operations/nba-s8-completion-decisions-2026-11-02.md). Chase approved T-60, strict source/injury/commence blocking with no diagnostic fallback, and necessary S1 inclusion in an isolated worktree. Exact cohort/split and per-family policies remain subject to evidence and owner approval. Older unresolved-decision and predecessor-integration wording below is historical where superseded by that record.
+
 > **For Hermes:** This is an umbrella scope with separate owner gates and reviewable implementation sub-slices. Do not launch one broad writer. Use the GameFlow SQL-runner for every live DB query, the implementation-worker lane for each approved code sub-slice, and independent specification/quality review before integration.
 
 **Goal:** Wire the owner-approved historical decision/source/cohort policy through NBA training and replay, prove feature and quote parity on a stable bounded dataset, run the complete artifact/sweep/audit/lifecycle path, and freeze one meaningful baseline configuration for Chase to launch.
