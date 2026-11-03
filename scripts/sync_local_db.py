@@ -1310,14 +1310,14 @@ def main() -> None:
     if args.status:
         sys.exit(print_sync_status(state_path))
 
-    if args.nba_support:
-        # Match the existing operator credential flow only after argument/status
-        # validation; import, help and status remain environment-file independent.
+    # Only the CLI entrypoint loads credentials. Imported main() callers (including
+    # tests) own their environment; never restore variables they deliberately removed.
+    if __name__ == "__main__":
         load_dotenv()
+
+    if args.nba_support:
         sys.exit(run_nba_support(args, state_path))
 
-    # Never load environment files during import, help or status.
-    load_dotenv()
     if args.replay_id_span is None:
         args.replay_id_span = 10_000
     try:
