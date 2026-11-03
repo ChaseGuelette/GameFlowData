@@ -1,0 +1,42 @@
+schema_version: 1
+experiment:
+  name: nba-baseline-example
+  purpose: discovery
+  output_root: backtest_results/nba_lifecycle
+artifact:
+  mode: train
+training:
+  train_seasons: ["22023", "22024"]
+  calibration_season: "22025"
+  calibration_end: 2026-01-01
+  tune: false
+  tuning_trials: 50
+  tuning_timeout: null
+  hyperparams_path: null
+  feature_tolerance: 0.005
+  local: true
+evaluation:
+  start: 2026-01-01
+  end: 2026-01-07
+  stats: [pts, reb, ast]
+  bookmakers: [draftkings, fanduel]
+  n_samples: 5000
+  seed: 42
+  min_minutes_avg: 8.0
+  starting_bankroll: 10000.0
+  flat_bet_size: 100.0
+  edge_thresholds: [0.05, 0.08, 0.10]
+  allowed_bets: null
+  bl_taus: []
+  bl_z_max: [1.0]
+  bl_max_weight: [0.5]
+  max_cells: 64
+  local: true
+  diagnostic_history: true
+audit:
+  checks: [integrity, concentration, coverage, timing]
+ranker:
+  mode: disabled
+decision:
+  require_integrity_pass: true
+  require_requested_audits_pass: true
