@@ -327,29 +327,29 @@ class DateRangeFeatureLoader:
                 )
                 if not chunk_df.empty:
                     chunk_dfs.append(chunk_df)
-            except Exception as e:
-                logger.error(f"  Feature chunk {chunk_idx + 1}/{len(chunks)} failed: {e}")
+            except Exception:
+                logger.error(
+                    f"  Feature chunk {chunk_idx + 1}/{len(chunks)} failed: "
+                    f"{chunk_start} to {chunk_end} ({len(chunk_dates)} dates); details suppressed"
+                )
                 failed_chunks.append({
                     "chunk_idx": chunk_idx + 1,
                     "dates": chunk_dates,
                     "start": chunk_start,
                     "end": chunk_end,
-                    "error": str(e),
                 })
                 continue
 
-        # Log summary of chunk processing results
+        # A failed query must never publish a partial feature population.
         if failed_chunks:
             failed_date_count = sum(len(c["dates"]) for c in failed_chunks)
-            logger.warning(
-                f"CHUNK FAILURES: {len(failed_chunks)}/{len(chunks)} chunks failed, "
-                f"dropping {failed_date_count}/{len(all_dates)} dates from result. "
-                f"Failed chunk indices: {[c['chunk_idx'] for c in failed_chunks]}"
-            )
-            for fc in failed_chunks:
-                logger.warning(f"  Chunk {fc['chunk_idx']}: {fc['start']} to {fc['end']} - {fc['error']}")
-        else:
-            logger.info(f"All {len(chunks)} chunks succeeded ({len(all_dates)} dates)")
+            raise RuntimeError(
+                f"Feature acquisition failed for {len(failed_chunks)}/{len(chunks)} chunks "
+                f"({failed_date_count}/{len(all_dates)} dates); "
+                f"failed chunk indices: {[c['chunk_idx'] for c in failed_chunks]}; "
+                "partial results discarded"
+            ) from None
+        logger.info(f"All {len(chunks)} chunks succeeded ({len(all_dates)} dates)")
 
         if not chunk_dfs:
             return {}

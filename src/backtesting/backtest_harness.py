@@ -298,8 +298,11 @@ class BacktestHarness:
                     all_predictions.append(date_preds)
                 if date_all_edges is not None and len(date_all_edges) > 0:
                     all_bookmaker_edges.append(date_all_edges)
-            except Exception as e:
-                logger.error(f"Error processing {game_date}: {e}")
+            except Exception:
+                logger.error(
+                    f"Backtest invalidated by unexpected processing failure for {game_date}; details suppressed"
+                )
+                raise RuntimeError(f"Backtest date processing failed for {game_date}") from None
 
         # Combine all predictions
         if all_predictions:
@@ -438,11 +441,7 @@ class BacktestHarness:
         features_df = features_df.sort_values(["player_id", "game_id"]).reset_index(drop=True)
 
         # Batch predict all players at once (4 XGBoost calls instead of ~N*4)
-        try:
-            predictions_list, prediction_samples = self.predictor.predict_batch_for_date(features_df, stats=self.stats)
-        except Exception as e:
-            logger.error(f"Error in batch prediction for {game_date}: {e}")
-            return None, pd.DataFrame()
+        predictions_list, prediction_samples = self.predictor.predict_batch_for_date(features_df, stats=self.stats)
 
         # Derive combo predictions from MC samples
         combo_preds, combo_samps = _derive_replay_combo_samples(prediction_samples, predictions_list)
