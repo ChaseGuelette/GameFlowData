@@ -163,6 +163,28 @@ def fetch_raw_allowed_stats_incremental(engine, start_date: date, end_date: date
             SELECT DISTINCT season_id
             FROM team_game_stats
             WHERE game_date::DATE BETWEEN :start_date AND :end_date
+        ), target_games AS MATERIALIZED (
+            SELECT tgs.*
+            FROM team_game_stats tgs
+            JOIN target_seasons seasons ON seasons.season_id = tgs.season_id
+            WHERE tgs.game_date::DATE <= :end_date
+        ), required_positions AS MATERIALIZED (
+            SELECT DISTINCT pgs.player_id, tgs.game_date::DATE AS game_date
+            FROM target_games tgs
+            JOIN player_game_stats pgs
+                ON tgs.game_id = pgs.game_id AND tgs.team_id != pgs.team_id AND pgs.min > 0
+        ), valid_positions AS MATERIALIZED (
+            SELECT tgs.player_id, tgs.game_date, ph.position_group
+            FROM required_positions tgs
+            JOIN LATERAL (
+                SELECT position_group FROM player_position_history ph
+                WHERE ph.player_id = tgs.player_id AND ph.snapshot_date < tgs.game_date::DATE
+                  AND (ph.primary_position, ph.position_group) IN (
+                      ('G', 'G'), ('G-F', 'W'), ('F-G', 'W'), ('F', 'W'),
+                      ('C', 'B'), ('C-F', 'B'), ('F-C', 'B')
+                  )
+                ORDER BY ph.snapshot_date DESC LIMIT 1
+            ) ph ON TRUE
         )
         SELECT
             tgs.team_id, tgs.game_id, tgs.game_date::DATE as game_date, tgs.season_id,
@@ -178,22 +200,13 @@ def fetch_raw_allowed_stats_incremental(engine, start_date: date, end_date: date
             COALESCE(SUM(pgs.oreb), 0) as oreb,
             COALESCE(SUM(pgs.pf), 0) as pf,
             SUM(adv.possessions) as poss_faced
-        FROM team_game_stats tgs
-        JOIN target_seasons seasons ON seasons.season_id = tgs.season_id
+        FROM target_games tgs
         JOIN player_game_stats pgs
             ON tgs.game_id = pgs.game_id AND tgs.team_id != pgs.team_id AND pgs.min > 0
+        JOIN valid_positions ph
+            ON ph.player_id = pgs.player_id AND ph.game_date = tgs.game_date::DATE
         JOIN player_game_advanced_stats adv
             ON pgs.game_id = adv.game_id AND pgs.player_id = adv.player_id
-        JOIN LATERAL (
-            SELECT position_group FROM player_position_history ph
-            WHERE ph.player_id = pgs.player_id AND ph.snapshot_date < tgs.game_date::DATE
-              AND (ph.primary_position, ph.position_group) IN (
-                  ('G', 'G'), ('G-F', 'W'), ('F-G', 'W'), ('F', 'W'),
-                  ('C', 'B'), ('C-F', 'B'), ('F-C', 'B')
-              )
-            ORDER BY ph.snapshot_date DESC LIMIT 1
-        ) ph ON TRUE
-        WHERE tgs.game_date::DATE <= :end_date
         GROUP BY tgs.team_id, tgs.game_id, tgs.game_date, tgs.season_id, ph.position_group
     """)
 
