@@ -29,6 +29,7 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Any, cast
 
 import pandas as pd
 import pytz
@@ -937,9 +938,11 @@ def _fetch_upcoming_games_from_nba_api(target_date: date | None = None) -> list[
     return games
 
 
-def _linkable_schedule_games(rows: list[dict], target_date: date) -> list[dict]:
+def _linkable_schedule_games(
+    rows: list[dict], target_date: date, end_date: date | None = None
+) -> list[dict]:
     """Map competitive schedule rows to the existing props-linker contract."""
-    end_date = target_date + timedelta(days=3)
+    end_date = end_date or target_date + timedelta(days=3)
     games = []
     for row in rows:
         game_date = row["game_date"]
@@ -974,9 +977,20 @@ def _linkable_schedule_games(rows: list[dict], target_date: date) -> list[dict]:
 
 def _fetch_upcoming_games_from_schedule(
     engine, target_date: date | None = None, *, observed_at: datetime | None = None,
+    bounded: bool = False,
+    status_out: dict[str, Any] | None = None,
+    end_date: date | None = None,
 ) -> list[dict]:
     """Use recent persisted CDN schedule rows, falling back to direct CDN."""
+    legacy_fallback = status_out is None and end_date is None
     target_date = target_date or datetime.now(EASTERN).date()
+    end_date = end_date or target_date + timedelta(days=3)
+
+    def fallback():
+        if legacy_fallback:
+            return _fetch_upcoming_games_from_cdn(target_date)
+        return _fetch_upcoming_games_from_cdn(target_date, status_out=status_out, end_date=end_date)
+
     now = observed_at or datetime.now(UTC)
     query = text("""
         SELECT game_id, game_date, home_team_id, away_team_id, commence_time_utc,
@@ -988,36 +1002,50 @@ def _fetch_upcoming_games_from_schedule(
     """)
     try:
         with engine.connect() as conn:
+            if bounded:
+                conn.execute(text("SET LOCAL statement_timeout = '15s'"))
+                conn.execute(text("SET LOCAL lock_timeout = '2s'"))
+                conn.execute(text("SET LOCAL idle_in_transaction_session_timeout = '15s'"))
             rows = [dict(row._mapping) for row in conn.execute(
-                query, {"target_date": target_date, "end_date": target_date + timedelta(days=3)}
+                query, {"target_date": target_date, "end_date": end_date}
             )]
     except Exception as exc:
         logging.warning("NBA schedule DB read failed; using CDN: %s", exc)
-        return _fetch_upcoming_games_from_cdn(target_date)
+        return fallback()
     if not rows:
-        return _fetch_upcoming_games_from_cdn(target_date)
+        return fallback()
     for row in rows:
         max_age = timedelta(minutes=90) if row["game_date"] <= now.astimezone(EASTERN).date() else timedelta(hours=48)
         timestamps = (row.get("observed_at"), row.get("source_updated_at"))
         if any(ts is None or ts.tzinfo is None or not -timedelta(minutes=15) <= now - ts <= max_age for ts in timestamps):
             logging.warning("NBA schedule snapshot is stale or incomplete; using CDN")
-            return _fetch_upcoming_games_from_cdn(target_date)
+            return fallback()
         if row.get("game_status") != 4 and row.get("postponed_status") in (None, "", "N"):
             if row.get("home_team_id") is None or row.get("away_team_id") is None or row.get("commence_time_utc") is None:
-                return _fetch_upcoming_games_from_cdn(target_date)
-    return _linkable_schedule_games(rows, target_date)
+                return fallback()
+    if status_out is not None:
+        status_out.update(reference_available=True, source="persisted_schedule")
+    return _linkable_schedule_games(rows, target_date, end_date)
 
 
-def _fetch_upcoming_games_from_cdn(target_date: date | None = None) -> list[dict]:
+def _fetch_upcoming_games_from_cdn(
+    target_date: date | None = None, *, status_out: dict[str, Any] | None = None,
+    end_date: date | None = None,
+) -> list[dict]:
     """Railway-safe direct CDN fallback for upcoming competitive games."""
     target_date = target_date or datetime.now(EASTERN).date()
+    end_date = end_date or target_date + timedelta(days=3)
     try:
         rows = parse_schedule(fetch_schedule())
         validate_source_freshness(rows, datetime.now(UTC))
-        games = _linkable_schedule_games(rows, target_date)
+        games = _linkable_schedule_games(rows, target_date, end_date)
+        if status_out is not None:
+            status_out.update(reference_available=True, source="direct_cdn")
         logging.info("Fetched %d upcoming games from CDN", len(games))
         return games
     except Exception as exc:
+        if status_out is not None:
+            status_out.update(reference_available=False, source="unavailable", error=str(exc))
         logging.warning("CDN schedule fallback failed: %s", exc)
         return []
 
@@ -1088,20 +1116,755 @@ def _resolve_fuzzy_names(
     return result
 
 
-def link_incremental(batch_size: int = 50000, limit: int | None = None, days: int = 30):
-    """
-    Lightweight incremental linker for daily use.
+LINKER_STATE_NAME = "production"
+LINKER_ADVISORY_LOCK_KEY = 629_817_204_113
+LINKER_STATE_TABLE = "public.nba_props_linker_state"
 
-    - No CSV download of entire tables
-    - Queries only unlinked records within the past `days` days
-    - Updates directly via batched SQL using keyset pagination (no OFFSET)
+
+def _set_linker_timeouts(conn, *, local: bool = True) -> None:
+    prefix = "SET LOCAL" if local else "SET"
+    for setting in (
+        "statement_timeout = '20s'",
+        "lock_timeout = '2s'",
+        "idle_in_transaction_session_timeout = '20s'",
+    ):
+        conn.execute(text(f"{prefix} {setting}"))
+
+
+def _read_linker_records(conn, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    return [dict(row._mapping) for row in conn.execute(text(query), params or {})]
+
+
+def _window_fixture_dates(engine, cursor: int, high_water: int) -> tuple[date, date]:
+    """Return the exact ET fixture-date interval for a bounded PK window."""
+    with engine.begin() as conn:
+        _set_linker_timeouts(conn)
+        row = conn.execute(text("""
+            SELECT MIN(commence_time) AS min_time, MAX(commence_time) AS max_time
+            FROM raw_player_props_combined
+            WHERE staging_id > :cursor AND staging_id <= :high_water
+        """), {"cursor": cursor, "high_water": high_water}).one()
+    if row.min_time is None:
+        today = datetime.now(EASTERN).date()
+        return today, today + timedelta(days=1)
+    start = pd.to_datetime(row.min_time, utc=True).tz_convert(EASTERN).date()
+    end = pd.to_datetime(row.max_time, utc=True).tz_convert(EASTERN).date() + timedelta(days=1)
+    return start, end
+
+
+def _load_linker_context(
+    engine, fixture_start: date | None = None, fixture_end: date | None = None
+) -> dict[str, Any]:
+    with engine.begin() as conn:
+        _set_linker_timeouts(conn)
+        teams = _read_linker_records(conn, "SELECT team_id, team_name FROM teams")
+        players = _read_linker_records(conn, "SELECT player_id, player_name FROM players")
+        games = _read_linker_records(conn, """
+            SELECT game_id, team_id, team_name, game_date AS team_game_date,
+                   team_matchup, opponent_id
+            FROM team_game_stats
+        """)
+
+    team_ids: defaultdict[str, set[int]] = defaultdict(set)
+    player_names: defaultdict[str, set[int]] = defaultdict(set)
+    manual: defaultdict[str, set[int]] = defaultdict(set)
+    for row in teams:
+        normalized = normalize_team(row["team_name"])
+        if isinstance(normalized, str) and normalized:
+            team_ids[normalized].add(int(row["team_id"]))
+    known_players = {int(row["player_id"]) for row in players if row.get("player_id") is not None}
+    for row in players:
+        normalized = normalize_player(row["player_name"])
+        if isinstance(normalized, str) and normalized and row.get("player_id") is not None:
+            player_names[normalized].add(int(row["player_id"]))
+
+    mappings_file = DATA_DIR / "player_mappings.csv"
+    if mappings_file.exists():
+        for row in pd.read_csv(mappings_file).to_dict("records"):
+            api_name, player_id = row.get("api_name"), row.get("player_id")
+            if isinstance(api_name, str) and pd.notna(player_id):
+                manual[api_name].add(int(player_id))
+
+    by_match: defaultdict[tuple[str, str, str], set[str]] = defaultdict(set)
+    by_game: defaultdict[str, set[tuple[str, str, str]]] = defaultdict(set)
+
+    def add_game(game_id: Any, home: Any, away: Any, game_date: Any) -> None:
+        game_id = str(game_id) if game_id is not None else ""
+        if not is_competitive_nba_game_id(game_id) or not isinstance(home, str) or not isinstance(away, str):
+            return
+        key = (normalize_team(home), normalize_team(away), str(game_date)[:10])
+        if not all(isinstance(value, str) and value for value in key) or key[0] == key[1]:
+            return
+        by_match[key].add(game_id)
+        by_game[game_id].add(key)
+
+    for row in games:
+        matchup = row.get("team_matchup")
+        if not isinstance(matchup, str):
+            continue
+        if " vs. " in matchup:
+            home, away = matchup.split(" vs. ", 1)
+        elif " @ " in matchup:
+            away, home = matchup.split(" @ ", 1)
+        else:
+            continue
+        add_game(row.get("game_id"), home, away, row.get("team_game_date"))
+
+    schedule_status: dict[str, Any] = {}
+    for row in _fetch_upcoming_games_from_schedule(
+        engine,
+        target_date=fixture_start,
+        end_date=fixture_end,
+        bounded=True,
+        status_out=schedule_status,
+    ):
+        add_game(row["game_id"], row["home_team"], row["away_team"], row["game_date"])
+
+    return {
+        "team_ids": team_ids,
+        "player_names": player_names,
+        "manual": manual,
+        "known_players": known_players,
+        "by_match": by_match,
+        "by_game": by_game,
+        "schedule_status": schedule_status,
+    }
+
+
+def _unique_reference(values: set[Any]) -> Any | None:
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def _resolve_linker_page(
+    conn, rows: list[dict[str, Any]], context: dict[str, Any], *, apply_updates: bool
+) -> dict[str, Any]:
+    proposed = {"player_id": 0, "game_id": 0, "team_id": 0}
+    conflicts: set[int] = set()
+    reference_unverified: set[int] = set()
+    resolved: list[tuple[dict[str, Any], dict[str, Any], Any, Any, tuple[str, str, str]]] = []
+    team_eligible: set[int] = set()
+
+    for row in rows:
+        staging_id = int(row["staging_id"])
+        old = {column: None if pd.isna(row.get(column)) else row.get(column) for column in proposed}
+        normalized_name = normalize_player(row.get("api_player_name"))
+        candidates = context["manual"].get(
+            row.get("api_player_name"), context["player_names"].get(normalized_name, set())
+        )
+        candidate_player = _unique_reference(candidates)
+        player_id = old["player_id"] if old["player_id"] is not None else candidate_player
+        player_verified = player_id is not None and int(player_id) in context["known_players"]
+        if old["player_id"] is not None and candidates and int(old["player_id"]) not in candidates:
+            conflicts.add(staging_id)
+            player_verified = False
+        elif old["player_id"] is not None and not candidates:
+            reference_unverified.add(staging_id)
+        if old["player_id"] is None and not player_verified:
+            player_id = None
+
+        parsed = pd.to_datetime(row.get("commence_time"), utc=True, errors="coerce")
+        game_date = parsed.tz_convert(EASTERN).strftime("%Y-%m-%d") if pd.notna(parsed) else ""
+        key = (normalize_team(row.get("home_team")), normalize_team(row.get("away_team")), game_date)
+        expected_game = _unique_reference(context["by_match"].get(key, set()))
+        game_id = old["game_id"] if old["game_id"] is not None else expected_game
+        game_verified = (
+            isinstance(game_id, str)
+            and is_competitive_nba_game_id(game_id)
+            and expected_game is not None
+            and game_id == expected_game
+            and len(context["by_game"].get(game_id, set())) == 1
+        )
+        if expected_game is None:
+            reference_unverified.add(staging_id)
+        elif old["game_id"] is not None and not game_verified:
+            conflicts.add(staging_id)
+        if old["game_id"] is None and not game_verified:
+            game_id = None
+        if player_verified and game_verified:
+            team_eligible.add(staging_id)
+        resolved.append((row, old, player_id, game_id, key))
+
+    pairs = sorted(
+        {(int(player_id), game_id) for row, _, player_id, game_id, _ in resolved
+         if int(row["staging_id"]) in team_eligible}
+    )
+    relations: defaultdict[tuple[int, str], set[int]] = defaultdict(set)
+    if pairs:
+        params = {
+            f"{column}{index}": value
+            for index, pair in enumerate(pairs)
+            for column, value in zip(("p", "g"), pair)
+        }
+        values = ", ".join(f"(:p{index}, :g{index})" for index in range(len(pairs)))
+        for relation in _read_linker_records(conn, f"""
+            SELECT player_id, game_id, team_id
+            FROM player_game_stats
+            WHERE (player_id, game_id) IN ({values})
+        """, params):
+            relations[(int(relation["player_id"]), str(relation["game_id"]))].add(int(relation["team_id"]))
+
+    updates: list[dict[str, Any]] = []
+    unresolved_ids: list[int] = []
+    for row, old, player_id, game_id, key in resolved:
+        staging_id = int(row["staging_id"])
+        team_id = None
+        if staging_id in team_eligible:
+            team_id = _unique_reference(relations.get((int(player_id), str(game_id)), set()))
+            home_id = _unique_reference(context["team_ids"].get(key[0], set()))
+            away_id = _unique_reference(context["team_ids"].get(key[1], set()))
+            if home_id is None or away_id is None or home_id == away_id or team_id not in (home_id, away_id):
+                team_id = None
+        if old["team_id"] is not None:
+            if team_id is None:
+                reference_unverified.add(staging_id)
+            elif int(old["team_id"]) != int(team_id):
+                conflicts.add(staging_id)
+            team_id = old["team_id"]
+
+        new = {"player_id": player_id, "game_id": game_id, "team_id": team_id}
+        fills = [column for column in proposed if old[column] is None and new[column] is not None]
+        for column in fills:
+            proposed[column] += 1
+        effective = {column: old[column] if old[column] is not None else new[column] for column in proposed}
+        if any(value is None for value in effective.values()):
+            unresolved_ids.append(staging_id)
+        if fills:
+            updates.append({
+                "id": staging_id,
+                **new,
+                **{f"old_{column}": value for column, value in old.items()},
+                **{column: row.get(column) for column in (
+                    "api_player_name", "home_team", "away_team", "commence_time"
+                )},
+            })
+
+    changed = 0
+    if updates and apply_updates:
+        result = conn.execute(text("""
+            UPDATE raw_player_props_combined
+            SET player_id = COALESCE(player_id, :player_id),
+                game_id = COALESCE(game_id, :game_id),
+                team_id = COALESCE(team_id, :team_id)
+            WHERE staging_id = :id
+              AND player_id IS NOT DISTINCT FROM :old_player_id
+              AND game_id IS NOT DISTINCT FROM :old_game_id
+              AND team_id IS NOT DISTINCT FROM :old_team_id
+              AND api_player_name IS NOT DISTINCT FROM :api_player_name
+              AND home_team IS NOT DISTINCT FROM :home_team
+              AND away_team IS NOT DISTINCT FROM :away_team
+              AND commence_time IS NOT DISTINCT FROM :commence_time
+        """), updates)
+        changed = int(result.rowcount or 0)
+        if changed != len(updates):
+            raise RuntimeError(
+                f"stale source or partial linker write: expected {len(updates)} rows, updated {changed}; checkpoint not advanced"
+            )
+
+    return {
+        "proposed": proposed,
+        "changed": changed,
+        "conflicts": sorted(conflicts),
+        "reference_unverified": sorted(reference_unverified),
+        "first_unresolved_id": min(unresolved_ids) if unresolved_ids else None,
+    }
+
+
+def _summary_json(summary: dict[str, Any]) -> None:
+    print("LINKER_SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
+
+
+def _run_fixed_linker(
+    engine, context: dict[str, Any], *, cursor: int, high_water: int,
+    batch_size: int, max_batches: int, dry_run: bool, mode: str = "fixed_window"
+) -> dict[str, Any]:
+    current = cursor
+    totals = {"player_id": 0, "game_id": 0, "team_id": 0}
+    scanned = changed = batches = 0
+    first_unresolved = None
+    conflict_ids: set[int] = set()
+    unverified_ids: set[int] = set()
+
+    while current < high_water and batches < max_batches:
+        with engine.begin() as conn:
+            _set_linker_timeouts(conn)
+            rows = _read_linker_records(conn, """
+                SELECT staging_id, api_player_name, home_team, away_team, commence_time,
+                       player_id, game_id, team_id
+                FROM raw_player_props_combined
+                WHERE staging_id > :cursor AND staging_id <= :high_water
+                ORDER BY staging_id
+                LIMIT :batch_size
+            """, {"cursor": current, "high_water": high_water, "batch_size": batch_size})
+            if not rows:
+                current = high_water
+                break
+            result = _resolve_linker_page(conn, rows, context, apply_updates=not dry_run)
+            current = int(rows[-1]["staging_id"])
+        batches += 1
+        scanned += len(rows)
+        changed += result["changed"]
+        for column in totals:
+            totals[column] += result["proposed"][column]
+        if result["first_unresolved_id"] is not None:
+            first_unresolved = min(first_unresolved, result["first_unresolved_id"]) if first_unresolved else result["first_unresolved_id"]
+        conflict_ids.update(result["conflicts"])
+        unverified_ids.update(result["reference_unverified"])
+        print(f"LINKER_RESUME cursor={current} high_water={high_water}", flush=True)
+
+    complete = current >= high_water
+    summary = {
+        "mode": mode,
+        "status": "complete" if complete else "incomplete",
+        "cursor": current,
+        "high_water": high_water,
+        "batches": batches,
+        "rows_scanned": scanned,
+        "rows_updated": changed,
+        "fill_candidates": totals,
+        "first_unresolved_id": first_unresolved,
+        "identity_ready": first_unresolved is None,
+        "conflict_count": len(conflict_ids),
+        "reference_unverified_count": len(unverified_ids),
+        "reference_available": context["schedule_status"].get("reference_available"),
+        "dry_run": dry_run,
+    }
+    _summary_json(summary)
+    return summary
+
+
+def _load_resume_state(conn, *, for_update: bool = False) -> dict[str, Any]:
+    suffix = " FOR UPDATE" if for_update else ""
+    try:
+        rows = _read_linker_records(conn, f"""
+            SELECT state_name, replay_floor, cursor, high_water, first_unresolved_id, updated_at
+            FROM {LINKER_STATE_TABLE}
+            WHERE state_name = :state_name{suffix}
+        """, {"state_name": LINKER_STATE_NAME})
+    except Exception as exc:
+        raise RuntimeError(
+            "production linker state table is unavailable; apply the prepared migration and provision the production row explicitly"
+        ) from exc
+    if not rows:
+        raise RuntimeError(
+            "production linker state row is missing; provision state_name='production' explicitly (no automatic initialization)"
+        )
+    return rows[0]
+
+
+def _run_resume_linker(
+    engine, *, batch_size: int, max_batches: int, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        # Snapshot the checkpoint without advisory/row locks or state mutation.
+        with engine.begin() as conn:
+            _set_linker_timeouts(conn)
+            state = _load_resume_state(conn)
+            current = int(state["cursor"])
+            high_water = state["high_water"]
+            if high_water is None:
+                source_high = conn.execute(text(
+                    "SELECT MAX(staging_id) FROM raw_player_props_combined"
+                )).scalar_one()
+                high_water = max(current, int(source_high) if source_high is not None else current)
+        fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water))
+        context = _load_linker_context(engine, fixture_start, fixture_end) if current < int(high_water) else {
+            "schedule_status": {"reference_available": None}
+        }
+        return _run_fixed_linker(
+            engine, context, cursor=current, high_water=int(high_water),
+            batch_size=batch_size, max_batches=max_batches, dry_run=True, mode="resume_preview",
+        )
+
+    totals = {"player_id": 0, "game_id": 0, "team_id": 0}
+    scanned = changed = batches = 0
+    conflict_ids: set[int] = set()
+    unverified_ids: set[int] = set()
+    completed_cycle = False
+
+    with engine.connect() as conn:
+        _set_linker_timeouts(conn, local=False)
+        acquired = bool(conn.execute(
+            text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": LINKER_ADVISORY_LOCK_KEY}
+        ).scalar_one())
+        conn.commit()
+        if not acquired:
+            raise RuntimeError("another production props linker invocation holds the durable checkpoint lock")
+        try:
+            with conn.begin():
+                state = _load_resume_state(conn, for_update=True)
+                replay_floor = int(state["replay_floor"])
+                current = int(state["cursor"])
+                high_water = state["high_water"]
+                first_unresolved = state["first_unresolved_id"]
+                if high_water is None:
+                    source_high = conn.execute(text(
+                        "SELECT MAX(staging_id) FROM raw_player_props_combined"
+                    )).scalar_one()
+                    high_water = max(current, int(source_high) if source_high is not None else current)
+                    if not dry_run:
+                        conn.execute(text(f"""
+                            UPDATE {LINKER_STATE_TABLE}
+                            SET high_water = :high_water, first_unresolved_id = NULL, updated_at = NOW()
+                            WHERE state_name = :state_name
+                        """), {"high_water": high_water, "state_name": LINKER_STATE_NAME})
+                    first_unresolved = None
+                if int(high_water) <= current and not dry_run:
+                    next_cursor = (
+                        max(replay_floor, int(first_unresolved) - 1)
+                        if first_unresolved is not None
+                        else int(high_water)
+                    )
+                    conn.execute(text(f"""
+                        UPDATE {LINKER_STATE_TABLE}
+                        SET cursor = :next_cursor, high_water = NULL,
+                            first_unresolved_id = NULL, updated_at = NOW()
+                        WHERE state_name = :state_name
+                    """), {"next_cursor": next_cursor, "state_name": LINKER_STATE_NAME})
+                    completed_cycle = True
+
+            if current < int(high_water):
+                fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water))
+                context = _load_linker_context(engine, fixture_start, fixture_end)
+            else:
+                context = {"schedule_status": {"reference_available": None}}
+            while current < int(high_water) and batches < max_batches:
+                with conn.begin():
+                    state = _load_resume_state(conn, for_update=True)
+                    if not dry_run and (int(state["cursor"]) != current or int(state["high_water"]) != int(high_water)):
+                        raise RuntimeError("production linker state changed while lock held; checkpoint not advanced")
+                    rows = _read_linker_records(conn, """
+                        SELECT staging_id, api_player_name, home_team, away_team, commence_time,
+                               player_id, game_id, team_id
+                        FROM raw_player_props_combined
+                        WHERE staging_id > :cursor AND staging_id <= :high_water
+                        ORDER BY staging_id
+                        LIMIT :batch_size
+                    """, {"cursor": current, "high_water": high_water, "batch_size": batch_size})
+                    if not rows:
+                        current = int(high_water)
+                        page_result = None
+                    else:
+                        page_result = _resolve_linker_page(conn, rows, context, apply_updates=not dry_run)
+                        current = int(rows[-1]["staging_id"])
+                        page_unresolved = page_result["first_unresolved_id"]
+                        if page_unresolved is not None:
+                            first_unresolved = min(int(first_unresolved), page_unresolved) if first_unresolved is not None else page_unresolved
+                    if not dry_run:
+                        if current >= int(high_water):
+                            next_cursor = max(replay_floor, int(first_unresolved) - 1) if first_unresolved is not None else int(high_water)
+                            conn.execute(text(f"""
+                                UPDATE {LINKER_STATE_TABLE}
+                                SET cursor = :next_cursor, high_water = NULL,
+                                    first_unresolved_id = NULL, updated_at = NOW()
+                                WHERE state_name = :state_name
+                            """), {"next_cursor": next_cursor, "state_name": LINKER_STATE_NAME})
+                            completed_cycle = True
+                        else:
+                            conn.execute(text(f"""
+                                UPDATE {LINKER_STATE_TABLE}
+                                SET cursor = :cursor, first_unresolved_id = :first_unresolved_id,
+                                    updated_at = NOW()
+                                WHERE state_name = :state_name
+                            """), {
+                                "cursor": current,
+                                "first_unresolved_id": first_unresolved,
+                                "state_name": LINKER_STATE_NAME,
+                            })
+                if rows:
+                    batches += 1
+                    scanned += len(rows)
+                    changed += page_result["changed"]
+                    for column in totals:
+                        totals[column] += page_result["proposed"][column]
+                    conflict_ids.update(page_result["conflicts"])
+                    unverified_ids.update(page_result["reference_unverified"])
+                print(f"LINKER_RESUME cursor={current} high_water={high_water}", flush=True)
+                if current >= int(high_water):
+                    completed_cycle = True
+                    break
+
+            complete = current >= int(high_water)
+            summary = {
+                "mode": "resume",
+                "status": "complete" if complete else "incomplete",
+                "cursor": current,
+                "high_water": int(high_water),
+                "batches": batches,
+                "rows_scanned": scanned,
+                "rows_updated": changed,
+                "fill_candidates": totals,
+                "first_unresolved_id": first_unresolved,
+                "identity_ready": first_unresolved is None,
+                "scanned_window_complete": complete,
+                "cycle_checkpoint_rotated": completed_cycle and not dry_run,
+                "conflict_count": len(conflict_ids),
+                "reference_unverified_count": len(unverified_ids),
+                "reference_available": context["schedule_status"].get("reference_available"),
+                "dry_run": dry_run,
+            }
+            _summary_json(summary)
+            return summary
+        finally:
+            try:
+                conn.execute(text("SELECT pg_advisory_unlock(:lock_key)"), {"lock_key": LINKER_ADVISORY_LOCK_KEY})
+                conn.commit()
+            except Exception:
+                logging.exception("Failed to release production props linker advisory lock")
+
+
+
+def link_incremental(
+    batch_size: int = 50000, limit: int | None = None, days: int = 30, *,
+    dry_run: bool = False, cursor: int | None = None, high_water: int | None = None,
+    max_batches: int | None = None, resume: bool = False,
+) -> dict[str, Any] | None:
+    """
+    Incremental linker: bounded recent-window smoke with --limit, legacy/unbounded otherwise.
+
+    Bounded mode shares one PK window across player, game, and independent team fills.
+    Reference tables and the existing CDN schedule route are reused; no fuzzy writes.
+    No-limit behavior below is retained for legacy callers, not recommended for smoke runs.
 
     Args:
         batch_size: Number of records to process per batch
-        limit: Optional limit on total records to process (for testing)
+        limit: Recent PK-window cap (1..5000); None retains legacy/unbounded behavior
         days: Only process records with commence_time within this many days (default 30)
     """
+    if batch_size <= 0 or (limit is not None and not 1 <= limit <= 5000):
+        raise ValueError("batch_size must be positive; bounded --limit must be between 1 and 5000")
+    fixed_requested = cursor is not None or high_water is not None or max_batches is not None
+    if (resume or fixed_requested) and batch_size > 5000:
+        raise ValueError("production bounded --batch-size must be between 1 and 5000")
+    if dry_run and limit is None and not (resume or fixed_requested):
+        raise ValueError("--dry-run requires a bounded --limit, --resume, or fixed-window scope")
+    if resume or fixed_requested:
+        if limit is not None:
+            raise ValueError("--limit cannot be mixed with --resume or fixed-window bounds")
+        if max_batches is None or max_batches <= 0:
+            raise ValueError("--max-batches must be positive for production bounded modes")
+        if resume:
+            if cursor is not None or high_water is not None:
+                raise ValueError("--resume cannot be mixed with --cursor or --high-water")
+        elif cursor is None or high_water is None:
+            raise ValueError("fixed-window mode requires both --cursor and --high-water")
+        elif cursor < 0 or high_water < 0 or cursor > high_water:
+            raise ValueError("fixed-window bounds require 0 <= cursor <= high-water")
+        print("Target: canonical DATABASE_URL (local processing, NOT automatic LOCAL_DATABASE_URL selection)")
+        engine = get_engine()
+        if resume:
+            with engine.begin() as conn:
+                _set_linker_timeouts(conn)
+                _load_resume_state(conn)
+        if resume:
+            return _run_resume_linker(
+                engine, batch_size=batch_size, max_batches=max_batches, dry_run=dry_run
+            )
+        assert cursor is not None and high_water is not None
+        fixed_cursor, fixed_high_water = cursor, high_water
+        fixture_start, fixture_end = _window_fixture_dates(engine, fixed_cursor, fixed_high_water)
+        context = _load_linker_context(engine, fixture_start, fixture_end)
+        return _run_fixed_linker(
+            engine, context, cursor=fixed_cursor, high_water=fixed_high_water, batch_size=batch_size,
+            max_batches=max_batches, dry_run=dry_run
+        )
+
+    print("Target: canonical DATABASE_URL (local processing, NOT automatic LOCAL_DATABASE_URL selection)")
     engine = get_engine()
+    if limit is not None:
+        # Retain the reviewed newest-window diagnostic implementation unchanged.
+        # One materialized source window serves BOTH former passes and independent team fills.
+        # No timestamp/null filter may precede the inner PK LIMIT.
+        def set_timeouts(conn):
+            for setting in ("statement_timeout = '15s'", "lock_timeout = '2s'",
+                            "idle_in_transaction_session_timeout = '15s'"):
+                conn.execute(text(f"SET LOCAL {setting}"))
+
+        def read_bounded(query, params=None):
+            with engine.begin() as conn:
+                set_timeouts(conn)
+                return pd.read_sql(text(query), conn, params=params)
+
+        bounds = read_bounded("""
+            SELECT MIN(staging_id) AS lower_id, MAX(staging_id) AS upper_id FROM (
+                SELECT staging_id FROM raw_player_props_combined
+                ORDER BY staging_id DESC LIMIT :limit
+            ) bounded
+        """, {"limit": limit}).iloc[0]
+        if pd.isna(bounds["lower_id"]):
+            print("Recent-window smoke: empty source table; no-op (NOT all-history completion).")
+            return
+        lower, upper = int(bounds["lower_id"]), int(bounds["upper_id"])
+        print(f"Recent-window smoke: staging_id [{lower}, {upper}], cap={limit}; NOT all-history completion.")
+        window, last_id = [], lower - 1
+        while len(window) < limit:
+            page = read_bounded("""
+                SELECT staging_id, api_player_name, home_team, away_team, commence_time,
+                       player_id, game_id, team_id
+                FROM raw_player_props_combined
+                WHERE staging_id >= :lower AND staging_id <= :upper AND staging_id > :last_id
+                ORDER BY staging_id LIMIT :batch_size
+            """, {"lower": lower, "upper": upper, "last_id": last_id,
+                  "batch_size": min(batch_size, limit - len(window))})
+            if page.empty:
+                break
+            page_rows = cast(list[dict[str, Any]], page.to_dict("records"))
+            window.extend(page_rows)
+            last_id = int(page_rows[-1]["staging_id"])
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+        selected = [r for r in window if pd.notna(r["commence_time"]) and
+                    pd.to_datetime(r["commence_time"], utc=True, errors="coerce") >= cutoff]
+        print(f"Unique window rows: {len(window)}; eligible last {days}d: {len(selected)}")
+        print("Pass candidates: " + ", ".join(
+            f"missing {col}={sum(pd.isna(r[col]) for r in selected)}"
+            for col in ("player_id", "game_id", "team_id")))
+        if not selected:
+            return
+
+        teams = read_bounded("SELECT team_id, team_name FROM teams")
+        players = read_bounded("SELECT player_id, player_name FROM players")
+        games = read_bounded("""
+            SELECT game_id, team_id, team_name, game_date as team_game_date, team_matchup, opponent_id
+            FROM team_game_stats
+        """)
+        team_ids, names, manual = defaultdict(set), defaultdict(set), defaultdict(set)
+        for r in teams.to_dict("records"):
+            team_ids[normalize_team(r["team_name"])].add(int(r["team_id"]))
+        known_players = set(players["player_id"])
+        for r in players.to_dict("records"):
+            norm = normalize_player(r["player_name"])
+            if isinstance(norm, str) and norm and pd.notna(r["player_id"]):
+                names[norm].add(int(r["player_id"]))
+        mappings_file = DATA_DIR / "player_mappings.csv"
+        if mappings_file.exists():
+            for r in pd.read_csv(mappings_file).to_dict("records"):
+                api_name, mapped_player_id = r.get("api_name"), r.get("player_id")
+                if (isinstance(api_name, str) and isinstance(mapped_player_id, str | int | float)
+                        and pd.notna(mapped_player_id)):
+                    manual[api_name].add(int(mapped_player_id))
+
+        def unique(values):
+            return next(iter(values)) if len(values) == 1 else None
+
+        by_match, by_game = defaultdict(set), defaultdict(set)
+
+        def add_game(gid, home, away, game_date):
+            if is_competitive_nba_game_id(gid) and isinstance(home, str) and isinstance(away, str) and home != away:
+                key = (normalize_team(home), normalize_team(away), str(game_date)[:10])
+                if not key[0] or not key[1] or key[0] == key[1]:
+                    return
+                by_match[key].add(gid)
+                by_game[gid].add(key)
+
+        for r in games.to_dict("records"):
+            matchup = r["team_matchup"]
+            if not isinstance(matchup, str):
+                continue
+            if " vs. " in matchup:
+                home, away = matchup.split(" vs. ", 1)
+            elif " @ " in matchup:
+                away, home = matchup.split(" @ ", 1)
+            else:
+                continue
+            add_game(r["game_id"], home, away, r["team_game_date"])
+        fixture_dates = [
+            pd.to_datetime(r["commence_time"], utc=True).tz_convert(EASTERN).date()
+            for r in selected
+        ]
+        fixture_start = min(fixture_dates)
+        fixture_end = max(fixture_dates) + timedelta(days=1)
+        for r in _fetch_upcoming_games_from_schedule(
+            engine, target_date=fixture_start, end_date=fixture_end, bounded=True
+        ):
+            add_game(r["game_id"], r["home_team"], r["away_team"], r["game_date"])
+
+        proposed: dict[str, int] = dict.fromkeys(("player_id", "game_id", "team_id"), 0)
+        conflicts, changed = set(), 0
+        for start in range(0, len(selected), batch_size):
+            batch = selected[start:start + batch_size]
+            resolved = []
+            team_eligible = set()
+            for r in batch:
+                old = {col: None if pd.isna(r[col]) else r[col] for col in proposed}
+                candidates = manual.get(r["api_player_name"], names.get(normalize_player(r["api_player_name"]), set()))
+                pid = old["player_id"] if old["player_id"] is not None else unique(candidates)
+                stamp = pd.to_datetime(r["commence_time"], utc=True).tz_convert(EASTERN).strftime("%Y-%m-%d")
+                key = (normalize_team(r["home_team"]), normalize_team(r["away_team"]), stamp)
+                expected_game = unique(by_match.get(key, set()))
+                gid = old["game_id"] if old["game_id"] is not None else expected_game
+                player_verified = pid is not None and pid in known_players
+                if old["player_id"] is not None and candidates and pid not in candidates:
+                    player_verified = False
+                game_verified = (isinstance(gid, str) and is_competitive_nba_game_id(gid) and gid == expected_game
+                                 and len(by_game[gid]) == 1)
+                if ((old["player_id"] is not None and candidates and not player_verified)
+                        or (old["game_id"] is not None and expected_game is not None and not game_verified)):
+                    conflicts.add(int(r["staging_id"]))
+                if old["player_id"] is None and not player_verified:
+                    pid = None
+                if old["game_id"] is None and not game_verified:
+                    gid = None
+                if player_verified and game_verified:
+                    team_eligible.add(int(r["staging_id"]))
+                resolved.append((r, old, pid, gid, key))
+
+            # Indexed PK pair lookups only; never download player_game_stats.
+            pairs = sorted({(int(pid), gid) for r, _, pid, gid, _ in resolved
+                            if int(r["staging_id"]) in team_eligible})
+            relations = defaultdict(set)
+            if pairs:
+                params = {f"{col}{i}": value for i, pair in enumerate(pairs)
+                          for col, value in zip(("p", "g"), pair)}
+                values = ", ".join(f"(:p{i}, :g{i})" for i in range(len(pairs)))
+                stats = read_bounded(f"""
+                    SELECT player_id, game_id, team_id FROM player_game_stats
+                    WHERE (player_id, game_id) IN ({values})
+                """, params)
+                for r in stats.to_dict("records"):
+                    relations[(r["player_id"], r["game_id"])].add(r["team_id"])
+            updates = []
+            for r, old, pid, gid, key in resolved:
+                tid = unique(relations.get((pid, gid), set())) if int(r["staging_id"]) in team_eligible else None
+                home_id, away_id = unique(team_ids[key[0]]), unique(team_ids[key[1]])
+                if home_id is None or away_id is None or home_id == away_id or tid not in (home_id, away_id):
+                    tid = None
+                if old["team_id"] is not None and tid is not None and old["team_id"] != tid:
+                    conflicts.add(int(r["staging_id"]))
+                if old["team_id"] is not None:
+                    tid = old["team_id"]
+                new = {"player_id": pid, "game_id": gid, "team_id": tid}
+                fills = [col for col in proposed if old[col] is None and new[col] is not None]
+                if not fills:
+                    continue
+                for col in fills:
+                    proposed[col] += 1
+                updates.append({"id": int(r["staging_id"]), **new,
+                                **{f"old_{col}": value for col, value in old.items()},
+                                **{col: r[col] for col in ("api_player_name", "home_team", "away_team", "commence_time")}})
+            if updates and not dry_run:
+                with engine.begin() as conn:
+                    set_timeouts(conn)
+                    result = conn.execute(text("""
+                        UPDATE raw_player_props_combined
+                        SET player_id = COALESCE(player_id, :player_id),
+                            game_id = COALESCE(game_id, :game_id), team_id = COALESCE(team_id, :team_id)
+                        WHERE staging_id = :id
+                          AND player_id IS NOT DISTINCT FROM :old_player_id
+                          AND game_id IS NOT DISTINCT FROM :old_game_id
+                          AND team_id IS NOT DISTINCT FROM :old_team_id
+                          AND api_player_name IS NOT DISTINCT FROM :api_player_name
+                          AND home_team IS NOT DISTINCT FROM :home_team
+                          AND away_team IS NOT DISTINCT FROM :away_team
+                          AND commence_time IS NOT DISTINCT FROM :commence_time
+                    """), updates)
+                    changed += result.rowcount
+        print(f"{'DRY RUN: would fill' if dry_run else 'Resolved fill candidates'}: {proposed}")
+        print(f"Rows updated: {changed}; invalid/conflicting/unverified nonnull identities: {len(conflicts)}")
+        if conflicts:
+            print(f"Review staging IDs (first 20): {sorted(conflicts)[:20]}; existing nonnull IDs preserved")
+        print("Recent-window smoke complete; unresolved rows remain null; NOT all-history completion.")
+        return
+
+    print("WARNING: no --limit: LEGACY/UNBOUNDED path, fuzzy matches and shared staging; NOT the safe smoke path.")
 
     print("=" * 60)
     print("INCREMENTAL LINKER (Lightweight Mode)")
@@ -1215,7 +1978,7 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None, days: in
             WHERE player_id IS NULL
               AND commence_time >= NOW() - CAST(:days || ' days' AS INTERVAL)
         """), {"days": days})
-        total_unlinked = count_result.scalar()
+        total_unlinked = int(count_result.scalar_one())
 
     print(f"  Unlinked (last {days}d): {total_unlinked:,}")
 
@@ -1455,11 +2218,11 @@ def link_incremental(batch_size: int = 50000, limit: int | None = None, days: in
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NBA Data Linker - Local Processing (FIXED)")
+    parser = argparse.ArgumentParser(description="NBA Data Linker - local processing; target is canonical DATABASE_URL, not LOCAL_DATABASE_URL")
     parser.add_argument(
         "command",
         choices=["download", "process", "upload", "all", "init", "incremental"],
-        help="Command to run. Use 'incremental' for lightweight daily linking."
+        help="Command to run. Safe incremental smoke requires --limit; omission is LEGACY/UNBOUNDED."
     )
     parser.add_argument(
         "--batch-size",
@@ -1471,8 +2234,12 @@ def main():
         "--limit",
         type=int,
         default=None,
-        help="Limit total records to process (for testing)"
+        help="Recent PK-window smoke cap, 1..5000, shared across all passes; omission is LEGACY/UNBOUNDED"
     )
+    parser.add_argument("--cursor", type=int, default=None, help="Exclusive staging_id for fixed-window mode")
+    parser.add_argument("--high-water", type=int, default=None, help="Inclusive frozen staging_id for fixed-window mode")
+    parser.add_argument("--max-batches", type=int, default=None, help="Positive bounded batch count for fixed-window/resume mode")
+    parser.add_argument("--resume", action="store_true", help="Use the pre-provisioned durable production checkpoint")
     parser.add_argument(
         "--days",
         type=int,
@@ -1480,7 +2247,31 @@ def main():
         help="Only process records with commence_time within this many days (default: 30)"
     )
 
+    parser.add_argument("--dry-run", action="store_true", help="Resolve only, no writes; requires a bounded incremental scope")
+
     args = parser.parse_args()
+    production_flags = args.resume or args.cursor is not None or args.high_water is not None or args.max_batches is not None
+    if args.command != "incremental" and (args.dry_run or args.limit is not None or production_flags):
+        parser.error("incremental scope flags are only valid with the incremental command")
+    if args.command == "incremental":
+        if args.batch_size <= 0:
+            parser.error("--batch-size must be positive")
+        if production_flags and args.batch_size > 5000:
+            parser.error("production bounded --batch-size must be between 1 and 5000")
+        if args.limit is not None and not 1 <= args.limit <= 5000:
+            parser.error("--limit must be between 1 and 5000")
+        if args.limit is not None and production_flags:
+            parser.error("--limit cannot be mixed with --resume or fixed-window bounds")
+        if args.resume and (args.cursor is not None or args.high_water is not None):
+            parser.error("--resume cannot be mixed with --cursor or --high-water")
+        if production_flags and (args.max_batches is None or not 1 <= args.max_batches <= 100):
+            parser.error("production bounded modes require --max-batches between 1 and 100")
+        if not args.resume and (args.cursor is None) != (args.high_water is None):
+            parser.error("fixed-window mode requires both --cursor and --high-water")
+        if args.cursor is not None and (args.cursor < 0 or args.high_water < args.cursor):
+            parser.error("fixed-window bounds require 0 <= cursor <= high-water")
+        if args.dry_run and args.limit is None and not production_flags:
+            parser.error("--dry-run requires --limit, --resume, or fixed-window bounds")
 
     if args.command == "download":
         download_tables()
@@ -1495,8 +2286,24 @@ def main():
         process_local()
         upload_results()
     elif args.command == "incremental":
-        link_incremental(batch_size=args.batch_size, limit=args.limit, days=args.days)
+        try:
+            summary = link_incremental(
+                batch_size=args.batch_size,
+                limit=args.limit,
+                days=args.days,
+                dry_run=args.dry_run,
+                cursor=args.cursor,
+                high_water=args.high_water,
+                max_batches=args.max_batches,
+                resume=args.resume,
+            )
+        except Exception as exc:
+            logging.error("Incremental linker failed: %s", exc, exc_info=True)
+            return 1
+        if summary and summary.get("status") == "incomplete":
+            return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -34,8 +34,10 @@ import sys
 import tempfile
 import time
 from datetime import UTC, date, datetime, timedelta
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import psycopg2
 from dotenv import load_dotenv
@@ -101,6 +103,8 @@ NBA_TABLES: dict[str, tuple[str | None, str]] = {
 DEFAULT_LOCAL_URL = "postgresql://postgres:***@localhost:5432/gameflow_local"
 SYNC_STATE_SCHEMA_VERSION = 1
 DEFAULT_STATE_FILE = Path("logs/sync/sync_state.json")
+ID_WINDOW_TABLE = "raw_game_lines_staging"
+MAX_ID_WINDOW_SPAN = 100_000
 
 
 def _utc_now() -> str:
@@ -342,6 +346,155 @@ def build_where_clause(
     return " AND ".join(clauses), params
 
 
+def validate_id_window_args(args: argparse.Namespace) -> None:
+    """Reject unsafe or ambiguous ID-window requests before database actions."""
+    if not getattr(args, "id_window", False):
+        if getattr(args, "start_after_id", None) is not None or getattr(args, "end_id", None) is not None:
+            raise ValueError("--start-after-id/--end-id require --id-window")
+        if getattr(args, "replay_id_span", 10_000) != 10_000:
+            raise ValueError("--replay-id-span requires --id-window")
+        return
+
+    if args.tables != [ID_WINDOW_TABLE]:
+        raise ValueError(f"--id-window requires exactly --tables {ID_WINDOW_TABLE}")
+    if args.full:
+        raise ValueError("--id-window cannot be combined with --full")
+    if args.start_date or args.end_date:
+        raise ValueError("--id-window cannot be combined with date bounds")
+    has_start = args.start_after_id is not None
+    has_end = args.end_id is not None
+    if has_start != has_end:
+        raise ValueError("--start-after-id and --end-id must be supplied together")
+    if args.replay_id_span < 0:
+        raise ValueError("--replay-id-span must be nonnegative")
+    if has_start:
+        if args.start_after_id <= 0 or args.end_id <= 0:
+            raise ValueError("explicit ID bounds must be positive")
+        if args.end_id <= args.start_after_id:
+            raise ValueError("--end-id must be greater than --start-after-id")
+        if args.end_id - args.start_after_id > MAX_ID_WINDOW_SPAN:
+            raise ValueError(
+                f"ID window exceeds {MAX_ID_WINDOW_SPAN:,}; choose an explicit owner-bounded window"
+            )
+
+
+def _database_identity(url: str) -> tuple[str, int | None, str]:
+    parts = urlsplit(url)
+    return ((parts.hostname or "").lower(), parts.port, parts.path.rstrip("/").lower())
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return False
+    return (getattr(address, "ipv4_mapped", None) or address).is_loopback
+
+
+def validate_id_window_routing(remote_url: str, local_url: str) -> None:
+    """Require a non-loopback source and a distinct loopback destination."""
+    remote_identity = _database_identity(remote_url)
+    local_identity = _database_identity(local_url)
+    if not remote_identity[0] or _is_loopback_host(remote_identity[0]):
+        raise ValueError("ID-window remote DATABASE_URL must be non-loopback canonical storage")
+    if not _is_loopback_host(local_identity[0]):
+        raise ValueError("ID-window LOCAL_DATABASE_URL must use localhost/loopback")
+    if remote_identity == local_identity:
+        raise ValueError("ID-window remote and local database identities must be distinct")
+
+
+def _connected_database_identity(conn) -> tuple[str, int, str]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT host(inet_server_addr()), inet_server_port(), current_database()")
+        row = cur.fetchone()
+    if not row or any(value is None for value in row):
+        raise ValueError("Cannot verify the connected database endpoint")
+    address = ip_address(str(row[0]))
+    address = getattr(address, "ipv4_mapped", None) or address
+    return str(address), int(row[1]), str(row[2])
+
+
+def verify_connected_id_window_routing(remote_conn, local_conn) -> None:
+    """Verify actual server identities before any target mutation."""
+    remote_identity = _connected_database_identity(remote_conn)
+    local_identity = _connected_database_identity(local_conn)
+    if ip_address(remote_identity[0]).is_loopback:
+        raise ValueError("Connected ID-window source must be non-loopback canonical storage")
+    if not ip_address(local_identity[0]).is_loopback:
+        raise ValueError("Connected ID-window destination must be loopback local storage")
+    if remote_identity == local_identity:
+        raise ValueError("Connected ID-window source and destination identities must be distinct")
+
+
+def get_table_contract(conn, table_name: str) -> tuple[list[tuple[str, str, bool]], list[str]]:
+    """Return ordered column type/nullability contract and ordered primary key."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s)", (f"public.{table_name}",))
+        if not cur.fetchone()[0]:
+            raise ValueError(f"required existing table public.{table_name} is missing")
+        cur.execute(
+            """
+            SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = %s
+              AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attnum
+            """,
+            (table_name,),
+        )
+        columns = [(str(name), str(pg_type), bool(not_null)) for name, pg_type, not_null in cur.fetchall()]
+    return columns, get_primary_key_columns(conn, table_name)
+
+
+def verify_id_window_contract(remote_conn, local_conn) -> None:
+    remote_columns, remote_pk = get_table_contract(remote_conn, ID_WINDOW_TABLE)
+    local_columns, local_pk = get_table_contract(local_conn, ID_WINDOW_TABLE)
+    if remote_columns != local_columns:
+        raise ValueError("remote/local raw_game_lines_staging column type/nullability contract differs")
+    if remote_pk != ["staging_id"] or local_pk != ["staging_id"]:
+        raise ValueError("raw_game_lines_staging primary key must be exactly staging_id on both databases")
+
+
+def get_id_extents(conn, table_name: str) -> tuple[int | None, int | None]:
+    with conn.cursor() as cur:
+        cur.execute(f'SELECT MIN("staging_id"), MAX("staging_id") FROM "{table_name}"')
+        row = cur.fetchone()
+    return (int(row[0]), int(row[1])) if row and row[0] is not None else (None, None)
+
+
+def resolve_id_window(remote_conn, local_conn, args: argparse.Namespace) -> tuple[int, int] | None:
+    """Freeze one bounded source ID interval without selecting outside it."""
+    source_min, source_max = get_id_extents(remote_conn, ID_WINDOW_TABLE)
+    if source_min is None or source_max is None:
+        logger.info("  %s: source empty; nothing to sync", ID_WINDOW_TABLE)
+        return None
+    if args.start_after_id is not None:
+        lower, upper = int(args.start_after_id), int(args.end_id)
+        if lower < source_min - 1:
+            raise ValueError(f"--start-after-id cannot be below source minimum minus one ({source_min - 1})")
+    else:
+        _, local_max = get_id_extents(local_conn, ID_WINDOW_TABLE)
+        local_watermark = local_max if local_max is not None else source_min - 1
+        lower = max(source_min - 1, local_watermark - args.replay_id_span)
+        upper = source_max
+    if upper > source_max:
+        raise ValueError(f"--end-id {upper} exceeds frozen source maximum {source_max}")
+    if upper <= lower:
+        logger.info("  %s: no pending/replay ID interval (%s, %s]", ID_WINDOW_TABLE, lower, upper)
+        return None
+    span = upper - lower
+    if span > MAX_ID_WINDOW_SPAN:
+        raise ValueError(
+            f"frozen ID gap {span:,} exceeds {MAX_ID_WINDOW_SPAN:,}; rerun with explicit "
+            "--start-after-id and --end-id owner-bounded windows"
+        )
+    return lower, upper
+
+
 def build_table_plan(args: argparse.Namespace) -> dict[str, tuple[str | None, str]]:
     """Build table plan and fail on unknown tables unless explicitly allowed."""
     all_configs = {**MLB_TABLES, **NBA_TABLES}
@@ -516,6 +669,7 @@ def sync_table(
     start_date: str | None = None,
     end_date: str | None = None,
     dry_run: bool = False,
+    id_bounds: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Sync a single table from remote to local using COPY.
 
@@ -524,11 +678,19 @@ def sync_table(
     t0 = time.time()
 
     where_clause = ""
-    where_params: dict[str, str] = {}
+    where_params: dict[str, Any] = {}
     mode = "full"
     pre_local_max = None
+    partition_col = date_col
 
-    if strategy == "incremental" and date_col and not force_full:
+    if id_bounds is not None:
+        lower_id, upper_id = id_bounds
+        where_clause = '"staging_id" > %(lower_id)s AND "staging_id" <= %(upper_id)s'
+        where_params = {"lower_id": lower_id, "upper_id": upper_id}
+        mode = "id_window"
+        partition_col = "staging_id"
+        pre_local_max = lower_id
+    elif strategy == "incremental" and date_col and not force_full:
         pre_local_max = get_local_max_date(local_conn, table_name, date_col)
         where_clause, where_params = build_where_clause(
             date_col,
@@ -557,14 +719,16 @@ def sync_table(
         try:
             cur.execute(count_sql, where_params)
             count = cur.fetchone()[0]
-            if date_col and count:
-                bounds_sql = f'SELECT MIN("{date_col}"), MAX("{date_col}") FROM "{table_name}"'
+            if partition_col and count:
+                bounds_sql = f'SELECT MIN("{partition_col}"), MAX("{partition_col}") FROM "{table_name}"'
                 if where_clause:
                     bounds_sql += f" WHERE {where_clause}"
                 cur.execute(bounds_sql, where_params)
                 min_value, max_value = cur.fetchone()
         except Exception:
             remote_conn.rollback()
+            if id_bounds is not None:
+                raise
             count = None
 
     if dry_run:
@@ -575,15 +739,15 @@ def sync_table(
             mode,
             where_clause or "<none>",
             where_params,
-            date_col or "date",
+            partition_col or "date",
             min_value,
-            date_col or "date",
+            partition_col or "date",
             max_value,
         )
         elapsed = time.time() - t0
         return _make_table_result(
             table_name=table_name,
-            date_column=date_col,
+            date_column=partition_col,
             strategy=strategy,
             mode=mode,
             rows_selected=count,
@@ -595,12 +759,12 @@ def sync_table(
             status="dry_run",
         )
 
-    if count == 0 and mode == "incremental":
+    if count == 0 and mode in {"incremental", "id_window"}:
         logger.info("  %s: up to date", table_name)
         elapsed = time.time() - t0
         return _make_table_result(
             table_name=table_name,
-            date_column=date_col,
+            date_column=partition_col,
             strategy=strategy,
             mode=mode,
             rows_selected=0,
@@ -640,7 +804,7 @@ def sync_table(
             elapsed = time.time() - t0
             return _make_table_result(
                 table_name=table_name,
-                date_column=date_col,
+                date_column=partition_col,
                 strategy=strategy,
                 mode=mode,
                 rows_selected=0,
@@ -703,9 +867,9 @@ def sync_table(
     size_mb = file_size / (1024 * 1024)
     rows = count or 0
     local_max = None
-    if date_col:
+    if partition_col:
         try:
-            local_max = get_local_max_date(local_conn, table_name, date_col)
+            local_max = get_local_max_date(local_conn, table_name, partition_col)
         except Exception as exc:
             logger.warning("  %s: copied successfully but local max lookup failed: %s", table_name, exc)
             try:
@@ -718,16 +882,16 @@ def sync_table(
         count_str,
         size_mb,
         elapsed,
-        date_col or "date",
+        partition_col or "date",
         min_value,
-        date_col or "date",
+        partition_col or "date",
         max_value,
-        date_col or "date",
+        partition_col or "date",
         local_max,
     )
     return _make_table_result(
         table_name=table_name,
-        date_column=date_col,
+        date_column=partition_col,
         strategy=strategy,
         mode=mode,
         rows_selected=rows,
@@ -759,6 +923,10 @@ def main() -> None:
     parser.add_argument("--start-date", help="Inclusive lower date bound for date/timestamp-backed tables (YYYY-MM-DD)")
     parser.add_argument("--end-date", help="Inclusive upper date bound for date/timestamp-backed tables (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true", help="Report planned counts without copying rows")
+    parser.add_argument("--id-window", action="store_true", help="Sync one bounded staging_id window for raw_game_lines_staging")
+    parser.add_argument("--start-after-id", type=int, help="Exclusive staging_id lower bound (requires --end-id)")
+    parser.add_argument("--end-id", type=int, help="Inclusive frozen staging_id upper bound")
+    parser.add_argument("--replay-id-span", type=int, default=10_000, help="Derived-mode rewind from local MAX(staging_id)")
     parser.add_argument("--allow-unknown-full-refresh", action="store_true", help="Allow unknown --tables to fall back to full refresh")
     parser.add_argument("--allow-large-full-refresh", action="store_true", help="Allow unbounded full refresh of very large tables such as dense CLV snapshots")
     parser.add_argument(
@@ -778,7 +946,14 @@ def main() -> None:
     if args.status:
         sys.exit(print_sync_status(state_path))
 
+    try:
+        validate_id_window_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     sync_state = _build_initial_state(args.sport, args.full, args.start_date, args.end_date, {})
+    if args.id_window:
+        sync_state["mode"] = "id_window"
     write_sync_state(sync_state, state_path)
 
     remote_url = os.getenv("DATABASE_URL")
@@ -790,6 +965,15 @@ def main() -> None:
         sys.exit(1)
 
     local_url = get_local_url()
+
+    if args.id_window:
+        try:
+            validate_id_window_routing(remote_url, local_url)
+        except ValueError as exc:
+            logger.error(str(exc))
+            sync_state.update(status="failed", finished_at=_utc_now(), error=str(exc))
+            write_sync_state(sync_state, state_path)
+            sys.exit(2)
 
     # Build table list
     try:
@@ -836,30 +1020,49 @@ def main() -> None:
 
     t_start = time.time()
     try:
-        # Ensure local database exists
-        ensure_local_db()
-
-        # Create engines for schema reflection
-        remote_engine = create_engine(
-            remote_url,
-            poolclass=NullPool,
-            connect_args=remote_connect_kwargs(),
-        )
-        local_engine = create_engine(
-            local_url,
-            poolclass=NullPool,
-            connect_args=local_connect_kwargs(),
-        )
-
-        # Create tables locally if needed
-        logger.info("Checking schemas...")
-        for table_name in tables:
-            ensure_table_schema(remote_engine, local_engine, table_name)
-
-        # Sync data using psycopg2 COPY
-        remote_conn = psycopg2.connect(remote_url, **remote_connect_kwargs())
-        remote_conn.autocommit = True
-        local_conn = psycopg2.connect(local_url, **local_connect_kwargs())
+        if args.id_window:
+            remote_conn = psycopg2.connect(remote_url, **remote_connect_kwargs())
+            remote_conn.set_session(readonly=True, autocommit=False)
+            id_local_kwargs = local_connect_kwargs()
+            id_local_kwargs["options"] = (
+                "-c statement_timeout=1800000 -c idle_in_transaction_session_timeout=60000"
+            )
+            local_conn = psycopg2.connect(local_url, **id_local_kwargs)
+            if args.dry_run:
+                local_conn.set_session(readonly=True, autocommit=False)
+            verify_connected_id_window_routing(remote_conn, local_conn)
+            verify_id_window_contract(remote_conn, local_conn)
+            id_bounds = resolve_id_window(remote_conn, local_conn, args)
+            if id_bounds is None:
+                sync_state.update(
+                    status="dry_run" if args.dry_run else "success",
+                    finished_at=_utc_now(),
+                    total_rows=0,
+                )
+                write_sync_state(sync_state, state_path)
+                logger.info("ID-window sync complete: no rows selected")
+                return
+            logger.info("Mode: ID WINDOW (%s, %s]", id_bounds[0], id_bounds[1])
+        else:
+            id_bounds = None
+            # Preserve legacy automatic database/schema initialization.
+            ensure_local_db()
+            remote_engine = create_engine(
+                remote_url,
+                poolclass=NullPool,
+                connect_args=remote_connect_kwargs(),
+            )
+            local_engine = create_engine(
+                local_url,
+                poolclass=NullPool,
+                connect_args=local_connect_kwargs(),
+            )
+            logger.info("Checking schemas...")
+            for table_name in tables:
+                ensure_table_schema(remote_engine, local_engine, table_name)
+            remote_conn = psycopg2.connect(remote_url, **remote_connect_kwargs())
+            remote_conn.autocommit = True
+            local_conn = psycopg2.connect(local_url, **local_connect_kwargs())
 
         for table_name, (date_col, strategy) in tables.items():
             table_start = time.time()
@@ -874,6 +1077,7 @@ def main() -> None:
                     start_date=args.start_date,
                     end_date=args.end_date,
                     dry_run=args.dry_run,
+                    id_bounds=id_bounds,
                 )
             except Exception as e:
                 logger.error("  %s: FAILED - %s", table_name, e)
@@ -887,7 +1091,7 @@ def main() -> None:
                     table_name=table_name,
                     date_column=date_col,
                     strategy=strategy,
-                    mode="full" if args.full else ("window" if (args.start_date or args.end_date) else "incremental"),
+                    mode="id_window" if args.id_window else ("full" if args.full else ("window" if (args.start_date or args.end_date) else "incremental")),
                     rows_selected=None,
                     rows_copied=0,
                     remote_min_partition=None,

@@ -64,6 +64,26 @@ logger = logging.getLogger("LinesJob")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _props_source_high_water() -> int | None:
+    """Read the indexed props PK high-water for scrape observability only."""
+    from sqlalchemy import text
+
+    from src.db.client import get_engine
+
+    with get_engine().begin() as conn:
+        conn.execute(text("SET LOCAL statement_timeout = '10s'"))
+        conn.execute(text("SET LOCAL lock_timeout = '2s'"))
+        value = conn.execute(text("SELECT MAX(staging_id) FROM raw_player_props_combined")).scalar_one()
+    return int(value) if value is not None else None
+
+
 def run_command(command: str, description: str, dry_run: bool = False) -> bool:
     """Run a shell command and return success status.
 
@@ -92,8 +112,9 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
         elapsed = time.time() - start_time
         logger.info(f"COMPLETED: {description} ({elapsed:.1f}s)")
         if result.stdout:
-            # Log last 200 chars of stdout for debugging
-            logger.debug(f"  Output: ...{result.stdout[-200:]}")
+            logger.info("  Output tail: %s", result.stdout[-4000:])
+        if result.stderr:
+            logger.warning("  Stderr tail: %s", result.stderr[-2000:])
         return True
     except subprocess.CalledProcessError as e:
         elapsed = time.time() - start_time
@@ -113,13 +134,32 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
 
 
 def run_step_group(steps: list[tuple[str, str]], dry_run: bool = False) -> bool:
-    """Run a list of (command, description) steps serially. Returns True if all succeeded."""
+    """Run serial steps while enforcing scraper-to-linker dependency barriers."""
     success = True
     for command, description in steps:
+        before_high_water = None
+        if description == "Scraping Player Props (Live)" and not dry_run:
+            try:
+                before_high_water = _props_source_high_water()
+                logger.info("Props source high-water before live scrape: %s", before_high_water)
+            except Exception as exc:
+                logger.warning("Could not read pre-scrape props high-water: %s", exc)
         if not run_command(command, description, dry_run):
-            success = False
             logger.error(f"Job failed at step: {description}")
-            # Continue with remaining steps even if one fails
+            success = False
+            if description.startswith(("Scraping Player Props", "Scraping Injuries")):
+                return False
+            continue
+        if description == "Scraping Player Props (Live)" and not dry_run:
+            try:
+                after_high_water = _props_source_high_water()
+                logger.info(
+                    "Props source high-water after live scrape: %s (before=%s)",
+                    after_high_water,
+                    before_high_water,
+                )
+            except Exception as exc:
+                logger.warning("Could not read post-scrape props high-water: %s", exc)
     return success
 
 
@@ -183,7 +223,23 @@ def main():
         action="store_true",
         help="Run independent step groups concurrently (props path + injury path)",
     )
+    parser.add_argument(
+        "--linker-batch-size",
+        type=int,
+        default=_env_int("NBA_LINKER_BATCH_SIZE", 500),
+        help="Production props-linker batch size (1..5000; default/env: 500)",
+    )
+    parser.add_argument(
+        "--linker-max-batches",
+        type=int,
+        default=_env_int("NBA_LINKER_MAX_BATCHES", 20),
+        help="Maximum production props-linker batches per invocation (1..100; default/env: 20)",
+    )
     args = parser.parse_args()
+    if not 1 <= args.linker_batch_size <= 5000:
+        parser.error("--linker-batch-size must be between 1 and 5000")
+    if not 1 <= args.linker_max_batches <= 100:
+        parser.error("--linker-max-batches must be between 1 and 100")
 
     start_time = time.time()
     mode_label = "LIVE" if args.live else "HISTORICAL"
@@ -219,8 +275,9 @@ def main():
 
     if not args.skip_linker:
         group_a.append((
-            f"{exe} src/processing/nba_linker_local.py incremental",
-            "Linking Props (Incremental)",
+            f"{exe} src/processing/nba_linker_local.py incremental --resume "
+            f"--batch-size {args.linker_batch_size} --max-batches {args.linker_max_batches}",
+            "Linking Props (Durable Bounded Resume)",
         ))
 
     # Group B: Injury path (injury scraper → injury linker)

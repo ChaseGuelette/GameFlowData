@@ -1,35 +1,30 @@
 @echo off
-REM Morning local jobs - run after Railway's 9:00/9:20 AM source jobs
-REM 1. Advanced Stats Scraper (local only — stats.nba.com blocks Railway)
-REM 2. DB sync (Supabase -> local Postgres, incremental)
+setlocal
 
-cd /d C:\Users\Chase\Projects\GameFlowData
+set "REPO_ROOT=%~dp0.."
+set "PYTHON=C:\Users\Chase\Projects\GameFlowData\venv\Scripts\python.exe"
+set "LOG_DIR=%REPO_ROOT%\logs\advanced"
+set "LOG_FILE=%LOG_DIR%\advanced_scraper.log"
 
-if not exist logs\advanced mkdir logs\advanced
-if not exist logs\sync mkdir logs\sync
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+if not exist "%PYTHON%" (
+  echo ERROR: Python interpreter not found: "%PYTHON%" 1>&2
+  exit /b 2
+)
 
-for /f "tokens=1-4 delims=/ " %%a in ('date /t') do set datestamp=%%d-%%b-%%c
-set SYNCLOG=logs\sync\sync_%datestamp%.log
-set LOGFILE=logs\advanced\advanced_scraper_%datestamp%.log
+pushd "%REPO_ROOT%" || exit /b 2
+echo === Advanced Stats Scraper started at %date% %time% ===>>"%LOG_FILE%"
+set "PROXY_ARGS=--no-proxy"
+if /I "%NBA_ADVANCED_USE_PROXY%"=="true" set "PROXY_ARGS=--use-proxy"
+if /I "%NBA_ADVANCED_NO_PROXY%"=="true" set "PROXY_ARGS=--no-proxy"
+"%PYTHON%" -X utf8 "src\scrapers\nba_unified_scraper.py" --season current --advanced-limit 120 --request-timeout 30 --max-retries 2 --http-client curl %PROXY_ARGS% --skip-team --skip-traditional >>"%LOG_FILE%" 2>&1
+set "ADV_EXIT=%ERRORLEVEL%"
+echo === Advanced Stats Scraper finished at %date% %time% with exit code %ADV_EXIT% ===>>"%LOG_FILE%"
+if not "%ADV_EXIT%"=="0" (
+  popd
+  exit /b %ADV_EXIT%
+)
 
-call venv\Scripts\activate.bat
-
-set RUN_EXIT=0
-
-echo === Advanced Stats Scraper started at %date% %time% === >> %LOGFILE% 2>&1
-python src/scrapers/nba_unified_scraper.py --no-proxy --skip-team --skip-traditional >> %LOGFILE% 2>&1
-set ADV_EXIT=%ERRORLEVEL%
-echo === Advanced Stats Scraper finished at %date% %time% with exit code %ADV_EXIT% === >> %LOGFILE% 2>&1
-
-echo === DB sync started at %date% %time% === >> %SYNCLOG% 2>&1
-python scripts\sync_local_db.py >> %SYNCLOG% 2>&1
-set SYNC_EXIT=%ERRORLEVEL%
-echo === DB sync finished at %date% %time% with exit code %SYNC_EXIT% === >> %SYNCLOG% 2>&1
-
-echo === Advanced Exit=%ADV_EXIT% / Sync Exit=%SYNC_EXIT% === >> %SYNCLOG% 2>&1
-echo === Advanced Exit=%ADV_EXIT% / Sync Exit=%SYNC_EXIT% === >> %LOGFILE% 2>&1
-
-if not "%ADV_EXIT%"=="0" set RUN_EXIT=%ADV_EXIT%
-if not "%SYNC_EXIT%"=="0" set RUN_EXIT=%SYNC_EXIT%
-
-exit /b %RUN_EXIT%
+echo === Advanced complete; mirror sync is a separate owner-launched step ===>>"%LOG_FILE%"
+popd
+exit /b %ADV_EXIT%

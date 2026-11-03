@@ -163,6 +163,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-after-id", type=int, default=None)
     parser.add_argument("--end-id", type=int, default=None)
     parser.add_argument(
+        "--follow",
+        action="store_true",
+        help="Follow new source IDs using a dedicated rotating frozen-window journal",
+    )
+    parser.add_argument(
+        "--replay-id-span",
+        type=nonnegative_int,
+        default=None,
+        help="Re-upsert this many IDs below the prior/local high-water mark (requires --follow)",
+    )
+    parser.add_argument(
         "--state-file",
         type=Path,
         default=DEFAULT_STATE_FILE,
@@ -177,6 +188,18 @@ def build_parser() -> argparse.ArgumentParser:
 def validate_arguments(args: argparse.Namespace) -> None:
     if args.start_after_id is not None and args.end_id is not None and args.start_after_id >= args.end_id:
         raise SafeSyncError("--start-after-id must be less than --end-id")
+    follow = bool(getattr(args, "follow", False))
+    replay_span = getattr(args, "replay_id_span", None)
+    state_file = resolve_state_path(args.state_file)
+    if replay_span is not None and not follow:
+        raise SafeSyncError("--replay-id-span requires --follow")
+    if follow:
+        if state_file.resolve() == DEFAULT_STATE_FILE.resolve():
+            raise SafeSyncError("--follow requires an explicit dedicated non-default --state-file")
+        if args.start_after_id is not None or args.end_id is not None:
+            raise SafeSyncError("--follow cannot be combined with --start-after-id or --end-id")
+        if replay_span is None:
+            raise SafeSyncError("--follow requires --replay-id-span")
 
 
 def resolve_state_path(path: Path) -> Path:
@@ -247,8 +270,11 @@ def validate_journal(state: Any) -> None:
         "finished_at",
         "message",
     }
-    if set(state) != required:
+    expected_fields = required | {"follow_mode"} if "follow_mode" in state else required
+    if set(state) != expected_fields:
         raise SafeSyncError("Sync journal has an incompatible field set")
+    if "follow_mode" in state and state["follow_mode"] is not True:
+        raise SafeSyncError("Sync journal follow_mode must be true when present")
     if state["journal_version"] != JOURNAL_VERSION or state["table"] != f"{TABLE_SCHEMA}.{TABLE_NAME}":
         raise SafeSyncError("Sync journal belongs to an incompatible tool or table")
     if state["status"] not in VALID_JOURNAL_STATUSES:
@@ -313,6 +339,14 @@ def atomic_write_journal(path: Path, state: dict[str, Any]) -> None:
     except Exception:
         temp_path.unlink(missing_ok=True)
         raise
+
+
+def backup_completed_journal(path: Path, state: dict[str, Any]) -> None:
+    """Atomically retain the most recently rotated completed follow window."""
+    if state["status"] != "complete":
+        raise SafeSyncError("Only a completed follow journal may be rotated")
+    backup_path = path.with_name(f"{path.stem}.previous-complete{path.suffix}")
+    atomic_write_journal(backup_path, state)
 
 
 def status_command(path: Path) -> int:
@@ -649,6 +683,44 @@ def initial_range(args: argparse.Namespace, bounds: SourceBounds) -> tuple[int |
     return lower, upper
 
 
+def follow_range(
+    bounds: SourceBounds,
+    *,
+    replay_id_span: int,
+    prior_completed_upper: int | None,
+    local_last_id: int | None,
+) -> tuple[int | None, int | None]:
+    if bounds.first_id is None or bounds.last_id is None:
+        return None, None
+    if local_last_id is None:
+        raise SafeSyncError("Follow requires a populated local mirror; use the explicit recovery workflow first")
+    high_water = prior_completed_upper if prior_completed_upper is not None else local_last_id
+    if high_water > bounds.last_id:
+        raise SafeSyncError("Source high-water is below the prior/local mirror high-water; refusing follow rotation")
+    lower = bounds.first_id - 1 if high_water is None else max(bounds.first_id - 1, high_water - replay_id_span)
+    return min(lower, bounds.last_id), bounds.last_id
+
+
+def print_follow_coverage(connection, frozen_upper: int | None, *, complete: bool) -> None:
+    try:
+        latest = source_bounds(connection).last_id
+    except SafeSyncError:
+        print(
+            "Follow coverage: "
+            f"frozen_window_complete={str(complete).lower()} "
+            f"frozen_upper_id={frozen_upper} latest_source_id=unavailable "
+            "latest_source_arrival_not_covered=unknown"
+        )
+        return
+    uncovered = latest is not None and (frozen_upper is None or latest > frozen_upper)
+    print(
+        "Follow coverage: "
+        f"frozen_window_complete={str(complete).lower()} "
+        f"frozen_upper_id={frozen_upper} latest_source_id={latest} "
+        f"latest_source_arrival_not_covered={str(uncovered).lower()}"
+    )
+
+
 def new_journal(
     *,
     source_identity: dict[str, Any],
@@ -972,6 +1044,7 @@ def execute_sync(args: argparse.Namespace, remote_dsn: str, local_dsn: str) -> i
         local_schema = read_schema(local, role="local")
         validate_schemas(remote_schema, local_schema)
         bounds = source_bounds(remote)
+        local_bounds = source_bounds(local) if getattr(args, "follow", False) else None
 
         phase = "local-lock"
         set_local_writable(local)
@@ -981,8 +1054,31 @@ def execute_sync(args: argparse.Namespace, remote_dsn: str, local_dsn: str) -> i
 
         phase = "journal"
         state = load_journal(state_path, required=False)
-        if state is None:
-            lower, upper = initial_range(args, bounds)
+        if state is not None and bool(getattr(args, "follow", False)) != state.get("follow_mode", False):
+            raise SafeSyncError("Checkpoint mode mismatch; preserve recovery journals and use a dedicated follow file")
+        if state is None or (getattr(args, "follow", False) and state["status"] == "complete"):
+            prior_completed_upper = None
+            if state is not None:
+                verify_resume_state(
+                    state,
+                    args=args,
+                    source_identity=source_identity,
+                    target_identity=target_identity,
+                    schema_signature=remote_schema.signature,
+                )
+                prior_completed_upper = state["initial_upper_id"]
+            if getattr(args, "follow", False):
+                assert local_bounds is not None
+                lower, upper = follow_range(
+                    bounds,
+                    replay_id_span=args.replay_id_span,
+                    prior_completed_upper=prior_completed_upper,
+                    local_last_id=local_bounds.last_id,
+                )
+            else:
+                lower, upper = initial_range(args, bounds)
+            if state is not None:
+                backup_completed_journal(state_path, state)
             state = new_journal(
                 source_identity=source_identity,
                 target_identity=target_identity,
@@ -990,6 +1086,8 @@ def execute_sync(args: argparse.Namespace, remote_dsn: str, local_dsn: str) -> i
                 lower=lower,
                 upper=upper,
             )
+            if getattr(args, "follow", False):
+                state["follow_mode"] = True
             atomic_write_journal(state_path, state)
             state_verified = True
         else:
@@ -1004,6 +1102,8 @@ def execute_sync(args: argparse.Namespace, remote_dsn: str, local_dsn: str) -> i
 
         if state["status"] == "complete":
             print("Checkpoint is complete for its frozen upper ID; nothing to do.")
+            if getattr(args, "follow", False):
+                print_follow_coverage(remote, state["initial_upper_id"], complete=True)
             return 0
         lower = state["last_committed_id"]
         upper = state["initial_upper_id"]
@@ -1024,6 +1124,8 @@ def execute_sync(args: argparse.Namespace, remote_dsn: str, local_dsn: str) -> i
                     message="No source rows remain at or below the frozen upper ID",
                 )
                 print("Sync complete for the frozen upper ID.")
+                if getattr(args, "follow", False):
+                    print_follow_coverage(remote, upper, complete=True)
                 return 0
 
             phase = "import-page"
@@ -1050,6 +1152,8 @@ def execute_sync(args: argparse.Namespace, remote_dsn: str, local_dsn: str) -> i
             )
             if complete:
                 print("Sync complete for the frozen upper ID.")
+                if getattr(args, "follow", False):
+                    print_follow_coverage(remote, upper, complete=True)
                 return 0
 
         state = save_terminal_state(
@@ -1059,6 +1163,9 @@ def execute_sync(args: argparse.Namespace, remote_dsn: str, local_dsn: str) -> i
             message=f"Paused after this invocation reached --max-batches={args.max_batches}",
         )
         print("Sync paused/incomplete at the requested batch cap; rerun the same command to resume.")
+        if getattr(args, "follow", False):
+            print_follow_coverage(remote, upper, complete=False)
+            return 3
         return 0
     except KeyboardInterrupt:
         if local is not None:

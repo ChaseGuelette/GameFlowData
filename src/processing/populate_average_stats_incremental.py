@@ -496,7 +496,7 @@ def upsert_player_advanced_averages(engine, df: pd.DataFrame):
     logger.info(f"Upserted {len(insert_df)} player advanced rows")
 
 
-def upsert_team_averages(engine, df: pd.DataFrame):
+def upsert_team_averages(engine, df: pd.DataFrame, *, basic_only: bool = False):
     """Upsert team average rows."""
     if df.empty:
         return
@@ -505,6 +505,9 @@ def upsert_team_averages(engine, df: pd.DataFrame):
     base_cols = ["team_id", "game_id", "season_id", "game_date",
                  "game_number", "games_l5", "games_l15", "games_szn"]
     avg_cols = [c for c in df.columns if c.startswith("avg_")]
+    if basic_only:
+        allowed = {f"avg_{stat}_{window}" for stat in TEAM_BASIC_MAPPING.values() for window in WINDOWS}
+        avg_cols = [c for c in avg_cols if c in allowed]
 
     all_cols = base_cols + avg_cols
     insert_df = df[[c for c in all_cols if c in df.columns]].copy()
@@ -530,6 +533,7 @@ def upsert_team_averages(engine, df: pd.DataFrame):
 def main():
     parser = argparse.ArgumentParser(description="Incremental rolling average stats update")
     parser.add_argument("--date", type=str, help="Target date (YYYY-MM-DD). Defaults to today.")
+    parser.add_argument("--basic-only", action="store_true", help="Update basic columns only; do not derive advanced averages.")
     args = parser.parse_args()
 
     if args.date:
@@ -564,12 +568,13 @@ def main():
                 upsert_player_basic_averages(engine, result_df)
 
             # ── Player Advanced Stats ───────────────────────────────
-            adv_df = fetch_player_advanced_season_games(engine, player_ids, season_id, target_date)
-            if not adv_df.empty:
-                adv_result = calculate_incremental(
-                    adv_df, target_date, "player_id", calculate_advanced_rolling_for_player
-                )
-                upsert_player_advanced_averages(engine, adv_result)
+            if not args.basic_only:
+                adv_df = fetch_player_advanced_season_games(engine, player_ids, season_id, target_date)
+                if not adv_df.empty:
+                    adv_result = calculate_incremental(
+                        adv_df, target_date, "player_id", calculate_advanced_rolling_for_player
+                    )
+                    upsert_player_advanced_averages(engine, adv_result)
         else:
             logger.info("No players found for target date.")
 
@@ -578,10 +583,12 @@ def main():
         if team_ids:
             team_df = fetch_team_season_games(engine, team_ids, season_id, target_date)
             if not team_df.empty:
+                if args.basic_only:
+                    team_df = team_df.drop(columns=list(TEAM_ADVANCED_MAPPING), errors="ignore")
                 team_result = calculate_incremental(
                     team_df, target_date, "team_id", calculate_team_rolling
                 )
-                upsert_team_averages(engine, team_result)
+                upsert_team_averages(engine, team_result, basic_only=args.basic_only)
         else:
             logger.info("No teams found for target date.")
 

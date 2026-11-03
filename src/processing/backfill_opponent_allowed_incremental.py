@@ -1,19 +1,9 @@
-"""
-Incremental Opponent Allowed Stats Backfill
-
-Lightweight version that only processes recent games (last 30 days by default).
-Uses the same rolling calculation logic but with date filtering to reduce runtime
-from 18-120 minutes to 2-5 minutes.
-
-Usage:
-    python src/processing/backfill_opponent_allowed_incremental.py
-    python src/processing/backfill_opponent_allowed_incremental.py --days-back 7
-    python src/processing/backfill_opponent_allowed_incremental.py --days-back 45
-"""
+"""Incrementally refresh opponent-allowed features from complete season history."""
 
 import argparse
 import sys
-from datetime import date, timedelta
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -27,61 +17,156 @@ from tqdm import tqdm
 from src.db.client import get_engine
 
 
+class IncompleteAdvancedStatsError(RuntimeError):
+    """The requested derivation would use incomplete advanced possessions."""
+
+
+@contextmanager
+def bounded_read_connection(engine):
+    with engine.connect() as conn:
+        conn.execute(text("SET LOCAL statement_timeout = '120s'"))
+        yield conn
+
+
+def parse_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an ISO date (YYYY-MM-DD)") from exc
+
+
+def discover_source_completed_end_date(engine) -> date | None:
+    query = text("""
+        SELECT MAX(tgs.game_date::DATE)
+        FROM team_game_stats AS tgs
+        WHERE tgs.game_date::DATE <= CURRENT_DATE
+    """)
+    with bounded_read_connection(engine) as conn:
+        value = conn.execute(query).scalar()
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raise RuntimeError("Completed source end date has an unexpected database type")
+
+
+def count_target_source_games(engine, start_date: date, end_date: date) -> int:
+    query = text("""
+        SELECT COUNT(DISTINCT tgs.game_id)
+        FROM team_game_stats AS tgs
+        WHERE tgs.game_date::DATE BETWEEN :start_date AND :end_date
+    """)
+    with bounded_read_connection(engine) as conn:
+        return int(conn.execute(query, {"start_date": start_date, "end_date": end_date}).scalar() or 0)
+
+
+def require_complete_advanced_history(engine, start_date: date, end_date: date) -> None:
+    query = text("""
+        WITH target_seasons AS (
+            SELECT DISTINCT tgs.season_id
+            FROM team_game_stats AS tgs
+            WHERE tgs.game_date::DATE BETWEEN :start_date AND :end_date
+        ), required_pairs AS (
+            SELECT DISTINCT pgs.game_id, pgs.player_id
+            FROM team_game_stats AS tgs
+            JOIN target_seasons AS seasons ON seasons.season_id = tgs.season_id
+            JOIN player_game_stats AS pgs
+              ON pgs.game_id = tgs.game_id
+             AND pgs.team_id != tgs.team_id
+             AND pgs.min > 0
+            WHERE tgs.game_date::DATE <= :end_date
+        )
+        SELECT
+            COUNT(*) AS required_pairs,
+            COUNT(*) FILTER (WHERE adv.game_id IS NULL OR adv.possessions IS NULL) AS missing_pairs
+        FROM required_pairs AS required
+        LEFT JOIN player_game_advanced_stats AS adv
+          ON adv.game_id = required.game_id
+         AND adv.player_id = required.player_id
+    """)
+    with bounded_read_connection(engine) as conn:
+        row = conn.execute(query, {"start_date": start_date, "end_date": end_date}).one()
+    required_pairs, missing_pairs = int(row[0]), int(row[1])
+    if required_pairs == 0:
+        raise IncompleteAdvancedStatsError(
+            "Source games exist but no positive-minute player/game history is available for derivation"
+        )
+    if missing_pairs:
+        raise IncompleteAdvancedStatsError(
+            f"Advanced possessions are incomplete: {missing_pairs} of {required_pairs} required player/game pairs are missing"
+        )
+
+
 def backfill_opponent_allowed_incremental(
     engine,
     days_back: int = 30,
     lookback_buffer: int = 15,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ):
-    """
-    Incremental version - only process recent games.
+    """Refresh target dates using all preceding games in their seasons."""
+    del lookback_buffer  # Retained only for caller compatibility; calendar buffers are unsafe for L15/season windows.
+    if days_back < 0:
+        raise ValueError("days_back must be zero or positive")
+    today = date.today()
+    if start_date is not None and start_date > today:
+        raise ValueError("start_date cannot be in the future")
+    if end_date is not None and end_date > today:
+        raise ValueError("end_date cannot be in the future")
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise ValueError("start_date must not be after end_date")
 
-    Args:
-        engine: SQLAlchemy engine
-        days_back: Number of days to update (default 30)
-        lookback_buffer: Extra days to fetch for L15 window calculations (default 15)
-    """
-    # Calculate date ranges
-    target_cutoff = date.today() - timedelta(days=days_back)
-    fetch_cutoff = date.today() - timedelta(days=days_back + lookback_buffer)
+    target_end = end_date or discover_source_completed_end_date(engine)
+    if target_end is None:
+        print("No completed source game date is available; nothing to refresh.")
+        return
+    target_start = start_date or (target_end - timedelta(days=days_back))
+    if target_start > target_end:
+        raise ValueError("start_date must not be after the completed source end date")
 
     print("--- Incremental Opponent Allowed Stats ---")
-    print(f"  Target date range: {target_cutoff} to {date.today()}")
-    print(f"  Fetch date range: {fetch_cutoff} to {date.today()} (includes lookback buffer)")
+    print(f"  Target date range: {target_start} to {target_end}")
+    print("  History range: full target season(s) through target end")
 
-    # Fetch raw stats with date filter
-    df = fetch_raw_allowed_stats_incremental(engine, fetch_cutoff)
-
-    if df.empty:
-        print("❌ No data found in date range.")
+    target_games = count_target_source_games(engine, target_start, target_end)
+    if target_games == 0:
+        print("No source games exist in the target range; nothing to refresh.")
         return
 
-    print(f"Loaded {len(df):,} rows. Computing rolling windows...")
-    df_processed = compute_rolling_metrics(df)
+    require_complete_advanced_history(engine, target_start, target_end)
+    df = fetch_raw_allowed_stats_incremental(engine, target_start, target_end)
+    if df.empty:
+        raise RuntimeError("Source games exist but the full-history opponent derivation produced zero rows")
 
-    # Validation cleaning
+    print(f"Loaded {len(df):,} full-history rows. Computing rolling windows...")
+    df_processed = compute_rolling_metrics(df)
     df_final = df_processed.dropna(subset=["games_l5"])
     df_final = df_final.dropna(subset=["team_id", "game_id", "game_date", "position_group"])
-
-    # Filter to only target date range before upserting
-    df_final = df_final[df_final["game_date"] >= target_cutoff]
+    game_dates = pd.to_datetime(df_final["game_date"]).dt.date
+    df_final = df_final[(game_dates >= target_start) & (game_dates <= target_end)]
+    if df_final.empty:
+        raise RuntimeError("Source games exist in the target range but no derived rows are eligible to write")
 
     print(f"Computed {len(df_final):,} rows in target range. Inserting...")
     batch_insert_to_db(engine, df_final)
     print("--- Complete ---")
 
 
-def fetch_raw_allowed_stats_incremental(engine, cutoff_date: date) -> pd.DataFrame:
-    """
-    Fetch raw opponent-allowed stats for games >= cutoff_date.
-
-    This is the same query as the full version but with a date filter.
-    """
+def fetch_raw_allowed_stats_incremental(engine, start_date: date, end_date: date | None = None) -> pd.DataFrame:
+    """Fetch complete history for seasons represented in the requested target range."""
+    if end_date is None:
+        end_date = date.today()
     query = text("""
+        WITH target_seasons AS (
+            SELECT DISTINCT season_id
+            FROM team_game_stats
+            WHERE game_date::DATE BETWEEN :start_date AND :end_date
+        )
         SELECT
             tgs.team_id, tgs.game_id, tgs.game_date::DATE as game_date, tgs.season_id,
-            COALESCE(ph.position_group, 'U') as position_group,
-
-            -- Core Stats
+            ph.position_group,
             COALESCE(SUM(pgs.pts), 0) as pts,
             COALESCE(SUM(pgs.reb), 0) as reb,
             COALESCE(SUM(pgs.ast), 0) as ast,
@@ -89,16 +174,12 @@ def fetch_raw_allowed_stats_incremental(engine, cutoff_date: date) -> pd.DataFra
             COALESCE(SUM(pgs.stl), 0) as stl,
             COALESCE(SUM(pgs.blk), 0) as blk,
             COALESCE(SUM(pgs.tov), 0) as tov,
-
-            -- Sharp Stats
             COALESCE(SUM(pgs.fta), 0) as fta,
             COALESCE(SUM(pgs.oreb), 0) as oreb,
             COALESCE(SUM(pgs.pf), 0) as pf,
-
-            -- Possessions (from Advanced)
-            COALESCE(SUM(adv.possessions), 0) as poss_faced
-
+            SUM(adv.possessions) as poss_faced
         FROM team_game_stats tgs
+        JOIN target_seasons seasons ON seasons.season_id = tgs.season_id
         JOIN player_game_stats pgs
             ON tgs.game_id = pgs.game_id AND tgs.team_id != pgs.team_id AND pgs.min > 0
         JOIN player_game_advanced_stats adv
@@ -108,12 +189,12 @@ def fetch_raw_allowed_stats_incremental(engine, cutoff_date: date) -> pd.DataFra
             WHERE ph.player_id = pgs.player_id AND ph.snapshot_date < tgs.game_date::DATE
             ORDER BY ph.snapshot_date DESC LIMIT 1
         ) ph ON TRUE
-        WHERE tgs.game_date >= :cutoff_date
+        WHERE tgs.game_date::DATE <= :end_date
         GROUP BY tgs.team_id, tgs.game_id, tgs.game_date, tgs.season_id, ph.position_group
     """)
 
-    with engine.connect() as conn:
-        return pd.read_sql(query, conn, params={"cutoff_date": cutoff_date})
+    with bounded_read_connection(engine) as conn:
+        return pd.read_sql(query, conn, params={"start_date": start_date, "end_date": end_date})
 
 
 def compute_rolling_metrics(df: pd.DataFrame) -> pd.DataFrame:
@@ -296,6 +377,7 @@ def batch_insert_to_db(engine, df: pd.DataFrame, batch_size: int = 100):
             raw_conn = engine.raw_connection()
             try:
                 cur = raw_conn.cursor()
+                cur.execute("SET LOCAL statement_timeout = '120s'")
                 execute_values(cur, upsert_sql, batch, page_size=batch_size)
                 raw_conn.commit()
             except Exception:
@@ -319,16 +401,29 @@ def main():
         "--lookback-buffer",
         type=int,
         default=15,
-        help="Extra days to fetch for L15 window calculations (default: 15)",
+        help="Deprecated compatibility option; full target-season history is always fetched",
     )
+    parser.add_argument("--start-date", type=parse_date, default=None, help="First target date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", type=parse_date, default=None, help="Last target date (YYYY-MM-DD)")
 
     args = parser.parse_args()
+    today = date.today()
+    if args.days_back < 0:
+        parser.error("--days-back must be zero or positive")
+    if args.start_date is not None and args.start_date > today:
+        parser.error("--start-date cannot be in the future")
+    if args.end_date is not None and args.end_date > today:
+        parser.error("--end-date cannot be in the future")
+    if args.start_date is not None and args.end_date is not None and args.start_date > args.end_date:
+        parser.error("--start-date must not be after --end-date")
 
     engine = get_engine()
     backfill_opponent_allowed_incremental(
         engine,
         days_back=args.days_back,
         lookback_buffer=args.lookback_buffer,
+        start_date=args.start_date,
+        end_date=args.end_date,
     )
 
 

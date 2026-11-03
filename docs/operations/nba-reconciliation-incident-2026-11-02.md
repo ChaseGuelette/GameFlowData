@@ -2,7 +2,7 @@
 
 ## Status
 
-The owner has now approved proceeding with reconciliation and requested an owner-launch linker command. Railway CLI authentication is restored. The current successful deployment is `2aeb972e-7f47-4033-a087-f6d02dda5bab`, commit `79a744316c54161b207240b711a7a0a850b4ce26`; the ingestion/linker files inspected here have no diff from the earlier `d478458` deployment. The approved reconciliation/linker tool is being implemented in isolated `nba-reconciliation` checkout against completed live-key metadata. One additive local props smoke completed; separate independent readback is pending. No remote write, deployment, archive transfer, pruning or index change has been performed by this investigation.
+The owner approved proceeding with reconciliation and requested an owner-launch linker command. Railway CLI authentication is restored. The verified successful deployment is `2aeb972e-7f47-4033-a087-f6d02dda5bab`, commit `79a744316c54161b207240b711a7a0a850b4ce26`; the ingestion/linker files inspected here had no diff from the earlier `d478458` deployment. After owner steering to reuse the existing linker, the separate reconciliation/linker draft was stopped and preserved unintegrated. A narrow repair is running against `src/processing/nba_linker_local.py` in the isolated checkout; it is not accepted, merged or deployed. The additive local props smoke passed separate independent readback. The owner ran the CDN catch-up, whose canonical output now passes bounded verification. No remote write, deployment, archive transfer, pruning or index change was performed by the agent.
 
 ### Authenticated follow-up
 
@@ -79,15 +79,21 @@ See [post-sync checks 1–2](nba-post-sync-checks-2026-11-02.md).
 
 ### Verified owner-run source catch-up
 
-The standalone CDN CLI supports a bounded date range and exits nonzero when game ingestion reports failures. From the main project root, the owner can run:
+The owner ran the standalone bounded CDN catch-up. Independent canonical post-run checks found 90 games, 2,440 player rows and 180 team rows for October 20–November 1, with identical game sets and exactly two team rows per game. Basic player/team source dates now reach 2026-11-01. This verifies resulting state, not attribution of every row to that single invocation. No CDN rerun is currently indicated for that window.
+
+For reference, the executed command surface is:
 
 ` .\venv\Scripts\python.exe -X utf8 src\scrapers\nba_cdn_scraper.py --date-range 2026-10-20 2026-11-01 `
 
-It writes canonical `DATABASE_URL`, not the local mirror, and does not call `stats.nba.com`. The agent has not launched this catch-up. Verify inserted-game/source watermarks afterward; process success alone is insufficient.
+It writes canonical `DATABASE_URL`, not the local mirror, and does not call `stats.nba.com`. The agent did not launch the catch-up. Source watermarks and game membership were verified separately from process success.
 
-Rolling-average catch-up accepts one `--date` at a time and needs the missing source dates processed, not merely yesterday. Opponent-allowed catch-up exposes runtime-relative `--days-back`/`--lookback-buffer`, not explicit start/end dates; its advanced-stats inner join must be satisfied first. Advanced-stat scraping remains local-only. Do not represent a CDN basic-stats catch-up as restoring advanced history or every derived feature.
+Rolling-average catch-up accepts one `--date` at a time and needs the missing source dates processed, not merely yesterday. The post-CDN check still found basic player, team and advanced player averages at 2026-06-13. Opponent-allowed catch-up exposes runtime-relative `--days-back`/`--lookback-buffer`, not explicit start/end dates; its advanced-stats inner join must be satisfied first. Advanced-stat scraping remains local-only. Do not represent a CDN basic-stats catch-up as restoring advanced history or every derived feature.
 
-## Approved reconciliation scope — implementation preparation
+Additional scraper-scope hazard: `nba_unified_scraper.py::scrape_advanced_stats()` calls `get_games_missing_advanced_stats()`, which selects every game with null team offensive rating ordered by game ID. Its missing-game selector does not accept/filter the CLI season, so passing `--season 2026-27` does not bound the advanced backlog, and `--advanced-limit` can choose oldest missing games rather than the requested new-season window. Do not recommend a blind advanced rerun; verify a targeted existing helper or repair its date/game-ID scope first.
+
+## Superseded reconciliation-tool draft — do not integrate
+
+The owner redirected this work to reuse the existing linker and restore remote automation. The separate tool/runbook draft below is preserved only in the isolated worktree and is not an approved replacement pipeline.
 
 New files only:
 
@@ -110,6 +116,14 @@ The optional local execution path must not report “everything reconciled” wh
 1. Railway authentication, deployment metadata and the bounded linker-error log check are complete. The initial critical Daily Stats scraper traceback and actual in-container egress remain unresolved; its final optional DFS error is not the initiating failure.
 2. The later owner message authorizes proceeding with the reconciliation scope and asks for the linker command. Implement and independently validate the bounded entrypoint before handing off a real write command; do not recommend the old unbounded incremental command merely with a smaller `--limit`.
 3. Turn verified root causes into separately approved source changes, rerun the original failing paths in a safe bounded mode, and verify actual output/freshness—not only process exit.
+
+### Current existing-linker acceptance and automation priority
+
+- Applied the repaired existing `src/processing/nba_linker_local.py` to the main checkout as an uncommitted local edit; no push/deploy. Only explicit `--limit` uses the bounded path; no-limit production callers remain legacy/unbounded and have not been fixed by deployment.
+- Independent review approved the corrected independent identity passes. Main checkout validation: six existing tests, 45 disposable guarded checks, Ruff, compile and whitespace checks passed. Differential Pyright found zero introduced errors (66 baseline errors versus 63 current legacy errors).
+- The corrected-core real CLI preview completed in enforced read-only mode over 1,000 rows, with one CDN request and zero proposed fills. All rows already contained game/player/team IDs and referred to November 3 future fixtures. The 1,000 conflict/unverified flags are not proof those IDs are wrong; the checked future game IDs lack completed-game stats, and historical identity acceptance remains unresolved. No remote rows were updated.
+- Current production verification does not establish that the old SSL/network failure or Daily Stats first-stage failure is repaired. Restore the scheduled remote chain and verify its actual outputs. Rolling averages, source scraping and sync should not become routine owner-run manual procedures; inspect their existing schedules and dependencies first. The scheduled local-mirror sync wiring/reachability has not yet been verified.
+- Current preview evidence: `C:/Users/Chase/AppData/Local/hermes/cache/scratch/nba-reconcile-incident/existing-linker-live-preview.current.json`. It binds the tested working-copy core revision; the later main-checkout scalar/type cleanups were verified separately with the full controlled checks and Pyright comparison.
 
 No root-cause or repair completion is claimed from truncated alert tails.
 

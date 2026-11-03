@@ -42,6 +42,7 @@ from src.models.features.nba.season import is_competitive_nba_game_id, resolve_n
 
 CDN_BASE = "https://cdn.nba.com/static/json"
 SCHEDULE_URL = f"{CDN_BASE}/staticData/scheduleLeagueV2.json"
+SCHEDULE_FALLBACK_URL = f"{CDN_BASE}/staticData/scheduleLeagueV2_1.json"
 BOXSCORE_URL = f"{CDN_BASE}/liveData/boxscore/boxscore_{{game_id}}.json"
 
 CDN_HEADERS = {
@@ -74,10 +75,20 @@ TEAM_ID_TO_ABBREV = {v: k for k, v in TEAM_ABBREV_MAP.items()}
 
 
 def fetch_schedule() -> dict:
-    """Fetch the full NBA schedule from CDN."""
-    resp = requests.get(SCHEDULE_URL, headers=CDN_HEADERS, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    """Fetch a valid schedule from the official CDN, with one bounded fallback."""
+    last_error = None
+    for endpoint in (SCHEDULE_URL, SCHEDULE_FALLBACK_URL):
+        try:
+            resp = requests.get(endpoint, headers=CDN_HEADERS, timeout=30)
+            resp.raise_for_status()
+            payload = resp.json()
+            schedule = payload.get("leagueSchedule") if isinstance(payload, dict) else None
+            if not isinstance(schedule, dict) or not isinstance(schedule.get("gameDates"), list) or not schedule["gameDates"]:
+                raise ValueError("NBA CDN returned an empty or invalid schedule")
+            return payload
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
+    raise RuntimeError("NBA schedule unavailable from both official CDN endpoints") from last_error
 
 
 def fetch_boxscore(game_id: str) -> dict | None:
