@@ -9,13 +9,22 @@ from __future__ import annotations
 import copy
 import importlib.metadata
 import importlib.util
+import json
 import math
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date
 from itertools import product
 from pathlib import Path
 
+from src.backtesting.nba.historical_execution import (
+    HISTORICAL_SOURCE_FILES,
+    load_attachment,
+    recheck_attachment,
+    source_policy,
+    validate_artifact_window,
+    validate_window,
+)
 from src.config.combo_config import COMBO_DEFINITIONS
 from src.models.black_litterman import BLConfig
 from src.models.nba_artifacts import (
@@ -140,6 +149,9 @@ class SweepConfig:
     max_cells: int = 64
     local: bool = False
     diagnostic_history: bool = False
+    historical_policy: str | None = None
+    historical_source_metadata: str | None = None
+    _historical_json: str = field(init=False, repr=False, default='null')
 
     def __post_init__(self) -> None:
         for name in ("model_dir", "output_dir"):
@@ -186,6 +198,21 @@ class SweepConfig:
         count = len(self.edge_thresholds) * (1 + len(self.bl_taus) * len(self.bl_z_max) * len(self.bl_max_weight))
         if count > self.max_cells:
             raise ValueError(f"Requested {count} cells exceeds max_cells={self.max_cells}")
+        historical = load_attachment(self.historical_policy, self.historical_source_metadata, local=self.local)
+        validate_window(historical, self.start, self.end)
+        if historical is not None:
+            for item in (historical['policy'], historical['source_metadata']):
+                if item['path'] is not None:
+                    target = Path(item['path'])
+                    output = Path(self.output_dir).resolve(strict=False)
+                    if any(target.is_relative_to(candidate) for candidate in
+                           (output, output.with_name(output.name + '_incomplete'))):
+                        raise ValueError('Historical input collides with sweep output')
+        object.__setattr__(self, '_historical_json', json.dumps(historical, sort_keys=True, allow_nan=False))
+
+    @property
+    def historical(self) -> dict | None:
+        return json.loads(self._historical_json)
 
     @property
     def market_stats(self) -> tuple[str, ...]:
@@ -202,6 +229,10 @@ class SweepConfig:
 
     def to_dict(self) -> dict:
         value = asdict(self)
+        for name in ('historical_policy', 'historical_source_metadata', '_historical_json'):
+            value.pop(name)
+        if self.historical is not None:
+            value['historical'] = self.historical
         value["start"], value["end"] = self.start.isoformat(), self.end.isoformat()
         for name in ("stats", "bookmakers", "edge_thresholds", "bl_taus", "bl_z_max", "bl_max_weight"):
             value[name] = list(value[name])
@@ -262,12 +293,14 @@ def validate_plan(config: SweepConfig, plan: dict) -> None:
             "acquisition_identity", "request_identity", *READINESS}
     if type(plan) is not dict or set(plan) != keys:
         raise ValueError("Malformed sweep plan")
-    expected = {"schema_version": 1, "fixed_config": config.to_dict(),
+    expected = {"schema_version": 2 if config.historical else 1, "fixed_config": config.to_dict(),
                 "cells": [{"cell_id": cell.cell_id, **cell.to_dict()} for cell in config.cells()],
                 "cell_count": len(config.cells()), "acquisition_settings": _acquisition_settings(config),
                 **READINESS}
     if any(canonical_sha256(plan[key]) != canonical_sha256(value) for key, value in expected.items()):
         raise ValueError("Sweep config/plan disagreement")
+    if plan['source_policy'] != source_policy(config.historical):
+        raise ValueError('Historical source-policy binding disagreement')
     if (plan["predictor_settings"]["n_samples"] != config.n_samples
             or plan["predictor_settings"]["random_state"] != config.seed
             or plan["predictor_settings"]["combined_calibration_offsets"] is not None
@@ -304,14 +337,18 @@ def build_plan(config: SweepConfig, *, check_output_collision: bool = True) -> d
                 raise
             versions[module] = {"distribution": "psycopg2", "version": importlib.metadata.version("psycopg2")}
     inspection = validate_artifact_bundle(config.model_dir, config.stats, allow_legacy=False)
+    if config.historical is not None:
+        recheck_attachment(config.historical)
+        validate_artifact_window(inspection, config.start)
     root = Path(__file__).resolve().parents[3]
-    source = {"base": source_git_state(root), "files": {name: sha256_file(root / name) for name in SOURCE_FILES}}
+    files = SOURCE_FILES + (HISTORICAL_SOURCE_FILES if config.historical else ())
+    source = {"base": source_git_state(root), "files": {name: sha256_file(root / name) for name in files}}
     settings = predictor_settings(config, inspection)
     body = {
-        "schema_version": 1, "fixed_config": config.to_dict(), "artifact": inspection.to_plan_dict(),
+        "schema_version": 2 if config.historical else 1, "fixed_config": config.to_dict(), "artifact": inspection.to_plan_dict(),
         "predictor_settings": settings, "dependencies": versions, "source": source,
         "ordered_features": inspection.manifest["features"]["ordered"],
-        "source_policy": {"source_id": "unknown", "policy_id": "unknown", "watermark": None},
+        "source_policy": source_policy(config.historical),
         "cells": [{"cell_id": cell.cell_id, **cell.to_dict()} for cell in config.cells()],
         "cell_count": len(config.cells()), **copy.deepcopy(READINESS),
     }

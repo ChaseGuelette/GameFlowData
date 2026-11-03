@@ -38,6 +38,11 @@ def build_sweep_command(resolved: ResolvedConfig, *, artifact_dir: Path, output_
         values = getattr(evaluation, name)
         if values:
             argv += ["--" + name.replace("_", "-"), *(str(value) for value in values)]
+    historical = resolved.historical_attachment
+    if historical is not None:
+        argv += ['--historical-policy', historical['policy']['path']]
+        if historical['source_metadata']['path'] is not None:
+            argv += ['--historical-source-metadata', historical['source_metadata']['path']]
     return argv + ["--local", "--diagnostic-history"]
 
 

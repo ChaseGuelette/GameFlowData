@@ -7,10 +7,26 @@ semantics while moving injury source ownership out of the god-class facade.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
+from math import isfinite
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.sql.elements import TextClause
+
+from src.models.features.nba.historical_observation_adapters import (
+    InjuryHistoryState,
+    SourceProvenance,
+    evaluate_injury_observation,
+)
+from src.models.features.nba.transforms import starter_probability
+
+if TYPE_CHECKING:
+    from src.models.features.nba.historical_loader import RollingSnapshot
 
 
 def default_injury_context() -> dict[str, float | int]:
@@ -358,3 +374,119 @@ def get_injury_context(
         player_status_result=player_status_result,
         same_position_result=same_position_result,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalInjuryRow:
+    provenance: SourceProvenance
+    player_id: int
+    team_id: int
+    status: str
+    history_state: InjuryHistoryState
+    local_observed_at: datetime | None
+    report_cycle_text: str | None
+    position_group: str | None = None
+    rolling: RollingSnapshot | None = None
+    advanced: RollingSnapshot | None = None
+
+    def __post_init__(self):
+        if not isinstance(self.provenance, SourceProvenance) or not isinstance(self.history_state, InjuryHistoryState):
+            raise ValueError('injury provenance/history state must be explicit immutable records')
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalInjuryEdition:
+    """Trusted complete team rosters for ONE observed edition, not latest-ID.
+
+    Each row's provenance attributes must reference this edition record ID.
+    ``completeness_evidence_ref`` binds the caller's explicit policy authority.
+    Missing target/roster records never mean healthy.
+    """
+
+    provenance: SourceProvenance
+    game_id: str
+    team_ids: tuple[int, ...]
+    completeness_evidence_ref: str
+    rows: tuple[HistoricalInjuryRow, ...]
+    roster_membership: tuple[tuple[int, tuple[int, ...]], ...] = ()
+
+    def __post_init__(self):
+        if not isinstance(self.provenance, SourceProvenance) or not isinstance(self.team_ids, tuple) or not isinstance(self.rows, tuple):
+            raise ValueError('injury edition requires immutable source records')
+        if any(not isinstance(row, HistoricalInjuryRow) for row in self.rows):
+            raise ValueError('injury rows must be HistoricalInjuryRow')
+        if not isinstance(self.roster_membership, tuple) or any(
+            not isinstance(item, tuple) or len(item) != 2 or not isinstance(item[1], tuple)
+            for item in self.roster_membership
+        ):
+            raise ValueError('injury roster membership must be deeply immutable')
+
+
+def historical_injury_features(*, context, player_id, team_id, opponent_id, position_group,
+                               edition, injury_policy, weight_values):
+    """Aggregate only a complete, eligible observed edition; no omission inference."""
+    if injury_policy['missing_history'] != 'block' or injury_policy['omitted_player'] != 'block':
+        raise ValueError('unsupported injury missing/omission semantics')
+    if (not isinstance(edition, HistoricalInjuryEdition) or edition.game_id != context.game_id
+            or set(edition.team_ids) != {team_id, opponent_id}
+            or edition.completeness_evidence_ref != injury_policy['completeness_evidence_ref']
+            or injury_policy['interpreter_id'] != 'nba-injury-local-observed-at/v1'):
+        raise ValueError('missing/incompatible complete injury edition authority')
+    roster = dict(edition.roster_membership)
+    if len(roster) != len(edition.roster_membership) or set(roster) != {team_id, opponent_id}:
+        raise ValueError('exact per-team injury roster membership required')
+    expected = {(team, member) for team, members in roster.items() for member in members}
+    if (any(not members or len(set(members)) != len(members) for members in roster.values())
+            or len({member for _, member in expected}) != len(expected)
+            or (team_id, player_id) not in expected
+            or expected != {(row.team_id, row.player_id) for row in edition.rows}):
+        raise ValueError('injury edition rows do not exactly cover the asserted team rosters')
+    ledger, records, target, seen = [], [], None, set()
+    observed_times = set()
+    for row in edition.rows:
+        observation = evaluate_injury_observation(context=context, provenance=row.provenance,
+            history_state=row.history_state, local_observed_at=row.local_observed_at,
+            report_cycle_text=row.report_cycle_text)
+        ledger.append((row.provenance, observation))
+        if (not observation.accepted or row.team_id not in edition.team_ids or row.player_id in seen
+                or dict(row.provenance.attributes).get('edition_ref') != edition.provenance.source_record_id
+                or row.status not in {'Out', 'Doubtful', 'Questionable', 'Probable', 'Available', 'Healthy'}):
+            raise HistoricalInjuryBlockedError('ambiguous/ineligible injury row or edition membership', ledger)
+        seen.add(row.player_id)
+        observed_times.add(row.local_observed_at)
+        if row.player_id == player_id:
+            if row.team_id != team_id:
+                raise ValueError('target injury team identity mismatch')
+            target = row
+        if row.status == 'Out':
+            weights = weight_values(row)
+            required = {'avg_min_l5', 'avg_pts_l5', 'avg_reb_l5', 'avg_ast_l5', 'avg_usg_pct_l5', 'games_started_l5'}
+            if not required <= weights.keys() or not row.position_group:
+                raise ValueError('OUT player missing raw contribution/position evidence')
+            if (any(not isfinite(weights[key]) or weights[key] < 0 for key in required)
+                    or weights['avg_min_l5'] <= 0 or weights['games_started_l5'] > 5):
+                raise ValueError('OUT player has invalid raw contribution values')
+            records.append({**weights, 'nba_team_id': row.team_id, 'report_date': context.game_date,
+                            'inj_player_id': row.player_id, 'inj_position_group': row.position_group})
+    if target is None or len(observed_times) != 1 or any(not any(r.team_id == team for r in edition.rows) for team in edition.team_ids):
+        raise ValueError('missing player/roster or mixed injury editions; omission is not health')
+    frame = pd.DataFrame(records)
+    aggregated = aggregate_team_injury_features(frame) if records else empty_team_injury_aggregation()
+    def team_result(team):
+        selected = aggregated[aggregated['nba_team_id'] == team]
+        return SimpleNamespace(**selected.iloc[0].to_dict()) if not selected.empty else SimpleNamespace(
+            out_count=0, out_min_sum=0, out_pts_sum=0, out_reb_sum=0, out_ast_sum=0, out_usg_sum=0)
+    same = [r for r in records if r['nba_team_id'] == team_id and r['inj_player_id'] != player_id
+            and r['inj_position_group'] == position_group]
+    features = build_injury_context(team_game_result=team_result(team_id), team_advanced_result=team_result(team_id),
+        opponent_result=team_result(opponent_id), player_status_result=SimpleNamespace(status=target.status),
+        same_position_result=SimpleNamespace(out_count=len(same), out_min_sum=sum(r['avg_min_l5'] for r in same),
+            out_usg_sum=sum(r['avg_usg_pct_l5'] for r in same),
+            out_starter_sum=sum(starter_probability(r['games_started_l5']) for r in same)))
+    return features, (edition.provenance, tuple(ledger))
+
+
+class HistoricalInjuryBlockedError(ValueError):
+    def __init__(self, reason, ledger):
+        self.ledger = tuple(ledger)
+        super().__init__(reason)

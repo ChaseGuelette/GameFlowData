@@ -202,7 +202,8 @@ def inspect_artifact(resolved: ResolvedConfig, path: Path) -> dict:
             "actual_training": actual_training, "actual_calibration": manifest["calibration"],
             "data_provenance": manifest["data_provenance"], "hyperparams_input": resolved.hyperparams_receipt,
             "runtime_setting_application": "unverified_unsigned_manifest",
-            "historical_readiness": "unverified", "policy": "unresolved_until_slice8"}
+            "historical_readiness": "unverified",
+            "policy": resolved.historical_attachment or "unresolved_until_slice8"}
 
 
 def execute_child(argv: list[str]) -> int:
@@ -361,6 +362,13 @@ class LifecycleRunner:
         values = {"schema_version": 1, "stage": stage, "config_identity": self.resolved.config_identity,
                   "sources": self.sources(), "predecessors": {name: self.state["stages"].get(name, {}).get("output_identity")
                                                                for name in predecessors}}
+        if self.resolved.historical_attachment is not None:
+            from src.backtesting.nba.historical_execution import HISTORICAL_SOURCE_FILES, recheck_attachment
+
+            receipt = self.resolved.historical_attachment
+            recheck_attachment(receipt)
+            values['historical_attachment'] = receipt
+            values['historical_sources'] = {name: sha256_file(repo_root() / name) for name in HISTORICAL_SOURCE_FILES}
         if stage == "train_or_attach" and self.resolved.artifact_path is not None:
             values["attached_artifact"] = inspect_artifact(self.resolved, self.resolved.artifact_path)
         if stage in ("artifact_identity", "sweep", "audit"):

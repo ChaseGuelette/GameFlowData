@@ -16,6 +16,7 @@ from src.models.features.nba.contracts import (
 )
 from src.models.features.nba.date_batch_loader import DateBatchFeatureLoader
 from src.models.features.nba.date_range_loader import DateRangeFeatureLoader
+from src.models.features.nba.historical_policy import HistoricalPolicy
 from src.models.features.nba.inference_loader import InferenceFeatureLoader
 from src.models.features.nba.injury_context import (
     get_injury_context,
@@ -68,9 +69,10 @@ class FeatureStore:
     - Opponent stats derived via join on opponent_id
     """
 
-    def __init__(self, engine, config: FeatureConfig | None = None):
+    def __init__(self, engine, config: FeatureConfig | None = None, *, historical_sources=None):
         self.engine = engine
         self.config = config or FeatureConfig()
+        self.historical_sources = historical_sources
 
     def get_player_game_features(
         self,
@@ -98,9 +100,12 @@ class FeatureStore:
         )
         return InferenceFeatureLoader(self).load(request)
 
-    def get_features_for_date(self, game_date: date) -> pd.DataFrame:
+    def get_features_for_date(self, game_date: date, *, historical_policy: HistoricalPolicy | None = None,
+                              historical_evidence: tuple = (), controlled_historical_evidence: bool = False) -> pd.DataFrame:
         """Efficiently fetch features for ALL players on a specific date."""
-        request = DateFeatureRequest(game_date=game_date)
+        request = DateFeatureRequest(game_date=game_date, historical_policy=historical_policy,
+                                     historical_evidence=historical_evidence,
+                                     controlled_historical_evidence=controlled_historical_evidence)
         return DateBatchFeatureLoader(self).load(request)
 
     def _get_game_dates_in_range(self, start_date: date, end_date: date) -> list[date]:
@@ -114,18 +119,32 @@ class FeatureStore:
         start_date: date,
         end_date: date,
         chunk_size: int = 25,
+        *,
+        historical_policy: HistoricalPolicy | None = None,
+        historical_evidence: tuple = (),
+        controlled_historical_evidence: bool = False,
     ) -> dict[date, pd.DataFrame]:
         """Fetch features for all players across an inclusive date range."""
-        request = DateRangeFeatureRequest(start_date=start_date, end_date=end_date)
+        request = DateRangeFeatureRequest(start_date=start_date, end_date=end_date,
+                                          historical_policy=historical_policy, historical_evidence=historical_evidence,
+                                          controlled_historical_evidence=controlled_historical_evidence)
         return DateRangeFeatureLoader(self).load(request, chunk_size=chunk_size)
 
-    def get_training_dataset(self, seasons: list[str]) -> pd.DataFrame:
+    def get_training_dataset(self, seasons: list[str], *, historical_policy: HistoricalPolicy | None = None,
+                             historical_evidence: tuple = (), controlled_historical_evidence: bool = False) -> pd.DataFrame:
         """Build complete training dataset."""
-        request = TrainingFeatureRequest(seasons=seasons)
+        request = TrainingFeatureRequest(seasons=seasons, historical_policy=historical_policy,
+                                         historical_evidence=historical_evidence,
+                                         controlled_historical_evidence=controlled_historical_evidence)
         return TrainingFeatureLoader(self).load(request)
 
-    def _load_single_season_training(self, season: str) -> pd.DataFrame:
+    def _load_single_season_training(self, season: str, *, historical_policy: HistoricalPolicy | None = None,
+                                     historical_evidence: tuple = (), controlled_historical_evidence: bool = False) -> pd.DataFrame:
         """Load training features for a single season."""
+        if historical_policy is not None or historical_evidence or controlled_historical_evidence:
+            return TrainingFeatureLoader(self).load_single_season(
+                season, historical_policy=historical_policy, historical_evidence=historical_evidence,
+                controlled_historical_evidence=controlled_historical_evidence)
         return TrainingFeatureLoader(self).load_single_season(season)
 
     def _load_injury_features_bulk(self, game_dates: list) -> tuple[pd.DataFrame, pd.DataFrame]:
