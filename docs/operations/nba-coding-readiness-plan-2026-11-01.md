@@ -6,7 +6,9 @@
 
 **Tech stack:** Existing Python, pandas, NumPy, SQLAlchemy, Pydantic/PyYAML and pytest/Ruff. No new infrastructure is proposed.
 
-**Status:** Coding slices **1–5 are implemented and source-integrated on main**. Main `a44b09a` closes slices 1–2/5 integration while preserving already merged slices 3–4. Independent integration review is SPEC PASS / QUALITY APPROVED; actual-main verification passed 186 existing tests and bounded CLI/sweep checks. Slices **6–8 remain pending**; historical S1 stays deferred. Source integration is not historical/model/platform acceptance. See the [integration record](nba-reviewed-source-integration-2026-11-01.md) and [eight-slice overview](../understanding/nba-training-evaluation-slices.md). Earlier checkpoint descriptions below are historical where superseded by this delivery.
+**Source publication checkpoint:** Slice 7 is reviewed and integrated in main merge `83c121b`; partial Slice 8 policy/context and source adapters are checkpointed in `041c013`. This supersedes the Slice-7-under-review wording below, not the outstanding policy, consumer integration, real-data or baseline acceptance gates.
+
+**Status:** Coding slices **1–6 are implemented and source-integrated on main**; Slice 6 is pushed in merge `bf7a3e9`. Slice 7 is under independent review. Slice 8A's bounded SELECT-only readiness receipt, conservative policy matrix and educational wiki are complete, but owner approval and explicit data gaps block 8B–8E. Historical S1 stays deferred. Source integration and read-only evidence are not historical/model/platform acceptance. See the [Slice 8A receipt](nba-s8-readiness-receipt-2026-11-02.md), [policy matrix](nba-s8-source-policy-matrix-2026-11-02.md), and [eight-slice overview](../understanding/nba-training-evaluation-slices.md). Earlier checkpoint descriptions below are historical where superseded.
 
 ## Chat decisions and scope
 
@@ -122,7 +124,7 @@ Proposed owners: `src/backtesting/nba/sweep_config.py`, `sweep_runner.py`, `run_
 
 ## Batch F — Evidence audits and evaluation parity
 
-**Slice 6 checkpoint — November 2, 2026:** Complete for the owner-approved simpler saved-artifact scope: **SPEC PASS / QUALITY APPROVED**, 68 existing scoped tests and bounded API/CLI/export/mutation checks pass. Source is uncommitted in `repair/nba-evidence-audits`, based on integrated main `3aa73a5`: new `src/backtesting/nba/evidence.py` plus the owner-approved lazy `src/backtesting/__init__.py`; no producer/test/DB/model changes. Output checks flag observed changes without native locks or a race-proof guarantee. See the [decision/evidence record](nba-evidence-slice6-2026-11-01.md) and [explanation](../understanding/nba-evidence-audits.md). Unsupported closing/source observations remain blocked. Integration and historical/model acceptance remain separate; no later-slice execution is authorized.
+**Slice 6 checkpoint — November 2, 2026:** Complete for the owner-approved simpler saved-artifact scope: **SPEC PASS / QUALITY APPROVED** and integrated/pushed on main in `bf7a3e9`. The delivered source is `src/backtesting/nba/evidence.py` plus the approved lazy `src/backtesting/__init__.py`; no producer/test/DB/model changes. Output checks flag observed changes without native locks or a race-proof guarantee. See the [decision/evidence record](nba-evidence-slice6-2026-11-01.md) and [explanation](../understanding/nba-evidence-audits.md). Unsupported closing/source observations remain blocked. Integration and historical/model acceptance remain separate.
 
 **Can build before sync:** schemas, artifact-only analyzers and command adapters; actual source joins wait.
 
@@ -154,6 +156,8 @@ Proposed owners: `src/models/nba/lifecycle/{config,adapters,runner}.py`, `script
 **Acceptance:** CLI dry-run/status; changed evidence/config invalidates resume; missing output and failed commands stop downstream work. Use bounded controlled child processes only; no long job.
 
 ## Batch H — S2-approved data integration and post-sync validation
+
+**Slice 8A checkpoint — November 2, 2026:** The exact 19-game, remote/local, SELECT-only evidence pass is complete without archive access or mutation. Identity parity passed; mapping, current props history, quote timing/provenance, injury editions and several feature families remain blocked or unknown. The [readiness receipt](nba-s8-readiness-receipt-2026-11-02.md), [source-policy matrix](nba-s8-source-policy-matrix-2026-11-02.md), and [educational wiki](../understanding/nba-historical-decision-policy.md) are ready for owner review. No policy YAML or 8B–8E writer is authorized yet.
 
 **Not executable from this proposal alone.** These remain real coding tasks, not forgotten documentation:
 

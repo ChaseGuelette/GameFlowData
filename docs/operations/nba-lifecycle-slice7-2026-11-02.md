@@ -2,6 +2,8 @@
 
 ## Current state
 
+Publication checkpoint: owner-authorized source commit `8e4c3b4` is merged into local main as `83c121b`. The uncommitted/unmerged wording below is the preserved pre-publication acceptance record. Historical readiness and production activation remain unverified and blocked.
+
 **Complete for controlled lifecycle mechanics — SPEC PASS / QUALITY APPROVED; ready for owner commit/integration review.** Branch `repair/nba-lifecycle`, worktree `C:/Users/Chase/Projects/GameFlowData-worktrees/nba-lifecycle`. All changes remain uncommitted and unmerged. No commit, merge, push, real training, DB access, or deployment was performed.
 
 ## Owner decisions

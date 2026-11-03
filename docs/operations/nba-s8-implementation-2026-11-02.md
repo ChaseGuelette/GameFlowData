@@ -2,6 +2,8 @@
 
 ## Kick off immediately
 
+Publication checkpoint: Chase explicitly authorized commit, merge and push. Slice 7 source `8e4c3b4` is merged into main as `83c121b`; partial Slice 8 source `1f16d2b` is merged as `041c013`. Earlier isolation/uncommitted wording below describes the implementation checkpoint, not current Git integration. The pending S1 and other-chat automation/reconciliation work remain excluded. No training, source-policy approval or real-data acceptance is inferred from publication.
+
 This chat owns sequential historical integration in `repair/nba-historical-integration`, worktree `C:/Users/Chase/Projects/GameFlowData-worktrees/nba-historical-integration`, based on `bf7a3e9`. Chase authorized the remaining code implementation, no unit tests and lean verification. Source and data acceptance remain distinct.
 
 Other chat owns completed but uncommitted Slice 7 and active source reconciliation/automation. No predecessor source is copied or merged by this lane. Historical S1 remains separately owned; its pending patch touches the date-range loader and replay harness. Resolve overlap before changing those methods. No commits, push, merge, DB writes, archive access or long runs are authorized.
