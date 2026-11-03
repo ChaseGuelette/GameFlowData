@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from typing import TYPE_CHECKING
+
+from src.models.features.nba.historical_policy import HistoricalPolicy
+
+if TYPE_CHECKING:
+    from src.models.features.nba.historical_loader import HistoricalPlayerEvidence
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,9 @@ class DateFeatureRequest:
     """Request for all NBA features on one game date."""
 
     game_date: date
+    historical_policy: HistoricalPolicy | None = None
+    historical_evidence: tuple[HistoricalPlayerEvidence, ...] = ()
+    controlled_historical_evidence: bool = False
 
 
 @dataclass(frozen=True)
@@ -36,6 +45,9 @@ class DateRangeFeatureRequest:
 
     start_date: date
     end_date: date
+    historical_policy: HistoricalPolicy | None = None
+    historical_evidence: tuple[HistoricalPlayerEvidence, ...] = ()
+    controlled_historical_evidence: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,3 +55,6 @@ class TrainingFeatureRequest:
     """Request for NBA training features across seasons."""
 
     seasons: list[str]
+    historical_policy: HistoricalPolicy | None = None
+    historical_evidence: tuple[HistoricalPlayerEvidence, ...] = ()
+    controlled_historical_evidence: bool = False

@@ -19,6 +19,12 @@ import pandas as pd
 from sqlalchemy import bindparam, text
 
 from src.backtesting.bet_simulator import BetSimulator
+from src.backtesting.nba.historical_replay import (
+    HISTORICAL_LINE_METADATA,
+    HistoricalReplayBlockedError,
+    HistoricalReplayQuotes,
+    write_quote_ledger,
+)
 from src.backtesting.performance_metrics import MetricsCalculator, PerformanceMetrics
 from src.config.combo_config import COMBO_DEFINITIONS, MARKET_TO_STAT, STAT_TO_MARKET
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
@@ -26,6 +32,7 @@ from src.models.monte_carlo import derive_combo_samples
 
 if TYPE_CHECKING:
     from src.config.stat_config import StatConfigSet
+    from src.models.features.nba.historical_policy import HistoricalGameContext, HistoricalPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -143,12 +150,15 @@ class BacktestResult:
     start_date: date
     end_date: date
     config: dict
+    quote_ledger_df: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def to_csv(self, output_dir: str) -> None:
         """Export results to CSV files."""
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
+        if not self.quote_ledger_df.empty:
+            write_quote_ledger(self.quote_ledger_df, output_path / "historical_quote_ledger.json")
         self.predictions_df.to_csv(output_path / "predictions.csv", index=False)
         self.bets_df.to_csv(output_path / "bets.csv", index=False)
 
@@ -199,13 +209,28 @@ class BacktestHarness:
     bl_blender: BlackLittermanBlender | None = None  # Black-Litterman probability blender (for edge filtering)
     bl_sizing_blender: BlackLittermanBlender | None = None  # BL for Kelly sizing only (edge detection uses raw probs)
     stat_config: StatConfigSet | None = None  # Per-stat edge thresholds and BL tau values
+    historical_policy: HistoricalPolicy | None = None
+    historical_contexts: dict[str, HistoricalGameContext] = field(default_factory=dict)
+    historical_feature_evidence: tuple = ()
+    historical_quote_rows: tuple | None = None
+    historical_market_routes: tuple = ()
+    controlled_historical_evidence: bool = False
+    historical_max_games: int = 8
+    historical_max_candidates_per_game: int = 5000
 
     # Internal state
     _simulator: BetSimulator = field(init=False)
     _metrics_calc: MetricsCalculator = field(init=False)
     _stat_blenders: dict[str, BlackLittermanBlender | None] = field(init=False)
+    _historical_quote_ledgers: dict[date, pd.DataFrame] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
+        if type(self.controlled_historical_evidence) is not bool:
+            raise ValueError('controlled historical mode must be an explicit boolean')
+        if self.historical_policy is None and (self.historical_contexts or self.historical_feature_evidence
+                                              or self.historical_quote_rows is not None or self.historical_market_routes
+                                              or self.controlled_historical_evidence):
+            raise ValueError('historical inputs require an explicit policy')
         self._simulator = BetSimulator(
             edge_threshold=self.edge_threshold,
             starting_bankroll=self.starting_bankroll,
@@ -263,6 +288,7 @@ class BacktestHarness:
             end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
 
         logger.info(f"Starting backtest from {start_date} to {end_date} (Sequential Execution)")
+        self._historical_quote_ledgers.clear()
 
         # Get all dates with games in range
         game_dates = self._get_game_dates(start_date, end_date)
@@ -270,8 +296,13 @@ class BacktestHarness:
 
         # Phase 0: Prefetch all data (features + lines) to minimize DB round trips
         logger.info("Phase 0: Prefetching all features and lines...")
-        prefetched_features = self.feature_store.get_features_for_date_range(start_date, end_date)
-        prefetched_lines = self._prefetch_all_lines(start_date, end_date)
+        prefetched_features = self.feature_store.get_features_for_date_range(
+            start_date, end_date, **self._historical_feature_kwargs())
+        if self.historical_policy is not None:
+            prefetched_lines = self._prefetch_all_lines(
+                start_date, end_date, prefetched_features=prefetched_features)
+        else:
+            prefetched_lines = self._prefetch_all_lines(start_date, end_date)
         logger.info(
             f"Prefetched features for {len(prefetched_features)} dates, lines for {len(prefetched_lines)} dates"
         )
@@ -372,7 +403,7 @@ class BacktestHarness:
 
         logger.info(f"\n{metrics}")
 
-        return BacktestResult(
+        result = BacktestResult(
             predictions_df=predictions_df,
             bets_df=bets_df,
             all_edges_df=all_edges_df,
@@ -391,6 +422,48 @@ class BacktestHarness:
                 "bl_sizing_tau": self.bl_sizing_blender.config.tau if self.bl_sizing_blender else None,
             },
         )
+        if self.historical_policy is not None:
+            result.config.update(historical_policy_content_id=self.historical_policy.content_id,
+                                 historical_readiness='controlled_only' if self.controlled_historical_evidence else 'source_integrated',
+                                 decision_grade=False)
+            if self._historical_quote_ledgers:
+                result.quote_ledger_df = pd.concat(
+                    [self._historical_quote_ledgers[day] for day in sorted(self._historical_quote_ledgers)],
+                    ignore_index=True)
+        return result
+
+    def _historical_feature_kwargs(self):
+        if self.historical_policy is None:
+            return {}
+        return {'historical_policy': self.historical_policy,
+                'historical_evidence': self.historical_feature_evidence,
+                'controlled_historical_evidence': self.controlled_historical_evidence}
+
+    def _historical_quote_owner(self):
+        native_sources=None
+        contexts=self.historical_contexts
+        if not self.controlled_historical_evidence:
+            native_sources=getattr(self.feature_store,'historical_sources',None)
+            if native_sources is not None:
+                contexts=native_sources.contexts
+                if self.historical_contexts and any(key not in self.historical_contexts or self.historical_contexts[key]!=value
+                                                   for key,value in contexts.items()):
+                    raise HistoricalReplayBlockedError('configured/source historical contexts disagree')
+        for item in self.historical_feature_evidence:
+            context = getattr(item, 'context', None)
+            if context is None or contexts.get(context.game_id) != context:
+                raise HistoricalReplayBlockedError('feature/quote historical contexts disagree')
+        routes = self.historical_market_routes or tuple(dict.fromkeys(
+            route for item in self.historical_feature_evidence for route in item.market_routes))
+        if native_sources is not None:
+            routes=native_sources.market_routes
+        return HistoricalReplayQuotes(
+            engine=self.engine, policy=self.historical_policy, contexts=contexts,
+            markets=[STAT_TO_MARKET[stat] for stat in self.stats if stat in STAT_TO_MARKET],
+            bookmakers=self.bookmakers, controlled_rows=self.historical_quote_rows,
+            controlled=self.controlled_historical_evidence, route_authority=routes, native_sources=native_sources,
+            max_games=self.historical_max_games,
+            max_candidates_per_game=self.historical_max_candidates_per_game)
 
     def _get_game_dates(self, start_date: date, end_date: date) -> list[date]:
         """Get all dates with games in the range."""
@@ -419,7 +492,13 @@ class BacktestHarness:
             if features_df is None:
                 features_df = pd.DataFrame()
         else:
-            features_df = self.feature_store.get_features_for_date(game_date)
+            features_df = self.feature_store.get_features_for_date(game_date, **self._historical_feature_kwargs())
+
+        if self.historical_policy is not None and (features_df is None
+                or features_df.attrs.get('historical_policy_content_id') != self.historical_policy.content_id
+                or features_df.attrs.get('historical_readiness') != ('controlled_only' if self.controlled_historical_evidence else 'source_integrated')
+                or features_df.attrs.get('decision_grade') is not False):
+            raise HistoricalReplayBlockedError('historical feature receipt missing or incompatible')
 
         if features_df is None or features_df.empty:
             logger.debug(f"No features returned for {game_date}")
@@ -461,6 +540,8 @@ class BacktestHarness:
 
         # Get lines (from prefetch dict or single-date DB query)
         if prefetched_lines is not None:
+            if self.historical_policy is not None and game_date not in prefetched_lines:
+                raise HistoricalReplayBlockedError('historical prefetched quote date missing')
             lines_df = prefetched_lines.get(game_date, pd.DataFrame())
         else:
             game_ids = features_df["game_id"].unique().tolist()
@@ -596,6 +677,14 @@ class BacktestHarness:
 
     def _get_lines_for_date(self, game_date: date, game_ids: list[str]) -> pd.DataFrame:
         """Get prop lines for games on a date."""
+        if self.historical_policy is not None:
+            try:
+                pairs, ledger = self._historical_quote_owner().for_date(game_date, game_ids)
+            except HistoricalReplayBlockedError as exc:
+                self._historical_quote_ledgers[game_date] = exc.ledger
+                raise
+            self._historical_quote_ledgers[game_date] = ledger
+            return pairs
         if not game_ids:
             return pd.DataFrame()
 
@@ -658,11 +747,38 @@ class BacktestHarness:
             logger.warning(f"Error fetching lines for {game_date}: {e}")
             return pd.DataFrame()
 
-    def _prefetch_all_lines(self, start_date: date, end_date: date, chunk_size: int = 3) -> dict[date, pd.DataFrame]:
+    def _prefetch_all_lines(
+        self, start_date: date, end_date: date, chunk_size: int = 3, *,
+        prefetched_features: dict[date, pd.DataFrame] | None = None,
+    ) -> dict[date, pd.DataFrame]:
         """Prefetch all prop lines for a date range in chunked queries.
 
         Returns dict[date, DataFrame] with the same columns as _get_lines_for_date.
+        Historical runs supply features to acquire only the games surviving the
+        same minutes filter as direct replay, not every configured context.
         """
+        if self.historical_policy is not None:
+            if start_date > end_date:
+                raise ValueError('historical date range is reversed')
+            owner = self._historical_quote_owner()
+            pairs = {}
+            days = sorted({context.game_date for context in owner.contexts.values()
+                           if start_date <= context.game_date <= end_date})
+            if prefetched_features is not None:
+                days = sorted(day for day in prefetched_features if start_date <= day <= end_date)
+            for day in days:
+                game_ids = None
+                if prefetched_features is not None:
+                    features = prefetched_features[day]
+                    if 'player_avg_min_l5' in features.columns:
+                        features = features.loc[features['player_avg_min_l5'] >= self.min_minutes_avg]
+                    game_ids = [] if features.empty else features['game_id'].unique().tolist()
+                try:
+                    pairs[day], self._historical_quote_ledgers[day] = owner.for_date(day, game_ids)
+                except HistoricalReplayBlockedError as exc:
+                    self._historical_quote_ledgers[day] = exc.ledger
+                    raise
+            return pairs
         markets = [STAT_TO_MARKET[s] for s in self.stats if s in STAT_TO_MARKET]
 
         # Get all game dates in range first
@@ -806,6 +922,7 @@ class BacktestHarness:
         line_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds"]
         if "bookmaker" in lines_df.columns:
             line_cols.append("bookmaker")
+        line_cols.extend(name for name in HISTORICAL_LINE_METADATA if name in lines_df.columns)
         merged = predictions_df.merge(
             lines_df[line_cols],
             on=["player_id", "game_id", "stat"],

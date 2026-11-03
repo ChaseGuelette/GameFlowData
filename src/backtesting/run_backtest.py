@@ -26,6 +26,13 @@ from typing import cast
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.backtesting.backtest_harness import BacktestHarness
+from src.backtesting.nba.historical_execution import (
+    load_attachment,
+    make_sources,
+    recheck_attachment,
+    validate_artifact_window,
+    validate_window,
+)
 from src.config.combo_config import COMBO_DEFINITIONS
 from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
@@ -241,6 +248,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
+    parser.add_argument('--historical-policy', help='Explicit historical policy JSON; requires --local')
+    parser.add_argument('--historical-source-metadata', help='Optional historical source-metadata JSON')
 
     parser.add_argument(
         "--dry-run",
@@ -283,6 +292,13 @@ def _validate_backtest_args(parser: argparse.ArgumentParser, args: argparse.Name
     try:
         if args.start > args.end:
             raise ValueError("--start must be on or before --end")
+        historical = load_attachment(_namespace_value(args, 'historical_policy'),
+                                     _namespace_value(args, 'historical_source_metadata'),
+                                     local=_namespace_value(args, 'local', False) is True)
+        validate_window(historical, args.start, args.end)
+        if historical and (_namespace_value(args, 'allow_legacy_artifacts', False)
+                           or args.flat_bet_size is None):
+            raise ValueError('Historical replay requires nonlegacy artifacts and explicit flat stakes')
         unsupported = sorted(set(args.stats) - set(SUPPORTED_MODEL_STATS))
         if unsupported:
             raise ValueError(f"Unsupported --stats values: {', '.join(unsupported)}")
@@ -345,6 +361,10 @@ def _validate_backtest_args(parser: argparse.ArgumentParser, args: argparse.Name
             allow_legacy=bool(_namespace_value(args, "allow_legacy_artifacts", False)),
         )
         model_path = artifact.path
+        if historical:
+            validate_artifact_window(artifact, args.start)
+            if Path(args.model_dir).resolve() != artifact.path.resolve():
+                raise ValueError('Historical replay requires the exact artifact directory, not discovery')
         if args.output_dir:
             output_dir = validate_output_path(args.output_dir)
             planned_output_name = output_dir.name
@@ -352,6 +372,12 @@ def _validate_backtest_args(parser: argparse.ArgumentParser, args: argparse.Name
             output_root = validate_output_path("backtest_results")
             output_dir = output_root / "nba_bt_<runtime_timestamp>"
             planned_output_name = "nba_bt_<runtime_timestamp>"
+        if historical:
+            if output_dir.resolve(strict=False).is_relative_to(model_path.resolve()):
+                raise ValueError('Historical output must be outside the artifact directory')
+            for item in (historical['policy'], historical['source_metadata']):
+                if item['path'] and Path(item['path']).is_relative_to(output_dir.resolve(strict=False)):
+                    raise ValueError('Historical input collides with replay output')
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
 
@@ -362,6 +388,7 @@ def _validate_backtest_args(parser: argparse.ArgumentParser, args: argparse.Name
         "artifact": artifact,
         "output_dir": output_dir,
         "planned_output_name": planned_output_name,
+        "historical": historical,
     }
 
 
@@ -380,6 +407,7 @@ def _backtest_plan(args: argparse.Namespace, validated: dict) -> dict:
         "mode": "historical_replay",
         "execution": False,
         "quote_clean_readiness": {"checked": False, "status": "not_checked"},
+        "historical_attachment": validated['historical'],
         "database_target": "LOCAL" if _namespace_value(args, "local", False) else "REMOTE",
         "date_range": {"start": str(args.start), "end": str(args.end)},
         "stats": args.stats,
@@ -423,6 +451,8 @@ def main(argv=None):
         return 0
 
     logger.info(f"Using model artifacts from: {model_path}")
+    historical = validated['historical']
+    policy = recheck_attachment(historical)
     if validated["artifact"].state == "legacy_unverified":
         logger.warning("Legacy/unverified artifact %s; file hashes only, not decision-grade", validated["artifact"].identity)
 
@@ -439,7 +469,8 @@ def main(argv=None):
     engine = get_engine(local=use_local)
     if use_local:
         logger.info("Using LOCAL database")
-    feature_store = FeatureStore(engine)
+    feature_store = (FeatureStore(engine, historical_sources=make_sources(engine, historical))
+                     if historical else FeatureStore(engine))
 
     logger.info("Loading model pipeline...")
     pipeline = PlayerPropsModelPipeline.load_all(str(model_path), feature_store)
@@ -492,6 +523,7 @@ def main(argv=None):
         bl_blender=bl_blender,
         bl_sizing_blender=bl_sizing_blender,
         stat_config=stat_config,
+        historical_policy=policy,
     )
 
     if args.max_bet_pct:
@@ -500,6 +532,12 @@ def main(argv=None):
         logger.info(f"Allowed bets filter: {[f'{s}:{side}' for s, side in allowed_bets]}")
     logger.info(f"Running backtest from {args.start} to {args.end}...")
     result = harness.run(start_date=args.start, end_date=args.end)
+    if historical:
+        recheck_attachment(historical)
+        current = _resolve_complete_model_dir(str(model_path), args.stats, allow_legacy=False)
+        if current.to_plan_dict() != validated['artifact'].to_plan_dict():
+            raise ValueError('Historical artifact changed during replay')
+        result.config['historical_attachment'] = historical
 
     # Preserve legacy config keys. This enrichment does not change harness.run().
     result.config.update(_effective_cli_config(harness, validated["artifact"], args.stats))

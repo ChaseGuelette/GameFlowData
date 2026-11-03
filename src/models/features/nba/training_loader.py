@@ -22,6 +22,10 @@ class TrainingFeatureLoader:
 
     def load(self, request: TrainingFeatureRequest) -> pd.DataFrame:
         """Load a full training dataframe for requested seasons."""
+        if request.historical_policy is not None or request.historical_evidence or request.controlled_historical_evidence:
+            from src.models.features.nba.historical_loader import HistoricalFeatureLoader
+
+            return HistoricalFeatureLoader(self.feature_store).load(request)
         seasons = request.seasons
         import time
 
@@ -170,8 +174,12 @@ class TrainingFeatureLoader:
 
         return df
 
-    def load_single_season(self, season: str) -> pd.DataFrame:
+    def load_single_season(self, season: str, *, historical_policy=None, historical_evidence=(),
+                           controlled_historical_evidence=False) -> pd.DataFrame:
         """Load training features for one season."""
+        if historical_policy is not None or historical_evidence or controlled_historical_evidence:
+            return self.load(TrainingFeatureRequest([season], historical_policy, historical_evidence,
+                                                   controlled_historical_evidence))
         query = text("""
             SELECT
                 -- Identifiers
@@ -414,5 +422,9 @@ class TrainingFeatureLoader:
 
         return df
 
-    def _load_single_season_training(self, season: str) -> pd.DataFrame:
+    def _load_single_season_training(self, season: str, *, historical_policy=None, historical_evidence=(),
+                                     controlled_historical_evidence=False) -> pd.DataFrame:
+        if historical_policy is not None or historical_evidence or controlled_historical_evidence:
+            return self.load_single_season(season, historical_policy=historical_policy, historical_evidence=historical_evidence,
+                                          controlled_historical_evidence=controlled_historical_evidence)
         return self.load_single_season(season)

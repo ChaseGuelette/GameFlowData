@@ -24,6 +24,12 @@ from itertools import product
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, cast
 
+from src.backtesting.nba.historical_execution import (
+    HISTORICAL_SOURCE_FILES,
+    source_policy,
+    validate_saved_attachment,
+    validate_window,
+)
 from src.config.combo_config import COMBO_DEFINITIONS, STAT_TO_MARKET
 from src.models.nba_artifacts import (
     _rename_no_replace,
@@ -452,14 +458,26 @@ def _saved_plan(plan: Any) -> dict:
     _keys(plan, PLAN_KEYS, "plan_keys")
     if type(plan["cells"]) is list and len(plan["cells"]) > CELL_LIMIT:
         raise EvidenceError("resource_limit", "BLOCKED")
-    _same(plan["schema_version"], 1, "plan_version")
+    _need(type(plan['schema_version']) is int and plan['schema_version'] in (1, 2), 'plan_version')
     _readiness(plan)
     fixed = plan["fixed_config"]
-    _keys(fixed, FIXED_KEYS, "fixed_config_keys")
+    historical = plan['schema_version'] == 2
+    _keys(fixed, FIXED_KEYS | ({'historical'} if historical else set()), "fixed_config_keys")
+    if historical:
+        try:
+            validate_saved_attachment(fixed['historical'])
+        except (ValueError, RuntimeError, KeyError, TypeError):
+            raise EvidenceError('historical_attachment') from None
     for key in ("model_dir", "output_dir"):
         _need(type(fixed[key]) is str and bool(fixed[key]) and "\x00" not in fixed[key], "recorded_path_token")
     start, end = _day(fixed["start"]), _day(fixed["end"])
     _need(start <= end, "date_range")
+    if historical:
+        try:
+            validate_window(fixed['historical'], start, end)
+        except (ValueError, RuntimeError, KeyError, TypeError):
+            raise EvidenceError('historical_window') from None
+        _need(fixed['local'] is True, 'historical_local_target')
     for key, allowed in (("stats", {"pts", "reb", "ast"}), ("bookmakers", BOOKMAKERS)):
         _unique(fixed[key])
         _need(all(type(item) is str and item in allowed for item in fixed[key]), "literal_config_token")
@@ -545,8 +563,11 @@ def _saved_acquisition_metadata(plan: dict, fixed: dict) -> None:
         for names in lists:
             _unique(names)
             _need(all(type(name) is str and bool(name) for name in names), "feature_names")
-    _keys(plan["source_policy"], {"source_id", "policy_id", "watermark"}, "source_policy")
-    _same(plan["source_policy"], {"source_id": "unknown", "policy_id": "unknown", "watermark": None}, "source_policy")
+    if plan['schema_version'] == 2:
+        _same(plan['source_policy'], source_policy(fixed['historical']), 'source_policy')
+    else:
+        _keys(plan["source_policy"], {"source_id", "policy_id", "watermark"}, "source_policy")
+        _same(plan["source_policy"], {"source_id": "unknown", "policy_id": "unknown", "watermark": None}, "source_policy")
     dependencies = plan["dependencies"]
     _keys(dependencies, {"numpy", "pandas", "scipy", "sqlalchemy", "joblib", "xgboost", "sklearn", "psycopg2"}, "dependencies")
     for receipt in dependencies.values():
@@ -561,6 +582,8 @@ def _saved_acquisition_metadata(plan: dict, fixed: dict) -> None:
     expected.update("src/backtesting/" + name for name in ("backtest_harness.py", "bet_simulator.py", "performance_metrics.py"))
     expected.update("src/models/" + name for name in ("nba_artifacts.py", "monte_carlo.py", "quantile_trainer.py", "feature_store.py", "black_litterman.py"))
     expected.add("src/config/combo_config.py")
+    if plan['schema_version'] == 2:
+        expected.update(HISTORICAL_SOURCE_FILES)
     _keys(source["files"], expected, "source_file_inventory")
     for digest in source["files"].values():
         _digest(digest)
@@ -625,6 +648,8 @@ def _dates(manifest: dict, fixed: dict) -> dict:
     _need(list(result) == expected, "observed_dates")
     components = manifest["input_component_digests"]
     names = "artifact source acquisition_identity acquisition_settings source_policy predictor_settings ordered_features rng_state_after expected_dates date_outcome_basis acquired_dates dates actuals voids empty_reason output_schemas".split()
+    if manifest['schema_version'] == 2:
+        names.append('quote_ledger_json')
     _keys(components, names, "input_component_inventory")
     for digest in components.values():
         _digest(digest)
@@ -973,13 +998,51 @@ def _timing(cell_id: str, rows: list[dict]) -> tuple[dict, list, list]:
             "counts": counts, "source_clock_mapping": "unknown; not source_availability_certification"}, violations, missing
 
 
+def _historical_ledger(reader: _Reader, manifest: dict, dates: dict) -> None:
+    ledger = reader.read('historical_quote_ledger.json', manifest['outputs']['historical_quote_ledger.json'])
+    _keys(ledger, {'schema_version', 'policy_id', 'dates'}, 'historical_ledger')
+    _same(ledger['schema_version'], 1, 'historical_ledger_version')
+    _same(ledger['policy_id'], manifest['plan']['source_policy']['policy_id'], 'historical_ledger_policy')
+    _keys(ledger['dates'], manifest['acquired_dates'], 'historical_ledger_dates')
+    for day, entry in ledger['dates'].items():
+        _keys(entry, {'rows', 'summary'}, 'historical_ledger_entry')
+        rows, summary = entry['rows'], entry['summary']
+        _need(type(rows) is list and len(rows) <= ROW_LIMIT, 'historical_ledger_rows')
+        _keys(summary, {'status', 'decision_grade', 'historical_readiness', 'input_occurrences',
+                       'eligible_pairs', 'eligible_occurrences', 'rejected_occurrences', 'duplicate_occurrences',
+                       'blocked_occurrences', 'policy_content_id', 'selection_status'}, 'historical_ledger_summary')
+        _need(summary['decision_grade'] is False and summary['blocked_occurrences'] == 0,
+              'historical_ledger_posture')
+        _same(summary['policy_content_id'], ledger['policy_id'], 'historical_ledger_policy')
+        _same(summary['input_occurrences'], len(rows), 'historical_occurrence_count')
+        _same(summary['eligible_pairs'], dates[day]['counts']['quotes'], 'historical_pair_count')
+        counts = Counter()
+        for index, row in enumerate(rows):
+            _keys(row, {'occurrence_index', 'raw_record', 'raw_game_id', 'game_id', 'game_id_mapping',
+                        'policy_content_id', 'context_identity', 'source_ref', 'disposition', 'selector_disposition',
+                        'adapter_reasons', 'quote_reasons', 'observation_reasons', 'observation', 'semantic_quote_id',
+                        'pair_id', 'canonical_source_ref', 'blocked', 'adapter_schema_version', 'quote_schema_version',
+                        'game_date'}, 'historical_ledger_row')
+            _need(row['blocked'] is False and row['occurrence_index'] == index
+                  and row['game_date'] == day and row['policy_content_id'] == ledger['policy_id'],
+                  'historical_ledger_occurrence')
+            _need(row['disposition'] in ('eligible_not_selected', 'rejected', 'duplicate'), 'historical_disposition')
+            counts[row['disposition']] += 1
+        for disposition, name in (('eligible_not_selected', 'eligible_occurrences'),
+                                  ('rejected', 'rejected_occurrences'), ('duplicate', 'duplicate_occurrences')):
+            _same(summary[name], counts[disposition], 'historical_ledger_accounting')
+    encoded = json.dumps(ledger, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    _same(manifest['input_component_digests']['quote_ledger_json'], canonical_sha256(['str', encoded]),
+          'historical_ledger_input_binding')
+
+
 def _inspect(reader: _Reader, report: dict, requested: tuple) -> str:
     root_entries = reader.listing(".")
-    report["ignored_root_entries"] = [{"name": name, "type": info["type"]} for name, info in root_entries.items() if name not in ("sweep_manifest.json", "sweep_summary.csv", "cells")]
+    report["ignored_root_entries"] = [{"name": name, "type": info["type"]} for name, info in root_entries.items() if name not in ("sweep_manifest.json", "sweep_summary.csv", "cells", 'historical_quote_ledger.json')]
     manifest = reader.read("sweep_manifest.json")
     _need(type(manifest) is dict, "manifest_type")
     _need(type(manifest.get("schema_version")) is int, "manifest_version_type")
-    if manifest["schema_version"] != 1:
+    if manifest["schema_version"] not in (1, 2):
         raise EvidenceError("unsupported_format", "BLOCKED")
     state = manifest.get("state")
     _need(type(state) is str and state in ("complete", "incomplete", "failed"), "producer_state")
@@ -998,6 +1061,7 @@ def _inspect(reader: _Reader, report: dict, requested: tuple) -> str:
     _digest(manifest["input_identity"])
     plan = manifest["plan"]
     fixed = _saved_plan(plan)
+    _same(manifest['schema_version'], plan['schema_version'], 'manifest_plan_version')
     schemas = _schemas(manifest["output_schemas"])
     dates = _dates(manifest, fixed)
     receipts = manifest["completed_cells"]
@@ -1017,7 +1081,10 @@ def _inspect(reader: _Reader, report: dict, requested: tuple) -> str:
         receipt_map[cell_id] = receipt
     _need(set(receipt_map) == set(ids), "cell_set")
     _need(set(reader.listing("cells")) == set(ids), "layout")
-    _keys(manifest["outputs"], {"sweep_summary.csv"}, "summary_receipt")
+    _keys(manifest["outputs"], {'sweep_summary.csv'} | (
+        {'historical_quote_ledger.json'} if manifest['schema_version'] == 2 else set()), "summary_receipt")
+    if manifest['schema_version'] == 2:
+        _historical_ledger(reader, manifest, dates)
     summary = reader.read("sweep_summary.csv", manifest["outputs"]["sweep_summary.csv"], SUMMARY_COLUMNS)
     _need(len(summary) == len(ids), "summary_cell_set")
     summary_map = {}

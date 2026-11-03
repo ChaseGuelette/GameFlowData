@@ -17,12 +17,15 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pandas as pd
 
 from src.backtesting.backtest_harness import BacktestHarness, BacktestResult, _derive_replay_combo_samples
 from src.backtesting.bet_simulator import Bet, BetSimulator
+from src.backtesting.nba.historical_execution import make_sources, recheck_attachment, validate_saved_attachment
+from src.backtesting.nba.historical_replay import evidence_payload
 from src.backtesting.nba.sweep_config import READINESS, CellConfig, SweepConfig, build_plan, validate_plan
 from src.config.combo_config import STAT_TO_MARKET
 from src.models.black_litterman import BlackLittermanBlender
@@ -33,6 +36,9 @@ from src.models.nba_artifacts import (
     sha256_file,
     validate_artifact_bundle,
 )
+
+if TYPE_CHECKING:
+    from src.models.feature_store import FeatureStore
 
 KEYS = ["player_id", "game_id", "stat"]
 PREDICTION_COLUMNS = KEYS + ["game_date", "player_name", "team_id", "game_time", "pred_mean", "pred_std", "pred_median", "pred_q10", "pred_q25",
@@ -273,8 +279,11 @@ def bootstrap_runtime(config: SweepConfig, plan: dict) -> Runtime:
     from src.models.monte_carlo import MonteCarloPredictor
     from src.models.quantile_trainer import PlayerPropsModelPipeline
 
+    historical = config.historical
+    policy = recheck_attachment(historical)
     engine = get_engine(local=config.local)
-    store = FeatureStore(engine)
+    store = (FeatureStore(engine, historical_sources=make_sources(engine, historical))
+             if historical else FeatureStore(engine))
     pipeline = PlayerPropsModelPipeline.load_all(plan["artifact"]["path"], store)
     predictor = MonteCarloPredictor(pipeline, **copy.deepcopy(plan["predictor_settings"]))
     return Runtime(BacktestHarness(
@@ -283,6 +292,7 @@ def bootstrap_runtime(config: SweepConfig, plan: dict) -> Runtime:
         min_minutes_avg=config.min_minutes_avg, starting_bankroll=config.starting_bankroll,
         flat_bet_size=config.flat_bet_size, allowed_bets=list(config.allowed_bets) if config.allowed_bets else None,
         stat_config=None,
+        historical_policy=policy,
     ), model_deserialized=True)
 
 
@@ -323,6 +333,11 @@ def _validate_binding(config: SweepConfig, plan: dict, shared: SharedInputs | No
         raise SweepFailure("plan_binding", error_type=type(exc).__name__) from None
 
 
+def _historical_payload(value):
+    # Strip enum subclasses as well as dataclasses at the inert evidence boundary.
+    return json.loads(json.dumps(evidence_payload(value), allow_nan=False))
+
+
 def acquire_shared_inputs(config: SweepConfig, plan: dict, runtime: Runtime) -> SharedInputs:
     """Use loader seams once; do not use error-swallowing harness run/_run_date."""
     stage, day = "runtime_settings", None
@@ -335,6 +350,14 @@ def acquire_shared_inputs(config: SweepConfig, plan: dict, runtime: Runtime) -> 
         if canonical_sha256(features) != canonical_sha256(plan["ordered_features"]):
             raise ValueError("Observed feature order disagrees with artifact")
         harness = runtime.harness
+        store = cast('FeatureStore', harness.feature_store)
+        historical = config.historical
+        if historical:
+            policy = recheck_attachment(historical)
+            if harness.historical_policy != policy or harness.controlled_historical_evidence:
+                raise ValueError('Historical runtime policy or source mode mismatch')
+            if store.historical_sources is None:
+                raise ValueError('Historical runtime source reader missing')
         stage = "game_dates"
         dates = harness._get_game_dates(config.start, config.end)
         if (not isinstance(dates, list) or any(type(value) is not date or not config.start <= value <= config.end
@@ -342,12 +365,37 @@ def acquire_shared_inputs(config: SweepConfig, plan: dict, runtime: Runtime) -> 
             raise ValueError("Invalid acquired game dates")
         dates = sorted(dates)
         stage = "features"
-        prefetched = harness.feature_store.get_features_for_date_range(config.start, config.end)
+        if historical:
+            prefetched = store.get_features_for_date_range(
+                config.start, config.end, historical_policy=policy)
+        else:
+            prefetched = store.get_features_for_date_range(config.start, config.end)
         stage = "quotes"
-        lines = harness._prefetch_all_lines(config.start, config.end)
+        if historical:
+            lines = harness._prefetch_all_lines(config.start, config.end, prefetched_features=prefetched)
+        else:
+            lines = harness._prefetch_all_lines(config.start, config.end)
         for mapping in (prefetched, lines):
             if not isinstance(mapping, Mapping) or any(type(key) is not date or key not in dates for key in mapping):
                 raise ValueError("Unexpected acquisition date keys")
+        if historical:
+            if any(day not in prefetched or day not in lines for day in dates):
+                raise ValueError('Historical acquisition omitted a required date')
+            for frame in prefetched.values():
+                if (frame.attrs.get('historical_policy_content_id') != policy.content_id
+                        or frame.attrs.get('historical_readiness') != 'source_integrated'
+                        or frame.attrs.get('decision_grade') is not False):
+                    raise ValueError('Historical feature receipt missing or incompatible')
+                if 'historical_lineage' in frame:
+                    frame['historical_lineage'] = frame['historical_lineage'].map(_historical_payload)
+                for name in ('historical_contexts', 'historical_market_routes'):
+                    if name in frame.attrs:
+                        frame.attrs[name] = _historical_payload(frame.attrs[name])
+            # Nested provenance dataclasses stay exact inert data in saved quotes.
+            for frame in lines.values():
+                for column in frame.select_dtypes(include='object'):
+                    frame[column] = frame[column].map(
+                        lambda value: _historical_payload(value) if isinstance(value, Mapping | tuple | list) else value)
         stage = "actuals"
         actuals = isolated_frame(harness._get_actuals(config.start, config.end))
         stage = "voids"
@@ -412,8 +460,17 @@ def acquire_shared_inputs(config: SweepConfig, plan: dict, runtime: Runtime) -> 
             "acquired_dates": tuple(dates), "dates": MappingProxyType(records),
             "actuals": actuals, "voids": voids, "empty_reason": "no_game_dates" if not dates else None,
             "output_schemas": _output_schemas(records),
+            **({'quote_ledger_json': json.dumps(evidence_payload({
+                'schema_version': 1, 'policy_id': policy.content_id,
+                'dates': {day.isoformat(): {
+                    'rows': harness._historical_quote_ledgers[day].to_dict('records'),
+                    'summary': lines[day].attrs['historical_quote_summary'],
+                } for day in sorted(lines)},
+            }), sort_keys=True, separators=(',', ':'), allow_nan=False)} if historical else {}),
         })
         shared = SharedInputs(plan["request_identity"], evidence, content_digest(evidence))
+        if historical:
+            recheck_attachment(historical)
         _validate_binding(config, plan, shared)
         return shared
     except SweepFailure:
@@ -457,6 +514,7 @@ def evaluate_cell(config: SweepConfig, plan: dict, shared: SharedInputs, cell: C
         allowed_bets=list(config.allowed_bets) if config.allowed_bets else None,
         bl_blender=BlackLittermanBlender(bl_config) if bl_config is not None else None,
         bl_sizing_blender=None, stat_config=None,
+        historical_policy=validate_saved_attachment(config.historical) if config.historical else None,
     )
     schemas = shared.evidence["output_schemas"]
     selected_frames, edge_frames = [], []
@@ -642,7 +700,7 @@ def run_sweep(config: SweepConfig, *, runtime_factory=None, plan: dict | None = 
     plan = copy.deepcopy(current)
     destination = Path(config.output_dir).resolve(strict=False)
     root, final = create_exclusive_incomplete_dir(destination.parent, destination.name)
-    manifest = {"schema_version": 1, "state": "incomplete", "plan": plan, "completed_cells": [],
+    manifest = {"schema_version": plan['schema_version'], "state": "incomplete", "plan": plan, "completed_cells": [],
                 "input_identity": None, "outputs": {}, "failure": None, **copy.deepcopy(READINESS),
                 "encoding": {"json_nonfinite": {"$nonfinite": "float.hex()"},
                              "nested_csv_values": "typed_value JSON", "csv_nan": "empty field"}}
@@ -654,6 +712,11 @@ def run_sweep(config: SweepConfig, *, runtime_factory=None, plan: dict | None = 
         stage = "acquisition"
         shared = acquire_shared_inputs(config, plan, runtime)
         shared.assert_unchanged(plan)
+        if config.historical:
+            ledger = json.loads(shared.evidence['quote_ledger_json'])
+            _write_json(root / 'historical_quote_ledger.json', ledger)
+            manifest['outputs']['historical_quote_ledger.json'] = {
+                'sha256': sha256_file(root / 'historical_quote_ledger.json')}
         manifest.update({"input_identity": shared.identity,
                          "model_deserialized": runtime.model_deserialized,
                          "expected_dates": list(shared.evidence["expected_dates"]),
@@ -695,6 +758,11 @@ def run_sweep(config: SweepConfig, *, runtime_factory=None, plan: dict | None = 
             _write_json(root / "sweep_manifest.json", manifest, replace=True)
         stage = "completion_verification"
         shared.assert_unchanged(plan)
+        if config.historical:
+            ledger = json.loads((root / 'historical_quote_ledger.json').read_text(encoding='utf-8'))
+            if (ledger != json.loads(shared.evidence['quote_ledger_json']) or
+                    sha256_file(root / 'historical_quote_ledger.json') != manifest['outputs']['historical_quote_ledger.json']['sha256']):
+                raise SweepFailure('historical_ledger_drift')
         _verify_exports(root, receipts, plan, shared, config)
         # Strict bytes/manifest inspection again; source/dependency drift also
         # invalidates this execution, not just a matching path/mtime/seed.

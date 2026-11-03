@@ -177,6 +177,11 @@ class Decision(StrictModel):
         return self
 
 
+class HistoricalInputs(StrictModel):
+    policy: str
+    source_metadata: str | None = None
+
+
 class LifecycleConfig(StrictModel):
     schema_version: int
     experiment: Experiment
@@ -186,11 +191,14 @@ class LifecycleConfig(StrictModel):
     audit: Audit
     ranker: Ranker
     decision: Decision
+    historical: HistoricalInputs | None = None
 
     @model_validator(mode="after")
     def cross_fields(self):
         if self.schema_version != 1:
             raise ValueError("Unsupported lifecycle schema")
+        if self.historical is not None and self.artifact.mode != 'attach':
+            raise ValueError('Historical lifecycle currently supports attach mode only')
         if self.artifact.mode == "attach" and "training" in self.model_fields_set:
             raise ValueError("Attach forbids training settings")
         if self.artifact.mode == "train":
@@ -239,6 +247,21 @@ class ResolvedConfig:
                     "artifact_path": str(artifact_path) if artifact_path else None,
                     "hyperparams_path": str(hyperparams_path) if hyperparams_path else None,
                     "hyperparams_receipt": hyperparams_receipt}
+        if validated.historical is None:
+            values.pop('historical', None)
+        else:
+            from src.backtesting.nba.historical_execution import load_attachment, validate_window
+
+            inputs = validated.historical
+            historical = load_attachment(str(resolve_path(inputs.policy)),
+                str(resolve_path(inputs.source_metadata)) if inputs.source_metadata is not None else None,
+                local=validated.evaluation.local)
+            validate_window(historical, validated.evaluation.start, validated.evaluation.end)
+            for item in (historical['policy'], historical['source_metadata']):
+                if item['path'] is not None and any(not disjoint(candidate, Path(item['path'])) for candidate in
+                        (run_root, run_root.with_name(run_root.name + '_dry_run'))):
+                    raise ValueError('Lifecycle output collides with historical input')
+            snapshot['historical_attachment'] = historical
         object.__setattr__(self, "run_root", run_root)
         object.__setattr__(self, "artifact_path", artifact_path)
         object.__setattr__(self, "hyperparams_path", hyperparams_path)
@@ -251,6 +274,10 @@ class ResolvedConfig:
     @property
     def hyperparams_receipt(self) -> dict | None:
         return self.to_dict()["hyperparams_receipt"]
+
+    @property
+    def historical_attachment(self) -> dict | None:
+        return self.to_dict().get('historical_attachment')
 
     def to_dict(self) -> dict:
         return json.loads(self._snapshot)
@@ -267,6 +294,13 @@ class ResolvedConfig:
             values[key] = tuple(values[key])
         if values["allowed_bets"] is not None:
             values["allowed_bets"] = tuple(tuple(token.split(":")) for token in values["allowed_bets"])
+        if self.historical_attachment is not None:
+            from src.backtesting.nba.historical_execution import recheck_attachment
+
+            receipt = self.historical_attachment
+            recheck_attachment(receipt)
+            values.update(historical_policy=receipt['policy']['path'],
+                          historical_source_metadata=receipt['source_metadata']['path'])
         return SweepConfig(model_dir=str(artifact_dir), output_dir=str(output_dir), **values)
 
 

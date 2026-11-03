@@ -25,8 +25,11 @@ class DateRangeFeatureLoader:
     def __getattr__(self, name):
         return getattr(self.feature_store, name)
 
-    def get_features_for_date(self, game_date: date) -> pd.DataFrame:
-        return DateBatchFeatureLoader(self.feature_store).load(DateFeatureRequest(game_date=game_date))
+    def get_features_for_date(self, game_date: date, *, historical_policy=None, historical_evidence=(),
+                              controlled_historical_evidence=False) -> pd.DataFrame:
+        return DateBatchFeatureLoader(self.feature_store).load(DateFeatureRequest(
+            game_date=game_date, historical_policy=historical_policy, historical_evidence=historical_evidence,
+            controlled_historical_evidence=controlled_historical_evidence))
 
     def _get_game_dates_in_range(self, start_date: date, end_date: date) -> list[date]:
         """Get all distinct game dates in a range."""
@@ -41,7 +44,17 @@ class DateRangeFeatureLoader:
             return [row[0] for row in result]
 
     def load(self, request: DateRangeFeatureRequest, chunk_size: int = 25) -> dict[date, pd.DataFrame]:
+        if request.historical_policy is not None or request.historical_evidence or request.controlled_historical_evidence:
+            from src.models.features.nba.historical_loader import HistoricalFeatureLoader
 
+            frame = HistoricalFeatureLoader(self.feature_store).load(request)
+            result = {}
+            for day, accounting in frame.attrs["historical_date_accounting"].items():
+                rows = frame.loc[frame["game_date"] == day].reset_index(drop=True)
+                rows.attrs = {**frame.attrs, "historical_accounting": accounting,
+                              "historical_date_accounting": {day: accounting}}
+                result[day] = rows
+            return result
         start_date = request.start_date
         end_date = request.end_date
         all_dates = self._get_game_dates_in_range(start_date, end_date)

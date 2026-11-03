@@ -18,6 +18,10 @@ class DateBatchFeatureLoader:
 
     def load(self, request: DateFeatureRequest) -> pd.DataFrame:
         """Load a single-date feature dataframe."""
+        if request.historical_policy is not None or request.historical_evidence or request.controlled_historical_evidence:
+            from src.models.features.nba.historical_loader import HistoricalFeatureLoader
+
+            return HistoricalFeatureLoader(self.feature_store).load(request)
         game_date = request.game_date
         query = text("""
             SELECT
