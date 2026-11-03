@@ -1,5 +1,13 @@
 # NBA Slice 8 completion lane
 
+## Local integration — November 3, 2026
+
+Chase authorized committing and merging all outstanding Slice 8 work. Consumer implementation/docs were committed as `8a1b21f2` and merged into main as `df87cd3a`. Remaining completion-decision/family-proposal docs were committed as `72345fb3` and merged as `0d11cca3`. Earlier historical-policy and S1 commits were already ancestors of main. This supersedes the uncommitted/unmerged status in historical checkpoints below; it does not grant data acceptance or approve the proposed family policies.
+
+All incoming consumer bytes matched the reviewed branch in the merge index. Actual main-checkout imports were verified; the same four existing scoped suites passed **55 tests** with DB/network/model-load guards and zero external calls. Main's unrelated position/opponent-repair work was excluded. No push, deployment, data job or training launch was authorized or performed.
+
+Remaining work is not merely reading old models: approve cohort/split/family/source semantics, verify an exact real artifact and dataset with explicit acquisition bounds, then freeze/dry-run the reproducible baseline for Chase to launch. The original full pre-acquisition player/resource caps remain a possible bounded code task; reader batching is not that guarantee. Existing models are reference/attachment candidates, not automatic evidence of historical validity.
+
 ## 8D code integration closeout — November 3, 2026
 
 **Approved operator-wiring scope complete; original real-data acceptance remains owner-run.** The accepted 8B/8C source was preserved. Coordinator implemented directly, with no additional agents, new unit tests, framework, production policy/configuration, live queries or long jobs.
