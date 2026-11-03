@@ -1616,7 +1616,7 @@ def _run_resume_linker(
 def link_incremental(
     batch_size: int = 50000, limit: int | None = None, days: int = 30, *,
     dry_run: bool = False, cursor: int | None = None, high_water: int | None = None,
-    max_batches: int | None = None, resume: bool = False,
+    max_batches: int | None = None, resume: bool = False, local: bool = False,
 ) -> dict[str, Any] | None:
     """
     Incremental linker: bounded recent-window smoke with --limit, legacy/unbounded otherwise.
@@ -1633,6 +1633,8 @@ def link_incremental(
     if batch_size <= 0 or (limit is not None and not 1 <= limit <= 5000):
         raise ValueError("batch_size must be positive; bounded --limit must be between 1 and 5000")
     fixed_requested = cursor is not None or high_water is not None or max_batches is not None
+    if local and (resume or not fixed_requested):
+        raise ValueError("--local requires explicit fixed-window bounds; local resume/legacy modes are not supported")
     if (resume or fixed_requested) and batch_size > 5000:
         raise ValueError("production bounded --batch-size must be between 1 and 5000")
     if dry_run and limit is None and not (resume or fixed_requested):
@@ -1649,8 +1651,8 @@ def link_incremental(
             raise ValueError("fixed-window mode requires both --cursor and --high-water")
         elif cursor < 0 or high_water < 0 or cursor > high_water:
             raise ValueError("fixed-window bounds require 0 <= cursor <= high-water")
-        print("Target: canonical DATABASE_URL (local processing, NOT automatic LOCAL_DATABASE_URL selection)")
-        engine = get_engine()
+        print("Target: LOCAL_DATABASE_URL" if local else "Target: canonical DATABASE_URL (local processing, NOT automatic LOCAL_DATABASE_URL selection)")
+        engine = get_engine(local=True) if local else get_engine()
         if resume:
             with engine.begin() as conn:
                 _set_linker_timeouts(conn)
@@ -2218,7 +2220,7 @@ def link_incremental(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NBA Data Linker - local processing; target is canonical DATABASE_URL, not LOCAL_DATABASE_URL")
+    parser = argparse.ArgumentParser(description="NBA Data Linker - canonical DATABASE_URL by default; --local selects LOCAL_DATABASE_URL for bounded fixed-window repair")
     parser.add_argument(
         "command",
         choices=["download", "process", "upload", "all", "init", "incremental"],
@@ -2240,6 +2242,7 @@ def main():
     parser.add_argument("--high-water", type=int, default=None, help="Inclusive frozen staging_id for fixed-window mode")
     parser.add_argument("--max-batches", type=int, default=None, help="Positive bounded batch count for fixed-window/resume mode")
     parser.add_argument("--resume", action="store_true", help="Use the pre-provisioned durable production checkpoint")
+    parser.add_argument("--local", action="store_true", help="Target LOCAL_DATABASE_URL; explicit fixed-window incremental mode only")
     parser.add_argument(
         "--days",
         type=int,
@@ -2250,6 +2253,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Resolve only, no writes; requires a bounded incremental scope")
 
     args = parser.parse_args()
+    if args.local and (args.command != "incremental" or args.resume or args.cursor is None or args.high_water is None):
+        parser.error("--local requires incremental --cursor and --high-water; production resume is not supported locally")
     production_flags = args.resume or args.cursor is not None or args.high_water is not None or args.max_batches is not None
     if args.command != "incremental" and (args.dry_run or args.limit is not None or production_flags):
         parser.error("incremental scope flags are only valid with the incremental command")
@@ -2296,6 +2301,7 @@ def main():
                 high_water=args.high_water,
                 max_batches=args.max_batches,
                 resume=args.resume,
+                local=args.local,
             )
         except Exception as exc:
             logging.error("Incremental linker failed: %s", exc, exc_info=True)

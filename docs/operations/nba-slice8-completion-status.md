@@ -1,5 +1,7 @@
 # NBA Slice 8 completion lane
 
+Current cross-lane assessment: [training-readiness reconciliation](nba-training-readiness-reconciliation-2026-11-03.md). Recovery completion, policy approval, real-source acceptance and the training launch route are distinct gates.
+
 ## Local integration — November 3, 2026
 
 Chase authorized committing and merging all outstanding Slice 8 work. Consumer implementation/docs were committed as `8a1b21f2` and merged into main as `df87cd3a`. Remaining completion-decision/family-proposal docs were committed as `72345fb3` and merged as `0d11cca3`. Earlier historical-policy and S1 commits were already ancestors of main. This supersedes the uncommitted/unmerged status in historical checkpoints below; it does not grant data acceptance or approve the proposed family policies.

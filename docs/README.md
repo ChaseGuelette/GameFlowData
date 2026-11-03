@@ -42,6 +42,7 @@ This repository documents the active NBA/MLB sportsbook product plus the separat
 - **Canonical mirror:** checked-in mirror of an active remote GBrain page.
 - **Historical evidence:** preserved result/plan context; missing archived paths are intentional and its commands are not current operating instructions.
 - **Agent contract:** always-loaded safety/workflow policy, not a product runbook.
+- **Research planning:** owner-requested design/handoff documents, not implemented runtime or launch authorization.
 
 ## Root and subsystem guides
 
@@ -83,6 +84,15 @@ This repository documents the active NBA/MLB sportsbook product plus the separat
 
 Exact contract membership lives in source constants and artifact manifests. Lifecycle docs govern workflow but never authorize long training/sweeps; Chase launches those jobs.
 
+## NCAAB research handoff — documentation only
+
+- [General summary and navigation](ncaab/README.md) — men's college basketball research scope and next-session entry point.
+- [Model architecture decision](ncaab/model-architecture-decision.md) — initial tree baseline, market variants, Bayesian and neural proposals.
+- [Data sources](ncaab/data-sources.md) — historical/live SportsDataverse and separate Odds API inputs; KenPom excluded for now.
+- [System architecture overview](ncaab/architecture-overview.md) — seven logical layers, each linked to an intentionally empty specification file.
+
+This owner-requested handoff set does not restore archived NCAAB code or activate a production lane. No ingestion, migration, training, or deployment is authorized by these documents.
+
 ## Engineering OS canonical mirrors
 
 - [Roadmap and usage](operations/gameflow-engineering-os-roadmap-and-usage.md)
@@ -106,7 +116,7 @@ The active repository does not contain or operate:
 
 - Kalshi or Polymarket trading;
 - cross-platform arbitrage;
-- NCAAB;
+- NCAAB runtime/implementation (the [new research handoff](ncaab/README.md) is documentation only);
 - Bot Tracker, Arb Scanner, or Data Vault dashboard surfaces;
 - unsupported MLB stat lanes removed during repository reduction.
 
