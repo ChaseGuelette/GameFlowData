@@ -44,8 +44,6 @@ from dotenv import load_dotenv
 from sqlalchemy import ForeignKeyConstraint, MetaData, create_engine, inspect
 from sqlalchemy.pool import NullPool
 
-load_dotenv()
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -105,6 +103,13 @@ SYNC_STATE_SCHEMA_VERSION = 1
 DEFAULT_STATE_FILE = Path("logs/sync/sync_state.json")
 ID_WINDOW_TABLE = "raw_game_lines_staging"
 MAX_ID_WINDOW_SPAN = 100_000
+NBA_SUPPORT_TABLES = {
+    name: ("report_date" if name == "rapidapi_injuries" else config[0])
+    for name, config in NBA_TABLES.items()
+    if name not in {"raw_player_props_combined", "raw_game_lines_staging"}
+}
+NBA_SUPPORT_STATE_FILE = Path("logs/sync/nba_support_sync.json")
+NBA_SUPPORT_MAX_ROWS = 100_000
 
 
 def _utc_now() -> str:
@@ -261,6 +266,20 @@ def render_sync_state_table(state: dict[str, Any]) -> str:
 
     failed = state.get("failed_tables", [])
     lines.append(f"Failed tables: {', '.join(failed) if failed else 'none'}")
+    if state.get("mode") == "nba_support":
+        lines.append(
+            f"Operation: {state.get('operation')} | Inclusive window: {state.get('start_date')}"
+            f" through {state.get('end_date')} | Row budget/table: {state.get('max_table_rows')}"
+        )
+        lines.append(
+            f"Confirmed committed rows: {state.get('total_rows_committed', 0)} | "
+            f"Readback-verified rows: {state.get('total_rows_verified', 0)}"
+        )
+        for table in tables:
+            lines.append(
+                f"{table['table']}: {table.get('scope', 'preflight incomplete')}; "
+                f"commit={table.get('commit_outcome')}; verified={table.get('rows_verified', 0)}"
+            )
     return "\n".join(lines)
 
 
@@ -904,6 +923,342 @@ def sync_table(
     )
 
 
+def validate_nba_support_args(args: argparse.Namespace) -> None:
+    """Validate the opt-in replay before environment loading, connections or writes."""
+    if not args.nba_support:
+        if args.execute:
+            raise ValueError("--execute requires --nba-support")
+        if args.max_table_rows is not None:
+            raise ValueError("--max-table-rows requires --nba-support")
+        return
+    if (
+        args.full or args.id_window or args.allow_unknown_full_refresh
+        or args.allow_large_full_refresh or args.start_after_id is not None
+        or args.end_id is not None or args.replay_id_span is not None
+        or args.sport not in {"all", "nba"}
+    ):
+        raise ValueError("--nba-support cannot use full-refresh, ID-window or MLB options")
+    if args.execute and args.dry_run:
+        raise ValueError("--execute and --dry-run are mutually exclusive")
+    if args.max_table_rows is None:
+        args.max_table_rows = 50_000
+    if not 1 <= args.max_table_rows <= NBA_SUPPORT_MAX_ROWS:
+        raise ValueError("--max-table-rows must be between 1 and 100000")
+    if args.status:
+        return
+    if not args.tables or len(set(args.tables)) != len(args.tables):
+        raise ValueError("--nba-support requires an explicit, duplicate-free --tables list")
+    if any(name not in NBA_SUPPORT_TABLES for name in args.tables):
+        raise ValueError("--nba-support accepts only registered NBA support tables, not raw odds or MLB")
+    bounds = []
+    for value in (args.start_date, args.end_date):
+        try:
+            parsed = date.fromisoformat(value)
+        except (TypeError, ValueError):
+            raise ValueError("--nba-support requires concrete YYYY-MM-DD start and end dates") from None
+        if parsed.isoformat() != value:
+            raise ValueError("--nba-support dates must be exactly YYYY-MM-DD, without time components")
+        bounds.append(parsed)
+    if not 0 <= (bounds[1] - bounds[0]).days < 31 or bounds[1] == date.max:
+        raise ValueError("--nba-support requires an ordered inclusive window of at most 31 days with a following midnight")
+
+
+def _support_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def build_nba_support_selection(
+    table_name: str, columns: list[str], start_date: str, end_date: str, budget: int,
+) -> tuple[str, dict[str, Any], str]:
+    """Explicit replay selection; never consult the local watermark or created_at."""
+    if table_name not in NBA_SUPPORT_TABLES or not 1 <= budget <= NBA_SUPPORT_MAX_ROWS:
+        raise ValueError("Invalid NBA support selection")
+    col_list = ", ".join(f's.{_support_identifier(name)}' for name in columns)
+    select = f'SELECT {col_list} FROM public.{_support_identifier(table_name)} AS s'
+    params: dict[str, Any] = {"row_limit": budget + 1}
+    date_col = NBA_SUPPORT_TABLES[table_name]
+    if date_col or table_name == "player_game_advanced_stats":
+        params.update(
+            start_date=date.fromisoformat(start_date),
+            end_exclusive=date.fromisoformat(end_date) + timedelta(days=1),
+        )
+        if date_col:
+            select += (
+                f' WHERE s.{_support_identifier(date_col)} >= %(start_date)s'
+                f' AND s.{_support_identifier(date_col)} < %(end_exclusive)s'
+            )
+            scope = f"date window on {date_col}"
+        else:
+            select += (
+                ' WHERE EXISTS (SELECT 1 FROM public."player_game_stats" AS g'
+                ' WHERE g."player_id" = s."player_id" AND g."game_id" = s."game_id"'
+                ' AND g."game_date" >= %(start_date)s AND g."game_date" < %(end_exclusive)s)'
+            )
+            scope = "exact player_id/game_id EXISTS in canonical player_game_stats date window"
+    else:
+        scope = "full reference key set (row-budgeted UPSERT; date bounds do not filter this table)"
+    return select + " LIMIT %(row_limit)s", params, scope
+
+
+def get_nba_support_contract(conn, table_name: str) -> tuple[list[tuple], list[str]]:
+    """Inspect existing public relations, including identity/generated restrictions."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod),
+                   a.attnotnull, a.attidentity, a.attgenerated
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = %s AND c.relkind IN ('r', 'p')
+              AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attnum
+            """,
+            (table_name,),
+        )
+        columns = list(cur.fetchall())
+    if not columns or any(col[4] or col[3] not in {"", "a", "d"} for col in columns):
+        raise ValueError("Missing support table or unsupported generated/identity columns")
+    pk = get_primary_key_columns(conn, f"public.{_support_identifier(table_name)}")
+    if not pk or not set(pk).issubset({col[0] for col in columns}):
+        raise ValueError("Support table requires an existing nonempty primary key")
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT indisvalid AND indisready AND indimmediate FROM pg_catalog.pg_index"
+            " WHERE indrelid = %s::regclass AND indisprimary",
+            (f"public.{_support_identifier(table_name)}",),
+        )
+        if cur.fetchone() != (True,):
+            raise ValueError("Support primary key must be valid, ready and nondeferrable")
+    return columns, pk
+
+
+def _nba_support_match_count(cur, table_name: str, stage: str, pk: list[str]) -> int:
+    keys = " AND ".join(f't.{_support_identifier(c)} = s.{_support_identifier(c)}' for c in pk)
+    cur.execute(
+        f'SELECT COUNT(*) FROM pg_temp.{_support_identifier(stage)} AS s'
+        f' JOIN public.{_support_identifier(table_name)} AS t ON {keys}'
+        ' WHERE pg_catalog.to_jsonb(t) IS NOT DISTINCT FROM pg_catalog.to_jsonb(s)'
+    )
+    row = cur.fetchone()
+    if not row or type(row[0]) is not int:
+        raise ValueError("Unknown local stage/value match count")
+    return row[0]
+
+
+def execute_nba_support_table(remote_conn, local_conn, plan: dict, result: dict, checkpoint) -> None:
+    """One keyed transaction, verified before commit and again against preserved stage."""
+    table_name = result["table"]
+    stage = "_nba_support_stage"
+    qualified_stage = f'pg_temp.{_support_identifier(stage)}'
+    col_list = ", ".join(_support_identifier(c) for c in plan["columns"])
+    pk = plan["pk"]
+    conflict = ", ".join(_support_identifier(c) for c in pk)
+    updates = [c for c in plan["columns"] if c not in pk]
+    action = "DO UPDATE SET " + ", ".join(
+        f'{_support_identifier(c)} = EXCLUDED.{_support_identifier(c)}' for c in updates
+    ) if updates else "DO NOTHING"
+    override = " OVERRIDING SYSTEM VALUE" if plan["identity_always"] else ""
+    expected = result["rows_selected"]
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as tmp:
+            with remote_conn.cursor() as cur:
+                query = cur.mogrify(plan["select"], plan["params"]).decode("utf-8")
+                cur.copy_expert(f"COPY ({query}) TO STDOUT WITH CSV HEADER", tmp)
+                if cur.rowcount != expected:
+                    raise ValueError("Selected/exported row counts differ or export count is unknown")
+                result["rows_exported"] = cur.rowcount
+            tmp.seek(0)
+            with local_conn.cursor() as cur:
+                cur.execute(
+                    f'CREATE TEMP TABLE {_support_identifier(stage)} ON COMMIT PRESERVE ROWS AS'
+                    f' SELECT {col_list} FROM public.{_support_identifier(table_name)} WHERE false'
+                )
+                cur.copy_expert(f"COPY {qualified_stage} ({col_list}) FROM STDIN WITH CSV HEADER", tmp)
+                if cur.rowcount != expected:
+                    raise ValueError("Selected/copied row counts differ or COPY count is unknown")
+                result["rows_copied"] = cur.rowcount
+                cur.execute(f"SELECT COUNT(*) FROM {qualified_stage}")
+                row = cur.fetchone()
+                if not row or type(row[0]) is not int or row[0] != expected:
+                    raise ValueError("Selected/staged row counts differ or staged count is unknown")
+                result["rows_staged"] = row[0]
+                cur.execute(
+                    f'INSERT INTO public.{_support_identifier(table_name)} ({col_list}){override}'
+                    f' SELECT {col_list} FROM {qualified_stage} WHERE true'
+                    f' ON CONFLICT ({conflict}) {action}'
+                )
+                if _nba_support_match_count(cur, table_name, stage, pk) != expected:
+                    raise ValueError("Local keys/values differ from selected stage before commit")
+            # A durable prepared receipt is ambiguous after process loss, but a
+            # checkpoint exception here proves the data commit was not attempted.
+            result.update(status="prepared", commit_outcome="pending", rows_committed=None)
+            try:
+                checkpoint()
+            except Exception:
+                result.update(status="failed", commit_outcome="not_attempted", rows_committed=0)
+                raise
+            result.update(status="committing", commit_outcome="unknown")
+            local_conn.commit()
+            result.update(commit_outcome="confirmed", rows_committed=expected, status="committed_unverified")
+            checkpoint()
+            with local_conn.cursor() as cur:
+                if _nba_support_match_count(cur, table_name, stage, pk) != expected:
+                    raise ValueError("Committed local keys/values differ from selected stage")
+            result.update(status="success", rows_verified=expected)
+    finally:
+        # A commit/readback failure cannot undo an earlier commit. Keep its outcome
+        # in the receipt; rollback only the current transaction, then remove stage.
+        local_conn.rollback()
+        with local_conn.cursor() as cur:
+            cur.execute(f"DROP TABLE IF EXISTS {qualified_stage}")
+        local_conn.commit()
+
+
+def run_nba_support(args: argparse.Namespace, state_path: Path) -> int:
+    """Isolated support replay: all-table SELECT preflight precedes any DB writes."""
+    if state_path.resolve() == DEFAULT_STATE_FILE.resolve():
+        logger.error("NBA support mode refuses the generic sync journal")
+        return 2
+    if state_path.exists():
+        # Preserve even completed receipts; never overwrite an unrelated/recovery journal.
+        logger.error("NBA support journal already exists; archive it or choose a new --state-file")
+        return 2
+    remote_url = os.getenv("DATABASE_URL")
+    local_url = os.getenv("LOCAL_DATABASE_URL")
+    if not remote_url or not local_url:
+        logger.error("NBA support mode requires explicit DATABASE_URL and LOCAL_DATABASE_URL in the environment")
+        return 2
+    try:
+        if any(urlsplit(url).scheme not in {"postgres", "postgresql"} for url in (remote_url, local_url)):
+            raise ValueError("Unsupported connection URL")
+        validate_id_window_routing(remote_url, local_url)
+    except Exception:
+        logger.error("NBA support routing requires a non-loopback source and distinct loopback target URLs")
+        return 2
+    state = _build_initial_state("nba", False, args.start_date, args.end_date, {})
+    state.update(
+        mode="nba_support", operation="execute" if args.execute else "preview",
+        tables_planned=args.tables, max_table_rows=args.max_table_rows,
+        total_rows_committed=0, total_rows_verified=0,
+        note="Diagnostic replay receipt, not a keyset-resume checkpoint; local-only rows are retained",
+        phase="connect",
+    )
+    remote_conn = local_conn = None
+    active_result = None
+
+    def checkpoint() -> None:
+        state["total_rows_committed"] = sum(r.get("rows_committed") or 0 for r in state["tables"])
+        state["total_rows_verified"] = sum(r.get("rows_verified") or 0 for r in state["tables"])
+        state["total_rows"] = state["total_rows_committed"]
+        write_sync_state(state, state_path)
+
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        # Exclusive reservation prevents two invocations from replacing a receipt.
+        with state_path.open("x", encoding="utf-8") as journal:
+            json.dump(state, journal, indent=2)
+        kwargs = {
+            "connect_timeout": 10,
+            "options": (
+                "-c default_transaction_read_only=on -c statement_timeout=30000"
+                " -c lock_timeout=3000 -c idle_in_transaction_session_timeout=60000"
+                " -c search_path=pg_catalog,public -c timezone=UTC -c datestyle=ISO,YMD"
+                " -c client_encoding=UTF8"
+            ),
+            "application_name": "gameflow:sync_local_db:nba_support",
+        }
+        remote_conn = psycopg2.connect(remote_url, **kwargs)
+        remote_conn.set_session(readonly=True, isolation_level="REPEATABLE READ", autocommit=False)
+        local_conn = psycopg2.connect(local_url, **kwargs)
+        local_conn.set_session(readonly=True, autocommit=False)
+        verify_connected_id_window_routing(remote_conn, local_conn)
+        plans = []
+        logger.info("NBA support %s: %s through %s (inclusive); budget=%s/table",
+                    state["operation"], args.start_date, args.end_date, args.max_table_rows)
+        for table_name in args.tables:
+            active_result = {
+                "table": table_name, "mode": "nba_support", "strategy": "keyed_upsert",
+                "status": "preflight", "rows_selected": None, "rows_copied": 0,
+                "rows_committed": 0, "rows_verified": 0, "commit_outcome": "not_attempted",
+            }
+            state["tables"].append(active_result)
+            state["phase"] = "schema_preflight"
+            source_columns, source_pk = get_nba_support_contract(remote_conn, table_name)
+            target_columns, target_pk = get_nba_support_contract(local_conn, table_name)
+            if source_columns != target_columns or source_pk != target_pk:
+                raise ValueError("Remote/local ordered columns, types, nullability, identity or primary keys differ")
+            columns = [c[0] for c in source_columns]
+            select, params, scope = build_nba_support_selection(
+                table_name, columns, args.start_date, args.end_date, args.max_table_rows,
+            )
+            active_result["scope"] = scope
+            state["phase"] = "bounded_count"
+            with remote_conn.cursor() as cur:
+                cur.execute(f"SELECT COUNT(*) FROM ({select}) AS bounded_selection", params)
+                row = cur.fetchone()
+            if not row or type(row[0]) is not int or not 0 <= row[0] <= args.max_table_rows:
+                logger.error("NBA support bounded count failed or exceeded budget for public.%s", table_name)
+                raise ValueError("Unknown selection count or per-table row budget exceeded")
+            active_result.update(rows_selected=row[0], scope=scope, status="ready")
+            plans.append({
+                "columns": columns, "pk": source_pk, "select": select, "params": params,
+                "identity_always": any(c[3] == "a" for c in target_columns),
+            })
+            logger.info("  public.%s: %s rows; %s", table_name, row[0], scope)
+        checkpoint()
+        if not args.execute:
+            for result in state["tables"]:
+                result["status"] = "preview"
+            state.update(status="preview", phase="complete", finished_at=_utc_now())
+            checkpoint()
+            logger.info("NBA support preview complete; no database mutations")
+            return 0
+        # End the SELECT-only target preflight before enabling explicit write transactions.
+        local_conn.rollback()
+        local_conn.set_session(readonly=False, autocommit=False)
+        state["phase"] = "table_execute_and_readback"
+        for plan, result in zip(plans, state["tables"], strict=True):
+            active_result = result
+            result["status"] = "executing"
+            checkpoint()
+            execute_nba_support_table(remote_conn, local_conn, plan, result, checkpoint)
+            checkpoint()
+            logger.info("  public.%s: committed and read back %s selected rows", result["table"], result["rows_verified"])
+        state.update(status="success", phase="complete", finished_at=_utc_now())
+        checkpoint()
+        return 0
+    except FileExistsError:
+        logger.error("NBA support journal reservation failed; existing receipt was preserved")
+        return 2
+    except Exception as exc:
+        # Driver messages/tracebacks may contain DSNs, passwords or data. Never emit them.
+        if active_result is not None:
+            if active_result["status"] == "success":
+                active_result["status"] = "committed_verified_error"
+            elif active_result["commit_outcome"] == "not_attempted":
+                active_result["status"] = "failed"
+            elif active_result["commit_outcome"] == "unknown":
+                active_result["status"] = "commit_unknown"
+            else:
+                active_result["status"] = "committed_unverified"
+            state["failed_tables"] = [active_result["table"]]
+        state.update(status="failed", finished_at=_utc_now(), error=f"NBA support aborted ({type(exc).__name__}); no exception details logged")
+        try:
+            checkpoint()
+        except Exception:
+            logger.error("Unable to update NBA support diagnostic receipt")
+        logger.error("NBA support aborted; confirmed prior commits=%s rows; inspect receipt before replay", state["total_rows_committed"])
+        return 1
+    finally:
+        for conn in (remote_conn, local_conn):
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Sync Supabase tables to local Postgres for offline training & backtesting"
@@ -923,15 +1278,18 @@ def main() -> None:
     parser.add_argument("--start-date", help="Inclusive lower date bound for date/timestamp-backed tables (YYYY-MM-DD)")
     parser.add_argument("--end-date", help="Inclusive upper date bound for date/timestamp-backed tables (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true", help="Report planned counts without copying rows")
+    parser.add_argument("--nba-support", action="store_true", help="Bounded NBA support-table replay; DB-read-only preview unless --execute")
+    parser.add_argument("--execute", action="store_true", help="Write selected NBA support rows (requires --nba-support)")
+    parser.add_argument("--max-table-rows", type=int, help="NBA support per-table row budget (default 50000; cap 100000)")
     parser.add_argument("--id-window", action="store_true", help="Sync one bounded staging_id window for raw_game_lines_staging")
     parser.add_argument("--start-after-id", type=int, help="Exclusive staging_id lower bound (requires --end-id)")
     parser.add_argument("--end-id", type=int, help="Inclusive frozen staging_id upper bound")
-    parser.add_argument("--replay-id-span", type=int, default=10_000, help="Derived-mode rewind from local MAX(staging_id)")
+    parser.add_argument("--replay-id-span", type=int, help="Derived-mode rewind from local MAX(staging_id), default 10000")
     parser.add_argument("--allow-unknown-full-refresh", action="store_true", help="Allow unknown --tables to fall back to full refresh")
     parser.add_argument("--allow-large-full-refresh", action="store_true", help="Allow unbounded full refresh of very large tables such as dense CLV snapshots")
     parser.add_argument(
         "--state-file",
-        default=str(DEFAULT_STATE_FILE),
+        default=None,
         help="Path to sync state JSON journal",
     )
     parser.add_argument(
@@ -941,11 +1299,27 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    state_path = Path(args.state_file)
+    try:
+        validate_nba_support_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    state_path = Path(args.state_file) if args.state_file is not None else (
+        NBA_SUPPORT_STATE_FILE if args.nba_support else DEFAULT_STATE_FILE
+    )
 
     if args.status:
         sys.exit(print_sync_status(state_path))
 
+    if args.nba_support:
+        # Match the existing operator credential flow only after argument/status
+        # validation; import, help and status remain environment-file independent.
+        load_dotenv()
+        sys.exit(run_nba_support(args, state_path))
+
+    # Never load environment files during import, help or status.
+    load_dotenv()
+    if args.replay_id_span is None:
+        args.replay_id_span = 10_000
     try:
         validate_id_window_args(args)
     except ValueError as exc:
