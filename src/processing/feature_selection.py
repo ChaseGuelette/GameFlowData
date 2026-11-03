@@ -8,6 +8,8 @@ from sklearn.inspection import permutation_importance
 from sklearn.metrics import mean_pinball_loss
 from sklearn.model_selection import TimeSeriesSplit
 
+from src.models.nba_training_chronology import temporal_folds
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -27,7 +29,8 @@ class ImprovedFeatureSelector:
         self.tolerance = tolerance
 
     def select_features_per_quantile(
-        self, df: pd.DataFrame, target_col: str, candidate_cols: list[str], model_name: str = "Model"
+        self, df: pd.DataFrame, target_col: str, candidate_cols: list[str], model_name: str = "Model",
+        *, date_column: str | None = None,
     ) -> dict[float, list[str]]:
         """
         Run feature selection independently for each quantile.
@@ -51,28 +54,28 @@ class ImprovedFeatureSelector:
         y = valid_data[target_col]
 
         results = {}
+        split_kwargs = {'dates': valid_data[date_column]} if date_column is not None else {}
         for q in self.quantiles:
             logger.info(f"\n  === Q{q:.2f} for {model_name} ===")
 
             # 1. Rank features at this quantile
-            ranked = self._rank_features_for_quantile(X, y, q)
+            ranked = self._rank_features_for_quantile(X, y, q, **split_kwargs)
             logger.info(f"  Top 5: {ranked[:5]}")
 
             # 2. Optimize count for this quantile
-            selected = self._optimize_count_for_quantile(X, y, ranked, q)
+            selected = self._optimize_count_for_quantile(X, y, ranked, q, **split_kwargs)
             logger.info(f"  Selected {len(selected)} features for Q{q:.2f}")
 
             results[q] = selected
 
         return results
 
-    def _rank_features_for_quantile(self, X: pd.DataFrame, y: pd.Series, quantile: float) -> list[str]:
+    def _rank_features_for_quantile(self, X: pd.DataFrame, y: pd.Series, quantile: float, *, dates=None) -> list[str]:
         """
         Rank features using Permutation Importance at a specific quantile level.
         """
-        tscv = TimeSeriesSplit(n_splits=self.n_splits)
         train_index = []
-        for train_index, _ in tscv.split(X):
+        for train_index, _ in temporal_folds(X, self.n_splits, dates):
             pass
 
         if len(train_index) == 0:
@@ -121,12 +124,12 @@ class ImprovedFeatureSelector:
         return positive_features
 
     def _optimize_count_for_quantile(
-        self, X: pd.DataFrame, y: pd.Series, ranked_candidates: list[str], quantile: float
+        self, X: pd.DataFrame, y: pd.Series, ranked_candidates: list[str], quantile: float, *, dates=None
     ) -> list[str]:
         """
         Find optimal K for a single quantile using its pinball loss via TimeSeriesSplit CV.
         """
-        tscv = TimeSeriesSplit(n_splits=self.n_splits)
+        splits = list(temporal_folds(X, self.n_splits, dates))
 
         step = 1
         max_feats = len(ranked_candidates)
@@ -138,7 +141,6 @@ class ImprovedFeatureSelector:
 
         best_score = float("inf")
         best_k = counts_to_test[0]
-        splits = list(tscv.split(X))
 
         for k in counts_to_test:
             current_features = ranked_candidates[:k]

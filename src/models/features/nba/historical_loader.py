@@ -186,6 +186,9 @@ class HistoricalFeatureLoader:
             ),))
         authorities = policy_payload(policy)['authorities']
         cohort = authorities['cohort_split']['value']
+        budget = getattr(self.feature_store, 'acquisition_budget', None)
+        if not request.controlled_historical_evidence and budget is None:
+            raise ValueError('Native historical execution requires explicit acquisition limits')
         carryover = {entry['family_id']: entry['value'] for entry in authorities['carryover']}
         unsupported = [HistoricalBlock(policy.content_id, None, None, 'policy', family,
                         f'unsupported carryover mode: {setting["mode"]}')
@@ -232,19 +235,45 @@ class HistoricalFeatureLoader:
                 season not in cohort['seasons'] for season in request.seasons
             ):
                 raise HistoricalPolicyContractError('training seasons must be explicit unique cohort members')
-            clause = text(query + 'pgs.season_id IN :seasons ORDER BY pgs.game_date, pgs.game_id, pgs.player_id')
-            clause = clause.bindparams(bindparam('seasons', expanding=True))
-            params = {'seasons': request.seasons}
+            params: dict = {'seasons': request.seasons}
+            predicate = 'pgs.season_id IN :seasons'
+            if request.historical_role == 'training':
+                predicate += ' AND pgs.game_date >= :start AND pgs.game_date <= :end'
+                params.update(start=date.fromisoformat(cohort['train_start']), end=date.fromisoformat(cohort['train_end']))
+            elif request.historical_role == 'calibration':
+                predicate += ' AND pgs.game_date >= :start AND pgs.game_date < :end'
+                params.update(start=date.fromisoformat(cohort['calibration_start']),
+                              end=date.fromisoformat(cohort['calibration_end_exclusive']))
+            elif not request.controlled_historical_evidence:
+                raise ValueError('Native training requires explicit training/calibration role')
         else:
             start = request.game_date if isinstance(request, DateFeatureRequest) else request.start_date
             end = request.game_date if isinstance(request, DateFeatureRequest) else request.end_date
             if not isinstance(request, DateFeatureRequest | DateRangeFeatureRequest) or start > end:
                 raise HistoricalPolicyContractError('invalid historical date request')
-            clause = text(query + 'pgs.game_date >= :start AND pgs.game_date <= :end ORDER BY pgs.game_date, pgs.game_id, pgs.player_id')
-            params = {'start': start, 'end': end}
+            if budget is not None:
+                budget.limits.check_span(start, end)
+            predicate = 'pgs.season_id IN :seasons AND pgs.game_date >= :start AND pgs.game_date <= :end'
+            params = {'start': start, 'end': end, 'seasons': cohort['seasons']}
+        sql = query + predicate + ' ORDER BY pgs.game_date, pgs.game_id, pgs.player_id'
+        if budget is not None:
+            sql += ' LIMIT :population_limit'
+            params['population_limit'] = budget.fetch_limit
+        clause = text(sql).bindparams(bindparam('seasons', expanding=True))
         # Fatal acquisition errors propagate unchanged; there is no legacy retry.
         with self.engine.connect() as conn:
-            population = pd.read_sql(clause, conn, params=params)
+            if budget is None:  # Explicit controlled fixtures only.
+                population = pd.read_sql(clause, conn, params=params)
+            else:
+                transaction = conn.begin()
+                try:
+                    conn.execute(text("SELECT set_config('statement_timeout', :timeout, true)"),
+                                 {'timeout': str(budget.limits.population_timeout_ms)})
+                    population = pd.read_sql(clause, conn, params=params)
+                finally:
+                    transaction.rollback()
+        if budget is not None:
+            budget.consume(population)
         input_evidence = request.historical_evidence
         if not request.controlled_historical_evidence:
             from src.models.features.nba.historical_sources import PostgresHistoricalSources
@@ -335,6 +364,8 @@ class HistoricalFeatureLoader:
                                                'historical_policy_content_id', 'historical_lineage'])
         frame.attrs['historical_accounting'] = {'population': len(population), 'ready': len(frame), 'excluded': tuple(excluded)}
         frame.attrs['historical_policy_content_id'] = policy.content_id
+        if budget is not None:
+            frame.attrs['acquisition_limits'] = budget.limits.to_dict()
         if isinstance(request, TrainingFeatureRequest):
             expected_dates = sorted(set(population_dates.values()))
         else:

@@ -37,6 +37,7 @@ from src.config.combo_config import COMBO_DEFINITIONS
 from src.config.stat_config import StatConfigSet
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
+from src.models.features.nba.acquisition import add_acquisition_arguments, limits_from_values
 from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
 from src.models.nba_artifacts import ArtifactInspection, resolve_artifact_for_execution
 from src.models.quantile_trainer import PlayerPropsModelPipeline
@@ -250,6 +251,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
     parser.add_argument('--historical-policy', help='Explicit historical policy JSON; requires --local')
     parser.add_argument('--historical-source-metadata', help='Optional historical source-metadata JSON')
+    add_acquisition_arguments(parser)
 
     parser.add_argument(
         "--dry-run",
@@ -296,6 +298,11 @@ def _validate_backtest_args(parser: argparse.ArgumentParser, args: argparse.Name
                                      _namespace_value(args, 'historical_source_metadata'),
                                      local=_namespace_value(args, 'local', False) is True)
         validate_window(historical, args.start, args.end)
+        limits = limits_from_values(vars(args), required=historical is not None)
+        if limits is not None:
+            if historical is None:
+                raise ValueError('Acquisition limits require historical policy')
+            limits.check_span(args.start, args.end)
         if historical and (_namespace_value(args, 'allow_legacy_artifacts', False)
                            or args.flat_bet_size is None):
             raise ValueError('Historical replay requires nonlegacy artifacts and explicit flat stakes')
@@ -389,6 +396,7 @@ def _validate_backtest_args(parser: argparse.ArgumentParser, args: argparse.Name
         "output_dir": output_dir,
         "planned_output_name": planned_output_name,
         "historical": historical,
+        "acquisition_limits": limits,
     }
 
 
@@ -408,6 +416,7 @@ def _backtest_plan(args: argparse.Namespace, validated: dict) -> dict:
         "execution": False,
         "quote_clean_readiness": {"checked": False, "status": "not_checked"},
         "historical_attachment": validated['historical'],
+        "acquisition_limits": validated['acquisition_limits'].to_dict() if validated['acquisition_limits'] else None,
         "database_target": "LOCAL" if _namespace_value(args, "local", False) else "REMOTE",
         "date_range": {"start": str(args.start), "end": str(args.end)},
         "stats": args.stats,
@@ -469,7 +478,8 @@ def main(argv=None):
     engine = get_engine(local=use_local)
     if use_local:
         logger.info("Using LOCAL database")
-    feature_store = (FeatureStore(engine, historical_sources=make_sources(engine, historical))
+    feature_store = (FeatureStore(engine, historical_sources=make_sources(engine, historical),
+                                 acquisition_limits=validated['acquisition_limits'])
                      if historical else FeatureStore(engine))
 
     logger.info("Loading model pipeline...")
@@ -538,6 +548,7 @@ def main(argv=None):
         if current.to_plan_dict() != validated['artifact'].to_plan_dict():
             raise ValueError('Historical artifact changed during replay')
         result.config['historical_attachment'] = historical
+        result.config['acquisition_limits'] = validated['acquisition_limits'].to_dict()
 
     # Preserve legacy config keys. This enrichment does not change harness.run().
     result.config.update(_effective_cli_config(harness, validated["artifact"], args.stats))

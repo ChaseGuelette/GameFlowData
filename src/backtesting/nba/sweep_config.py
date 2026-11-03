@@ -18,6 +18,7 @@ from itertools import product
 from pathlib import Path
 
 from src.backtesting.nba.historical_execution import (
+    BOUNDED_HISTORICAL_SOURCE_FILES,
     HISTORICAL_SOURCE_FILES,
     load_attachment,
     recheck_attachment,
@@ -27,6 +28,7 @@ from src.backtesting.nba.historical_execution import (
 )
 from src.config.combo_config import COMBO_DEFINITIONS
 from src.models.black_litterman import BLConfig
+from src.models.features.nba.acquisition import AcquisitionLimits
 from src.models.nba_artifacts import (
     _SAFE_FILENAME,
     SUPPORTED_STATS,
@@ -151,6 +153,7 @@ class SweepConfig:
     diagnostic_history: bool = False
     historical_policy: str | None = None
     historical_source_metadata: str | None = None
+    acquisition_limits: AcquisitionLimits | None = None
     _historical_json: str = field(init=False, repr=False, default='null')
 
     def __post_init__(self) -> None:
@@ -201,6 +204,12 @@ class SweepConfig:
         historical = load_attachment(self.historical_policy, self.historical_source_metadata, local=self.local)
         validate_window(historical, self.start, self.end)
         if historical is not None:
+            if not isinstance(self.acquisition_limits, AcquisitionLimits):
+                raise ValueError('Native historical sweeps require explicit acquisition limits')
+            self.acquisition_limits.check_span(self.start, self.end)
+        elif self.acquisition_limits is not None:
+            raise ValueError('Acquisition limits require historical policy')
+        if historical is not None:
             for item in (historical['policy'], historical['source_metadata']):
                 if item['path'] is not None:
                     target = Path(item['path'])
@@ -229,6 +238,8 @@ class SweepConfig:
 
     def to_dict(self) -> dict:
         value = asdict(self)
+        if self.acquisition_limits is None:
+            value.pop('acquisition_limits')
         for name in ('historical_policy', 'historical_source_metadata', '_historical_json'):
             value.pop(name)
         if self.historical is not None:
@@ -267,10 +278,13 @@ def predictor_settings(config: SweepConfig, inspection: ArtifactInspection) -> d
 
 def _acquisition_settings(config: SweepConfig) -> dict:
     fixed = config.to_dict()
-    return {name: fixed[name] for name in (
+    result = {name: fixed[name] for name in (
         "model_dir", "start", "end", "stats", "market_stats", "bookmakers", "n_samples", "seed",
         "min_minutes_avg", "local",
     )}
+    if config.acquisition_limits is not None:
+        result['acquisition_limits'] = config.acquisition_limits.to_dict()
+    return result
 
 
 def _acquisition_identity(plan: dict) -> str:
@@ -341,7 +355,7 @@ def build_plan(config: SweepConfig, *, check_output_collision: bool = True) -> d
         recheck_attachment(config.historical)
         validate_artifact_window(inspection, config.start)
     root = Path(__file__).resolve().parents[3]
-    files = SOURCE_FILES + (HISTORICAL_SOURCE_FILES if config.historical else ())
+    files = SOURCE_FILES + (HISTORICAL_SOURCE_FILES + BOUNDED_HISTORICAL_SOURCE_FILES if config.historical else ())
     source = {"base": source_git_state(root), "files": {name: sha256_file(root / name) for name in files}}
     settings = predictor_settings(config, inspection)
     body = {

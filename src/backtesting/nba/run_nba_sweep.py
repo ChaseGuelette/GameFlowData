@@ -12,6 +12,7 @@ import sys
 from datetime import date
 
 from src.backtesting.nba.sweep_config import SweepConfig, build_plan
+from src.models.features.nba.acquisition import add_acquisition_arguments, limits_from_values
 
 
 class StrictParser(argparse.ArgumentParser):
@@ -75,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local", action="store_true")
     parser.add_argument('--historical-policy', help='Explicit historical policy JSON; requires --local')
     parser.add_argument('--historical-source-metadata', help='Optional historical metadata sidecar JSON')
+    add_acquisition_arguments(parser)
     parser.add_argument("--diagnostic-history", action="store_true", help="Required for execution; never grants decision-grade status")
     parser.add_argument("--dry-run", action="store_true", help="Strict filesystem validation/plan only; no model deserialization")
     return parser
@@ -94,6 +96,9 @@ def config_from_args(args: argparse.Namespace) -> SweepConfig:
         max_cells=args.max_cells, local=args.local, diagnostic_history=args.diagnostic_history,
         historical_policy=getattr(args, 'historical_policy', None),
         historical_source_metadata=getattr(args, 'historical_source_metadata', None),
+        acquisition_limits=limits_from_values(
+            vars(args), required=getattr(args, 'historical_policy', None) is not None,
+        ),
     )
 
 

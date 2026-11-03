@@ -12,7 +12,9 @@ import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictFloat, StrictInt, model_validator
 from yaml.events import AliasEvent
 
+from src.models.features.nba.acquisition import AcquisitionLimits
 from src.models.nba_artifacts import canonical_json_bytes, canonical_sha256, sha256_file
+from src.models.nba_training_chronology import validate_seasons
 
 Number = StrictInt | StrictFloat
 CHECKS = (
@@ -111,11 +113,10 @@ class Training(StrictModel):
 
     @model_validator(mode="after")
     def settings(self):
-        seasons = [*self.train_seasons, self.calibration_season]
-        if any(re.fullmatch(r"2[0-9]{4}", season) is None for season in seasons):
-            raise ValueError("Expected literal NBA season tokens")
-        if self.calibration_season in self.train_seasons:
-            raise ValueError("Training and calibration seasons must be distinct")
+        validate_seasons(self.train_seasons, self.calibration_season)
+        if any(re.fullmatch(r"2[0-9]{4}", season) is None
+               for season in [*self.train_seasons, self.calibration_season]):
+            raise ValueError("Lifecycle training requires regular-season NBA tokens")
         if not self.local or self.tune and self.hyperparams_path is not None:
             raise ValueError("Local execution required; tuning and supplied hyperparameters conflict")
         if self.tuning_timeout is not None and self.tuning_timeout <= 0:
@@ -177,9 +178,17 @@ class Decision(StrictModel):
         return self
 
 
+class HistoricalLimits(StrictModel):
+    max_dates: int = Field(gt=0)
+    max_games: int = Field(gt=0)
+    max_population_rows: int = Field(gt=0)
+    population_timeout_ms: int = Field(gt=0)
+
+
 class HistoricalInputs(StrictModel):
     policy: str
     source_metadata: str | None = None
+    acquisition_limits: HistoricalLimits
 
 
 class LifecycleConfig(StrictModel):
@@ -197,8 +206,7 @@ class LifecycleConfig(StrictModel):
     def cross_fields(self):
         if self.schema_version != 1:
             raise ValueError("Unsupported lifecycle schema")
-        if self.historical is not None and self.artifact.mode != 'attach':
-            raise ValueError('Historical lifecycle currently supports attach mode only')
+
         if self.artifact.mode == "attach" and "training" in self.model_fields_set:
             raise ValueError("Attach forbids training settings")
         if self.artifact.mode == "train":
@@ -250,13 +258,23 @@ class ResolvedConfig:
         if validated.historical is None:
             values.pop('historical', None)
         else:
-            from src.backtesting.nba.historical_execution import load_attachment, validate_window
+            from src.backtesting.nba.historical_execution import (
+                load_attachment,
+                validate_training_window,
+                validate_window,
+            )
 
             inputs = validated.historical
             historical = load_attachment(str(resolve_path(inputs.policy)),
                 str(resolve_path(inputs.source_metadata)) if inputs.source_metadata is not None else None,
                 local=validated.evaluation.local)
             validate_window(historical, validated.evaluation.start, validated.evaluation.end)
+            AcquisitionLimits(**inputs.acquisition_limits.model_dump()).check_span(
+                validated.evaluation.start, validated.evaluation.end)
+            if validated.training is not None:
+                training = validated.training
+                validate_training_window(historical, training.train_seasons, training.calibration_season,
+                                         training.calibration_end)
             for item in (historical['policy'], historical['source_metadata']):
                 if item['path'] is not None and any(not disjoint(candidate, Path(item['path'])) for candidate in
                         (run_root, run_root.with_name(run_root.name + '_dry_run'))):
@@ -279,6 +297,11 @@ class ResolvedConfig:
     def historical_attachment(self) -> dict | None:
         return self.to_dict().get('historical_attachment')
 
+    @property
+    def acquisition_limits(self) -> AcquisitionLimits | None:
+        historical = self.config.historical
+        return AcquisitionLimits(**historical.acquisition_limits.model_dump()) if historical else None
+
     def to_dict(self) -> dict:
         return json.loads(self._snapshot)
 
@@ -300,7 +323,8 @@ class ResolvedConfig:
             receipt = self.historical_attachment
             recheck_attachment(receipt)
             values.update(historical_policy=receipt['policy']['path'],
-                          historical_source_metadata=receipt['source_metadata']['path'])
+                          historical_source_metadata=receipt['source_metadata']['path'],
+                          acquisition_limits=self.acquisition_limits)
         return SweepConfig(model_dir=str(artifact_dir), output_dir=str(output_dir), **values)
 
 

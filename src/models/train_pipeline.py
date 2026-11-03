@@ -12,8 +12,17 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 
+from src.backtesting.nba.historical_execution import (
+    load_attachment,
+    make_sources,
+    recheck_attachment,
+    source_policy,
+    validate_training_provenance,
+    validate_training_window,
+)
 from src.db.client import get_engine
 from src.models.feature_store import FeatureStore
+from src.models.features.nba.acquisition import AcquisitionLimits, add_acquisition_arguments, limits_from_values
 from src.models.features.nba.contracts import NBA_FEATURE_LISTS, validate_feature_lists
 from src.models.hyperparameter_tuner import QuantileHyperparameterTuner
 from src.models.monte_carlo import MonteCarloPredictor, compute_copula_params_from_data
@@ -27,6 +36,7 @@ from src.models.nba_artifacts import (
     source_git_state,
     validate_artifact_bundle,
 )
+from src.models.nba_training_chronology import chronology_proof, validate_populations, validate_seasons
 from src.models.quantile_trainer import PlayerPropsModelPipeline
 from src.models.training_preflight import (
     validate_existing_directory,
@@ -58,9 +68,23 @@ class TrainingOrchestrator:
         hyperparams_path: str | None = None,
         feature_tolerance: float = 0.005,
         local: bool = False,
+        historical_attachment: dict | None = None,
+        acquisition_limits: AcquisitionLimits | None = None,
     ):
+        if tune_hyperparams and hyperparams_path is not None:
+            raise ValueError('Tuning and supplied fixed hyperparameters conflict')
+        if historical_attachment is not None:
+            if local is not True or not isinstance(acquisition_limits, AcquisitionLimits):
+                raise ValueError('Historical training requires local targeting and acquisition limits')
+            recheck_attachment(historical_attachment)
+        elif acquisition_limits is not None:
+            raise ValueError('Acquisition limits require historical policy')
+        self.historical_attachment = historical_attachment
+        self.acquisition_limits = acquisition_limits
         self.engine = get_engine(local=local)
-        self.feature_store = FeatureStore(self.engine)
+        self.feature_store = (FeatureStore(self.engine,
+            historical_sources=make_sources(self.engine, historical_attachment), acquisition_limits=acquisition_limits)
+            if historical_attachment is not None else FeatureStore(self.engine))
         self.feature_tolerance = feature_tolerance
 
         # Tuning settings
@@ -102,6 +126,7 @@ class TrainingOrchestrator:
                           Useful for reserving recent games for backtesting.
         """
         # Save run configuration
+        self._validate_request(train_seasons, calibration_season, cal_end_date)
         self._save_run_config(train_seasons, calibration_season, cal_end_date)
 
         logger.info(f"Training Seasons: {train_seasons}")
@@ -112,12 +137,12 @@ class TrainingOrchestrator:
         # 1. Load Data
         logger.info("Loading datasets...")
         # Load Training Data
-        train_df = self.feature_store.get_training_dataset(train_seasons)
+        train_df = self._load_population(train_seasons, 'training')
         logger.info(f"Loaded Training Data: {len(train_df):,} rows")
 
         # Load Calibration Data (Holdout)
-        cal_df = self.feature_store.get_training_dataset([calibration_season])
-        if cal_end_date:
+        cal_df = self._load_population([calibration_season], 'calibration')
+        if cal_end_date and self.historical_attachment is None:
             pre_filter = len(cal_df)
             cal_df = cal_df[cal_df["game_date"] < cal_end_date].reset_index(drop=True)
             logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows (filtered from {pre_filter:,}, end date {cal_end_date})")
@@ -125,6 +150,7 @@ class TrainingOrchestrator:
             logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows")
 
         # 2. Feature Selection (on Training Data ONLY)
+        train_df, cal_df = self._gate_populations(train_df, cal_df, train_seasons, calibration_season)
         selected_features = self._run_feature_selection(train_df)
 
         # 3. Hyperparameter Tuning (Optional)
@@ -197,6 +223,7 @@ class TrainingOrchestrator:
                 retrained components.
         """
         # Save run config
+        self._validate_request(train_seasons, calibration_season, cal_end_date)
         config = {
             "mode": "partial_retrain",
             "train_seasons": train_seasons,
@@ -231,6 +258,13 @@ class TrainingOrchestrator:
         )
         if parent_artifact.state == "legacy_unverified":
             logger.warning("Legacy/unverified parent %s; file hashes only, not decision-grade", parent_artifact.identity)
+        if self.historical_attachment is not None:
+            if parent_artifact.manifest is None:
+                raise ValueError('Historical partial retraining requires proven parent chronology')
+            validate_training_provenance(
+                parent_artifact.manifest['data_provenance'], self.historical_attachment, self.acquisition_limits,
+                train_seasons=train_seasons, calibration_season=calibration_season,
+            )
 
         # Load existing pipeline from base_model_dir
         logger.info(f"Loading existing pipeline from {base_model_dir}...")
@@ -239,11 +273,11 @@ class TrainingOrchestrator:
 
         # 2. Load training + calibration data
         logger.info("Loading datasets...")
-        train_df = self.feature_store.get_training_dataset(train_seasons)
+        train_df = self._load_population(train_seasons, 'training')
         logger.info(f"Loaded Training Data: {len(train_df):,} rows")
 
-        cal_df = self.feature_store.get_training_dataset([calibration_season])
-        if cal_end_date:
+        cal_df = self._load_population([calibration_season], 'calibration')
+        if cal_end_date and self.historical_attachment is None:
             pre_filter = len(cal_df)
             cal_df = cal_df[cal_df["game_date"] < cal_end_date].reset_index(drop=True)
             logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows (filtered from {pre_filter:,})")
@@ -251,6 +285,7 @@ class TrainingOrchestrator:
             logger.info(f"Loaded Calibration Data: {len(cal_df):,} rows")
 
         # 3. Optionally reselect features for retrained components only
+        train_df, cal_df = self._gate_populations(train_df, cal_df, train_seasons, calibration_season)
         if reselect_features:
             new_features = self._run_feature_selection_partial(train_df, retrain_stats, retrain_minutes)
             if retrain_minutes and "minutes_features" in new_features:
@@ -283,12 +318,12 @@ class TrainingOrchestrator:
         if retrain_minutes:
             logger.info("Retraining minutes model...")
             minutes_hp = hyperparams.get("minutes")
-            pipeline.train_minutes_model(train_df, hyperparams=minutes_hp)
+            pipeline.train_minutes_model(train_df, hyperparams=minutes_hp, chronological_dates=True)
 
         if retrain_stats:
             logger.info(f"Retraining rate models: {[s.upper() for s in retrain_stats]}")
             rate_hp = {s: hyperparams.get(s) for s in retrain_stats}
-            pipeline.train_rate_models(train_df, stats=retrain_stats, hyperparams=rate_hp)
+            pipeline.train_rate_models(train_df, stats=retrain_stats, hyperparams=rate_hp, chronological_dates=True)
 
         # 5. Evaluate calibration (all models, not just retrained)
         self._evaluate_calibration(pipeline, cal_df)
@@ -334,6 +369,39 @@ class TrainingOrchestrator:
         )
         logger.info(f"Surgical retrain complete. Artifacts in {self.run_dir}")
 
+    def _validate_request(self, train_seasons, calibration_season, cal_end_date):
+        if self.tune_hyperparams and self.hyperparams_path is not None:
+            raise ValueError('Tuning and supplied fixed hyperparameters conflict')
+        recheck_attachment(self.historical_attachment)
+        validate_training_window(self.historical_attachment, train_seasons, calibration_season, cal_end_date)
+
+    def _load_population(self, seasons, role):
+        policy = recheck_attachment(self.historical_attachment)
+        if policy is None:
+            return self.feature_store.get_training_dataset(seasons)
+        return self.feature_store.get_training_dataset(seasons, historical_policy=policy, historical_role=role)
+
+    def _gate_populations(self, train_df, cal_df, train_seasons, calibration_season):
+        train_df, cal_df = validate_populations(train_df, cal_df, train_seasons, calibration_season)
+        self.execution_provenance = {
+            'chronology': chronology_proof(train_df, cal_df),
+            'historical_attachment': self.historical_attachment,
+            'source_policy': source_policy(self.historical_attachment),
+            'acquisition_limits': self.acquisition_limits.to_dict() if self.acquisition_limits else None,
+        }
+        if self.historical_attachment is not None:
+            validate_training_provenance({
+                'training': {**observed_dataframe_provenance(train_df), 'execution': self.execution_provenance},
+                'calibration': observed_dataframe_provenance(cal_df),
+            }, self.historical_attachment, self.acquisition_limits)
+        config_path = self.run_dir / 'run_config.json'
+        with config_path.open(encoding='utf-8') as handle:
+            config = json.load(handle)
+        config['execution'] = self.execution_provenance
+        with config_path.open('w', encoding='utf-8') as handle:
+            json.dump(config, handle, indent=4)
+        return train_df, cal_df
+
     def _finalize_training_run(
         self,
         *,
@@ -348,6 +416,10 @@ class TrainingOrchestrator:
         parent: dict | None = None,
         requested_stats: list[str] | None = None,
     ) -> None:
+        recheck_attachment(self.historical_attachment)
+        checked_train, checked_cal = validate_populations(train_df, cal_df, train_seasons, calibration_season)
+        if chronology_proof(checked_train, checked_cal) != self.execution_provenance['chronology']:
+            raise ValueError('Training population changed after chronology gate')
         with self.feature_config_path.open(encoding="utf-8") as handle:
             effective_features = json.load(handle)
         available_stats = [stat for stat in ["pts", "reb", "ast"] if stat in pipeline.rate_models]
@@ -383,12 +455,14 @@ class TrainingOrchestrator:
                 "hard_fail": self.CALIBRATION_HARD_FAIL,
             },
             data_provenance={
-                "training": observed_dataframe_provenance(train_df),
+                "training": {**observed_dataframe_provenance(train_df),
+                             "execution": self.execution_provenance},
                 "calibration": observed_dataframe_provenance(cal_df),
             },
             parent=parent,
             source=source_git_state(Path(__file__).resolve().parents[2]),
         )
+        recheck_attachment(self.historical_attachment)
         inspection = finalize_training_bundle(self.run_dir, self.final_run_dir, manifest)
         self.run_dir = inspection.path
 
@@ -442,10 +516,10 @@ class TrainingOrchestrator:
                 X = minutes_df[all_features].fillna(0)
                 y = minutes_df["actual_minutes"]
                 if self.tuning_per_quantile:
-                    configs = tuner.tune_per_quantile(X, y)
+                    configs = tuner.tune_per_quantile(X, y, dates=minutes_df['game_date'])
                     hyperparams["minutes"] = {str(q): cfg.to_dict() for q, cfg in configs.items()}
                 else:
-                    config = tuner.tune(X, y)
+                    config = tuner.tune(X, y, dates=minutes_df['game_date'])
                     hyperparams["minutes"] = config.to_dict()
 
             if retrain_stats:
@@ -461,10 +535,10 @@ class TrainingOrchestrator:
                     X = rate_df[all_features].fillna(0)
                     y = rate_df[target]
                     if self.tuning_per_quantile:
-                        configs = tuner.tune_per_quantile(X, y)
+                        configs = tuner.tune_per_quantile(X, y, dates=rate_df['game_date'])
                         hyperparams[stat] = {str(q): cfg.to_dict() for q, cfg in configs.items()}
                     else:
-                        config = tuner.tune(X, y)
+                        config = tuner.tune(X, y, dates=rate_df['game_date'])
                         hyperparams[stat] = config.to_dict()
 
             with open(self.hyperparams_config_path, "w") as f:
@@ -548,10 +622,10 @@ class TrainingOrchestrator:
         y_minutes = minutes_df["actual_minutes"]
 
         if self.tuning_per_quantile:
-            minutes_configs = tuner.tune_per_quantile(X_minutes, y_minutes)
+            minutes_configs = tuner.tune_per_quantile(X_minutes, y_minutes, dates=minutes_df['game_date'])
             hyperparams["minutes"] = {str(q): cfg.to_dict() for q, cfg in minutes_configs.items()}
         else:
-            minutes_config = tuner.tune(X_minutes, y_minutes)
+            minutes_config = tuner.tune(X_minutes, y_minutes, dates=minutes_df['game_date'])
             hyperparams["minutes"] = minutes_config.to_dict()
 
         # Tune Rate Models
@@ -570,10 +644,10 @@ class TrainingOrchestrator:
             y_rate = rate_df[target]
 
             if self.tuning_per_quantile:
-                rate_configs = tuner.tune_per_quantile(X_rate, y_rate)
+                rate_configs = tuner.tune_per_quantile(X_rate, y_rate, dates=rate_df['game_date'])
                 hyperparams[stat] = {str(q): cfg.to_dict() for q, cfg in rate_configs.items()}
             else:
-                rate_config = tuner.tune(X_rate, y_rate)
+                rate_config = tuner.tune(X_rate, y_rate, dates=rate_df['game_date'])
                 hyperparams[stat] = rate_config.to_dict()
 
         # Save hyperparameters
@@ -596,7 +670,7 @@ class TrainingOrchestrator:
         minutes_df = df[df["actual_minutes"] > 0].fillna(0)
 
         features["minutes_features"] = selector.select_features_per_quantile(
-            minutes_df, target, candidates, model_name="Minutes"
+            minutes_df, target, candidates, model_name="Minutes", date_column='game_date'
         )
 
         # Rate Stats
@@ -607,7 +681,7 @@ class TrainingOrchestrator:
             candidates = get_candidate_columns(rate_df, target)
 
             features[f"{stat}_rate_features"] = selector.select_features_per_quantile(
-                rate_df, target, candidates, model_name=f"{stat.upper()} Rate"
+                rate_df, target, candidates, model_name=f"{stat.upper()} Rate", date_column='game_date'
             )
 
         return features
@@ -626,7 +700,7 @@ class TrainingOrchestrator:
             candidates = get_candidate_columns(df, target)
             minutes_df = df[df["actual_minutes"] > 0].fillna(0)
             features["minutes_features"] = selector.select_features_per_quantile(
-                minutes_df, target, candidates, model_name="Minutes"
+                minutes_df, target, candidates, model_name="Minutes", date_column='game_date'
             )
 
         if retrain_stats:
@@ -636,7 +710,7 @@ class TrainingOrchestrator:
                 rate_df = df[(df["actual_minutes"] >= 10) & (df[target].notna())].fillna(0)
                 candidates = get_candidate_columns(rate_df, target)
                 features[f"{stat}_rate_features"] = selector.select_features_per_quantile(
-                    rate_df, target, candidates, model_name=f"{stat.upper()} Rate"
+                    rate_df, target, candidates, model_name=f"{stat.upper()} Rate", date_column='game_date'
                 )
 
         return features
@@ -661,8 +735,8 @@ class TrainingOrchestrator:
         )
 
         # Train
-        pipeline.train_minutes_model(df, hyperparams=minutes_hyperparams)
-        pipeline.train_rate_models(df, stats=["pts", "reb", "ast"], hyperparams=rate_hyperparams)
+        pipeline.train_minutes_model(df, hyperparams=minutes_hyperparams, chronological_dates=True)
+        pipeline.train_rate_models(df, stats=["pts", "reb", "ast"], hyperparams=rate_hyperparams, chronological_dates=True)
 
         return pipeline
 
@@ -1218,6 +1292,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
+    parser.add_argument('--historical-policy', help='Explicit historical policy JSON; local only')
+    parser.add_argument('--historical-source-metadata', help='Optional historical metadata sidecar JSON')
+    add_acquisition_arguments(parser)
 
     parser.add_argument(
         "--artifacts-dir",
@@ -1254,6 +1331,17 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
         parser.error("--base-model-dir requires --retrain-stats, --retrain-minutes, or --calibrate-only")
 
     try:
+        validate_seasons(args.train_seasons, args.cal_season)
+        if args.tune and args.hyperparams_path is not None:
+            raise ValueError('Tuning and supplied fixed hyperparameters conflict')
+        historical = load_attachment(_namespace_value(args, 'historical_policy'),
+                                     _namespace_value(args, 'historical_source_metadata'),
+                                     local=_namespace_value(args, 'local', False))
+        limits = limits_from_values(vars(args), required=historical is not None)
+        if limits is not None and historical is None:
+            raise ValueError('Acquisition limits require historical policy')
+        if historical is not None and is_calibrate_only:
+            raise ValueError('Historical calibration-only diagnostics are unsupported; use historical training holdout')
         if args.diagnostics_output_dir and not is_calibrate_only:
             raise ValueError("--diagnostics-output-dir requires --calibrate-only")
         if args.allow_legacy_artifacts and not args.base_model_dir:
@@ -1291,6 +1379,14 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
             raise ValueError(f"Unknown --force-features values: {', '.join(unknown_features)}")
 
         cal_end = datetime.strptime(args.cal_end_date, "%Y-%m-%d").date() if args.cal_end_date else None
+        validate_training_window(historical, args.train_seasons, args.cal_season, cal_end)
+        if historical is not None and base_artifact is not None:
+            if base_artifact.manifest is None:
+                raise ValueError('Historical partial retraining requires proven parent chronology')
+            validate_training_provenance(
+                base_artifact.manifest['data_provenance'], historical, limits,
+                train_seasons=args.train_seasons, calibration_season=args.cal_season,
+            )
         if is_calibrate_only:
             if base_model_dir is None:
                 raise ValueError("--base-model-dir is required for calibration-only output")
@@ -1307,6 +1403,12 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
                 raise ValueError("--artifacts-dir must be a filesystem path")
             artifacts_dir = validate_output_path(artifacts_root)
             diagnostics_dir = None
+            if historical is not None:
+                for item in (historical['policy'], historical['source_metadata']):
+                    if item['path'] and Path(item['path']).is_relative_to(artifacts_dir):
+                        raise ValueError('Training output collides with historical input')
+            if base_model_dir is not None and artifacts_dir.is_relative_to(base_model_dir):
+                raise ValueError('Training output must be disjoint from parent artifact')
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
 
@@ -1320,6 +1422,8 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
         "hyperparams_path": hyperparams_path,
         "artifacts_dir": artifacts_dir,
         "diagnostics_dir": diagnostics_dir,
+        "historical": historical,
+        "acquisition_limits": limits,
     }
 
 
@@ -1329,6 +1433,8 @@ def _training_plan(args: argparse.Namespace, validated: dict) -> dict:
     planned_name = "nba_calibration_<runtime_timestamp>" if mode == "calibration-only" else "nba_run_<runtime_timestamp>"
     return {
         "command": "nba-training",
+        "historical_attachment": validated['historical'],
+        "acquisition_limits": validated['acquisition_limits'].to_dict() if validated['acquisition_limits'] else None,
         "status": "preflight_only",
         "mode": mode,
         "execution": False,
@@ -1468,6 +1574,8 @@ def main(argv=None):
             hyperparams_path=args.hyperparams_path,
             feature_tolerance=args.feature_tolerance,
             local=args.local,
+            historical_attachment=validated['historical'],
+            acquisition_limits=validated['acquisition_limits'],
         )
 
         if is_partial:
