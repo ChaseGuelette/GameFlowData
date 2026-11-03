@@ -1,6 +1,10 @@
 # NBA pretraining hardening and bounded data acceptance
 
-Status: proposed scope and rough effort estimate, not an executable implementation spec or job authorization. Cold-start policy is explicitly deferred. Owner choices are in [readiness reconciliation](nba-training-readiness-reconciliation-2026-11-03.md); background evidence is in [policy research](nba-training-policy-research-2026-11-03.md).
+Status: owner-approved code items 1 and 3 are implemented and merged into main as `4ffdf065`, from reviewed source commit `974b57ea` on `repair/nba-pretraining-hardening`. Parent validation: 197 existing offline tests, scoped Ruff/compile/whitespace, controlled training plus replay/sweep/audit/lifecycle checks; 96 core tests also passed from the destination main checkout. Independent review: SPEC PASS / QUALITY PASS. Only the owner-approved existing trainer test input setup changed; no new permanent tests or assertions changed. Deployment is not certified by source publication.
+
+Item 2's [bounded read-only investigation](nba-pretraining-bounded-data-investigation-2026-11-03.md) is complete, but real quote/injury source acceptance remains blocked. No scraping, DB writes, real training/model loading, deployment or promotion occurred. The actual local populated source-acceptance check is not complete. Cold-start policy remains deferred. Owner choices are in [readiness reconciliation](nba-training-readiness-reconciliation-2026-11-03.md); background evidence is in [policy research](nba-training-policy-research-2026-11-03.md).
+
+Implementation details and exact checks are in main's [implementation receipt](nba-pretraining-hardening-implementation-2026-11-03.md) and [operator wiki](../understanding/nba-pretraining-hardening.md). The original scope/estimates below are planning history, not a fresh implementation queue or permission to launch jobs.
 
 ## 1. Chronological separation — code and controlled validation
 
