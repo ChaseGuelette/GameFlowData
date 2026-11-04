@@ -102,9 +102,13 @@ DEFERRED_FAILURE_JOBS = {
 
 # Prevent overlapping scheduler launches for jobs that are unsafe to run
 # concurrently. Schedule refreshes must not overlap each other.
-LOCKABLE_JOB_SCRIPTS = {"lines_job.py", "nba_schedule_job.py"}
+LOCKABLE_JOB_SCRIPTS = {"lines_job.py", "nba_schedule_job.py", "daily_stats_job.py"}
 JOB_LOCKS: dict[str, threading.Lock] = {}
 JOB_LOCKS_GUARD = threading.Lock()
+# Both NBA jobs invoke the same durable linker; queue them before launching
+# children rather than racing the database advisory lock after doing other work.
+NBA_LINKER_JOB_SCRIPTS = {"lines_job.py", "daily_stats_job.py"}
+NBA_LINKER_JOB_LOCK = threading.Lock()
 
 
 # Updated by run_job() after every execution.
@@ -361,6 +365,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
     job_status = "failed"
     job_lock = _get_job_lock(script_name)
     lock_acquired = False
+    linker_job_lock_acquired = False
 
     if job_lock is not None:
         lock_acquired = job_lock.acquire(blocking=False)
@@ -384,12 +389,18 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
             return
 
     try:
+        if script_name in NBA_LINKER_JOB_SCRIPTS:
+            logger.info("Waiting for NBA linker job slot: %s", script_name)
+            linker_job_lock_acquired = NBA_LINKER_JOB_LOCK.acquire(timeout=timeout)
+            if not linker_job_lock_acquired:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            logger.info("Acquired NBA linker job slot: %s", script_name)
         result = subprocess.run(
             cmd,
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=max(0.001, timeout - (time.time() - start_time)) if linker_job_lock_acquired else timeout,
         )
 
         stdout = result.stdout or ""
@@ -450,6 +461,8 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
         stderr = str(e)
 
     finally:
+        if linker_job_lock_acquired:
+            NBA_LINKER_JOB_LOCK.release()
         if lock_acquired and job_lock is not None:
             job_lock.release()
 

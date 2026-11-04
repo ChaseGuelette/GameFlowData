@@ -62,6 +62,8 @@ tmpclaude-*
 .agents/
 .hermes/tmp/
 .hermes/audits/
+# Repo-local disposable scratch scripts and generated receipts
+/scratch/
 .aDelete/
 .braintree/
 # .claude

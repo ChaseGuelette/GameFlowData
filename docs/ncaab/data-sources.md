@@ -29,7 +29,7 @@ NCAA -> separate producer/release family -> optional enrichment
 The Odds API -> separate historical/current quote ingestion
 ```
 
-For repeated training/replay, store the selected records in GameFlow's own source/canonical tables and query those. Do not repeatedly download full seasons for every prediction. Do not assume identically named fields or identifiers from different producers are interchangeable.
+For repeated training/replay, store the selected records in GameFlow's own source/canonical tables and query those. Do not repeatedly download full seasons for every prediction. The initial implementation uses direct Parquet and small direct-HTTP Python adapters, avoiding an R or beta-SDK runtime dependency; a later SDK adapter must preserve fixture parity. Do not assume identically named fields or identifiers from different producers are interchangeable. A separate reviewed season-team classification manifest is required for D1 eligibility; scoreboard grouping alone is insufficient.
 
 ## Initial collection scope
 
@@ -39,7 +39,7 @@ For repeated training/replay, store the selected records in GameFlow's own sourc
 - Collect only game-level odds markets needed by the initial spread/total/moneyline evaluation, not college player props.
 - Add earlier feature warm-up history only where necessary. Collection depth and model-training window are different decisions.
 
-This is a target, not a claim that these seasons are already ingested or that all fields/books are complete. The exact Division-I/non-Division-I/exhibition/postseason universe and quote-time policy still need to be specified.
+This is a target, not a claim that these seasons are already ingested or that all fields/books are complete. The v1 design selects verified D1-versus-D1 non-exhibition games, supported postseason/neutral sites, and T-60 decisions with a T-5 closing reference. Season-specific classification evidence, book lists and execution budgets still require verification/configuration before acquisition.
 
 ## Historical statistics: verified evidence and limitations
 
@@ -78,7 +78,7 @@ On 2026-11-03, read-only requests from the local Windows environment returned:
 
 The requests returned HTTP 200. This verifies a small **local upstream HTTP** path, not an installed-wrapper integration, all-game completeness, sustained uptime, or access from Railway/the eventual deployment host. [11] [12] [13]
 
-Proposed daily behavior: fetch schedules/results, acquire newly completed or corrected game records, upsert by verified keys, rebuild rolling features/team states, and check freshness before inference. Retain raw retrieval metadata, retry bounded transient failures, and block affected predictions on incomplete inputs. A short correction lookback and cadence remain to be specified in [layer 7](layers/07-daily-orchestration-and-data-quality.md).
+Proposed daily behavior: fetch schedules/results, acquire newly completed or corrected game records, upsert by verified keys, rebuild rolling features/team states, and check freshness before inference. Retain raw retrieval metadata, retry bounded transient failures, and block affected predictions on incomplete inputs. [Layer 7](layers/07-daily-orchestration-and-data-quality.md) specifies the initial three-day correction lookback, disabled schedules, leases, request ceilings and deployment acceptance.
 
 ## Odds source
 
@@ -113,7 +113,7 @@ Use it only for a concrete gap or a later source comparison. Its season-level ra
 5. Does the live path work from the intended execution host?
 6. Which bookmakers and decision times have usable paired quotes and independent closing observations?
 
-These questions belong in the future [ingestion](layers/01-data-ingestion.md), [database/linking](layers/02-database-and-identity-linking.md), and [data-quality](layers/07-daily-orchestration-and-data-quality.md) specifications. The layer files intentionally remain empty for now.
+The [ingestion](layers/01-data-ingestion.md), [database/linking](layers/02-database-and-identity-linking.md), and [data-quality](layers/07-daily-orchestration-and-data-quality.md) specifications now define these contracts and acceptance checks. Remaining provider coverage, book choices and deploy-host evidence are explicit implementation/operation gates, not facts established by this research.
 
 ## Sources
 

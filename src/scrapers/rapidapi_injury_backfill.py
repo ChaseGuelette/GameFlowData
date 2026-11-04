@@ -16,12 +16,14 @@ Environment:
 """
 
 import argparse
+import hashlib
 import logging
 import os
 import sys
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
@@ -30,6 +32,15 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 from src.db.client import get_engine
+from src.scrapers.nba_injury_db import (
+    completed_dates,
+    ensure_capture_columns,
+    historical_request_dates,
+    persist_capture,
+    prepare_records,
+    require_capture_schema,
+    saved_captures,
+)
 
 load_dotenv()
 
@@ -70,7 +81,11 @@ CREATE TABLE IF NOT EXISTS public.rapidapi_injuries (
     report_time text,
     injury_category text,
     injury_detail text,
-    scraped_at timestamp with time zone DEFAULT now()
+    scraped_at timestamp with time zone DEFAULT now(),
+    player_id bigint,
+    nba_team_id bigint,
+    game_id text,
+    source_observations jsonb
 );
 
 CREATE INDEX IF NOT EXISTS idx_rapidapi_inj_date
@@ -93,6 +108,7 @@ def ensure_table(engine) -> None:
     """
     with engine.begin() as conn:
         conn.execute(text(DDL_CREATE_TABLE))
+    ensure_capture_columns(engine)
     logger.info("Ensured rapidapi_injuries table exists.")
 
 
@@ -138,6 +154,7 @@ class RapidAPIInjuryClient:
             "X-RapidAPI-Host": RAPIDAPI_HOST,
         })
         self._last_request_time: float | None = None
+        self.last_capture = None
 
     def _rate_limit(self) -> None:
         if self._last_request_time is not None:
@@ -146,6 +163,22 @@ class RapidAPIInjuryClient:
                 time.sleep(self.delay - elapsed)
         self._last_request_time = time.time()
 
+    def fetch_date_response(
+        self, target_date: date, *, timeout: tuple[float, float] = (5.0, 15.0)
+    ) -> requests.Response:
+        """One streamed request for evidence capture; caller reads/closes it.
+
+        No retries, JSON coercion, redirects or storage. Keep the legacy
+        fetch_date path unchanged for scheduled production callers.
+        """
+        self._rate_limit()
+        return self.session.get(
+            f"{RAPIDAPI_BASE_URL}/{target_date.isoformat()}",
+            timeout=timeout,
+            stream=True,
+            allow_redirects=False,
+        )
+
     def fetch_date(self, target_date: date) -> list[dict] | None:
         """
         Fetch injury reports for a single date.
@@ -153,12 +186,13 @@ class RapidAPIInjuryClient:
         Returns:
             List of injury record dicts, or None on failure.
         """
+        self.last_capture = None
         url = f"{RAPIDAPI_BASE_URL}/{target_date.isoformat()}"
 
         for attempt in range(self.max_retries):
             self._rate_limit()
             try:
-                response = self.session.get(url, timeout=15)
+                response = self.session.get(url, timeout=15, allow_redirects=False)
 
                 if response.status_code == 429:
                     wait = (2 ** attempt) * 5
@@ -166,22 +200,41 @@ class RapidAPIInjuryClient:
                     time.sleep(wait)
                     continue
 
+                if response.status_code == 404:
+                    from src.scrapers.nba_injury_pilot import is_missing_report
+
+                    receipt = {"http_status": 404, "body_complete": True, "requested_date": target_date.isoformat()}
+                    if is_missing_report(receipt, response.content):
+                        self.last_capture = {
+                            "retrieved_at_utc": datetime.now(UTC).isoformat(),
+                            "raw_body_sha256": hashlib.sha256(response.content).hexdigest(),
+                            "http_status": 404, "missing_report": True,
+                        }
+                        return []
                 response.raise_for_status()
+                if response.status_code != 200:
+                    logger.error("Unexpected HTTP status %s", response.status_code)
+                    return None
 
                 try:
                     data = response.json()
                 except (ValueError, KeyError):
-                    logger.warning(f"{target_date}: Non-JSON response: {response.text[:200]}")
-                    return []
+                    logger.warning(f"{target_date}: Non-JSON response; not an empty injury report")
+                    return None
 
                 if isinstance(data, list):
+                    self.last_capture = {
+                        "retrieved_at_utc": datetime.now(UTC).isoformat(),
+                        "raw_body_sha256": hashlib.sha256(response.content).hexdigest(),
+                        "http_status": 200,
+                    }
                     return data
                 elif isinstance(data, dict) and "message" in data:
-                    logger.warning(f"{target_date}: API message: {data['message']}")
-                    return []
+                    logger.warning(f"{target_date}: API error object; refusing an empty-success checkpoint")
+                    return None
                 else:
                     logger.warning(f"{target_date}: Unexpected response format: {type(data)}")
-                    return []
+                    return None
 
             except requests.exceptions.Timeout:
                 logger.warning(f"{target_date}: Timeout (attempt {attempt + 1}/{self.max_retries})")
@@ -209,61 +262,19 @@ class RapidAPIInjuryClient:
 
 # --- Storage ---
 
-def get_scraped_dates(engine) -> set[date]:
-    """Get set of dates already present in the table (for resume support)."""
-    query = text("SELECT DISTINCT report_date FROM rapidapi_injuries")
-    with engine.connect() as conn:
-        rows = conn.execute(query).fetchall()
-    return {row[0] for row in rows}
+def get_scraped_dates(engine, start_date=date.min, end_date=date.max) -> set[date]:
+    """Resume only atomically completed DB captures, not arbitrary legacy rows."""
+    return completed_dates(engine, start_date, end_date)
 
 
-def store_records(engine, target_date: date, records: list[dict]) -> int:
+def store_records(engine, target_date: date, records: list[dict], *, capture_metadata=None) -> int:
+    """Upsert existing injury rows and commit a DB-backed capture checkpoint.
+
+    report_date uses each payload's game date. Requested date/report observations
+    remain on the same injury rows in source_observations. Returns rows affected,
+    not a claim that every row was newly inserted.
     """
-    Insert injury records for a date. Uses ON CONFLICT DO NOTHING for idempotency.
-
-    Returns:
-        Number of rows inserted.
-    """
-    if not records:
-        return 0
-
-    stmt = text("""
-        INSERT INTO rapidapi_injuries
-            (report_date, team, player, status, reason, report_time, injury_category, injury_detail)
-        VALUES
-            (:report_date, :team, :player, :status, :reason, :report_time, :injury_category, :injury_detail)
-        ON CONFLICT (report_date, COALESCE(team, ''), player, status, COALESCE(reason, ''))
-        DO NOTHING
-    """)
-
-    inserted = 0
-    skipped = 0
-    with engine.begin() as conn:
-        for rec in records:
-            player = rec.get("player") or None
-            status = rec.get("status") or None
-            if not player or not status:
-                skipped += 1
-                logger.debug(f"Skipping record with null player/status: {rec}")
-                continue
-
-            category, detail = parse_reason(rec.get("reason"))
-            params = {
-                "report_date": target_date,
-                "team": rec.get("team") or None,
-                "player": player,
-                "status": status,
-                "reason": rec.get("reason") or None,
-                "report_time": rec.get("reportTime") or None,
-                "injury_category": category,
-                "injury_detail": detail,
-            }
-            result = conn.execute(stmt, params)
-            inserted += result.rowcount
-
-    if skipped > 0:
-        logger.warning(f"{target_date}: Skipped {skipped} records with missing player/status")
-    return inserted
+    return persist_capture(engine, target_date, records, parse_reason, capture_metadata)
 
 
 # --- Main Backfill Logic ---
@@ -285,6 +296,8 @@ def run_backfill(
     end_date: date,
     skip_existing: bool = True,
     dry_run: bool = False,
+    request_dates=None,
+    max_dates: int = 600,
 ) -> dict:
     """
     Run the historical backfill.
@@ -292,13 +305,18 @@ def run_backfill(
     Returns:
         Summary dict with counts.
     """
-    all_dates = generate_date_range(start_date, end_date)
+    all_dates = sorted(set(request_dates)) if request_dates is not None else generate_date_range(start_date, end_date)
+    if not all_dates or max_dates < 1 or len(all_dates) > max_dates:
+        raise ValueError("Requested dates exceed --max-dates or are empty")
+    if not dry_run:
+        require_capture_schema(engine)
     logger.info(f"Backfill range: {start_date} to {end_date} ({len(all_dates)} days)")
 
     # Resume support: skip dates already in DB
     if skip_existing and not dry_run:
-        existing = get_scraped_dates(engine)
-        dates_to_fetch = [d for d in all_dates if d not in existing]
+        existing = get_scraped_dates(engine, min(all_dates), max(all_dates))
+        today_et = datetime.now(ZoneInfo("America/New_York")).date()
+        dates_to_fetch = [d for d in all_dates if d not in existing or d >= today_et]
         skipped = len(all_dates) - len(dates_to_fetch)
         if skipped > 0:
             logger.info(f"Skipping {skipped} dates already in database. {len(dates_to_fetch)} remaining.")
@@ -331,24 +349,19 @@ def run_backfill(
         if records is None:
             logger.error(f"{progress} {target_date}: FAILED")
             stats["errors"] += 1
-            continue
-
-        if len(records) == 0:
-            logger.debug(f"{progress} {target_date}: No injury reports (off-season or no data)")
-            stats["empty_days"] += 1
-            stats["fetched"] += 1
-            continue
+            break
 
         try:
-            inserted = store_records(engine, target_date, records)
+            stored = store_records(engine, target_date, records, capture_metadata=getattr(client, "last_capture", None))
         except Exception as e:
-            logger.error(f"{progress} {target_date}: DB error storing {len(records)} records: {e}")
+            logger.error("%s %s: DB capture failed (%s)", progress, target_date, type(e).__name__)
             stats["errors"] += 1
-            continue
+            break
 
         stats["fetched"] += 1
-        stats["records"] += inserted
-        logger.info(f"{progress} {target_date}: {len(records)} reports, {inserted} new rows")
+        stats["records"] += stored
+        stats["empty_days"] += not records
+        logger.info(f"{progress} {target_date}: {len(records)} observations, {stored} rows upserted; DB checkpoint committed")
 
         # Periodic progress summary
         if (i + 1) % 50 == 0:
@@ -362,6 +375,39 @@ def run_backfill(
 
 
 # --- CLI ---
+
+def import_captures(engine, path, start_date, end_date, *, dry_run=False, skip_existing=True, max_dates=600):
+    """Import the already downloaded captures, without any HTTP requests."""
+    dates, count, invalid, missing = set(), 0, 0, 0
+    for requested, records, metadata in saved_captures(path):
+        if not start_date <= requested <= end_date:
+            continue
+        dates.add(requested)
+        if len(dates) > max_dates:
+            raise ValueError("Capture import exceeds --max-dates")
+        _, metrics = prepare_records(requested, records, parse_reason, metadata)
+        count += len(records)
+        invalid += metrics["invalid_status_count"]
+        missing += metrics["missing_report"]
+    if not dates:
+        raise ValueError("No completed captures selected for import")
+    logger.info("Capture import: %s request dates, %s observations, %s invalid statuses retained as raw evidence, %s missing reports",
+                len(dates), count, invalid, missing)
+    if dry_run:
+        logger.info("DRY RUN: validated captures; zero API requests and zero database access")
+        return {"dates": len(dates), "observations": count, "invalid_statuses": invalid, "missing_reports": missing, "dry_run": True}
+    require_capture_schema(engine)
+    existing = get_scraped_dates(engine, min(dates), max(dates)) if skip_existing else set()
+    stored, processed = 0, 0
+    for requested, records, metadata in saved_captures(path):
+        if requested not in dates or requested in existing:
+            continue
+        stored += store_records(engine, requested, records, capture_metadata=metadata)
+        processed += 1
+        logger.info("Imported %s (%s observations); DB checkpoint committed", requested, len(records))
+    logger.info("DB import complete: %s captures, %s rows upserted; no API calls", processed, stored)
+    return {"captures_imported": processed, "rows_upserted": stored, "api_requests": 0}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -418,6 +464,10 @@ Examples:
             "Production schema changes belong in database migrations."
         ),
     )
+    parser.add_argument("--schema-only", action="store_true", help="With --ensure-schema: apply/read back schema and exit")
+    parser.add_argument("--import-captures", type=Path, help="Import a completed capture manifest/directory into the DB; no API calls")
+    parser.add_argument("--seasons", nargs="+", help="Read historical game dates from the DB, plus D-1; no props filter")
+    parser.add_argument("--max-dates", type=int, default=600, help="Maximum request dates in this invocation (default 600)")
     return parser.parse_args()
 
 
@@ -425,7 +475,7 @@ def main():
     args = parse_args()
 
     api_key = os.getenv("RAPIDAPI_KEY")
-    if not api_key and not args.dry_run:
+    if not api_key and not args.dry_run and not args.import_captures and not args.schema_only:
         logger.error("RAPIDAPI_KEY not found in environment. Add it to your .env file.")
         sys.exit(1)
 
@@ -441,6 +491,13 @@ def main():
         logger.error(f"Start date ({start_date}) is after end date ({end_date}).")
         sys.exit(1)
 
+    if args.max_dates < 1 or args.delay < 1:
+        raise ValueError("--max-dates must be positive and --delay must be at least one second")
+    if args.schema_only and not args.ensure_schema:
+        raise ValueError("--schema-only requires explicit --ensure-schema")
+    if args.import_captures and args.seasons:
+        raise ValueError("Choose saved captures or DB season selection, not both")
+
     logger.info("=" * 70)
     logger.info("RapidAPI NBA Injury Reports - Historical Backfill")
     logger.info(f"  Range: {start_date} to {end_date}")
@@ -451,17 +508,30 @@ def main():
 
     # Initialize. Dry-run intentionally avoids DB connections and API calls so
     # scheduled-command validation cannot mutate schema or consume quota.
-    engine = None if args.dry_run else get_engine()
+    engine = None if args.dry_run and not args.seasons else get_engine()
 
     if args.ensure_schema:
-        if engine is None:
+        if args.dry_run:
             logger.info("Dry run requested; skipping --ensure-schema bootstrap.")
+        elif args.schema_only:
+            ensure_capture_columns(engine)
         else:
             ensure_table(engine)
     elif not args.dry_run:
         logger.info("Skipping schema bootstrap; production schema is managed by database migrations.")
 
-    client = RapidAPIInjuryClient(api_key or "dry-run", delay=args.delay)
+    if args.schema_only:
+        logger.info("Schema preview complete" if args.dry_run else "Schema applied and column readback verified")
+        return
+    if args.import_captures:
+        import_captures(engine, args.import_captures, start_date, end_date,
+                        dry_run=args.dry_run, skip_existing=not args.no_resume, max_dates=args.max_dates)
+        return
+    request_dates = historical_request_dates(engine, args.seasons, start_date, end_date) if args.seasons else None
+    if args.seasons and args.dry_run:
+        logger.info("Season preview used a read-only DB date lookup; no API calls or DB writes")
+
+    client = RapidAPIInjuryClient(api_key or "dry-run", delay=args.delay, max_retries=1)
 
     # Run
     stats = run_backfill(
@@ -471,6 +541,8 @@ def main():
         end_date=end_date,
         skip_existing=not args.no_resume,
         dry_run=args.dry_run,
+        request_dates=request_dates,
+        max_dates=args.max_dates,
     )
 
     # Summary
@@ -489,6 +561,7 @@ def main():
             f"{stats['errors']} dates failed. Re-run the script to retry "
             f"(resume will skip already-fetched dates)."
         )
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

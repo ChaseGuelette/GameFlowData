@@ -86,10 +86,12 @@ Exact contract membership lives in source constants and artifact manifests. Life
 
 ## NCAAB research handoff — documentation only
 
+NBA remains the primary priority. NCAAB is a new parallel design/worktree lane; the [session handoff](ncaab/HANDOFF.md) records the actual checkout state and isolation gate before implementation.
+
 - [General summary and navigation](ncaab/README.md) — men's college basketball research scope and next-session entry point.
 - [Model architecture decision](ncaab/model-architecture-decision.md) — initial tree baseline, market variants, Bayesian and neural proposals.
 - [Data sources](ncaab/data-sources.md) — historical/live SportsDataverse and separate Odds API inputs; KenPom excluded for now.
-- [System architecture overview](ncaab/architecture-overview.md) — seven logical layers, each linked to an intentionally empty specification file.
+- [System architecture and shared contracts](ncaab/architecture-overview.md) — seven fully scoped layer specifications with files, classes, interfaces, proposed tables, lifecycle rules, and acceptance tests.
 
 This owner-requested handoff set does not restore archived NCAAB code or activate a production lane. No ingestion, migration, training, or deployment is authorized by these documents.
 

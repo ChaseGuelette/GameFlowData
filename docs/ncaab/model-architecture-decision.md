@@ -36,11 +36,11 @@ Proposed role in the hybrid: provide team-state estimates and uncertainty summar
 
 Across seasons, examine partial resets and priors informed by verified roster/role/coaching continuity rather than assuming a school is the same team indefinitely. Separate uncertainty about team strength from game-to-game outcome variability. Passing uncertainty summaries into trees does not automatically produce a fully Bayesian posterior predictive distribution.
 
-**Alternative retained:** an integrated Bayesian outcome model could generate its own predictive distributions without a tree downstream. It is a separate challenger, not another mandatory layer.
+**Alternative retained:** an integrated Bayesian outcome model could generate its own predictive distributions without a tree downstream. It is a separate challenger, not another mandatory layer. Layer 4 scopes an inexpensive empirical-Bayes/MAP state estimator with forward filtering first; that approximation must not be described as a full joint Bayesian posterior.
 
 ### 2. Direct distributional boosted-tree predictor
 
-Use pregame team/state/style/context inputs to predict distributions of home-oriented scoring margin and game total, rather than only a point forecast. Quantile/distributional boosting is the proposed starting family; the exact library, output grid, loss, and sampling representation remain to be specified.
+Use pregame team/state/style/context inputs to predict distributions of home-oriented scoring margin and game total, rather than only a point forecast. The v1 design now specifies direct XGBoost quantile regressors, a fixed nine-quantile grid, no conformal offsets, and the versioned marginal sampler in [layer 4](layers/04-training-and-artifact-management.md) and [layer 5](layers/05-prediction-and-betting-decisions.md). These are starting research controls, not empirically selected winners.
 
 Initially, separate margin and total prediction heads are acceptable research baselines. They do not by themselves establish a coherent joint distribution of both scores. Do not use them as if a joint simulation or correlated-market model has already been validated.
 
@@ -127,6 +127,8 @@ Generate historical Bayesian states and other learned intermediate features usin
 
 These lessons were retrieved earlier in the planning discussion from GameFlow's critical-invariants and atomic modeling-lesson pages. They constrain the experiments; they do not establish that any NCAAB architecture is already validated.
 
-## Decisions still needed before implementation
+## Design defaults and remaining gates
 
-Specify the competition universe, odds decision-time/book policy, exact initial feature contract and model objective, validation dates, artifact format, and supported deployment environment. Resolve these in the [seven-layer architecture](architecture-overview.md) and its currently empty layer documents; do not invent existing repository implementations from this proposal.
+The [shared architecture contract](architecture-overview.md) now specifies D1-versus-D1 eligibility, T-60 decisions/T-5 closing reference, the 31/35-field base/aware schemas, fixed quantile/model controls, deterministic sampling, chronological discovery/independent folds, flat-unit decision policy and immutable artifact format. Layer specifications define implementation ownership and tests.
+
+Execution still requires verified classification/source coverage, explicit reference/execution books and book rules, resource/API budgets, schema preflight, durable storage and deployment-host acceptance. These are required operator/evidence inputs, not permission to guess. Moneyline wagers remain disabled until generated zero-margin samples and actual no-tie final outcomes have a validated policy. No layer is implemented or launched by this document.

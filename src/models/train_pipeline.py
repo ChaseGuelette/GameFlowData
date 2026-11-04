@@ -389,6 +389,8 @@ class TrainingOrchestrator:
             'source_policy': source_policy(self.historical_attachment),
             'acquisition_limits': self.acquisition_limits.to_dict() if self.acquisition_limits else None,
         }
+        if 'training_linkage_exclusion' in train_df.attrs:
+            self.execution_provenance['training_linkage_exclusion'] = train_df.attrs['training_linkage_exclusion']
         if self.historical_attachment is not None:
             validate_training_provenance({
                 'training': {**observed_dataframe_provenance(train_df), 'execution': self.execution_provenance},

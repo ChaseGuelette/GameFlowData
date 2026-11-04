@@ -268,7 +268,8 @@ def build_injury_mappings(
     query = text("""
         SELECT player, team, COUNT(*) as row_count
         FROM rapidapi_injuries
-        WHERE player_id IS NULL
+        WHERE (player_id IS NULL OR nba_team_id IS NULL)
+          AND status IN ('Out', 'Doubtful', 'Questionable', 'Probable', 'Available')
         GROUP BY player, team
         ORDER BY COUNT(*) DESC
     """)
@@ -361,10 +362,10 @@ def bulk_update_injuries(
                 params: dict = {"player_text": player_text}
 
                 if player_id is not None:
-                    set_parts.append("player_id = :player_id")
+                    set_parts.append("player_id = COALESCE(player_id, :player_id)")
                     params["player_id"] = player_id
                 if nba_team_id is not None:
-                    set_parts.append("nba_team_id = :nba_team_id")
+                    set_parts.append("nba_team_id = COALESCE(nba_team_id, :nba_team_id)")
                     params["nba_team_id"] = nba_team_id
 
                 if not set_parts:
@@ -381,7 +382,8 @@ def bulk_update_injuries(
                     SET {', '.join(set_parts)}
                     WHERE player = :player_text
                       AND {where_team}
-                      AND player_id IS NULL
+                      AND (player_id IS NULL OR nba_team_id IS NULL)
+                      AND status IN ('Out', 'Doubtful', 'Questionable', 'Probable', 'Available')
                 """
                 result = conn.execute(text(sql), params)
                 batch_updated += result.rowcount
@@ -464,6 +466,56 @@ def backfill_team_from_games(engine, dry_run: bool = False, max_days: int = 30) 
     return updated
 
 
+def backfill_game_ids(engine, *, dry_run=False, batch_size=1000, max_batches=100):
+    """Fill missing game IDs by the source's game date and resolved team.
+
+    An OUT player need not appear in the game: any player-game row establishes
+    the team's fixture. Ambiguous date/team matches remain NULL. Legacy rows
+    without the new date-preserving observations are not reinterpreted.
+    """
+    if not 1 <= batch_size <= 1000 or not 1 <= max_batches <= 1000:
+        raise ValueError("Invalid bounded game-link limits")
+    cursor, total = 0, 0
+    prefix = """
+        WITH targets AS MATERIALIZED (
+            SELECT id, report_date, nba_team_id FROM rapidapi_injuries
+            WHERE id > :cursor AND game_id IS NULL AND nba_team_id IS NOT NULL
+              AND source_observations IS NOT NULL
+              AND status IN ('Out', 'Doubtful', 'Questionable', 'Probable', 'Available')
+            ORDER BY id LIMIT :batch_size
+        ), matches AS (
+            SELECT t.id, MIN(p.game_id) AS game_id
+            FROM targets t JOIN player_game_stats p
+              ON p.game_date = t.report_date AND p.team_id = t.nba_team_id
+            WHERE p.game_id ~ '^[0-9]{10}$'
+            GROUP BY t.id HAVING COUNT(DISTINCT p.game_id) = 1
+        )
+    """
+    write = """, applied AS (
+        UPDATE rapidapi_injuries r SET game_id = m.game_id FROM matches m
+        WHERE r.id = m.id AND r.game_id IS NULL RETURNING r.id
+    )"""
+    count_source = "matches" if dry_run else "applied"
+    sql = prefix + ("" if dry_run else write) + f"""
+        SELECT COALESCE((SELECT MAX(id) FROM targets), :cursor) AS last_id,
+               (SELECT COUNT(*) FROM targets) AS selected,
+               (SELECT COUNT(*) FROM {count_source}) AS matched
+    """
+    for _ in range(max_batches):
+        with engine.begin() as conn:
+            if dry_run:
+                conn.execute(text("SET TRANSACTION READ ONLY"))
+            conn.execute(text("SET LOCAL lock_timeout = '3s'"))
+            conn.execute(text("SET LOCAL statement_timeout = '15s'"))
+            row = conn.execute(text(sql), {"cursor": cursor, "batch_size": batch_size}).mappings().one()
+        total += int(row["matched"])
+        cursor = int(row["last_id"])
+        if int(row["selected"]) < batch_size:
+            logger.info("%sGame-ID links: %s", "DRY RUN: " if dry_run else "", total)
+            return total
+    raise RuntimeError("Game-link batch budget exhausted; rerun with an explicit larger budget if needed")
+
+
 # --- Unmatched Report ---
 
 def write_unmatched_report(unmatched: list[dict], path: Path) -> None:
@@ -531,6 +583,11 @@ Examples:
         default=str(MANUAL_MAPPINGS_PATH),
         help=f"Path to manual player_mappings.csv (default: {MANUAL_MAPPINGS_PATH})",
     )
+    parser.add_argument("--ensure-schema", action="store_true", help="Explicit legacy ID-column bootstrap; never automatic")
+    parser.add_argument("--skip-game-ids", action="store_true", help="Only resolve player/team IDs")
+    parser.add_argument("--unmatched-report", type=Path, help="Optional diagnostic CSV; normal Railway runs use stdout/DB only")
+    parser.add_argument("--game-batch-size", type=int, default=1000)
+    parser.add_argument("--max-game-batches", type=int, default=100)
     return parser.parse_args()
 
 
@@ -544,7 +601,8 @@ def main() -> None:
     logger.info("=" * 70)
     logger.info("RapidAPI Injury Data Linker")
     logger.info("=" * 70)
-    ensure_columns(engine)
+    if args.ensure_schema and not args.dry_run and not args.report_only:
+        ensure_columns(engine)
 
     # 2. Load reference data
     logger.info("Loading reference data...")
@@ -568,7 +626,10 @@ def main() -> None:
                 f"{len(unmatched)} unmatched players")
 
     # 4. Write unmatched report
-    write_unmatched_report(unmatched, UNMATCHED_REPORT_PATH)
+    if args.unmatched_report or args.report_only:
+        write_unmatched_report(unmatched, args.unmatched_report or UNMATCHED_REPORT_PATH)
+    elif unmatched:
+        logger.warning("%s unmatched player names remain unresolved in the DB; optional --unmatched-report writes suggestions", len(unmatched))
 
     if args.report_only:
         logger.info("Report-only mode. Skipping DB updates.")
@@ -579,9 +640,10 @@ def main() -> None:
     total = bulk_update_injuries(engine, mapping, dry_run=args.dry_run)
     logger.info(f"Updated {total:,} rows in rapidapi_injuries.")
 
-    # 6. Backfill missing team IDs from player_game_stats
-    logger.info("Backfilling missing team IDs from game data...")
-    backfill_team_from_games(engine, dry_run=args.dry_run)
+    # 6. Use exact game-date/team identity, not a future/past nearest-team guess.
+    if not args.skip_game_ids:
+        backfill_game_ids(engine, dry_run=args.dry_run,
+                          batch_size=args.game_batch_size, max_batches=args.max_game_batches)
 
     # 7. Verification
     if not args.dry_run:

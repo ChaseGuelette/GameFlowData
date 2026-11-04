@@ -1,9 +1,11 @@
 """Shared historical NBA assembly for native readers and explicit controlled inputs."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import date, datetime, timedelta
 from math import isfinite
+from numbers import Integral
 from types import SimpleNamespace
 
 import pandas as pd
@@ -29,6 +31,8 @@ REQUIRED_FAMILIES = tuple(sorted(NBA_FEATURE_FAMILIES))
 ORDERED_FEATURES = tuple(dict.fromkeys(feature for group in NBA_FEATURE_LISTS.values() for feature in group))
 IDENTIFIERS = ('game_id', 'player_id', 'game_date', 'season_id', 'team_id', 'opponent_id', 'position_group')
 TARGETS = ('actual_minutes', 'actual_pts', 'actual_reb', 'actual_ast', 'actual_threes')
+logger = logging.getLogger(__name__)
+TRAINING_LINKAGE_POLICY = 'exclude_training_games_without_linked_props_v1'
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +176,57 @@ class HistoricalFeatureLoader:
         self.engine = feature_store.engine
         self.config = feature_store.config
 
+    def _filter_training_linkage(self, population, budget):
+        """Filter targets, never their history; quote eligibility is checked later."""
+        identity = ['game_id', 'player_id', 'game_date', 'season_id']
+        if (population[identity].isna().any().any()
+                or population.duplicated(['game_id', 'player_id']).any()
+                or population.groupby('game_id')[['game_date', 'season_id']].nunique().gt(1).any().any()
+                or any(not isinstance(game, str) or not game or game != game.strip()
+                       for game in population['game_id'])
+                or any(isinstance(player, bool) or not isinstance(player, Integral) or player <= 0
+                       for player in population['player_id'])):
+            raise HistoricalPolicyContractError('Invalid/duplicate training population identity before linkage exclusion')
+        games = sorted(population['game_id'].unique())
+        linked = set()
+        query = text('''SELECT candidate.game_id
+                        FROM unnest(CAST(:game_ids AS text[])) AS candidate(game_id)
+                        WHERE EXISTS (
+                            SELECT 1 FROM raw_player_props_combined props
+                            WHERE props.game_id = candidate.game_id AND props.player_id IS NOT NULL
+                        )''')
+        for start in range(0, len(games), 100):
+            batch = games[start:start + 100]
+            with self.engine.connect() as conn:
+                transaction = conn.begin()
+                try:
+                    conn.execute(text("SELECT set_config('statement_timeout', :timeout, true)"),
+                                 {'timeout': str(budget.limits.population_timeout_ms)})
+                    found = set(conn.execute(query, {'game_ids': batch}).scalars().all())
+                    if not found <= set(batch):
+                        raise HistoricalPolicyContractError('Unexpected game identity in training linkage lookup')
+                    linked.update(found)
+                finally:
+                    transaction.rollback()
+        missing = population[~population['game_id'].isin(linked)]
+        retained = population[population['game_id'].isin(linked)].copy()
+        excluded = [(game, player, 'no_linked_player_props') for game, player in
+                    missing[['game_id', 'player_id']].itertuples(index=False, name=None)]
+        receipt = {
+            'policy_id': TRAINING_LINKAGE_POLICY,
+            'source': 'raw_player_props_combined',
+            'candidate_games': len(games), 'candidate_rows': len(population),
+            'retained_games': len(linked), 'retained_rows': len(retained),
+            'excluded_games': len(games) - len(linked), 'excluded_rows': len(missing),
+            'games': [{'game_id': game, 'game_date': rows.iloc[0]['game_date'].isoformat(),
+                       'season_id': rows.iloc[0]['season_id'], 'player_game_rows': len(rows)}
+                      for game, rows in missing.groupby('game_id', sort=True)],
+        }
+        logger.info('Training linkage exclusion: %s/%s games, %s/%s player-game rows removed',
+                    receipt['excluded_games'], receipt['candidate_games'],
+                    receipt['excluded_rows'], receipt['candidate_rows'])
+        return retained, excluded, receipt
+
     def load(self, request):
         policy = request.historical_policy
         if not isinstance(policy, HistoricalPolicy):
@@ -274,6 +329,14 @@ class HistoricalFeatureLoader:
                     transaction.rollback()
         if budget is not None:
             budget.consume(population)
+        population_count = len(population)
+        population_dates = {(game, player): day.date() if isinstance(day, datetime) else day
+                            for game, player, day in
+                            population[['game_id', 'player_id', 'game_date']].itertuples(index=False, name=None)}
+        linkage_excluded, linkage_receipt = [], None
+        if (isinstance(request, TrainingFeatureRequest) and request.historical_role == 'training'
+                and not request.controlled_historical_evidence):
+            population, linkage_excluded, linkage_receipt = self._filter_training_linkage(population, budget)
         input_evidence = request.historical_evidence
         if not request.controlled_historical_evidence:
             from src.models.features.nba.historical_sources import PostgresHistoricalSources
@@ -288,7 +351,7 @@ class HistoricalFeatureLoader:
                 reason = f'missing source metadata field: {exc.args[0]}' if isinstance(exc, KeyError) else str(exc)
                 raise HistoricalFeatureBlockedError((HistoricalBlock(
                     policy.content_id, None, None, 'native_historical_sources', 'all', reason,
-                ),), population_count=len(population)) from None
+                ),), population_count=population_count, excluded=linkage_excluded) from None
         for item in input_evidence:
             if not isinstance(item, HistoricalPlayerEvidence):
                 raise HistoricalPolicyContractError('invalid historical player evidence')
@@ -300,8 +363,8 @@ class HistoricalFeatureLoader:
             contexts[item.context.game_id] = item.context
             register_sources(item)
             evidence[key] = item
-        blocks, excluded, output, ledger = [], [], [], []
-        population_dates, used_evidence = {}, set()
+        blocks, excluded, output, ledger = [], list(linkage_excluded), [], []
+        used_evidence = set()
         seen = set()
         for row in population.to_dict('records'):
             key = (row['game_id'], row['player_id'])
@@ -358,11 +421,13 @@ class HistoricalFeatureLoader:
                 blocks.extend(exc.blocks)
                 ledger.append((key, exc.ledger))
         if blocks:
-            raise HistoricalFeatureBlockedError(blocks, population_count=len(population), excluded=excluded, ledger=ledger)
+            raise HistoricalFeatureBlockedError(blocks, population_count=population_count, excluded=excluded, ledger=ledger)
         frame = pd.DataFrame(output, columns=[*IDENTIFIERS, *ORDERED_FEATURES, *TARGETS,
                                                'pts_per_min', 'reb_per_min', 'ast_per_min', 'threes_per_min',
                                                'historical_policy_content_id', 'historical_lineage'])
-        frame.attrs['historical_accounting'] = {'population': len(population), 'ready': len(frame), 'excluded': tuple(excluded)}
+        frame.attrs['historical_accounting'] = {'population': population_count, 'ready': len(frame), 'excluded': tuple(excluded)}
+        if linkage_receipt is not None:
+            frame.attrs['training_linkage_exclusion'] = linkage_receipt
         frame.attrs['historical_policy_content_id'] = policy.content_id
         if budget is not None:
             frame.attrs['acquisition_limits'] = budget.limits.to_dict()
