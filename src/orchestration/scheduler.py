@@ -54,7 +54,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -78,7 +78,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Job display names for alerts
 JOB_NAMES = {
-    "daily_stats_job.py": "Daily Stats",
+    "daily_stats_job.py": "Daily Stats (Basic Only)",
     "nba_schedule_job.py": "NBA Schedule Refresh",
     "lines_job.py": "Lines Scraper",
     "inference_job.py": "Inference",
@@ -209,6 +209,58 @@ def check_dependency(upstream_job: str, max_age_hours: float = 8) -> bool:
         logger.warning(f"Failed to check job_executions for {upstream_job}: {e}")
 
     return False
+
+
+def check_nba_advanced_readiness() -> tuple[bool, str]:
+    """Require a successful local advanced producer through the current source target."""
+    try:
+        from sqlalchemy import text
+
+        from src.db.client import get_engine
+        from src.orchestration.daily_stats_job import (
+            count_missing_advanced_pairs,
+            latest_completed_source_date,
+        )
+        from src.scrapers.nba_unified_scraper import current_nba_season_label, season_label_to_id
+
+        season_id = season_label_to_id(current_nba_season_label())
+        engine = get_engine()
+        through_date = latest_completed_source_date(engine, season_id)
+        if through_date is None:
+            return False, "no completed NBA source target date exists"
+
+        with engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ ONLY"))
+            conn.execute(text("SET LOCAL statement_timeout = '10s'"))
+            recorded = conn.execute(
+                text("""
+                    SELECT metrics->>'through_date'
+                    FROM job_executions
+                    WHERE job_name = 'nba_advanced_stats_job.py'
+                      AND status = 'success'
+                      AND metrics ? 'through_date'
+                      AND metrics->>'season_id' = :season_id
+                    ORDER BY ended_at DESC
+                    LIMIT 1
+                """),
+                {"season_id": season_id},
+            ).scalar_one_or_none()
+
+        if not recorded:
+            return False, "no successful nba_advanced_stats_job.py readiness record exists"
+        try:
+            recorded_date = date.fromisoformat(recorded)
+        except ValueError:
+            return False, f"latest advanced readiness record has invalid through_date={recorded!r}"
+        if recorded_date < through_date:
+            return False, f"advanced producer is stale ({recorded_date} < source target {through_date})"
+
+        missing = count_missing_advanced_pairs(engine, season_id, through_date)
+        if missing:
+            return False, f"{missing} raw advanced player/team pairs are missing through {through_date}"
+        return True, f"advanced producer verified through {through_date}"
+    except Exception as exc:
+        return False, f"advanced readiness check failed: {type(exc).__name__}: {exc}"
 
 
 def _parse_metrics_from_output(script_name: str, stdout: str, stderr: str) -> dict | None:
@@ -353,6 +405,8 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
         silent_on_success: If True, skip Discord alerts on success (still alert on failure).
         timeout: Subprocess timeout in seconds (default 2700 = 45 min).
     """
+    if script_name == "daily_stats_job.py" and not extra_args:
+        extra_args = "--basic-only"
     script_path = PROJECT_ROOT / "src" / "orchestration" / script_name
     cmd = [sys.executable, str(script_path)] + (shlex.split(extra_args) if extra_args else [])
     logger.info(f"Starting job: {script_name}{' ' + extra_args if extra_args else ''}")
@@ -572,7 +626,7 @@ def run_lines_props_only():
 
 
 def run_inference(skip_bets: bool = False):
-    """Run inference, checking if daily stats succeeded first."""
+    """Run inference only when basic stats and local advanced readiness are current."""
     extra_parts = []
     if skip_bets:
         extra_parts.append("--skip-bets")
@@ -596,9 +650,41 @@ def run_inference(skip_bets: bool = False):
             ),
         )
         stale_extra = f"--stale-warning {extra}".strip()
-        run_job("inference_job.py", extra_args=stale_extra)
     else:
-        run_job("inference_job.py", extra_args=extra) if extra else run_job("inference_job.py")
+        stale_extra = extra
+
+    advanced_ready, advanced_reason = check_nba_advanced_readiness()
+    if not advanced_ready:
+        message = (
+            "NBA inference blocked pending current advanced stats: "
+            f"{advanced_reason}. Run scripts\\run_advanced_scraper.bat locally."
+        )
+        logger.error(message)
+        _send_job_alert(
+            "inference_job.py",
+            success=False,
+            duration=0,
+            stdout="",
+            stderr=message,
+        )
+        now = datetime.now(UTC)
+        JOB_STATUS["inference_job.py"] = {
+            "status": "skipped",
+            "end_time": now,
+            "duration": 0.0,
+        }
+        record_job_execution(
+            job_name="inference_job.py",
+            started_at=now,
+            status="skipped",
+            duration=0.0,
+            error_message=message,
+            metrics={"blocked_dependency": "nba_advanced_stats_job.py"},
+        )
+        return
+
+    logger.info("NBA advanced readiness satisfied: %s", advanced_reason)
+    run_job("inference_job.py", extra_args=stale_extra) if stale_extra else run_job("inference_job.py")
 
 
 def run_edge_refresh():

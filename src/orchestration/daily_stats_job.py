@@ -11,7 +11,7 @@ This job:
 4. Does NOT scrape odds or run inference (separate jobs)
 
 Usage:
-    python src/orchestration/daily_stats_job.py [--dry-run] [--skip-resolution]
+    python src/orchestration/daily_stats_job.py [--dry-run] [--skip-resolution] [--skip-linker] [--basic-only]
 
 Examples:
     # Normal run
@@ -495,7 +495,9 @@ def count_missing_advanced_pairs(engine, season_id: str, through_date: date) -> 
              AND tgs.game_date::date < CURRENT_DATE
              AND (tgs.possessions IS NULL OR tgs.offensive_rating IS NULL OR tgs.pace IS NULL))
     """)
-    with engine.connect() as conn:
+    with engine.begin() as conn:
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        conn.execute(text("SET LOCAL statement_timeout = '15s'"))
         return int(conn.execute(query, {"season_id": season_id, "through_date": through_date}).scalar_one())
 
 
@@ -508,7 +510,9 @@ def latest_completed_source_date(engine, season_id: str) -> date | None:
           AND game_id LIKE ANY (ARRAY['002%', '004%', '005%'])
           AND game_date::date < CURRENT_DATE
     """)
-    with engine.connect() as conn:
+    with engine.begin() as conn:
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        conn.execute(text("SET LOCAL statement_timeout = '10s'"))
         return conn.execute(query, {"season_id": season_id}).scalar_one()
 
 
@@ -547,6 +551,12 @@ def main():
     )
     parser.add_argument("--dry-run", action="store_true", help="Show commands; do not access DB/API or write")
     parser.add_argument("--skip-resolution", action="store_true", help="Skip paper/user/DFS resolution and calibration")
+    parser.add_argument("--skip-linker", action="store_true", help="Skip bounded props linking; source/derived checks remain active")
+    parser.add_argument(
+        "--basic-only",
+        action="store_true",
+        help="Run CDN/basic catch-up and bounded props linking; omit advanced-dependent derived stages",
+    )
     parser.add_argument(
         "--max-catchup-dates",
         type=int,
@@ -589,10 +599,16 @@ def main():
             "[DRY RUN] BASIC catch-up dates/season/coverage are runtime-discovered: UNKNOWN; "
             "no database planning query was executed"
         )
-        logger.info(
-            "[DRY RUN] ADVANCED coverage gate is runtime-discovered: UNKNOWN; "
-            "advanced-dependent stages would run only after complete possession coverage"
-        )
+        if args.basic_only:
+            logger.info(
+                "[DRY RUN] BASIC-ONLY mode omits the advanced coverage gate and all "
+                "advanced-dependent derived stages; this does not establish advanced readiness"
+            )
+        else:
+            logger.info(
+                "[DRY RUN] ADVANCED coverage gate is runtime-discovered: UNKNOWN; "
+                "advanced-dependent stages would run only after complete possession coverage"
+            )
     elif scrape_ok:
         try:
             from src.db.client import get_engine
@@ -646,73 +662,81 @@ def main():
                 # The bounded durable linker below owns game-specific team fills.
                 # Do not run the legacy date-scan/latest-team backfill here.
 
-                through_date = latest_completed_source_date(engine, season_id)
-                if through_date is None:
-                    fail("ADVANCED-DEPENDENT STAGES BLOCKED: no completed source target date")
-                    missing_advanced = 0
+                if args.basic_only:
+                    logger.info(
+                        "BASIC-ONLY scope complete: advanced coverage and advanced-dependent "
+                        "derived stages intentionally omitted; advanced readiness is unchanged"
+                    )
                 else:
-                    missing_advanced = count_missing_advanced_pairs(engine, season_id, through_date)
-                if through_date is not None and missing_advanced:
-                    fail(
-                        f"ADVANCED-DEPENDENT STAGES DEFERRED/BLOCKED: {missing_advanced} played "
-                        f"player-game pairs through {through_date} lack advanced possessions"
-                    )
-                elif success and through_date is not None:
-                    advanced_dates, _ = discover_advanced_catchup(
-                        engine, season_id, through_date, args.max_catchup_dates
-                    )
-                    for target_date in advanced_dates:
-                        if not run_command(
-                            [python, "src/processing/populate_average_stats_incremental.py", "--date", target_date.isoformat()],
-                            f"Populating Verified Advanced Rolling Averages for {target_date}",
-                            timeout=1200, max_retries=2,
-                        ):
-                            fail(last_command_error or f"Advanced rolling averages failed for {target_date}")
-                            break
-                    _, remaining_advanced = discover_advanced_catchup(
-                        engine, season_id, through_date, args.max_catchup_dates
-                    )
-                    if remaining_advanced:
-                        fail(f"ADVANCED rolling catch-up INCOMPLETE: {remaining_advanced} dates still lack outputs")
-                    advanced_steps: list[tuple[list[str], str, bool, int, int]] = [
-                        (
-                            [python, "src/scrapers/update_player_position_history.py"],
-                            "Updating Player Position History",
-                            True,
-                            300,
-                            0,
-                        ),
-                        (
-                            [python, "src/scrapers/update_league_position_averages.py"],
-                            "Updating League Position Averages",
-                            True,
-                            300,
-                            0,
-                        ),
-                        (
-                            [python, "src/processing/backfill_opponent_allowed_incremental.py", "--days-back", "2"],
-                            "Updating Opponent Allowed Stats (Incremental)",
-                            True,
-                            900,
-                            2,
-                        ),
-                    ]
-                    for command, description, critical, timeout, retries in advanced_steps:
-                        if not success:
-                            break
-                        if not run_command(
-                            command,
-                            description,
-                            timeout=timeout,
-                            max_retries=retries,
-                        ):
-                            message = last_command_error or f"{description} failed"
-                            if critical:
-                                fail(message)
+                    through_date = latest_completed_source_date(engine, season_id)
+                    if through_date is None:
+                        fail("ADVANCED-DEPENDENT STAGES BLOCKED: no completed source target date")
+                        missing_advanced = 0
+                    else:
+                        missing_advanced = count_missing_advanced_pairs(engine, season_id, through_date)
+                    if through_date is not None and missing_advanced:
+                        fail(
+                            f"ADVANCED-DEPENDENT STAGES DEFERRED/BLOCKED: {missing_advanced} played "
+                            f"player-game pairs through {through_date} lack advanced possessions"
+                        )
+                    elif success and through_date is not None:
+                        advanced_dates, _ = discover_advanced_catchup(
+                            engine, season_id, through_date, args.max_catchup_dates
+                        )
+                        for target_date in advanced_dates:
+                            if not run_command(
+                                [python, "src/processing/populate_average_stats_incremental.py", "--date", target_date.isoformat()],
+                                f"Populating Verified Advanced Rolling Averages for {target_date}",
+                                timeout=1200, max_retries=2,
+                            ):
+                                fail(last_command_error or f"Advanced rolling averages failed for {target_date}")
                                 break
-                            logger.warning("Non-critical step failed: %s", message)
+                        _, remaining_advanced = discover_advanced_catchup(
+                            engine, season_id, through_date, args.max_catchup_dates
+                        )
+                        if remaining_advanced:
+                            fail(f"ADVANCED rolling catch-up INCOMPLETE: {remaining_advanced} dates still lack outputs")
+                        advanced_steps: list[tuple[list[str], str, bool, int, int]] = [
+                            (
+                                [python, "src/scrapers/update_player_position_history.py"],
+                                "Updating Player Position History",
+                                True,
+                                300,
+                                0,
+                            ),
+                            (
+                                [python, "src/scrapers/update_league_position_averages.py"],
+                                "Updating League Position Averages",
+                                True,
+                                300,
+                                0,
+                            ),
+                            (
+                                [python, "src/processing/backfill_opponent_allowed_incremental.py", "--days-back", "2"],
+                                "Updating Opponent Allowed Stats (Incremental)",
+                                True,
+                                900,
+                                2,
+                            ),
+                        ]
+                        for command, description, critical, timeout, retries in advanced_steps:
+                            if not success:
+                                break
+                            if not run_command(
+                                command,
+                                description,
+                                timeout=timeout,
+                                max_retries=retries,
+                            ):
+                                message = last_command_error or f"{description} failed"
+                                if critical:
+                                    fail(message)
+                                    break
+                                logger.warning("Non-critical step failed: %s", message)
                 # Linking is independent of advanced availability and always bounded.
-                if not run_command(
+                if args.skip_linker:
+                    logger.info("Props linking intentionally skipped by --skip-linker")
+                elif not run_command(
                     [python, "src/processing/nba_linker_local.py", "incremental", "--resume", "--repair-game-conflicts",
                      "--batch-size", "500", "--max-batches", "20"],
                     "Linking Props (Bounded Durable Resume)", timeout=600,
@@ -732,7 +756,13 @@ def main():
     elapsed = time.time() - start_time
     logger.info("=" * 60)
     if success:
-        logger.info(f"DAILY STATS JOB COMPLETED SUCCESSFULLY ({elapsed:.1f}s)")
+        if args.basic_only:
+            logger.info(
+                f"DAILY STATS BASIC-ONLY JOB COMPLETED SUCCESSFULLY ({elapsed:.1f}s); "
+                "advanced readiness was not established"
+            )
+        else:
+            logger.info(f"DAILY STATS JOB COMPLETED SUCCESSFULLY ({elapsed:.1f}s)")
     else:
         logger.error(f"DAILY STATS JOB FAILED ({elapsed:.1f}s)")
         logger.error("FIRST FAILURE (retained for scheduler stderr tail): %s", first_failure)

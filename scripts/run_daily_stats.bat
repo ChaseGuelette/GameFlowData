@@ -1,5 +1,5 @@
 @echo off
-REM GameFlowData - Daily Stats Job
+REM GameFlowData - Basic Daily Stats (advanced chain has a separate owner)
 REM Run once daily (6 AM ET) after previous night's games are final
 REM ================================================================
 
@@ -26,7 +26,8 @@ if errorlevel 1 (
 
 REM Run the job
 echo [%date% %time%] Starting Daily Stats Job... >> %LOG_FILE%
-python src/orchestration/daily_stats_job.py
+set "PYTHONUTF8=1"
+python src/orchestration/daily_stats_job.py --basic-only --skip-linker
 set EXIT_CODE=%errorlevel%
 
 if %EXIT_CODE% EQU 0 (

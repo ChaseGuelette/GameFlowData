@@ -17,7 +17,7 @@ echo === Advanced Stats Scraper started at %date% %time% ===>>"%LOG_FILE%"
 set "PROXY_ARGS=--no-proxy"
 if /I "%NBA_ADVANCED_USE_PROXY%"=="true" set "PROXY_ARGS=--use-proxy"
 if /I "%NBA_ADVANCED_NO_PROXY%"=="true" set "PROXY_ARGS=--no-proxy"
-"%PYTHON%" -X utf8 "src\scrapers\nba_unified_scraper.py" --season current --advanced-limit 120 --request-timeout 30 --max-retries 2 --http-client curl %PROXY_ARGS% --skip-team --skip-traditional >>"%LOG_FILE%" 2>&1
+"%PYTHON%" -X utf8 "src\orchestration\nba_advanced_stats_job.py" --advanced-limit 120 --request-timeout 30 --max-retries 2 --http-client curl %PROXY_ARGS% >>"%LOG_FILE%" 2>&1
 set "ADV_EXIT=%ERRORLEVEL%"
 echo === Advanced Stats Scraper finished at %date% %time% with exit code %ADV_EXIT% ===>>"%LOG_FILE%"
 if not "%ADV_EXIT%"=="0" (
@@ -25,6 +25,6 @@ if not "%ADV_EXIT%"=="0" (
   exit /b %ADV_EXIT%
 )
 
-echo === Advanced complete; mirror sync is a separate owner-launched step ===>>"%LOG_FILE%"
+echo === Advanced source and strict derived chain complete; mirror sync remains separate ===>>"%LOG_FILE%"
 popd
 exit /b %ADV_EXIT%
