@@ -30,7 +30,7 @@ class ImprovedFeatureSelector:
 
     def select_features_per_quantile(
         self, df: pd.DataFrame, target_col: str, candidate_cols: list[str], model_name: str = "Model",
-        *, date_column: str | None = None,
+        *, date_column: str | None = None, allow_missing_features: bool = False,
     ) -> dict[float, list[str]]:
         """
         Run feature selection independently for each quantile.
@@ -44,7 +44,8 @@ class ImprovedFeatureSelector:
         if "game_date" in df.columns:
             df = df.sort_values("game_date").reset_index(drop=True)
 
-        valid_data = df.dropna(subset=[target_col] + candidate_cols).copy()
+        required = [target_col] if allow_missing_features else [target_col] + candidate_cols
+        valid_data = df.dropna(subset=required).copy()
 
         if valid_data.empty:
             logger.warning(f"No valid data for {model_name}. Skipping.")

@@ -6,6 +6,11 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, text
 
+from src.models.features.nba.injury_context import (
+    empty_training_injury_rows,
+    empty_training_team_injury_aggregation,
+    load_training_injury_rows,
+)
 from src.models.features.nba.requests import TrainingFeatureRequest
 
 
@@ -48,10 +53,35 @@ class TrainingFeatureLoader:
         # --- Injury features (loaded separately for performance) ---
         inj_start = time.time()
         print("  Loading injury context features ...")
-        game_dates = df["game_date"].tolist()
+        for required_column in (
+            "game_id", "player_id", "team_id", "opponent_id", "commence_time_utc"
+        ):
+            if required_column not in df.columns:
+                df[required_column] = pd.NA
+        df["injury_cutoff_utc"] = pd.to_datetime(
+            df["commence_time_utc"], errors="coerce", utc=True
+        ) - pd.Timedelta(minutes=60)
+        supported_report_times = getattr(
+            self.feature_store, "training_injury_report_times", {}
+        )
+        team_contexts = pd.concat([
+            df[["game_id", "game_date", "team_id", "injury_cutoff_utc"]].rename(
+                columns={"team_id": "nba_team_id"}
+            ),
+            df[["game_id", "game_date", "opponent_id", "injury_cutoff_utc"]].rename(
+                columns={"opponent_id": "nba_team_id"}
+            ),
+        ], ignore_index=True).drop_duplicates(["game_id", "nba_team_id"])
+
+        selected_player_statuses, injury_accounting = load_training_injury_rows(
+            self.engine, team_contexts, supported_report_times
+        )
+        # The retained reports contain listed players, not proof of a complete
+        # team edition. Absence-based team/opponent/position aggregates remain unknown.
+        team_inj = empty_training_team_injury_aggregation()
+        inj_per_player = empty_training_injury_rows()
 
         # Team/opponent injury aggregations
-        team_inj, inj_per_player = self._load_injury_features_bulk(game_dates)
         if not team_inj.empty:
             # Merge for teammate injuries (team_id -> team_out_*)
             team_inj_renamed = team_inj.rename(columns={
@@ -62,36 +92,39 @@ class TrainingFeatureLoader:
             })
             df = df.merge(
                 team_inj_renamed,
-                left_on=["team_id", "game_date"],
-                right_on=["_inj_team_id", "_inj_date"],
+                left_on=["game_id", "team_id"],
+                right_on=["game_id", "_inj_team_id"],
                 how="left",
             ).drop(columns=["_inj_team_id", "_inj_date"], errors="ignore")
 
             # Merge for opponent injuries (opponent_id -> opp_out_*)
-            opp_inj_renamed = team_inj[["nba_team_id", "report_date", "out_count", "out_min_sum"]].rename(columns={
+            opp_inj_renamed = team_inj[["game_id", "nba_team_id", "report_date", "out_count", "out_min_sum"]].rename(columns={
                 "nba_team_id": "_inj_team_id", "report_date": "_inj_date",
                 "out_count": "opp_out_count", "out_min_sum": "opp_out_min_sum",
             })
             df = df.merge(
                 opp_inj_renamed,
-                left_on=["opponent_id", "game_date"],
-                right_on=["_inj_team_id", "_inj_date"],
+                left_on=["game_id", "opponent_id"],
+                right_on=["game_id", "_inj_team_id"],
                 how="left",
             ).drop(columns=["_inj_team_id", "_inj_date"], errors="ignore")
         else:
             for col in ["team_out_count", "team_out_min_sum", "team_out_pts_sum",
                          "team_out_reb_sum", "team_out_ast_sum", "team_out_usg_sum",
                          "opp_out_count", "opp_out_min_sum"]:
-                df[col] = 0
+                df[col] = np.nan
 
         # Position-matched injury features: aggregate OUT teammates in same position group
         if not inj_per_player.empty and "position_group" in df.columns:
-            pos_inj = inj_per_player[inj_per_player["inj_position_group"].notna()].copy()
+            pos_inj = inj_per_player[
+                inj_per_player["inj_position_group"].notna()
+                & inj_per_player["inj_status"].eq("Out")
+            ].copy()
             if not pos_inj.empty:
                 # Compute starter_prob for each injured player (same formula as feature_store)
                 pos_inj["_starter_prob"] = (pos_inj["games_started_l5"].fillna(0) / 5.0).clip(0, 1)
                 pos_agg = pos_inj.groupby(
-                    ["nba_team_id", "report_date", "inj_position_group"]
+                    ["game_id", "nba_team_id", "report_date", "inj_position_group"]
                 ).agg(
                     same_pos_out_count=("inj_player_id", "nunique"),
                     same_pos_out_min_sum=("avg_min_l5", lambda x: np.nansum(x)),
@@ -109,38 +142,59 @@ class TrainingFeatureLoader:
                 })
                 df = df.merge(
                     pos_agg_renamed,
-                    left_on=["team_id", "game_date", "position_group"],
-                    right_on=["_inj_team_id", "_inj_date", "_inj_pos"],
+                    left_on=["game_id", "team_id", "position_group"],
+                    right_on=["game_id", "_inj_team_id", "_inj_pos"],
                     how="left",
                 ).drop(columns=["_inj_team_id", "_inj_date", "_inj_pos"], errors="ignore")
+                accepted_team_games = team_inj[["game_id", "nba_team_id"]].drop_duplicates()
+                df = df.merge(
+                    accepted_team_games.assign(_accepted_team_snapshot=True),
+                    left_on=["game_id", "team_id"], right_on=["game_id", "nba_team_id"], how="left",
+                ).drop(columns=["nba_team_id"], errors="ignore")
+                for col in ["team_out_same_pos_count", "team_out_same_pos_min_sum",
+                            "team_out_same_pos_usg_sum", "team_out_same_pos_starter_sum"]:
+                    df[col] = df[col].where(
+                        df[col].notna() | ~df["_accepted_team_snapshot"].eq(True), 0.0
+                    )
+                df.drop(columns=["_accepted_team_snapshot"], inplace=True)
             else:
-                df["team_out_same_pos_count"] = 0
-                df["team_out_same_pos_min_sum"] = 0
-                df["team_out_same_pos_usg_sum"] = 0
-                df["team_out_same_pos_starter_sum"] = 0
+                accepted_team_games = team_inj[["game_id", "nba_team_id"]].drop_duplicates()
+                df = df.merge(
+                    accepted_team_games.assign(_accepted_team_snapshot=True),
+                    left_on=["game_id", "team_id"], right_on=["game_id", "nba_team_id"], how="left",
+                ).drop(columns=["nba_team_id"], errors="ignore")
+                for col in ["team_out_same_pos_count", "team_out_same_pos_min_sum",
+                            "team_out_same_pos_usg_sum", "team_out_same_pos_starter_sum"]:
+                    df[col] = np.where(df["_accepted_team_snapshot"].eq(True), 0.0, np.nan)
+                df.drop(columns=["_accepted_team_snapshot"], inplace=True)
         else:
-            df["team_out_same_pos_count"] = 0
-            df["team_out_same_pos_min_sum"] = 0
-            df["team_out_same_pos_usg_sum"] = 0
-            df["team_out_same_pos_starter_sum"] = 0
+            df["team_out_same_pos_count"] = np.nan
+            df["team_out_same_pos_min_sum"] = np.nan
+            df["team_out_same_pos_usg_sum"] = np.nan
+            df["team_out_same_pos_starter_sum"] = np.nan
 
         # Player injury status
-        player_inj = self._load_player_injury_status_bulk(game_dates)
+        player_inj = selected_player_statuses.rename(
+            columns={"inj_player_id": "player_id"}
+        )
         if not player_inj.empty:
             df = df.merge(
-                player_inj.rename(columns={"report_date": "_inj_date"}),
-                left_on=["player_id", "game_date"],
-                right_on=["player_id", "_inj_date"],
+                player_inj[["game_id", "player_id", "inj_status"]],
+                on=["game_id", "player_id"],
                 how="left",
-            ).drop(columns=["_inj_date"], errors="ignore")
-            df["player_is_questionable"] = (df["inj_status"] == "Questionable").astype(int)
-            df["player_is_probable"] = (df["inj_status"] == "Probable").astype(int)
+            )
+            has_status = df["inj_status"].notna()
+            df["player_is_questionable"] = np.where(
+                has_status, (df["inj_status"] == "Questionable").astype(float), np.nan
+            )
+            df["player_is_probable"] = np.where(
+                has_status, (df["inj_status"] == "Probable").astype(float), np.nan
+            )
             df.drop(columns=["inj_status"], inplace=True, errors="ignore")
         else:
-            df["player_is_questionable"] = 0
-            df["player_is_probable"] = 0
+            df["player_is_questionable"] = np.nan
+            df["player_is_probable"] = np.nan
 
-        # Fill any NaN injury features with 0
         injury_cols = [
             "team_out_count", "team_out_min_sum", "team_out_pts_sum",
             "team_out_reb_sum", "team_out_ast_sum", "team_out_usg_sum",
@@ -149,8 +203,14 @@ class TrainingFeatureLoader:
             "team_out_same_pos_count", "team_out_same_pos_min_sum",
             "team_out_same_pos_usg_sum", "team_out_same_pos_starter_sum",
         ]
-        for col in injury_cols:
-            df[col] = df[col].fillna(0)
+        unknown_rows = int(df[injury_cols].isna().all(axis=1).sum())
+        print(
+            "  Injury availability: "
+            "aggregate_team_games=0 (completeness unknown), "
+            f"accepted_player_items={injury_accounting.get('accepted_items', 0)}, "
+            f"fully_unknown_rows={unknown_rows}/{len(df)}; "
+            f"status_accounting={injury_accounting}"
+        )
 
         inj_elapsed = time.time() - inj_start
         print(f"  Injury features merged in {inj_elapsed:.1f}s")
@@ -185,6 +245,7 @@ class TrainingFeatureLoader:
                 -- Identifiers
                 pgs.game_id, pgs.player_id, pgs.game_date::date, pgs.season_id,
                 pgs.team_id, tgs.opponent_id,
+                schedule.commence_time_utc,
 
                 -- Target Variables
                 pgs.min as actual_minutes,
@@ -309,6 +370,8 @@ class TrainingFeatureLoader:
             FROM player_game_stats pgs
             JOIN team_game_stats tgs
                 ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
+            LEFT JOIN public.nba_game_schedule schedule
+                ON schedule.game_id = pgs.game_id
 
             -- Position
             LEFT JOIN LATERAL (

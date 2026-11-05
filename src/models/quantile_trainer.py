@@ -66,6 +66,25 @@ STAT_FEATURES = {
 }
 
 
+def _is_injury_context_feature(feature: str) -> bool:
+    return (
+        feature.startswith(("team_out_", "opp_out_"))
+        or feature in {"player_is_questionable", "player_is_probable"}
+    )
+
+
+def prepare_quantile_features(
+    df: pd.DataFrame,
+    feature_names: list[str] | tuple[str, ...] | None = None,
+) -> pd.DataFrame:
+    """Prepare ordered XGBoost inputs without erasing unavailable injury context."""
+    columns = list(feature_names) if feature_names is not None else list(df.columns)
+    prepared = df.loc[:, columns].copy().apply(pd.to_numeric, errors="coerce")
+    imputed = [column for column in prepared.columns if not _is_injury_context_feature(column)]
+    prepared.loc[:, imputed] = prepared.loc[:, imputed].fillna(0)
+    return prepared
+
+
 class QuantileModelSuite:
     """
     Trains and manages a suite of quantile regression models.
@@ -110,10 +129,14 @@ class QuantileModelSuite:
 
         Returns dict of {quantile: validation_loss}.
         """
+        if X.empty or y.empty:
+            raise ValueError("Cannot fit quantile models with an empty training population")
+
+        prepared_X = prepare_quantile_features(X)
         self.feature_names_per_quantile = feature_names_per_quantile
 
         # Split for early stopping (preserve temporal order)
-        arrays = [X, y]
+        arrays = [prepared_X, y]
         if sample_weight is not None:
             arrays.append(sample_weight)
 
@@ -208,10 +231,11 @@ class QuantileModelSuite:
         Returns dict: {quantile: [{train_size, fraction, train_coverage, val_coverage}, ...]}
         """
         train_sizes = train_sizes or np.linspace(0.1, 1.0, 5)
+        prepared_X = prepare_quantile_features(X)
 
         # Split for evaluation (Preserve temporal order)
         X_train, X_val, y_train, y_val = train_test_split(
-            X,
+            prepared_X,
             y,
             test_size=self.config.val_fraction,
             shuffle=False,
@@ -277,7 +301,7 @@ class QuantileModelSuite:
 
         for q, model in self.models.items():
             q_features = self.feature_names_per_quantile[q]
-            X_q = X[q_features]
+            X_q = prepare_quantile_features(X, q_features)
             # validate_features=False works around pandas 3.0 compat issue
             # where XGBoost DMatrix can't extract feature names from the new
             # str-typed Index. Feature order is guaranteed correct by the caller.
@@ -392,7 +416,7 @@ class PlayerPropsModelPipeline:
 
         # Filter to valid rows
         valid_mask = df["actual_minutes"] > 0
-        X = df.loc[valid_mask, available_features].fillna(0)
+        X = prepare_quantile_features(df.loc[valid_mask], available_features)
         y = df.loc[valid_mask, "actual_minutes"]
 
         print(f"Training on {len(X):,} samples")
@@ -461,7 +485,7 @@ class PlayerPropsModelPipeline:
             rate_col = f"{stat}_per_min"
             valid_mask = df[rate_col].notna() & (df["actual_minutes"] >= 10)
 
-            X = df.loc[valid_mask, available_features].fillna(0)
+            X = prepare_quantile_features(df.loc[valid_mask], available_features)
             y = df.loc[valid_mask, rate_col]
 
             w = None

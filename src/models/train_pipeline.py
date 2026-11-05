@@ -37,7 +37,7 @@ from src.models.nba_artifacts import (
     validate_artifact_bundle,
 )
 from src.models.nba_training_chronology import chronology_proof, validate_populations, validate_seasons
-from src.models.quantile_trainer import PlayerPropsModelPipeline
+from src.models.quantile_trainer import PlayerPropsModelPipeline, prepare_quantile_features
 from src.models.training_preflight import (
     validate_existing_directory,
     validate_finite_number,
@@ -509,13 +509,13 @@ class TrainingOrchestrator:
 
             if retrain_minutes:
                 logger.info("Tuning Minutes Model...")
-                minutes_df = train_df[train_df["actual_minutes"] > 0].copy()
+                minutes_df: pd.DataFrame = train_df.loc[train_df["actual_minutes"] > 0].copy()
                 minutes_features = pipeline.minutes_features
                 if isinstance(minutes_features, dict):
                     all_features = list(set(f for feats in minutes_features.values() for f in feats))
                 else:
                     all_features = minutes_features
-                X = minutes_df[all_features].fillna(0)
+                X = prepare_quantile_features(minutes_df, all_features)
                 y = minutes_df["actual_minutes"]
                 if self.tuning_per_quantile:
                     configs = tuner.tune_per_quantile(X, y, dates=minutes_df['game_date'])
@@ -528,13 +528,15 @@ class TrainingOrchestrator:
                 for stat in retrain_stats:
                     logger.info(f"Tuning {stat.upper()} Rate Model...")
                     target = f"{stat}_per_min"
-                    rate_df = train_df[(train_df["actual_minutes"] >= 10) & (train_df[target].notna())].copy()
+                    rate_df: pd.DataFrame = train_df.loc[
+                        (train_df["actual_minutes"] >= 10) & train_df[target].notna()
+                    ].copy()
                     rate_features = pipeline.rate_features.get(stat, {})
                     if isinstance(rate_features, dict):
                         all_features = list(set(f for feats in rate_features.values() for f in feats))
                     else:
                         all_features = rate_features
-                    X = rate_df[all_features].fillna(0)
+                    X = prepare_quantile_features(rate_df, all_features)
                     y = rate_df[target]
                     if self.tuning_per_quantile:
                         configs = tuner.tune_per_quantile(X, y, dates=rate_df['game_date'])
@@ -611,7 +613,7 @@ class TrainingOrchestrator:
 
         # Tune Minutes Model
         logger.info("Tuning Minutes Model...")
-        minutes_df = df[df["actual_minutes"] > 0].copy()
+        minutes_df: pd.DataFrame = df.loc[df["actual_minutes"] > 0].copy()
         minutes_features = feature_config["minutes_features"]
 
         # For per-quantile features, use the union of all features for tuning
@@ -620,7 +622,7 @@ class TrainingOrchestrator:
         else:
             all_minutes_features = minutes_features
 
-        X_minutes = minutes_df[all_minutes_features].fillna(0)
+        X_minutes = prepare_quantile_features(minutes_df, all_minutes_features)
         y_minutes = minutes_df["actual_minutes"]
 
         if self.tuning_per_quantile:
@@ -634,7 +636,9 @@ class TrainingOrchestrator:
         for stat in ["pts", "reb", "ast"]:
             logger.info(f"Tuning {stat.upper()} Rate Model...")
             target = f"{stat}_per_min"
-            rate_df = df[(df["actual_minutes"] >= 10) & (df[target].notna())].copy()
+            rate_df: pd.DataFrame = df.loc[
+                (df["actual_minutes"] >= 10) & df[target].notna()
+            ].copy()
 
             rate_features = feature_config[f"{stat}_rate_features"]
             if isinstance(rate_features, dict):
@@ -642,7 +646,7 @@ class TrainingOrchestrator:
             else:
                 all_rate_features = rate_features
 
-            X_rate = rate_df[all_rate_features].fillna(0)
+            X_rate = prepare_quantile_features(rate_df, all_rate_features)
             y_rate = rate_df[target]
 
             if self.tuning_per_quantile:
@@ -669,21 +673,27 @@ class TrainingOrchestrator:
         logger.info("Selecting Minutes features (per quantile)...")
         target = "actual_minutes"
         candidates = get_candidate_columns(df, target)
-        minutes_df = df[df["actual_minutes"] > 0].fillna(0)
+        minutes_df: pd.DataFrame = df.loc[df["actual_minutes"] > 0].copy()
+        minutes_df.loc[:, candidates] = prepare_quantile_features(minutes_df, candidates)
 
         features["minutes_features"] = selector.select_features_per_quantile(
-            minutes_df, target, candidates, model_name="Minutes", date_column='game_date'
+            minutes_df, target, candidates, model_name="Minutes", date_column='game_date',
+            allow_missing_features=True,
         )
 
         # Rate Stats
         for stat in ["pts", "reb", "ast"]:
             logger.info(f"Selecting {stat.upper()} features (per quantile)...")
             target = f"{stat}_per_min"
-            rate_df = df[(df["actual_minutes"] >= 10) & (df[target].notna())].fillna(0)
+            rate_df: pd.DataFrame = df.loc[
+                (df["actual_minutes"] >= 10) & df[target].notna()
+            ].copy()
             candidates = get_candidate_columns(rate_df, target)
+            rate_df.loc[:, candidates] = prepare_quantile_features(rate_df, candidates)
 
             features[f"{stat}_rate_features"] = selector.select_features_per_quantile(
-                rate_df, target, candidates, model_name=f"{stat.upper()} Rate", date_column='game_date'
+                rate_df, target, candidates, model_name=f"{stat.upper()} Rate", date_column='game_date',
+                allow_missing_features=True,
             )
 
         return features
@@ -700,19 +710,25 @@ class TrainingOrchestrator:
             logger.info("Selecting Minutes features (per quantile)...")
             target = "actual_minutes"
             candidates = get_candidate_columns(df, target)
-            minutes_df = df[df["actual_minutes"] > 0].fillna(0)
+            minutes_df: pd.DataFrame = df.loc[df["actual_minutes"] > 0].copy()
+            minutes_df.loc[:, candidates] = prepare_quantile_features(minutes_df, candidates)
             features["minutes_features"] = selector.select_features_per_quantile(
-                minutes_df, target, candidates, model_name="Minutes", date_column='game_date'
+                minutes_df, target, candidates, model_name="Minutes", date_column='game_date',
+                allow_missing_features=True,
             )
 
         if retrain_stats:
             for stat in retrain_stats:
                 logger.info(f"Selecting {stat.upper()} features (per quantile)...")
                 target = f"{stat}_per_min"
-                rate_df = df[(df["actual_minutes"] >= 10) & (df[target].notna())].fillna(0)
+                rate_df: pd.DataFrame = df.loc[
+                    (df["actual_minutes"] >= 10) & df[target].notna()
+                ].copy()
                 candidates = get_candidate_columns(rate_df, target)
+                rate_df.loc[:, candidates] = prepare_quantile_features(rate_df, candidates)
                 features[f"{stat}_rate_features"] = selector.select_features_per_quantile(
-                    rate_df, target, candidates, model_name=f"{stat.upper()} Rate", date_column='game_date'
+                    rate_df, target, candidates, model_name=f"{stat.upper()} Rate", date_column='game_date',
+                    allow_missing_features=True,
                 )
 
         return features
@@ -816,7 +832,7 @@ class TrainingOrchestrator:
         filtered = df[filter_mask].copy().reset_index(drop=True)
 
         # Use the model's all_feature_names property
-        X = filtered[model.all_feature_names].fillna(0)
+        X = prepare_quantile_features(filtered, model.all_feature_names)
         y_actual = filtered[actual_col].values
 
         if X.empty:

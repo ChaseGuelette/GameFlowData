@@ -7,8 +7,11 @@ semantics while moving injury source ownership out of the god-class facade.
 
 from __future__ import annotations
 
+import json
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time
 from math import isfinite
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -275,6 +278,55 @@ def player_injury_status_bulk_query() -> TextClause:
     """)
 
 
+def training_injury_raw_rows_query() -> TextClause:
+    """Build bounded raw injury rows for chronology-safe training enrichment."""
+    return text("""
+        SELECT
+            ri.id as injury_row_id,
+            ri.nba_team_id,
+            ri.report_date,
+            ri.player_id as inj_player_id,
+            ri.player as inj_player_name,
+            ri.team as inj_team_name,
+            ri.status as inj_status,
+            ri.reason as inj_reason,
+            ri.source_observations,
+            pags_l.avg_min_l5,
+            pags_l.avg_pts_l5,
+            pags_l.avg_reb_l5,
+            pags_l.avg_ast_l5,
+            pags_l.games_started_l5,
+            paas_l.avg_usg_pct_l5,
+            pph.position_group as inj_position_group
+        FROM rapidapi_injuries ri
+        LEFT JOIN LATERAL (
+            SELECT avg_min_l5, avg_pts_l5, avg_reb_l5, avg_ast_l5, games_started_l5
+            FROM player_average_game_stats
+            WHERE player_id = ri.player_id
+              AND game_date < ri.report_date
+            ORDER BY game_date DESC LIMIT 1
+        ) pags_l ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT avg_usg_pct_l5
+            FROM player_average_advanced_stats
+            WHERE player_id = ri.player_id
+              AND game_date < ri.report_date
+            ORDER BY game_date DESC LIMIT 1
+        ) paas_l ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT position_group
+            FROM player_position_history
+            WHERE player_id = ri.player_id
+              AND snapshot_date < ri.report_date
+            ORDER BY snapshot_date DESC LIMIT 1
+        ) pph ON TRUE
+        WHERE ri.player_id IS NOT NULL
+          AND ri.nba_team_id IS NOT NULL
+          AND ri.report_date = ANY(:dates)
+        ORDER BY ri.report_date, ri.nba_team_id, ri.player_id, ri.id
+    """)
+
+
 TEAM_INJURY_AGG_COLUMNS = [
     "nba_team_id",
     "report_date",
@@ -307,6 +359,237 @@ def aggregate_team_injury_features(inj_df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
 
 
+def _provider_observations(
+    row: Mapping,
+    supported_report_times: Mapping[str, time],
+) -> tuple[list[dict], Counter]:
+    """Parse explicitly supported provider clocks; retrieval time is provenance only."""
+    counts: Counter = Counter()
+    observations = row.get("source_observations")
+    if isinstance(observations, str):
+        try:
+            observations = json.loads(observations)
+        except (TypeError, ValueError):
+            observations = None
+    if not isinstance(observations, dict):
+        counts["missing_or_invalid_observation"] += 1
+        return [], counts
+
+    parsed: list[dict] = []
+    for capture_id, observation in observations.items():
+        if not isinstance(observation, dict):
+            counts["missing_or_invalid_observation"] += 1
+            continue
+        requested_raw = observation.get("requested_date")
+        try:
+            requested_date = date.fromisoformat(requested_raw)
+        except (TypeError, ValueError):
+            counts["missing_or_invalid_observation"] += 1
+            continue
+        records = observation.get("records")
+        if not isinstance(records, list):
+            counts["unsupported_payload"] += 1
+            continue
+        for record in records:
+            raw = record.get("raw") if isinstance(record, dict) else None
+            if not isinstance(raw, dict):
+                counts["unsupported_payload"] += 1
+                continue
+            label = raw.get("reportTime")
+            mapped_time = supported_report_times.get(label) if isinstance(label, str) else None
+            if not isinstance(mapped_time, time) or mapped_time.tzinfo is None:
+                counts["unsupported_report_time"] += 1
+                continue
+            provider_at = datetime.combine(requested_date, mapped_time)
+            if provider_at.utcoffset() is None:
+                counts["unsupported_report_time"] += 1
+                continue
+            raw_date = raw.get("date")
+            try:
+                payload_date = date.fromisoformat(raw_date)
+            except (TypeError, ValueError):
+                counts["unsupported_payload"] += 1
+                continue
+            parsed.append({
+                "provider_at": pd.Timestamp(provider_at).tz_convert("UTC"),
+                "requested_date": requested_date,
+                "payload_date": payload_date,
+                "capture_id": str(capture_id),
+                "capture_sha256": str(observation.get("capture_sha256") or ""),
+                "record_ordinal": record.get("ordinal"),
+                "retrieved_at_utc": observation.get("retrieved_at_utc"),
+                "raw_status": raw.get("status"),
+                "raw_report_time": label,
+                "raw_player": raw.get("player"),
+                "raw_team": raw.get("team"),
+                "raw_reason": raw.get("reason"),
+            })
+    return parsed, counts
+
+
+def _normalise_game_contexts(game_contexts) -> pd.DataFrame:
+    if isinstance(game_contexts, list | tuple | set) and all(
+        not isinstance(value, Mapping) for value in game_contexts
+    ):
+        # Compatibility for the old private FeatureStore wrappers: dates alone
+        # have no game/team/cutoff authority, so they can only produce unknowns.
+        values = list(game_contexts)
+        if not values:
+            return pd.DataFrame(columns=[
+                "game_id", "game_date", "nba_team_id", "injury_cutoff_utc"
+            ])
+        return pd.DataFrame({
+            "game_id": [pd.NA] * len(values),
+            "game_date": pd.to_datetime(values, errors="coerce").date,
+            "nba_team_id": [pd.NA] * len(values),
+            "injury_cutoff_utc": [pd.NaT] * len(values),
+        })
+    contexts = pd.DataFrame(game_contexts).copy()
+    required = {"game_id", "game_date", "nba_team_id", "injury_cutoff_utc"}
+    if contexts.empty:
+        return pd.DataFrame(columns=sorted(required))
+    missing = required.difference(contexts.columns)
+    if missing:
+        raise ValueError(f"Missing injury game context columns: {sorted(missing)}")
+    contexts["game_date"] = pd.to_datetime(contexts["game_date"], errors="coerce").dt.date
+    contexts["injury_cutoff_utc"] = pd.to_datetime(
+        contexts["injury_cutoff_utc"], errors="coerce", utc=True
+    )
+    return contexts.drop_duplicates(["game_id", "nba_team_id"])
+
+
+TRAINING_SELECTED_INJURY_COLUMNS = [
+    "injury_row_id", "nba_team_id", "report_date", "inj_player_id",
+    "inj_player_name", "inj_team_name", "inj_status", "inj_reason",
+    "source_observations", "avg_min_l5", "avg_pts_l5", "avg_reb_l5",
+    "avg_ast_l5", "games_started_l5", "avg_usg_pct_l5",
+    "inj_position_group", "game_id", "game_date", "injury_cutoff_utc",
+    "provider_at", "requested_date", "payload_date", "capture_id",
+    "capture_sha256", "record_ordinal", "retrieved_at_utc", "raw_status",
+    "raw_report_time", "raw_player", "raw_team", "raw_reason",
+]
+
+
+def empty_training_injury_rows() -> pd.DataFrame:
+    """Return the explicit schema for chronology-selected training rows."""
+    return pd.DataFrame(columns=TRAINING_SELECTED_INJURY_COLUMNS)
+
+
+def empty_training_team_injury_aggregation() -> pd.DataFrame:
+    """Return unknown ordinary-training aggregates with a stable merge schema."""
+    return pd.DataFrame(columns=["game_id", *TEAM_INJURY_AGG_COLUMNS])
+
+
+def _same_source_value(left, right) -> bool:
+    """Compare retained flat identity fields to their nested raw record."""
+    left_missing = left is None or (not isinstance(left, (list, dict)) and pd.isna(left))
+    right_missing = right is None or (not isinstance(right, (list, dict)) and pd.isna(right))
+    if left_missing or right_missing:
+        return left_missing and right_missing
+    return left == right
+
+
+def _source_identity_value(value):
+    if value is None or (not isinstance(value, (list, dict)) and pd.isna(value)):
+        return None
+    return value
+
+
+def _select_training_injury_rows(
+    raw_rows: pd.DataFrame,
+    game_contexts,
+    supported_report_times: Mapping[str, time] | None,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Select explicit statuses from each team's latest eligible report edition."""
+    contexts = _normalise_game_contexts(game_contexts)
+    counts: Counter = Counter()
+    if contexts.empty or raw_rows.empty:
+        counts["no_accepted_snapshot"] += len(contexts)
+        return empty_training_injury_rows(), dict(counts)
+    supported = supported_report_times or {}
+    if not isinstance(supported, Mapping):
+        raise ValueError("supported_report_times must be an explicit mapping")
+    candidates: list[dict] = []
+    rows_by_date: dict[date, list[dict]] = {}
+    for row in raw_rows.to_dict("records"):
+        report_date = pd.to_datetime(row.get("report_date"), errors="coerce")
+        if pd.isna(report_date):
+            counts["unsupported_payload"] += 1
+            continue
+        rows_by_date.setdefault(report_date.date(), []).append(row)
+
+    for context in contexts.to_dict("records"):
+        cutoff = context.get("injury_cutoff_utc")
+        if pd.isna(cutoff):
+            counts["missing_cutoff"] += 1
+            continue
+        team_rows = [
+            row for row in rows_by_date.get(context["game_date"], [])
+            if row.get("nba_team_id") == context["nba_team_id"]
+        ]
+        for row in team_rows:
+            observations, rejected = _provider_observations(row, supported)
+            counts.update(rejected)
+            for observation in observations:
+                # The retained raw payload must identify this exact game date. Adjacent-day
+                # requests are accepted, but older/future request routing is not guessed.
+                day_gap = (context["game_date"] - observation["requested_date"]).days
+                if observation["payload_date"] != context["game_date"] or day_gap not in (0, 1):
+                    counts["unsupported_payload"] += 1
+                    continue
+                if observation["provider_at"] > cutoff:
+                    counts["after_cutoff"] += 1
+                    continue
+                if not all((
+                    _same_source_value(row.get("inj_status"), observation["raw_status"]),
+                    _same_source_value(row.get("inj_reason"), observation["raw_reason"]),
+                    _same_source_value(row.get("inj_player_name"), observation["raw_player"]),
+                    _same_source_value(row.get("inj_team_name"), observation["raw_team"]),
+                )):
+                    counts["identity_mismatch"] += 1
+                    continue
+                candidate = dict(row)
+                candidate.update(context)
+                candidate.update(observation)
+                candidates.append(candidate)
+
+    if not candidates:
+        counts["no_accepted_snapshot"] += len(contexts)
+        return empty_training_injury_rows(), dict(counts)
+
+    candidate_df = pd.DataFrame(candidates)
+    selected: list[pd.DataFrame] = []
+    for _, team_group in candidate_df.groupby(
+        ["game_id", "nba_team_id"], dropna=False, sort=True
+    ):
+        latest_at = team_group["provider_at"].max()
+        latest_team = team_group[team_group["provider_at"] == latest_at]
+        counts["latest_team_editions"] += 1
+        for _, player_group in latest_team.groupby("inj_player_id", dropna=False, sort=True):
+            signatures = set(zip(
+                [_source_identity_value(value) for value in player_group["inj_status"]],
+                [_source_identity_value(value) for value in player_group["inj_reason"]],
+                [_source_identity_value(value) for value in player_group["inj_player_name"]],
+                [_source_identity_value(value) for value in player_group["inj_team_name"]],
+            ))
+            if len(signatures) != 1:
+                counts["conflicting_latest_status"] += 1
+                continue
+            selected.append(player_group.iloc[[-1]])
+    if not selected:
+        counts["no_accepted_snapshot"] += len(contexts)
+        return empty_training_injury_rows(), dict(counts)
+    result = pd.concat(selected, ignore_index=True).reindex(
+        columns=TRAINING_SELECTED_INJURY_COLUMNS
+    )
+    counts["accepted_items"] += len(result)
+    counts["accepted_games"] += result["game_id"].nunique()
+    accepted_team_games = result[["game_id", "nba_team_id"]].drop_duplicates()
+    counts["accepted_status_team_games"] += len(accepted_team_games)
+    counts["no_accepted_snapshot"] += max(len(contexts) - len(accepted_team_games), 0)
+    return result, dict(counts)
+
+
 def load_injury_features_bulk(engine, game_dates: list) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Pre-aggregate injury features for all (team, date) pairs in one pass."""
     with engine.connect() as conn:
@@ -327,6 +610,23 @@ def load_player_injury_status_bulk(engine, game_dates: list) -> pd.DataFrame:
             conn,
             params={"dates": list(set(game_dates))},
         )
+
+
+def load_training_injury_rows(
+    engine,
+    game_contexts,
+    supported_report_times: Mapping[str, time] | None = None,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Load explicit latest-edition statuses; aggregate completeness stays unknown."""
+    contexts = _normalise_game_contexts(game_contexts)
+    dates = sorted({value for value in contexts["game_date"] if value is not None})
+    with engine.connect() as conn:
+        raw = pd.read_sql(
+            training_injury_raw_rows_query(),
+            conn,
+            params={"dates": dates},
+        )
+    return _select_training_injury_rows(raw, contexts, supported_report_times)
 
 
 def get_injury_context(

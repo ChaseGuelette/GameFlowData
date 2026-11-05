@@ -11,6 +11,7 @@ import pandas as pd
 from scipy.stats import norm as sp_norm
 
 from src.config.combo_config import COMBO_DEFINITIONS
+from src.models.quantile_trainer import prepare_quantile_features
 
 if TYPE_CHECKING:
     pass  # Type imports removed with THREES model archival
@@ -514,13 +515,11 @@ class MonteCarloPredictor:
         present = [f for f in feature_names if f in features_df.columns]
         missing = [f for f in feature_names if f not in features_df.columns]
 
-        df = features_df[present].copy()
+        df: pd.DataFrame = features_df.loc[:, present].copy()
         for col in missing:
-            df[col] = 0
+            df[col] = np.nan
 
-        df = df[feature_names]
-        df = df.apply(pd.to_numeric, errors="coerce").fillna(0).astype(np.float32)
-        return df
+        return prepare_quantile_features(df, feature_names).astype(np.float32)
 
     def _apply_variance_inflation(
         self,
@@ -819,10 +818,9 @@ class MonteCarloPredictor:
 
     def _prepare_features(self, features: dict, feature_names: list[str]) -> pd.DataFrame:
         """Prepare feature dict as DataFrame for model input."""
-        row = {f: features.get(f, 0) for f in feature_names}
+        row = {f: features.get(f, np.nan) for f in feature_names}
         df = pd.DataFrame([row])
-        df = df.apply(pd.to_numeric, errors="coerce").fillna(0).astype(np.float32)
-        return df
+        return prepare_quantile_features(df, feature_names).astype(np.float32)
 
     def batch_predict(self, player_games: list[tuple[int, str, dict]], stats: list[str] = None) -> pd.DataFrame:
         """
