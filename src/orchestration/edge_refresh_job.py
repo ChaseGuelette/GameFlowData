@@ -35,9 +35,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
-from sqlalchemy import bindparam, create_engine, text  # noqa: E402
+from sqlalchemy import create_engine, text  # noqa: E402
 
-from src.config.combo_config import MARKET_TO_STAT, STAT_TO_MARKET  # noqa: E402
+from src.config.combo_config import MARKET_TO_STAT  # noqa: E402
 from src.models.black_litterman import BlackLittermanBlender, BLConfig  # noqa: E402
 from src.models.daily_runner import should_skip_recommendation  # noqa: E402
 from src.models.monte_carlo import derive_combo_samples  # noqa: E402
@@ -93,96 +93,14 @@ def _odds_to_prob(odds):
 
 
 def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataFrame:
-    """Fetch sharpest prop lines from nba_player_props_inference.
+    """Use the same coherent compact-quote reader as initial inference."""
+    from src.models.daily_runner import DailyPredictionRunner
 
-    Replicates the query from DailyPredictionRunner._get_current_lines()
-    without needing to instantiate the full runner.
-    """
-    markets = [STAT_TO_MARKET[s] for s in stats if s in STAT_TO_MARKET]
-    if not game_ids or not markets:
-        return pd.DataFrame()
-
-    # Search both 8-digit and 10-digit game_ids (mixed formats in DB)
-    game_ids_10digit = [g.zfill(10) for g in game_ids]
-    game_ids_8digit = [g.lstrip("0") for g in game_ids]
-    all_game_ids = list(set(game_ids_10digit + game_ids_8digit))
-
-    query = text("""
-        WITH eligible AS (
-            SELECT
-                player_id,
-                game_id,
-                bookmaker,
-                market_key,
-                line,
-                outcome_label,
-                odds_american,
-                source_snapshot_time AS quote_snapshot
-            FROM nba_player_props_inference
-            WHERE game_id IN :game_ids
-              AND market_key IN :markets
-              AND player_id IS NOT NULL
-              AND observed_at >= NOW() - interval '48 hours'
-              AND observed_at <= NOW()
-              AND source_snapshot_time <= NOW()
-              AND observed_at < commence_time
-              AND (market_last_update IS NULL OR market_last_update < commence_time)
-              AND (bookmaker_last_update IS NULL OR bookmaker_last_update < commence_time)
-        ), paired AS (
-            SELECT
-                player_id,
-                game_id,
-                bookmaker,
-                market_key,
-                line,
-                quote_snapshot,
-                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
-                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds
-            FROM eligible
-            GROUP BY player_id, game_id, bookmaker, market_key, line, quote_snapshot
-            HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
-               AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
-        ), ranked_lines AS (
-            SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY player_id, game_id, market_key, bookmaker, line
-                ORDER BY quote_snapshot DESC
-            ) AS pair_rn
-            FROM paired
-        )
-        SELECT
-            player_id,
-            LPAD(game_id, 10, '0') as game_id,
-            bookmaker,
-            market_key,
-            line,
-            over_odds,
-            under_odds
-        FROM ranked_lines
-        WHERE pair_rn = 1
-    """).bindparams(
-        bindparam("game_ids", expanding=True),
-        bindparam("markets", expanding=True),
-    )
-
-    with engine.connect() as conn:
-        all_lines = pd.read_sql(query, conn, params={"game_ids": all_game_ids, "markets": list(markets)})
-
-    if all_lines.empty:
-        return all_lines
-
-    # Select sharpest book (lowest vig) per player/game/market
-    all_lines["_raw_over"] = all_lines["over_odds"].apply(_odds_to_prob)
-    all_lines["_raw_under"] = all_lines["under_odds"].apply(_odds_to_prob)
-    all_lines["_booksum"] = all_lines["_raw_over"] + all_lines["_raw_under"]
-    all_lines = all_lines.dropna(subset=["_booksum"])
-
-    idx = all_lines.groupby(["player_id", "game_id", "market_key"])["_booksum"].idxmin()
-    best_lines = all_lines.loc[idx].drop(columns=["_raw_over", "_raw_under", "_booksum"])
-
-    # Map market_key to stat
-    best_lines["stat"] = best_lines["market_key"].map(MARKET_TO_STAT)
-
-    return best_lines.reset_index(drop=True)
+    runner = DailyPredictionRunner(engine, None, None, None)
+    lines = runner._get_current_lines([{"game_id": g} for g in game_ids], stats)
+    if not lines.empty:
+        lines["stat"] = lines["market_key"].map(MARKET_TO_STAT)
+    return lines
 
 
 def detect_stale_predictions(
@@ -283,7 +201,11 @@ def _get_cached_pipeline_and_predictor():
     t0 = time.perf_counter()
 
     # feature_store=None is fine — only used for training, not prediction
+    from src.paper_trading.nba_paper_entry import artifact_snapshot
+
+    artifact = artifact_snapshot(model_path)
     pipeline = PlayerPropsModelPipeline.load_all(str(model_path), None)
+    setattr(pipeline, "paper_artifact", artifact)
 
     copula_params = load_copula_params(str(model_path))
     cal_offsets = load_combined_calibration_offsets(str(model_path))
@@ -293,6 +215,8 @@ def _get_cached_pipeline_and_predictor():
         copula_params=copula_params,
         combined_calibration_offsets=cal_offsets,
     )
+    if artifact_snapshot(model_path) != artifact:
+        raise RuntimeError("Model artifact changed while loading models/calibration")
 
     logger.info(f"Pipeline loaded in {time.perf_counter() - t0:.1f}s")
 
@@ -376,8 +300,10 @@ def reinfer_stale_players(
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     from src.models.feature_store import FeatureStore
+    from src.paper_trading.nba_paper_entry import bind_model_samples, model_snapshot
 
     t0 = time.perf_counter()
+    bind_model_samples(predictions_df, samples_dict, verify=True)
 
     # 1. Get unique (player_id, game_id) pairs and stale stats
     player_games = list({(pid, gid) for pid, gid, _ in stale_keys})
@@ -460,7 +386,7 @@ def reinfer_stale_players(
     logger.info(f"Built features for {len(features_df)} players in {time.perf_counter() - t0:.1f}s")
 
     # 4. Run batch prediction (XGBoost + MC sampling)
-    _, predictor = _get_cached_pipeline_and_predictor()
+    pipeline, predictor = _get_cached_pipeline_and_predictor()
     new_preds_list, new_samples = predictor.predict_batch_for_date(features_df, stats=stale_stats)
 
     if not new_samples:
@@ -475,6 +401,9 @@ def reinfer_stale_players(
 
     # 6. Update predictions_df with new quantile values + fresh prop_line
     new_preds_df = pd.DataFrame(new_preds_list)
+    snapshot = model_snapshot(getattr(pipeline, "paper_artifact"), n_samples=predictor.n_samples)
+    if "model_snapshot" not in predictions_df:
+        predictions_df["model_snapshot"] = None
     quantile_cols = [
         "pred_mean", "pred_std", "pred_median",
         "pred_q10", "pred_q25", "pred_q50", "pred_q75", "pred_q90",
@@ -487,6 +416,8 @@ def reinfer_stale_players(
             & (predictions_df["stat"] == new_row["stat"])
         )
         if mask.any():
+            for idx in predictions_df.index[mask]:
+                predictions_df.at[idx, "model_snapshot"] = snapshot
             for col in quantile_cols:
                 if col in new_row:
                     predictions_df.loc[mask, col] = new_row[col]
@@ -518,7 +449,21 @@ def reinfer_stale_players(
     if combo_samps:
         logger.info(f"Re-derived {len(combo_samps)} combo sample arrays")
 
+    # Combos may combine refreshed and retained samples from different bundles.
+    # Capture each actual component; never relabel all as the loaded model.
+    from src.paper_trading.nba_settlement import COMPONENTS
+
+    sources = {(r['player_id'], r['game_id'], r['stat']): r['model_snapshot']
+               for r in predictions_df.to_dict('records') if r['stat'] in ('pts', 'reb', 'ast')}
+    for idx, row in predictions_df.iterrows():
+        if (row['player_id'], row['game_id'], row['stat']) in combo_samps:
+            predictions_df.at[idx, 'model_snapshot'] = {'components': {
+                stat: sources.get((row['player_id'], row['game_id'], stat))
+                for stat in COMPONENTS[str(row['stat'])]
+            }}
+
     # 8. Persist updated samples + predictions to DB
+    bind_model_samples(predictions_df, {**new_samples, **combo_samps})
     store.store_samples(new_samples, target_date)
     if combo_samps:
         store.store_samples(combo_samps, target_date)
@@ -542,6 +487,10 @@ def recalculate_edges(
     """
     df = predictions_df.copy()
 
+    from src.paper_trading.nba_paper_entry import bind_model_samples
+
+    bind_model_samples(df, samples_dict, verify=True)
+
     # Preserve old line columns so we can fall back when fresh lines are missing
     line_preserve_cols = ["line", "over_odds", "under_odds", "bookmaker"]
     old_lines = {}
@@ -551,7 +500,7 @@ def recalculate_edges(
 
     # Drop old line/edge/BL columns — we'll recalculate them
     edge_cols = [
-        "line", "over_odds", "under_odds", "bookmaker",
+        "line", "over_odds", "under_odds", "bookmaker", "quote_snapshot",
         "over_prob", "under_prob", "implied_over", "implied_under",
         "over_edge", "under_edge",
         "bl_over_prob", "bl_under_prob", "bl_over_edge", "bl_under_edge",
@@ -561,7 +510,7 @@ def recalculate_edges(
 
     # Merge fresh lines
     merge_cols = ["player_id", "game_id", "stat"]
-    line_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds", "bookmaker"]
+    line_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds", "bookmaker", "quote_snapshot"]
     available_line_cols = [c for c in line_cols if c in lines_df.columns]
     df = df.merge(lines_df[available_line_cols], on=merge_cols, how="left")
 
@@ -684,6 +633,12 @@ def recalculate_edges(
         f"{recommended_count} recommended (edge >= {DEFAULT_BL_EDGE_THRESHOLD*100:.0f}%)"
     )
 
+    from src.paper_trading.nba_paper_entry import annotate_quote_decisions
+
+    annotate_quote_decisions(df, samples_dict, {
+        'tau': DEFAULT_BL_TAU, 'z_max': DEFAULT_BL_Z_MAX,
+        'max_weight': DEFAULT_BL_MAX_WEIGHT, 'edge_threshold': DEFAULT_BL_EDGE_THRESHOLD,
+    })
     return df
 
 
@@ -1196,7 +1151,7 @@ def main():
                         f"({res['total_won']}W {res['total_lost']}L {res['total_push']}P)"
                     )
 
-                # Place / update paper bets for today's predictions
+                # Freeze first eligible paper entries; accepted terms never change.
                 logger.info("Placing paper bets on recommended predictions...")
                 bets = trader.select_bets(target_date)
                 if bets:
@@ -1205,7 +1160,8 @@ def main():
                 else:
                     logger.info("No predictions meet edge threshold for paper bets")
             except Exception as e:
-                logger.warning(f"Paper trading step failed: {e} (non-fatal)")
+                logger.error(f"Paper trading step failed: {e}")
+                raise
 
         # 8. Export CSV backup
         output_dir = Path("predictions")

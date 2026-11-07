@@ -49,15 +49,7 @@ logger = logging.getLogger("ResolveUserPaperBets")
 
 # Mapping from stat_type → (source_table, sql_expression_for_actual_value)
 STAT_TO_SOURCE: dict[str, tuple[str, str]] = {
-    # NBA
-    "pts": ("player_game_stats", "pts"),
-    "reb": ("player_game_stats", "reb"),
-    "ast": ("player_game_stats", "ast"),
-    "pra": ("player_game_stats", "pts + reb + ast"),
-    "pr": ("player_game_stats", "pts + reb"),
-    "pa": ("player_game_stats", "pts + ast"),
-    "ra": ("player_game_stats", "reb + ast"),
-    # MLB
+    # MLB only; NBA entrypoints delegate to nba_settlement.
     "pitcher_strikeouts": ("mlb_player_game_stats_pitching", "so"),
     "batter_hits": ("mlb_player_game_stats_batting", "h"),
     "batter_rbis": ("mlb_player_game_stats_batting", "rbi"),
@@ -77,7 +69,7 @@ def compute_pnl(stake: float, odds: float, outcome: str) -> float:
         return 0.0
 
 
-def resolve_paper_bets(dry_run: bool = False) -> dict:
+def _resolve_mlb_paper_bets(dry_run: bool = False) -> dict:
     """Main resolution logic."""
     from sqlalchemy import text
 
@@ -94,6 +86,7 @@ def resolve_paper_bets(dry_run: bool = False) -> dict:
                        odds_at_bet, stake
                 FROM user_bets
                 WHERE is_paper_trade = true
+                  AND stat_type IN ('pitcher_strikeouts', 'batter_hits', 'batter_rbis')
                   AND status = 'pending'
                   AND game_date <= :yesterday
                   AND player_id IS NOT NULL
@@ -216,6 +209,25 @@ def resolve_paper_bets(dry_run: bool = False) -> dict:
     return {"resolved": len(updates), "won": won, "lost": lost, "push": push}
 
 
+def resolve_paper_bets(dry_run: bool = False) -> dict:
+    """Compatibility entrypoint: shared NBA rules, existing MLB paper scope."""
+    from src.paper_trading.user_bet_resolver import UserBetResolver
+
+    nba = UserBetResolver(paper_only=True, dry_run=dry_run).resolve_all_pending()
+    mlb = _resolve_mlb_paper_bets(dry_run=dry_run)
+    if dry_run:
+        # The legacy MLB preview reports hypothetical updates as resolved.
+        # Normalize only the wrapper's reporting; do not claim committed writes.
+        mlb = {**mlb, 'would_resolve': mlb.get('resolved', 0),
+               'resolved': 0, 'won': 0, 'lost': 0, 'push': 0}
+    result = {key: nba.get(f'total_{key}', 0) + mlb.get(key, 0)
+              for key in ('resolved', 'won', 'lost', 'push', 'cancelled', 'pending', 'blocked', 'would_resolve')}
+    result['nba'] = nba
+    result['mlb'] = mlb
+    logger.info("Paper settlement summary: %s", result)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description="Resolve pending user paper bets against actual game stats.")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be updated without writing to DB.")
@@ -226,6 +238,11 @@ def main():
     logger.info("=" * 60)
 
     result = resolve_paper_bets(dry_run=args.dry_run)
+
+    if args.dry_run:
+        print(f"Would resolve {result['would_resolve']} paper bets (no DB writes; "
+              f"{result['pending']} pending, {result['blocked']} blocked)")
+        return
 
     print(
         f"Resolved {result['resolved']} paper bets "
