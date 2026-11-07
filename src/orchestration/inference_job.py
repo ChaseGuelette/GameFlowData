@@ -236,8 +236,8 @@ def main():
             logger.info("Storing predictions to database...")
             store = PredictionStore(engine)
             store.store_predictions(preds, target_date)
-            store.store_samples(samples, target_date)
-            logger.info(f"Stored {len(preds)} predictions + {len(samples)} sample arrays")
+            stored_samples = store.store_samples(samples, target_date)
+            logger.info(f"Stored {len(preds)} predictions + {stored_samples} base sample arrays")
 
         # Export CSV backup
         output_dir = Path("predictions")

@@ -1019,7 +1019,7 @@ def main():
             with engine.connect() as conn:
                 sample_age = conn.execute(text(
                     "SELECT EXTRACT(EPOCH FROM (NOW() - MAX(created_at))) / 3600.0 "
-                    "FROM mc_samples WHERE prediction_date = :target_date"
+                    "FROM daily_prediction_samples WHERE prediction_date = :target_date"
                 ), {"target_date": target_date}).scalar()
 
                 if sample_age is not None and sample_age > 6:
