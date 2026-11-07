@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 from psycopg2 import extras
 
+from src.config.combo_config import COMBO_STATS
+
 logger = logging.getLogger(__name__)
 
 # Columns in daily_predictions that come from the predictions DataFrame
@@ -113,7 +115,7 @@ class PredictionStore:
         self,
         samples_dict: dict[tuple, np.ndarray],
         prediction_date: date,
-    ):
+    ) -> int:
         """Store MC samples as gzip-compressed bytea.
 
         Args:
@@ -121,10 +123,12 @@ class PredictionStore:
             prediction_date: The date these predictions are for
         """
         if not samples_dict:
-            return
+            return 0
 
         rows = []
         for (player_id, game_id, stat), samples in samples_dict.items():
+            if stat in COMBO_STATS:
+                continue  # Combo arrays are reconstructed from stored base stats.
             compressed = gzip.compress(samples.astype(np.float64).tobytes())
             rows.append((
                 prediction_date,
@@ -134,6 +138,9 @@ class PredictionStore:
                 len(samples),
                 compressed,
             ))
+
+        if not rows:
+            return 0
 
         query = """
             INSERT INTO daily_prediction_samples
@@ -151,6 +158,7 @@ class PredictionStore:
                 extras.execute_values(cur, query, rows)
             conn.commit()
             logger.info(f"Stored {len(rows)} sample arrays for {prediction_date}")
+            return len(rows)
         finally:
             conn.close()
 
