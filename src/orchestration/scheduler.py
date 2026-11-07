@@ -920,6 +920,7 @@ def main():
         CronTrigger(hour='10-23', minute='5,35', timezone=ET),
         id="inference_recovery",
         name="NBA Inference Recovery (no bets; every 30 min)",
+        next_run_time=datetime.now(UTC),  # Also close a missed window after restart.
     )
 
     nba_full_lines_enabled = env_flag("NBA_FULL_LINES_ENABLED", default=True)
