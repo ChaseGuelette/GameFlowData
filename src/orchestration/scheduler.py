@@ -56,6 +56,7 @@ import threading
 import time
 from datetime import UTC, date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -102,7 +103,7 @@ DEFERRED_FAILURE_JOBS = {
 
 # Prevent overlapping scheduler launches for jobs that are unsafe to run
 # concurrently. Schedule refreshes must not overlap each other.
-LOCKABLE_JOB_SCRIPTS = {"lines_job.py", "nba_schedule_job.py", "daily_stats_job.py"}
+LOCKABLE_JOB_SCRIPTS = {"lines_job.py", "nba_schedule_job.py", "daily_stats_job.py", "inference_job.py"}
 JOB_LOCKS: dict[str, threading.Lock] = {}
 JOB_LOCKS_GUARD = threading.Lock()
 # Both NBA jobs invoke the same durable linker; queue them before launching
@@ -627,11 +628,13 @@ def run_lines_props_only():
     run_job("lines_job.py", extra_args="--live --props-only")
 
 
-def run_inference(skip_bets: bool = False):
+def run_inference(skip_bets: bool = False, skip_discord: bool = False):
     """Run inference only when basic stats and local advanced readiness are current."""
     extra_parts = []
     if skip_bets:
         extra_parts.append("--skip-bets")
+    if skip_discord:
+        extra_parts.append("--skip-discord")
     if os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes"):
         extra_parts.append("--model-dir src/models/artifacts/production_playoffs")
         logger.info("NBA playoff mode active — using production_playoffs model")
@@ -687,6 +690,25 @@ def run_inference(skip_bets: bool = False):
 
     logger.info("NBA advanced readiness satisfied: %s", advanced_reason)
     run_job("inference_job.py", extra_args=stale_extra) if stale_extra else run_job("inference_job.py")
+
+
+def run_inference_recovery():
+    """Recover a missed inference after the workstation producer catches up.
+
+    Recovery updates display/model outputs only; it never adds a paper-entry
+    window or sends prediction alerts. Normal inference keeps its existing times.
+    """
+    now = datetime.now(ZoneInfo("America/New_York"))
+    if (now.hour, now.minute) < (10, 15):
+        return
+    if check_dependency("inference_job.py", max_age_hours=8):
+        return
+    ready, reason = check_nba_advanced_readiness()
+    if not ready:
+        logger.info("NBA inference recovery remains dependency-blocked: %s", reason)
+        return
+    logger.info("Recovering missed NBA inference with betting and prediction alerts disabled")
+    run_inference(skip_bets=True, skip_discord=True)
 
 
 def run_edge_refresh():
@@ -892,6 +914,13 @@ def main():
     )
 
     # --- First window: noon full scrape + inference ---
+
+    scheduler.add_job(
+        run_inference_recovery,
+        CronTrigger(hour='10-23', minute='5,35', timezone=ET),
+        id="inference_recovery",
+        name="NBA Inference Recovery (no bets; every 30 min)",
+    )
 
     nba_full_lines_enabled = env_flag("NBA_FULL_LINES_ENABLED", default=True)
 
