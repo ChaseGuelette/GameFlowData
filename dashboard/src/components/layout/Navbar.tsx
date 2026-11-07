@@ -13,7 +13,7 @@ export function Navbar() {
   const pathname = usePathname()
   const supabase = createClient()
   const { prefs, loading: prefsLoading } = useUserPreferences()
-  const { sport, setSport, config } = useSport()
+  const { sport, setSport } = useSport()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   useEffect(() => {
@@ -79,11 +79,7 @@ export function Navbar() {
               <Link href="/dashboard" className={navLinkClasses('/dashboard')}>
                 Props
               </Link>
-              {config.features.dfs && (
-                <Link href="/dfs" className={navLinkClasses('/dfs')}>
-                  DFS
-                </Link>
-              )}
+
               <Link href="/performance" className={navLinkClasses('/performance')}>
                 Performance
               </Link>
@@ -139,11 +135,7 @@ export function Navbar() {
           <Link href="/dashboard" className={mobileNavLinkClasses('/dashboard')}>
             Props
           </Link>
-          {config.features.dfs && (
-            <Link href="/dfs" className={mobileNavLinkClasses('/dfs')}>
-              DFS
-            </Link>
-          )}
+
           <Link href="/performance" className={mobileNavLinkClasses('/performance')}>
             Performance
           </Link>

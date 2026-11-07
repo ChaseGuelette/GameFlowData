@@ -722,9 +722,12 @@ def main(argv: list[str] | None = None) -> int:
             selected_ids = {game["game_id"] for game in games}
             processed_ids = {game["game_id"] for game in selected}
             accounted = selected_ids <= set(state["games"])
+            # Recorded source/identity gaps are accounted outcomes, not budget
+            # work. Unvisited games and never-attempted reports still need a batch.
             budget_remaining = budget_remaining or any(
-                game_id not in processed_ids and state["games"].get(game_id, {}).get("status") != "verified"
-                for game_id in selected_ids
+                game["game_id"] not in state["games"]
+                or any(url not in state["report_cache"] for url in _candidate_urls(args, game["game_date"]))
+                for game in games if game["game_id"] not in processed_ids
             )
             blocked = blocked or any(
                 state["games"].get(game_id, {}).get("status") in {"blocked", "error"}

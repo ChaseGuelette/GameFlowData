@@ -1,5 +1,9 @@
 # NBA Core Product Restart Plan — 2026–27 Season
 
+## Backtest harness check — November 7, 2026
+
+The [current harness check](nba-backtest-harness-check-2026-11-07.md) ran 175 passing existing checks plus one stale compact-table assertion and reproduced shared drawdown/null-quantile metric defects. Historical policy/artifact chronology guards are present; the compact training-line sync does not certify executable holdout odds. No model fitting/replay or production source repair was performed. Next MVP scope is metric correctness/validity, a genuinely bounded loader-only check, then actual chosen-window source/artifact replay acceptance—not a new modeling architecture or full rescrape.
+
 ## Props T-60 implementation — November 5, 2026
 
 The owner-approved T-60 props slice is integrated into the main checkout and its four-table remote migration is applied/read back. Use the [T-60 runbook](nba-props-t60-runbook.md) for the separate one-time API backfill, daily inference table/materializer, game-level eligibility, bounded cleanup and validation limitations. The original bulk scraper and old raw/archive tables are unchanged. No paid scrape, broad backfill, local sync, commit/push or deployment was run. Historical source population and the daily production cutover remain pending; do not treat the empty new tables as training-ready data. The [investigation](nba-compact-prop-lines-proposal-2026-11-05.md) retains the original evidence. Concurrent injury work was preserved.

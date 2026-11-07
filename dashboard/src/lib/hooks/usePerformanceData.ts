@@ -76,78 +76,16 @@ export function usePropsPerformance(enabled = true) {
   })
 }
 
-// DFS performance data types
-interface DfsEntry {
-  id: number
-  entry_date: string
-  slip_type: string
-  platform: string
-  num_legs: number
-  stake: number
-  status: string
-  legs_won: number
-  legs_lost: number
-  legs_push: number
-  legs_cancelled: number
-  payout_multiplier: number
-  pnl: number
-  avg_edge: number
-  min_edge: number
-}
-
-interface DfsDailyLog {
-  entry_date: string
-  entries_placed: number
-  entries_won: number
-  entries_lost: number
-  entries_partial: number
-  total_staked: number
-  total_pnl: number
-  roi_pct: number
-  cumulative_pnl: number
-  bankroll_after: number
-}
-
-async function fetchDfsPerformance() {
-  const supabase = createClient()
-
-  const [entriesRes, dailyRes] = await Promise.all([
-    supabase
-      .from('dfs_paper_entries')
-      .select('id, entry_date, slip_type, platform, num_legs, stake, status, legs_won, legs_lost, legs_push, legs_cancelled, payout_multiplier, pnl, avg_edge, min_edge')
-      .order('entry_date', { ascending: true }),
-    supabase
-      .from('dfs_paper_daily_log')
-      .select('entry_date, entries_placed, entries_won, entries_lost, entries_partial, total_staked, total_pnl, roi_pct, cumulative_pnl, bankroll_after')
-      .order('entry_date', { ascending: true }),
-  ])
-
-  if (entriesRes.error) throw entriesRes.error
-  if (dailyRes.error) throw dailyRes.error
-
-  return {
-    dfsEntries: (entriesRes.data ?? []) as DfsEntry[],
-    dfsDailyData: (dailyRes.data ?? []) as DfsDailyLog[],
-  }
-}
-
-export function useDfsPerformance(enabled = true) {
-  return useQuery({
-    queryKey: ['performance', 'dfs'],
-    queryFn: fetchDfsPerformance,
-    enabled,
-    staleTime: 10 * 60 * 1000,
-  })
-}
-
-async function fetchMyBetsPerformance(statTypes: string[]) {
+async function fetchMyBetsPerformance(statTypes: string[], startDate: string, endDate: string) {
   const supabase = createClient()
 
   const { data, error } = await supabase
     .from('user_bets')
-    .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet')
+    .select('id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl, book_at_bet, is_paper_trade')
     .in('stat_type', statTypes)
     .in('status', ['won', 'lost', 'push'])
+    .gte('game_date', startDate)
+    .lte('game_date', endDate)
     .order('game_date', { ascending: true })
 
   if (error) throw error
@@ -167,18 +105,20 @@ async function fetchMyBetsPerformance(statTypes: string[]) {
     actual_value: row.actual_value != null ? Number(row.actual_value) : null,
     pnl: row.pnl != null ? Number(row.pnl) : null,
     bookmaker: row.book_at_bet,
+    is_paper_trade: row.is_paper_trade ?? false,
   })) as PaperBet[]
 }
 
-export function useMyBetsPerformance(enabled = true) {
+export function useMyBetsPerformance(startDate: string, endDate: string, enabled = true) {
   const { sport, config } = useSport()
+  const validRange = Boolean(startDate && endDate && startDate <= endDate)
 
   return useQuery({
-    queryKey: ['performance', 'myBets', sport],
-    queryFn: () => fetchMyBetsPerformance(config.statTypes),
-    enabled,
+    queryKey: ['performance', 'myBets', sport, startDate, endDate],
+    queryFn: () => fetchMyBetsPerformance(config.statTypes, startDate, endDate),
+    enabled: enabled && validRange,
     staleTime: 10 * 60 * 1000,
   })
 }
 
-export type { PaperBetWithRecommended, DfsEntry, DfsDailyLog }
+export type { PaperBetWithRecommended }

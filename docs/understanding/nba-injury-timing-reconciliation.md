@@ -8,6 +8,8 @@ Status: migration and bounded pilot applied remotely and locally; actual public 
 
 ## Two clocks, not one
 
+**New official-start source (2026-11-07):** `.hermes/plans/nba-official-game-time-fixer.md` scopes the separate implemented `scripts/fix_nba_game_start_times.py`. The authoritative `nba_game_schedule` table only had current-season rows, so the missing historical population is available from NBA's season schedule API: 3,959 validated game rows across 2023–24, 2024–25 and 2025–26. The new fixer fills that table and optionally mirrors it; it never uses PDFs or odds to determine starts and does not modify the running injury job. Real three-game remote/local preview and UPSERT-plan checks passed; schedule writes have not been launched here. Existing readers already prefer valid official schedule rows. Previously skipped publication evidence is still separate from game-time repair.
+
 A game-start timestamp answers **when the game begins**. An injury observation timestamp answers **when the information became available**. Pregame eligibility requires the second instant to precede the applicable decision cutoff, which cannot be later than game start.
 
 Existing game/schedule timestamps may solve missing cutoffs without another external scrape. They cannot by themselves establish the meaning of an injury provider's `08PM` label. Once both timestamps have known UTC offsets, comparison is straightforward; local display timezone no longer changes the result. A bare clock label still requires source timezone and date semantics, including daylight-saving behavior.
@@ -186,3 +188,9 @@ Owner launch, **not run by the agent**: append `-Run` to that same command after
 The `05PM` filename slot is only a first supported source candidate. Gaps that need earlier publications, other report layouts, additional status history or ambiguous identity repair remain explicit follow-up work. Do not launch model training merely because the batch loop finishes.
 
 Launcher verification passed on the actual PowerShell-to-Python path, without database execution: March 3, 2025 completed one read-only batch and returned `accounted_with_gaps` / exit 4 with one PDF request; July 15, 2025 returned `no_observed_games` / exit 0 without a PDF request. Neither produced stderr or a JSON-contract error. Receipt: `logs/receipts/nba_injury_history_live_pilot/launcher_smoke.json`. The one-game live gate and batch-launcher smoke are complete; the full historical launch is intentionally not run.
+
+### Completion-accounting repair
+
+The owner's first weekly run exposed a case absent from the one-day smoke: 38 recorded blocked games exceeded the 10-game invocation budget. Already-visited gaps incorrectly kept `remaining_due_to_budget=true`, preventing advancement. The narrow Python completion predicate now distinguishes recorded gaps from unvisited games and never-attempted report URLs. HTTP/parser failures already recorded in the cache remain explicit gaps; genuine request-budget deferrals remain pending.
+
+Verified the actual corrected completion branch against the unchanged October 24–30 checkpoint: `accounted=True`, `remaining_due_to_budget=False`, `blocked=True`. Also verified unvisited-game, unattempted-report, recorded-source-error and current-budget-exhaustion cases; scoped Ruff and six existing guarded tests passed. No recovery, DB writes or checkpoint edits occurred during this fix. Restart the same PowerShell command with the same state directory; the wrapper automatically passes `--resume`. Exit 4 may remain, but accounted windows now advance with gaps rather than loop.

@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useSport } from '@/contexts/SportContext'
 import { type PaperBet } from '@/types/predictions'
-import type { UserDfsEntryWithLegs } from '@/types/dfs-entries'
+import { MLB_CONFIG, NBA_CONFIG, type Sport } from '@/lib/sport-config'
 
 interface PaperBetWithRecommended extends PaperBet {
   is_recommended?: boolean
@@ -61,11 +61,11 @@ async function fetchModelHistory(
   }) as PaperBetWithRecommended[]
 }
 
-export function useModelHistory(startDate: string, endDate: string, enabled = true) {
-  const { sport, config } = useSport()
+export function useModelHistory(startDate: string, endDate: string, enabled = true, selectedSport: Sport = 'nba') {
+  const config = selectedSport === 'mlb' ? MLB_CONFIG : NBA_CONFIG
 
   return useQuery({
-    queryKey: ['history', 'model', sport, startDate, endDate],
+    queryKey: ['history', 'model', selectedSport, startDate, endDate],
     queryFn: () => fetchModelHistory(config, startDate, endDate),
     enabled,
     staleTime: 10 * 60 * 1000,
@@ -115,79 +115,12 @@ async function fetchMyBets(
 
 export function useMyBets(startDate: string, endDate: string, enabled = true) {
   const { sport, config } = useSport()
+  const validRange = Boolean(startDate && endDate && startDate <= endDate)
 
   return useQuery({
     queryKey: ['history', 'myBets', sport, startDate, endDate],
     queryFn: () => fetchMyBets(config.statTypes, startDate, endDate),
-    enabled,
-    staleTime: 10 * 60 * 1000,
-  })
-}
-
-async function fetchDfsEntries(startDate: string, endDate: string) {
-  const supabase = createClient()
-
-  const { data: entriesData, error: entriesError } = await supabase
-    .from('user_dfs_entries')
-    .select('*')
-    .gte('entry_date', startDate)
-    .lte('entry_date', endDate)
-    .order('placed_at', { ascending: false })
-
-  if (entriesError) throw entriesError
-  if (!entriesData?.length) return [] as UserDfsEntryWithLegs[]
-
-  const entryIds = entriesData.map(e => e.id)
-  const { data: legsData, error: legsError } = await supabase
-    .from('user_dfs_legs')
-    .select('*')
-    .in('entry_id', entryIds)
-
-  if (legsError) throw legsError
-
-  const legsByEntry = new Map<number, typeof legsData>()
-  if (legsData) {
-    for (const leg of legsData) {
-      if (!legsByEntry.has(leg.entry_id)) legsByEntry.set(leg.entry_id, [])
-      legsByEntry.get(leg.entry_id)!.push(leg)
-    }
-  }
-
-  return entriesData.map(entry => ({
-    ...entry,
-    legs: legsByEntry.get(entry.id) ?? [],
-  })) as UserDfsEntryWithLegs[]
-}
-
-export function useDfsEntries(startDate: string, endDate: string, enabled = true) {
-  return useQuery({
-    queryKey: ['history', 'dfs', startDate, endDate],
-    queryFn: () => fetchDfsEntries(startDate, endDate),
-    enabled,
-    staleTime: 10 * 60 * 1000,
-  })
-}
-
-async function fetchMLBModelHistory(startDate: string, endDate: string) {
-  const supabase = createClient()
-
-  const { data, error } = await supabase
-    .from('mlb_paper_bets')
-    .select('id, prediction_id, game_date, player_id, player_name, stat_type, line, bet_direction, odds_at_bet, stake, edge, status, actual_value, pnl')
-    .gte('game_date', startDate)
-    .lte('game_date', endDate)
-    .order('game_date', { ascending: false })
-    .limit(PAGE_SIZE)
-
-  if (error) throw error
-  return (data ?? []) as PaperBetWithRecommended[]
-}
-
-export function useMLBModelHistory(startDate: string, endDate: string, enabled = true) {
-  return useQuery({
-    queryKey: ['history', 'mlb_model', startDate, endDate],
-    queryFn: () => fetchMLBModelHistory(startDate, endDate),
-    enabled,
+    enabled: enabled && validRange,
     staleTime: 10 * 60 * 1000,
   })
 }

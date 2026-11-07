@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { FilterTabs, type FilterOption } from '@/components/predictions/FilterTabs'
 import { PropGrid } from '@/components/predictions/PropGrid'
@@ -22,6 +23,7 @@ import { useSport } from '@/contexts/SportContext'
 
 export default function DashboardPage() {
   const { sport, config } = useSport()
+  const queryClient = useQueryClient()
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<FilterOption>('all')
@@ -54,6 +56,10 @@ export default function DashboardPage() {
 
   // Fallback games from game lines when predictions haven't been generated yet
   const [fallbackGames, setFallbackGames] = useState<Array<{home_team: string, away_team: string, commence_time: string}>>([])
+  const [fallbackLoading, setFallbackLoading] = useState(false)
+  const [fallbackError, setFallbackError] = useState<string | null>(null)
+  const fallbackRequestRef = useRef(0)
+  const predictionsRequestRef = useRef(0)
 
   const MAX_SLATE_PICKS = 5
 
@@ -118,16 +124,22 @@ export default function DashboardPage() {
 
   // Fetch fallback games from NBA CDN schedule (when predictions haven't been generated yet)
   const fetchFallbackGames = useCallback(async (date: string) => {
+    const requestId = ++fallbackRequestRef.current
+    setFallbackGames([])
+    setFallbackError(null)
+    setFallbackLoading(true)
     try {
       const resp = await fetch(`/api/games?date=${date}&sport=${sport}`)
-      if (resp.ok) {
-        const games = await resp.json()
-        setFallbackGames(Array.isArray(games) && games.length > 0 ? games : [])
-      } else {
-        setFallbackGames([])
-      }
-    } catch {
-      setFallbackGames([])
+      if (!resp.ok) throw new Error(`Schedule lookup failed (${resp.status})`)
+      const games = await resp.json()
+      if (!Array.isArray(games)) throw new Error('Schedule response was invalid')
+      if (requestId !== fallbackRequestRef.current) return
+      setFallbackGames(games)
+    } catch (error) {
+      if (requestId !== fallbackRequestRef.current) return
+      setFallbackError(error instanceof Error ? error.message : 'Schedule lookup failed')
+    } finally {
+      if (requestId === fallbackRequestRef.current) setFallbackLoading(false)
     }
   }, [sport])
 
@@ -148,12 +160,24 @@ export default function DashboardPage() {
     })
     if (result) {
       markBetTaken(prediction.player_id, prediction.stat, result.id)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['userBets'] }),
+        queryClient.invalidateQueries({ queryKey: ['history'] }),
+        queryClient.invalidateQueries({ queryKey: ['performance'] }),
+        queryClient.invalidateQueries({ queryKey: ['trackRecord'] }),
+      ])
     }
-  }, [markBetTaken])
+    return result
+  }, [markBetTaken, queryClient])
 
   // Fetch predictions for a specific date
   const fetchPredictions = useCallback(async (date: string) => {
+    const requestId = ++predictionsRequestRef.current
     setLoading(true)
+    fallbackRequestRef.current += 1
+    setFallbackGames([])
+    setFallbackError(null)
+    setFallbackLoading(false)
     const supabase = createClient()
 
     // Safety net: fetch "Out" player IDs from injury table to filter client-side
@@ -186,6 +210,7 @@ export default function DashboardPage() {
       .order('over_edge', { ascending: false })
       .limit(3000)
 
+    if (requestId !== predictionsRequestRef.current) return
     if (!predictionsError && predictionsData) {
       // Map DB columns to frontend expected names and add team abbrevs
       const mappedPredictions = predictionsData
@@ -259,11 +284,13 @@ export default function DashboardPage() {
         }
       }
 
+      if (requestId !== predictionsRequestRef.current) return
       setPredictions(mappedPredictions)
       if (mappedPredictions.length === 0 && config.features.scoreboard) {
         await fetchFallbackGames(date)
       } else {
         setFallbackGames([])
+        setFallbackError(null)
       }
     } else {
       setPredictions([])
@@ -272,7 +299,7 @@ export default function DashboardPage() {
       }
     }
 
-    setLoading(false)
+    if (requestId === predictionsRequestRef.current) setLoading(false)
   }, [config, fetchFallbackGames])
 
   // Initial load: fetch available dates (re-runs when sport changes)
@@ -609,13 +636,24 @@ export default function DashboardPage() {
 
       {/* Tonight's Games Strip */}
       {!loading && config.features.scoreboard && (
-        <TonightsGames
-          games={tonightsGames}
-          activeMatchup={teamFilter}
-          onSelectMatchup={setTeamFilter}
-          isToday={isToday}
-          gameStatusMap={gameStatusMap}
-        />
+        fallbackError && predictions.length === 0 ? (
+          <div className="mb-6 rounded-lg border border-red-700 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>Schedule unavailable: {fallbackError}</span>
+              <button onClick={() => fetchFallbackGames(selectedDate)} className="rounded bg-red-800 px-3 py-1.5 font-medium text-red-100 hover:bg-red-700">Retry</button>
+            </div>
+          </div>
+        ) : fallbackLoading && predictions.length === 0 ? (
+          <div className="mb-6 rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-3 text-sm text-slate-400">Checking the schedule...</div>
+        ) : (
+          <TonightsGames
+            games={tonightsGames}
+            activeMatchup={teamFilter}
+            onSelectMatchup={setTeamFilter}
+            isToday={isToday}
+            gameStatusMap={gameStatusMap}
+          />
+        )
       )}
 
       {/* Play of the Day */}
@@ -638,9 +676,16 @@ export default function DashboardPage() {
       ) : sortedPredictions.length === 0 ? (
         <div className="flex items-center justify-center py-16">
           <div className="text-center">
-            {fallbackGames.length > 0 ? (
+            {fallbackLoading ? (
+              <p className="text-slate-400 text-lg">Checking the schedule...</p>
+            ) : fallbackError ? (
               <>
-                <p className="text-slate-400 text-lg">Predictions are being generated and will appear shortly</p>
+                <p className="text-slate-400 text-lg">Schedule is currently unavailable</p>
+                <button onClick={() => fetchFallbackGames(selectedDate)} className="mt-3 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500">Retry schedule</button>
+              </>
+            ) : fallbackGames.length > 0 ? (
+              <>
+                <p className="text-slate-400 text-lg">Predictions are not available yet</p>
                 <p className="text-slate-500 text-sm mt-2">Games are scheduled — check back after the daily pipeline completes</p>
               </>
             ) : selectedDate === getToday() ? (

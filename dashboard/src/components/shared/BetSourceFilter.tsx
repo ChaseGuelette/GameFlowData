@@ -2,7 +2,7 @@
 
 import { cn } from '@/lib/utils'
 
-export type BetSource = 'model' | 'all'
+export type BetSource = 'model' | 'my_bets'
 
 interface BetSourceFilterProps {
   activeSource: BetSource
@@ -12,7 +12,7 @@ interface BetSourceFilterProps {
 
 const SOURCES: { value: BetSource; label: string; description: string }[] = [
   { value: 'model', label: 'Model Picks', description: 'BL Edge ≥9% (τ=0.50)' },
-  { value: 'all', label: 'All Bets', description: 'All placed bets' },
+  { value: 'my_bets', label: 'My Bets', description: 'Your saved real and paper bets' },
 ]
 
 export function BetSourceFilter({ activeSource, onSourceChange, className }: BetSourceFilterProps) {

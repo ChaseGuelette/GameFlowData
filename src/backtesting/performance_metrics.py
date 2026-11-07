@@ -225,8 +225,22 @@ class MetricsCalculator:
                 "loss_streak": 0,
             }
 
-        # Filter to resolved bets with profit
-        profits = bets_df[bets_df["profit"].notna()]["profit"].values
+        # Use dated, resolved P&L. Aggregate simultaneous game-day results rather
+        # than making risk depend on the arbitrary order of bets within a day.
+        resolved = pd.DataFrame(bets_df.loc[bets_df["outcome"].notna() & bets_df["profit"].notna()]).copy()
+        daily_profits: pd.Series | None = None
+        if not resolved.empty and "game_date" in resolved:
+            dates = pd.DatetimeIndex([pd.Timestamp(value).date() for value in resolved["game_date"]])
+            if bool(dates.isna().any()):
+                raise ValueError("Resolved bets require nonmissing game dates for risk metrics")
+            resolved["_risk_date"] = dates
+            resolved = resolved.sort_values("_risk_date", kind="mergesort")
+            daily_profits = pd.Series(resolved.groupby("_risk_date")["profit"].sum()).sort_index()
+            day_index = pd.DatetimeIndex(daily_profits.index)
+            daily_profits = daily_profits.reindex(
+                pd.date_range(day_index.min(), day_index.max(), freq="D"), fill_value=0.0
+            )
+        profits = daily_profits.to_numpy() if daily_profits is not None else resolved["profit"].to_numpy()
 
         if len(profits) == 0:
             return {
@@ -236,10 +250,18 @@ class MetricsCalculator:
                 "loss_streak": 0,
             }
 
-        # Sharpe ratio (annualized assuming ~170 NBA game days per season)
-        mean_return = profits.mean()
-        std_return = profits.std()
-        sharpe = (mean_return / std_return) * np.sqrt(170) if std_return > 0 else 0.0
+        # Calendar-daily equity returns, including zero-action intervening days.
+        # Annualization now matches observation frequency. Without dated bets,
+        # positive starting equity, or two observations, Sharpe is unavailable
+        # and retains the existing report convention of zero.
+        sharpe = 0.0
+        if daily_profits is not None and starting_bankroll > 0 and len(daily_profits) >= 2:
+            opening_equity = starting_bankroll + daily_profits.cumsum().shift(1, fill_value=0.0)
+            if (opening_equity > 0).all():
+                returns = daily_profits / opening_equity
+                std_return = returns.std(ddof=1)
+                if np.isfinite(std_return) and std_return > 0:
+                    sharpe = (returns.mean() / std_return) * np.sqrt(365)
 
         # Max drawdown calculation
         cumulative_pl = np.concatenate([[0.0], np.cumsum(profits)])
@@ -248,12 +270,9 @@ class MetricsCalculator:
             # Equity curve based
             equity = starting_bankroll + cumulative_pl
             running_max = np.maximum.accumulate(equity)
-            drawdowns = equity - running_max  # Always <= 0
-            max_drawdown_amount = abs(drawdowns.min()) if len(drawdowns) > 0 else 0.0
-
-            # Drawdown % relative to peak equity
-            peak = running_max.max()
-            max_dd_pct = max_drawdown_amount / peak if peak > 0 else 0.0
+            # Each decline uses its own preceding peak, not a later all-time
+            # high or the peak associated with the largest *dollar* decline.
+            max_dd_pct = float(np.max((running_max - equity) / running_max))
         else:
             # P&L based (legacy/fallback)
             running_max = np.maximum.accumulate(cumulative_pl)
@@ -267,7 +286,7 @@ class MetricsCalculator:
             max_dd_pct = max_drawdown_amount / reference if reference > 0 else 0.0
 
         # Win/loss streaks
-        outcomes = bets_df[bets_df["outcome"].notna()]["outcome"].values
+        outcomes = resolved["outcome"].to_numpy()
         win_streak, loss_streak = self._calculate_streaks(outcomes)
 
         return {
@@ -320,8 +339,13 @@ class MetricsCalculator:
             if col not in df.columns:
                 continue
 
-            # Coverage: P(actual <= predicted_quantile)
-            coverage = (df["actual"] <= df[col]).mean()
+            # Each quantile has its own valid denominator. NaN/inf predictions
+            # are missing evidence, not failed coverage observations.
+            valid = df[["actual", col]].apply(pd.to_numeric, errors="coerce")
+            valid = valid.replace([np.inf, -np.inf], np.nan).dropna()
+            if valid.empty:
+                continue
+            coverage = (valid["actual"] <= valid[col]).mean()
 
             results.append(
                 CalibrationResult(
@@ -329,7 +353,7 @@ class MetricsCalculator:
                     target_coverage=q,
                     actual_coverage=float(coverage),
                     gap=float(coverage - q),
-                    n_samples=len(df),
+                    n_samples=len(valid),
                 )
             )
 

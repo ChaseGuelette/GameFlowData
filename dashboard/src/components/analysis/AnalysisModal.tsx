@@ -32,7 +32,7 @@ export interface TakeBetData {
 interface AnalysisModalProps {
   prediction: Prediction
   onClose: () => void
-  onTakeBet?: (prediction: Prediction, data: TakeBetData) => void
+  onTakeBet?: (prediction: Prediction, data: TakeBetData) => Promise<{ id: number } | null>
 }
 
 // Map stat type to column name in player_game_stats
@@ -387,6 +387,8 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   const [customStake, setCustomStake] = useState<string>('')
   const [betPlaced, setBetPlaced] = useState(false)
   const [paperBetSet, setPaperBetSet] = useState(false)
+  const [savingBet, setSavingBet] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [userConfidence, setUserConfidence] = useState<number | null>(null)
 
   // Selected line index for bet sizing (defaults to best edge = index 0)
@@ -430,6 +432,8 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   useEffect(() => {
     setBetPlaced(false)
     setPaperBetSet(false)
+    setSavingBet(false)
+    setSaveError(null)
     setUserConfidence(null)
   }, [prediction.id])
 
@@ -935,9 +939,11 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                 disabled={betPlaced}
               />
               <button
-                onClick={() => {
+                onClick={async () => {
                   const stake = parseFloat(customStake) || 0
                   if (stake <= 0) return
+                  setSavingBet(true)
+                  setSaveError(null)
 
                   const l5Games = history.length > 0
                     ? history.map(g => ({
@@ -960,35 +966,43 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                     source: 'analysis_modal',
                   })
 
-                  onTakeBet(prediction, {
-                    book: selectedLine.bookmaker,
-                    odds: selectedLine.relevantOdds,
-                    line: selectedLine.line,
-                    stake,
-                    modelProb: selectedLine.modelProb,
-                    edge: selectedLine.lineEdge,
-                    direction: isOverBet ? 'over' : 'under',
-                    betContext,
-                    userConfidence,
-                  })
-                  setBetPlaced(true)
-                  // Auto-close modal after brief delay so user sees confirmation
-                  setTimeout(() => onClose(), 1500)
+                  try {
+                    const result = await onTakeBet(prediction, {
+                      book: selectedLine.bookmaker,
+                      odds: selectedLine.relevantOdds,
+                      line: selectedLine.line,
+                      stake,
+                      modelProb: selectedLine.modelProb,
+                      edge: selectedLine.lineEdge,
+                      direction: isOverBet ? 'over' : 'under',
+                      betContext,
+                      userConfidence,
+                    })
+                    if (!result?.id) throw new Error('Bet was not saved. Please try again.')
+                    setBetPlaced(true)
+                    setTimeout(() => onClose(), 1500)
+                  } catch (error) {
+                    setSaveError(error instanceof Error ? error.message : 'Bet was not saved. Please try again.')
+                  } finally {
+                    setSavingBet(false)
+                  }
                 }}
-                disabled={betPlaced || !customStake || parseFloat(customStake) <= 0}
+                disabled={savingBet || betPlaced || !customStake || parseFloat(customStake) <= 0}
                 className={`py-2 px-4 rounded-md font-medium text-sm transition-colors ${
                   betPlaced
                     ? 'bg-green-700 text-green-200 cursor-default'
                     : 'bg-green-600 hover:bg-green-500 text-white disabled:bg-slate-700 disabled:text-slate-500'
                 }`}
               >
-                {betPlaced ? 'Bet Taken!' : 'Take Bet'}
+                {betPlaced ? 'Bet Taken!' : savingBet ? 'Saving...' : 'Take Bet'}
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   const paperStake = sizingData.recommendedBet > 0
                     ? Math.round(sizingData.recommendedBet * 100) / 100
                     : 10
+                  setSavingBet(true)
+                  setSaveError(null)
 
                   const l5Games = history.length > 0
                     ? history.map(g => ({
@@ -1011,32 +1025,44 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                     source: 'analysis_modal',
                   })
 
-                  onTakeBet(prediction, {
-                    book: selectedLine.bookmaker,
-                    odds: selectedLine.relevantOdds,
-                    line: selectedLine.line,
-                    stake: paperStake,
-                    modelProb: selectedLine.modelProb,
-                    edge: selectedLine.lineEdge,
-                    direction: isOverBet ? 'over' : 'under',
-                    betContext,
-                    userConfidence,
-                    isPaperTrade: true,
-                  })
-                  setPaperBetSet(true)
+                  try {
+                    const result = await onTakeBet(prediction, {
+                      book: selectedLine.bookmaker,
+                      odds: selectedLine.relevantOdds,
+                      line: selectedLine.line,
+                      stake: paperStake,
+                      modelProb: selectedLine.modelProb,
+                      edge: selectedLine.lineEdge,
+                      direction: isOverBet ? 'over' : 'under',
+                      betContext,
+                      userConfidence,
+                      isPaperTrade: true,
+                    })
+                    if (!result?.id) throw new Error('Paper trade was not saved. Please try again.')
+                    setPaperBetSet(true)
+                  } catch (error) {
+                    setSaveError(error instanceof Error ? error.message : 'Paper trade was not saved. Please try again.')
+                  } finally {
+                    setSavingBet(false)
+                  }
                 }}
-                disabled={paperBetSet}
+                disabled={savingBet || paperBetSet}
                 className={`py-2 px-4 rounded-md font-medium text-sm transition-colors ${
                   paperBetSet
                     ? 'bg-blue-800 text-blue-300 cursor-default'
                     : 'bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 hover:border-blue-500'
                 }`}
               >
-                {paperBetSet ? 'Paper Set!' : 'Paper Trade'}
+                {paperBetSet ? 'Paper Set!' : savingBet ? 'Saving...' : 'Paper Trade'}
               </button>
             </div>
           )}
         </div>
+        {saveError && (
+          <div className="px-4 sm:px-6 pb-4 text-sm text-red-300" role="alert">
+            {saveError}
+          </div>
+        )}
       </div>
     </div>
   )
