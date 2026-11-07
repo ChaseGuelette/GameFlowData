@@ -1,8 +1,7 @@
-"""Bounded historical replay acquisition; raw current rows are never authenticated."""
+"""Bounded historical replay acquisition from compact, price-backed sources."""
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
@@ -11,7 +10,6 @@ from math import isfinite
 from numbers import Integral, Real
 
 import pandas as pd
-from sqlalchemy import bindparam, text
 
 from src.backtesting.nba.historical_quote_adapter import adapt_historical_quotes, resolve_game_context
 from src.models.features.nba.historical_policy import HistoricalPolicy, HistoricalPolicyContractError, policy_payload
@@ -66,7 +64,7 @@ def write_quote_ledger(frame, path):
 class HistoricalReplayQuotes:
     """One owner called by both direct and prefetch paths, with bounded inputs.
 
-    Native rows retain unknown route/period/variant authority and therefore block.
+    Native compact quotes require exact source prices and explicit route authority.
     Explicit controlled rows exercise mechanics only, never source verification.
     """
 
@@ -136,40 +134,16 @@ class HistoricalReplayQuotes:
             return rows
         if getattr(self.engine.dialect, 'name', None) != 'postgresql':
             raise HistoricalReplayBlockedError('native historical acquisition requires read-only PostgreSQL')
-        query = text('''SELECT staging_id::text AS source_record_id, game_id, player_id,
-            market_key, bookmaker, line, odds_american AS price, outcome_label, snapshot_time,
-            market_last_update AS market_updated_at, bookmaker_last_update AS bookmaker_updated_at,
-            commence_time, inserted_at
-            FROM raw_player_props_combined
-            WHERE game_id IN :aliases AND market_key IN :markets AND bookmaker IN :bookmakers
-            ORDER BY staging_id LIMIT :row_limit''').bindparams(
-                bindparam('aliases', expanding=True), bindparam('markets', expanding=True),
-                bindparam('bookmakers', expanding=True))
+        from src.backtesting.nba.compact_quotes import CompactQuoteError, historical_quote_rows, load_compact_pairs
+
         rows = []
         try:
-            with self.engine.connect() as conn, conn.begin():
-                conn.execute(text('SET TRANSACTION READ ONLY'))
-                conn.execute(text("SET LOCAL statement_timeout = '15s'"))
-                for game_id in game_ids:
-                    aliases = {game_id}
-                    if isinstance(game_id, str) and re.fullmatch(r'[0-9]{10}', game_id):
-                        aliases.update(game_id[-length:] for length in (8, 9)
-                                       if game_id[-length:].zfill(10) == game_id)
-                    frame = pd.read_sql(query, conn, params={'aliases': sorted(aliases),
-                        'markets': list(self.markets), 'bookmakers': list(self.bookmakers),
-                        'row_limit': self.max_candidates_per_game + 1})
-                    if len(frame) > self.max_candidates_per_game:
-                        raise HistoricalReplayBlockedError('native candidate cap exceeded; completeness unknown')
-                    for row in frame.to_dict('records'):
-                        row.update(source_namespace='postgres:public.raw_player_props_combined',
-                                   odds_format='american', side={'Over':'over','Under':'under'}.get(row['outcome_label'], row['outcome_label']))
-                        # Deliberately no provenance, source class, period, variant,
-                        # snapshot compatibility or request-time inference.
-                        rows.append(row)
-        except HistoricalReplayBlockedError:
-            raise
-        except Exception:
-            raise HistoricalReplayBlockedError('historical quote query failed; details suppressed') from None
+            for game_id in game_ids:
+                pairs = load_compact_pairs(self.engine, game_ids=[game_id], markets=self.markets,
+                    bookmakers=self.bookmakers, max_rows=self.max_candidates_per_game // 2)
+                rows.extend(historical_quote_rows(pairs, allowed_routes=self.allowed_routes))
+        except CompactQuoteError as exc:
+            raise HistoricalReplayBlockedError(str(exc)) from exc
         return rows
 
     def for_date(self, game_date, game_ids=None):

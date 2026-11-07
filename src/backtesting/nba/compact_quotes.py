@@ -13,6 +13,7 @@ from dataclasses import asdict
 from datetime import UTC, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import bindparam, text
@@ -74,7 +75,7 @@ def _live_candidates(engine, feature):
             "api_game_id", "api_player_name", "bookmaker", "market_key", "line", "source_snapshot_time")})
     if len(frame) > 2:
         raise CompactQuoteError("Ambiguous live inference price pair")
-    rows = frame.get("raw", pd.Series(dtype=object)).tolist()
+    rows = frame["raw"].tolist() if "raw" in frame else []
     for row in rows:
         for name in CLOCKS:
             if name in row:
@@ -109,7 +110,7 @@ def load_compact_pairs(engine, *, markets, bookmakers, game_ids=None,
     if len(frame) > max_rows:
         raise CompactQuoteError("Compact replay row cap exceeded; narrow the date window")
     cache, output = {}, []
-    for feature in frame.get("raw", pd.Series(dtype=object)):
+    for feature in frame["raw"].tolist() if "raw" in frame else []:
         for name in CLOCKS:
             feature[name] = _clock(feature.get(name), name, name in (
                 "decision_time", "commence_time", "source_snapshot_time", "observed_at"))
@@ -145,7 +146,7 @@ def load_compact_pairs(engine, *, markets, bookmakers, game_ids=None,
             sides[side] = price
         if set(sides) != {"over", "under"}:
             raise CompactQuoteError(f"No exact source price pair for {feature['game_id']}/{feature['player_id']}/{feature['market_key']}")
-        row = dict(feature, line=float(feature["line"]), over_odds=sides["over"], under_odds=sides["under"],
+        row: dict[str, Any] = dict(feature, line=float(feature["line"]), over_odds=sides["over"], under_odds=sides["under"],
                    bet_decision_time=decision, quote_decision_policy="t60_v1")
         row["game_date"] = pd.Timestamp(row["game_date"]).date()
         for side in ("over", "under"):
@@ -155,3 +156,35 @@ def load_compact_pairs(engine, *, markets, bookmakers, game_ids=None,
                         f"{side}_decision_time": decision, f"{side}_bookmaker": feature["bookmaker"]})
         output.append(row)
     return pd.DataFrame(output)
+
+
+def historical_quote_rows(pairs, *, allowed_routes):
+    """Adapt actual compact/cache clocks; route permission still comes from policy.
+
+    The four t60_v1 markets are full-game main player props. An explicit matching
+    route is required; a quarter/alternate route cannot relabel these quotes.
+    """
+    from src.models.features.nba.historical_observation_adapters import HistoricalSourceClass, SourceProvenance
+
+    output = []
+    for row in pairs.to_dict("records"):
+        route = (row["bookmaker"], "full_game", "main")
+        if route not in allowed_routes:
+            raise CompactQuoteError(f"Compact replay needs an authorized full_game/main route for {row['bookmaker']}")
+        snapshot_key = json.dumps([row["api_game_id"], row["bookmaker"], row["source_snapshot_time"].isoformat()], separators=(",", ":"))
+        for side in ("over", "under"):
+            identity = json.dumps([row["game_id"], row["player_id"], row["market_key"],
+                                   row["selection_policy_version"], snapshot_key, side], separators=(",", ":"))
+            provenance = SourceProvenance(TABLE, identity, (("api_game_id", row["api_game_id"]),
+                ("task_id", str(row.get("task_id") or "")), ("price_source", "cached_response" if row["source_kind"] == "historical" else "nba_player_props_inference")))
+            historical = row["source_kind"] == "historical"
+            output.append({"game_id": row["game_id"], "player_id": row["player_id"],
+                "market_key": row["market_key"], "bookmaker": row["bookmaker"], "period": "full_game", "variant": "main",
+                "line": row["line"], "side": side, "price": row[f"{side}_odds"], "odds_format": "american",
+                "source_namespace": TABLE, "source_record_id": identity, "provenance": provenance,
+                "source_class": HistoricalSourceClass.AUTHENTICATED_HISTORICAL_REQUEST if historical else HistoricalSourceClass.LOCAL_OBSERVED_AT,
+                "snapshot_compatibility_key": snapshot_key, "snapshot_time": row["source_snapshot_time"],
+                "historical_requested_at": row["requested_snapshot_time"] if historical else None,
+                "market_updated_at": row["market_last_update"], "bookmaker_updated_at": row["bookmaker_last_update"],
+                "local_observed_at": None if historical else row["observed_at"], "commence_time": row["commence_time"]})
+    return tuple(output)

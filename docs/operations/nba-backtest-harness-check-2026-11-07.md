@@ -1,6 +1,24 @@
 # NBA backtest harness check — November 7, 2026
 
-## Verdict
+## Requested MVP repair — completed November 7
+
+The owner-requested drawdown, missing-quantile calibration and Sharpe repairs are implemented in `src/backtesting/performance_metrics.py`. Drawdown now uses each preceding equity peak on chronological daily P&L. Sharpe uses calendar-daily equity returns, includes intervening zero-action days, uses sample standard deviation and annualizes with 365; it retains the legacy zero/unavailable convention when dated observations or positive starting capital are insufficient. Calibration uses finite actual/prediction pairs and valid counts independently for each quantile. Existing saved metrics are not automatically recalculated.
+
+Replay no longer queries `raw_player_props_combined`. Shared `src/backtesting/nba/compact_quotes.py` reads frozen `nba_player_prop_feature_lines` selections. Because that table has no prices, historical Over/Under prices must match the exact original cached event/player/market/book/line/source clocks; live rows use the small `nba_player_props_inference` table. Missing or contradictory prices stop the run—there is no invented price, API call or giant-table fallback. Direct/prefetched harness readers and native historical market/quote readers share this path. Existing historical policy/route gates remain; supported compact market routes are full-game/main. Pinnacle is accepted by the existing CLI/evidence allowlists, and the helper/parser are source-fingerprinted.
+
+Keep `C:/Users/Chase/.gameflow/nba-props-t60/events` available for historical replay; override its parent directory with `NBA_PROPS_T60_STATE_DIR` if moved. No migration, new odds request, rescrape, model-stat expansion or broad run was needed. Replay now uses the compact table's one selected line/book at T-60, not the legacy all-book/latest-line shopping population. Combo-market prices are not present in this compact table.
+
+Verification:
+- 43 affected existing tests passed; scoped Ruff passed.
+- Synthetic public-calculator checks: the reproduced drawdown is now 10%, valid-only Q50 coverage is 100% with n=1, and daily risk is invariant to shuffled input and splitting one day's bets into identical smaller bets.
+- New reader: zero Pyright errors/warnings. Metrics: no introduced diagnostics against the pinned task-start commit `43c36c7f`; existing pandas typing diagnostics remain.
+- Real local pilot, game `0022400061` on October 22, 2024: **44 supported-stat pairs matched exactly** across compact reader, direct harness, prefetched harness and native historical source (15 points, 15 rebounds, 14 assists). Full source reads also recovered 14 threes pairs, but current artifact support is only `pts/reb/ast`; no threes model support was claimed or added.
+- Actual source prices and all T-60 clocks passed; zero HTTP calls, model loads/fits, legacy raw/archive queries or database writes. This pilot used DraftKings rows; the live-inference branch was not exercised against live rows.
+- Receipts: Hermes scratch `compact_quote_local_pilot_supported_stats.json` and `nba_harness_metric_fix_probe.py`. The earlier 58-vs-44 comparison incorrectly injected unsupported threes into the harness and is superseded by the supported-stat comparison.
+
+This completes the requested code/source repair, not full holdout evaluation or model promotion. Unrequested predictive-score expansion, empty-evaluation validity reporting and bounded training-loader CLI remain separate work. No full training or holdout sweep was launched.
+
+## Original audit verdict (before this repair)
 
 **Not yet trustworthy as the final multi-metric holdout evaluator.** Existing execution/identity/chronology plumbing is substantial, but the shared metric calculator has reproduced correctness defects. No real model holdout replay or model fitting was run; this is a bounded current-source audit plus existing tests and synthetic probes, not full end-to-end certification.
 

@@ -223,7 +223,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             # US2 / us_ex markets
             "ballybet", "betopenly", "betparx", "espnbet", "fliff",
             "hardrockbet", "novig", "prophetx", "rebet",
-            "windcreek",
+            "windcreek", "pinnacle",
         ],
         help="List of bookmakers to shop lines from (default: all available)",
     )

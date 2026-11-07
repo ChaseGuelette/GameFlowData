@@ -43,7 +43,7 @@ BOOKMAKERS = (
     "draftkings", "fanduel", "betmgm", "betrivers", "bovada", "williamhill_us",
     "betonlineag", "unibet_us", "mybookieag", "pointsbetus", "fanatics", "barstool",
     "wynnbet", "ballybet", "betopenly", "betparx", "espnbet", "fliff", "hardrockbet",
-    "novig", "prophetx", "rebet", "windcreek",
+    "novig", "prophetx", "rebet", "windcreek", "pinnacle",
 )
 READINESS = {
     "historical_readiness": "unverified", "decision_grade": False,
@@ -58,6 +58,7 @@ SOURCE_FILES = (
     "src/backtesting/nba/sweep_runner.py", "src/backtesting/nba/run_nba_sweep.py",
     "src/backtesting/backtest_harness.py", "src/backtesting/bet_simulator.py",
     "src/backtesting/performance_metrics.py", "src/models/nba_artifacts.py",
+    "src/backtesting/nba/compact_quotes.py", "src/processing/nba_prop_snapshots.py",
     "src/models/monte_carlo.py", "src/models/quantile_trainer.py",
     "src/models/feature_store.py", "src/config/combo_config.py", "src/models/black_litterman.py",
 )

@@ -3,6 +3,8 @@
 Values come from real tables, never from an evidence object supplied to FeatureStore.
 Missing lineage/edition metadata is a data error, not an unimplemented-adapter gate.
 Metadata may live in each row's historical_metadata JSON object or a repair sidecar.
+Compact player props instead retain native clock/task provenance and must match
+their original cached or inference prices; route authority remains explicit.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import bindparam, text
 
+from src.backtesting.nba.compact_quotes import CompactQuoteError, historical_quote_rows, load_compact_pairs
 from src.models.features.nba.contracts import NBA_FEATURE_FAMILIES
 from src.models.features.nba.historical_observation_adapters import (
     HistoricalSourceClass,
@@ -193,11 +196,20 @@ class PostgresHistoricalSources:
         if not bookmakers:
             raise HistoricalSourceDataError('missing explicit historical bookmaker routes')
         rows = {key: [] for key in contexts}
+        prop_markets = tuple(market for market in markets if market.startswith('player_'))
+        if prop_markets:
+            for raw in self.quote_rows(contexts, markets=prop_markets, bookmakers=bookmakers,
+                                       max_rows=max(1, len(contexts)) * 5000):
+                rows[raw['game_id']].append(HistoricalMarketRow(
+                    raw['provenance'], raw['source_class'], raw['game_id'], str(raw['player_id']),
+                    raw['market_key'], raw['bookmaker'], raw['snapshot_compatibility_key'], raw['side'],
+                    raw['line'], raw['price'], raw['period'], raw['variant'], raw['historical_requested_at'],
+                    raw['market_updated_at'], raw['bookmaker_updated_at'], raw['local_observed_at']))
         aliases = sorted({alias for key in contexts for alias in game_aliases(key)})
-        for table, column in (('raw_player_props_combined', 'game_id'), ('raw_game_lines_staging', 'nba_game_id')):
+        for table, column in (('raw_game_lines_staging', 'nba_game_id'),):
             frame = self._query(f'''SELECT to_jsonb(s) AS raw FROM {table} s
               WHERE {column} IN :games AND bookmaker IN :books AND market_key IN :markets''',
-              {'games':aliases,'books':list(bookmakers),'markets':list(markets)}, ('games','books','markets'))
+              {'games':aliases,'books':list(bookmakers),'markets':[m for m in markets if not m.startswith('player_')]}, ('games','books','markets'))
             for raw in frame.get('raw', []):
                 matches = [context for key, context in contexts.items() if raw[column] in game_aliases(key)]
                 if len(matches) != 1:
@@ -207,30 +219,14 @@ class PostgresHistoricalSources:
         return {key: tuple(value) for key, value in rows.items()}
 
     def quote_rows(self, contexts, *, markets, bookmakers, max_rows):
-        """Native raw player quotes for the same replay adapter; no source inference."""
-        aliases = sorted({alias for key in contexts for alias in game_aliases(key)})
-        frame = self._query('''SELECT to_jsonb(s) AS raw FROM raw_player_props_combined s
-          WHERE game_id IN :games AND market_key IN :markets AND bookmaker IN :books ORDER BY staging_id LIMIT :row_limit''',
-          {'games':aliases,'markets':list(markets),'books':list(bookmakers),'row_limit':max_rows+1}, ('games','markets','books'))
-        if len(frame)>max_rows:
-            raise HistoricalSourceDataError('native quote candidate cap exceeded; completeness unknown')
-        output=[]
-        for raw in frame.get('raw',[]):
-            matches=[context for key,context in contexts.items() if raw['game_id'] in game_aliases(key)]
-            if len(matches)!=1:
-                raise HistoricalSourceDataError('raw_player_props_combined: ambiguous context identity')
-            context=matches[0]
-            row=self.market('raw_player_props_combined',raw,context)
-            output.append({'game_id':context.game_id,'player_id':raw['player_id'],'market_key':row.market,
-              'bookmaker':row.bookmaker,'period':row.period,'variant':row.variant,'line':raw['line'],
-              'side':row.side,'price':raw['odds_american'],'odds_format':'american',
-              'source_namespace':row.provenance.source_namespace,'source_record_id':row.provenance.source_record_id,
-              'provenance':row.provenance,'source_class':row.source_class,'snapshot_compatibility_key':row.snapshot_key,
-              'snapshot_time':instant(raw['snapshot_time']) if raw.get('snapshot_time') is not None else None,
-              'historical_requested_at':row.historical_requested_at,'market_updated_at':row.market_updated_at,
-              'bookmaker_updated_at':row.bookmaker_updated_at,'local_observed_at':row.local_observed_at,
-              'commence_time':instant(raw['commence_time']) if raw.get('commence_time') is not None else None})
-        return tuple(output)
+        """Compact selected props plus their exact cached/live paired prices."""
+        try:
+            pairs = load_compact_pairs(self.engine, game_ids=list(contexts), markets=markets,
+                                       bookmakers=bookmakers, max_rows=max_rows // 2)
+            return historical_quote_rows(pairs, allowed_routes={
+                (route.bookmaker, route.period, route.variant) for route in self.market_routes})
+        except CompactQuoteError as exc:
+            raise HistoricalSourceDataError(str(exc)) from exc
 
     def _injury_rows(self, contexts, population):
         games = sorted(contexts)

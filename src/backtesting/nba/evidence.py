@@ -66,7 +66,7 @@ PLAN_KEYS = set("schema_version fixed_config artifact predictor_settings depende
 ACQUISITION_KEYS = "model_dir start end stats market_stats bookmakers n_samples seed min_minutes_avg local".split()
 BOOKMAKERS = set("draftkings fanduel betmgm betrivers bovada williamhill_us betonlineag unibet_us mybookieag "
                 "pointsbetus fanatics barstool wynnbet ballybet betopenly betparx espnbet fliff hardrockbet "
-                "novig prophetx rebet windcreek".split())
+                "novig prophetx rebet windcreek pinnacle".split())
 PROVENANCE_SUFFIXES = ("snapshot_time", "market_last_update", "bookmaker_last_update", "decision_time", "bookmaker")
 PREDICTION_COLUMNS = "player_id game_id stat game_date player_name team_id game_time pred_mean pred_std pred_median pred_q10 pred_q25 pred_q50 pred_q75 pred_q90".split()
 SELECTED_COLUMNS = "selected_side selected_line selected_price max_edge".split()
@@ -594,6 +594,10 @@ def _saved_acquisition_metadata(plan: dict, fixed: dict) -> None:
     expected.update("src/backtesting/" + name for name in ("backtest_harness.py", "bet_simulator.py", "performance_metrics.py"))
     expected.update("src/models/" + name for name in ("nba_artifacts.py", "monte_carlo.py", "quantile_trainer.py", "feature_store.py", "black_litterman.py"))
     expected.add("src/config/combo_config.py")
+    # Older saved sweeps predate the compact reader; new producer plans include
+    # both its implementation and the parser dependency in their fingerprint.
+    if "src/backtesting/nba/compact_quotes.py" in source["files"]:
+        expected.update(("src/backtesting/nba/compact_quotes.py", "src/processing/nba_prop_snapshots.py"))
     if plan['schema_version'] == 2:
         expected.update(HISTORICAL_SOURCE_FILES)
         if 'acquisition_limits' in fixed:

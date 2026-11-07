@@ -1,12 +1,112 @@
 """Tests for PaperTrader class."""
 
-from datetime import date
+import json
+from datetime import UTC, date, datetime, timedelta
+from hashlib import sha256
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
 
 from src.paper_trading.paper_trader import PaperTrader
+
+
+def _selection_evidence(engine, predictions):
+    """Supply captured producer evidence and eligibility-query responses."""
+    row = predictions.iloc[0].to_dict()
+    decision = datetime(2024, 1, 15, 18, tzinfo=UTC)
+    start = decision + timedelta(hours=2)
+    quotes = [
+        {
+            "staging_id": index, "api_game_id": "test-game", "game_id": row["game_id"],
+            "player_id": row["player_id"], "bookmaker": "draftkings",
+            "market_key": {"pts": "player_points", "reb": "player_rebounds"}[row["stat"]],
+            "line": row["line"], "outcome_label": side, "odds_american": row[f"{side.lower()}_odds"],
+            "source_snapshot_time": (decision - timedelta(minutes=2)).isoformat(),
+            "observed_at": (decision - timedelta(minutes=1)).isoformat(),
+            "commence_time": start.isoformat(),
+        }
+        for index, side in enumerate(("Over", "Under"), 1)
+    ]
+    predictions["bookmaker"] = "draftkings"
+    predictions["quote_snapshot"] = [{
+        "decision_time": decision.isoformat(), "rows": quotes,
+        "probability_source": "empirical_samples", "sample_count": 100,
+    }]
+    predictions["model_snapshot"] = [{
+        "artifact": {"identity": "test-only-model", "file_hashes": {
+            "model.joblib": {"sha256": sha256(b"test-only model").hexdigest()},
+        }},
+        "sample_sha256": sha256(b"test-only samples").hexdigest(),
+    }]
+
+    def execute(query, params=None):
+        sql = str(query)
+        result = MagicMock()
+        if "FROM nba_game_schedule" in sql:
+            result.fetchone.return_value = (start,)
+        elif "SELECT to_jsonb(q)" in sql:
+            result.fetchall.return_value = [(quote,) for quote in quotes]
+        elif "SELECT 1 FROM nba_player_props_inference" in sql:
+            result.fetchone.return_value = None
+        else:
+            raise AssertionError(f"Unexpected selection query: {sql}")
+        return result
+
+    engine.begin.return_value.__enter__.return_value.execute.side_effect = execute
+
+
+def _settlement_responses(engine, bets_by_date, actuals_by_date):
+    """Model captured-ledger, exact-game and conditional-update DB responses."""
+    ledger = {}
+    actuals = {}
+    for day, frame in bets_by_date.items():
+        for row in frame.to_dict("records"):
+            bet = {**row, "game_date": day.isoformat(), "game_id": f"00225{row['id']:05d}",
+                   "prediction_id": row["id"], "status": "pending"}
+            ledger[bet["id"]] = bet
+            stats = actuals_by_date[day].set_index("player_id").loc[bet["player_id"]].to_dict()
+            actuals[(bet["player_id"], bet["game_id"])] = {
+                **stats, "min": 30, "comment": None,
+                "team_wl": "W", "team_pts": 110, "team_min": 240,
+                "opp_wl": "L", "opp_pts": 100, "opp_min": 240,
+                "schedule_game_id": bet["game_id"], "game_status": 3,
+                "status_text": "Final", "postponed_status": "N", "schedule_matches": True,
+            }
+
+    def execute(query, params=None):
+        sql = str(query)
+        result = MagicMock()
+        if "SELECT DISTINCT game_date" in sql:
+            result.fetchall.return_value = [(day,) for day in sorted(bets_by_date)]
+        elif "FROM daily_predictions" in sql:
+            bet = ledger[params["prediction_id"]]
+            matches = all(params[key] == bet[key] for key in ("player_id", "game_date", "stat_type"))
+            result.fetchone.return_value = (bet["game_id"],) if matches else None
+        elif "FROM player_game_stats p" in sql:
+            result.mappings.return_value.all.return_value = [actuals[(params["player_id"], params["game_id"])]]
+        elif "UPDATE paper_bets AS b" in sql:
+            bet = ledger[params["id"]]
+            if bet["status"] == "pending" and bet == json.loads(params["captured"]):
+                bet.update(status=params["status"], actual_value=params["actual"], pnl=params["pnl"])
+                result.fetchone.return_value = (bet["id"],)
+            else:
+                result.fetchone.return_value = None
+        elif "pg_advisory_xact_lock" not in sql and "WITH daily AS" not in sql:
+            raise AssertionError(f"Unexpected settlement query: {sql}")
+        return result
+
+    conn = MagicMock()
+    conn.execute.side_effect = execute
+    engine.connect.return_value.__enter__.return_value = conn
+    engine.begin.return_value.__enter__.return_value = conn
+
+    def read_sql(query, connection, params):
+        return pd.DataFrame([{"captured": dict(bet)} for bet in ledger.values()
+                             if bet["game_date"] == str(params["game_date"]) and bet["status"] == "pending"],
+                            columns=["captured"])
+
+    return read_sql
 
 
 class TestPaperTraderCalculations:
@@ -118,17 +218,7 @@ class TestPaperTraderBetSelection:
             "implied_under": 0.48,
         }])
 
-        bankroll_result = MagicMock()
-        bankroll_result.fetchone.return_value = (10000.0,)
-
-        def mock_connect():
-            conn = MagicMock()
-            conn.__enter__ = MagicMock(return_value=conn)
-            conn.__exit__ = MagicMock(return_value=False)
-            conn.execute.return_value = bankroll_result
-            return conn
-
-        mock_engine.connect = mock_connect
+        _selection_evidence(mock_engine, predictions_df)
 
         with patch("pandas.read_sql", return_value=predictions_df):
             trader = PaperTrader()
@@ -161,17 +251,7 @@ class TestPaperTraderBetSelection:
             "implied_under": 0.48,
         }])
 
-        bankroll_result = MagicMock()
-        bankroll_result.fetchone.return_value = (10000.0,)
-
-        def mock_connect():
-            conn = MagicMock()
-            conn.__enter__ = MagicMock(return_value=conn)
-            conn.__exit__ = MagicMock(return_value=False)
-            conn.execute.return_value = bankroll_result
-            return conn
-
-        mock_engine.connect = mock_connect
+        _selection_evidence(mock_engine, predictions_df)
 
         with patch("pandas.read_sql", return_value=predictions_df):
             trader = PaperTrader()
@@ -431,8 +511,6 @@ class TestResolveAllPending:
 
         past_date = date(2026, 2, 10)
 
-        call_count = [0]
-
         # Create mock bet and actuals data
         bets_df = pd.DataFrame([{
             "id": 1,
@@ -452,35 +530,8 @@ class TestResolveAllPending:
             "did_not_play": False,
         }])
 
-        def mock_connect():
-            conn = MagicMock()
-            conn.__enter__ = MagicMock(return_value=conn)
-            conn.__exit__ = MagicMock(return_value=False)
-
-            def mock_execute(query, params=None):
-                call_count[0] += 1
-                result = MagicMock()
-                # First call: get pending dates
-                if call_count[0] == 1:
-                    result.fetchall.return_value = [(past_date,)]
-                # Second call: check if stats exist
-                elif call_count[0] == 2:
-                    result.scalar.return_value = 10  # Stats available
-                # Later calls: aggregation, prev log, etc.
-                else:
-                    result.fetchone.return_value = (1, 1, 0, 0, 0, 100.0, 90.91)
-                return result
-
-            conn.execute = mock_execute
-            conn.commit = MagicMock()
-            return conn
-
-        mock_engine.connect = mock_connect
-
-        # Mock pandas read_sql to return our test data
-        with patch("pandas.read_sql") as mock_read_sql:
-            mock_read_sql.side_effect = [bets_df, actuals_df]
-
+        read_sql = _settlement_responses(mock_engine, {past_date: bets_df}, {past_date: actuals_df})
+        with patch("pandas.read_sql", side_effect=read_sql):
             trader = PaperTrader()
             result = trader.resolve_all_pending()
 
@@ -498,8 +549,6 @@ class TestResolveAllPending:
 
         date1 = date(2026, 2, 10)
         date2 = date(2026, 2, 11)
-
-        call_count = [0]
 
         # Create mock bet data for each date
         bets_df_date1 = pd.DataFrame([{
@@ -538,44 +587,11 @@ class TestResolveAllPending:
             "did_not_play": False,
         }])
 
-        def mock_connect():
-            conn = MagicMock()
-            conn.__enter__ = MagicMock(return_value=conn)
-            conn.__exit__ = MagicMock(return_value=False)
-
-            def mock_execute(query, params=None):
-                call_count[0] += 1
-                result = MagicMock()
-                # First call: get pending dates
-                if call_count[0] == 1:
-                    result.fetchall.return_value = [(date1,), (date2,)]
-                # Stats checks and aggregations
-                elif call_count[0] in (2, 6):  # Stats check calls
-                    result.scalar.return_value = 10
-                else:
-                    result.fetchone.return_value = (1, 1, 0, 0, 0, 100.0, 90.91)
-                return result
-
-            conn.execute = mock_execute
-            conn.commit = MagicMock()
-            return conn
-
-        mock_engine.connect = mock_connect
-
-        read_sql_calls = [0]
-
-        def mock_read_sql(*args, **kwargs):
-            read_sql_calls[0] += 1
-            if read_sql_calls[0] == 1:
-                return bets_df_date1
-            elif read_sql_calls[0] == 2:
-                return actuals_df_date1
-            elif read_sql_calls[0] == 3:
-                return bets_df_date2
-            else:
-                return actuals_df_date2
-
-        with patch("pandas.read_sql", side_effect=mock_read_sql):
+        read_sql = _settlement_responses(
+            mock_engine, {date1: bets_df_date1, date2: bets_df_date2},
+            {date1: actuals_df_date1, date2: actuals_df_date2},
+        )
+        with patch("pandas.read_sql", side_effect=read_sql):
             trader = PaperTrader()
             result = trader.resolve_all_pending()
 

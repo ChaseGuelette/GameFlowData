@@ -16,9 +16,10 @@ from typing import TYPE_CHECKING
 import joblib
 import numpy as np
 import pandas as pd
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 
 from src.backtesting.bet_simulator import BetSimulator
+from src.backtesting.nba.compact_quotes import load_compact_pairs
 from src.backtesting.nba.historical_replay import (
     HISTORICAL_LINE_METADATA,
     HistoricalReplayBlockedError,
@@ -201,7 +202,7 @@ class BacktestHarness:
         # US2 / us_ex markets
         "ballybet", "betopenly", "betparx", "espnbet", "fliff",
         "hardrockbet", "novig", "prophetx", "rebet",
-        "windcreek",
+        "windcreek", "pinnacle",
     ])
     stats: list[str] = field(default_factory=lambda: ["pts", "reb", "ast"])
     min_minutes_avg: int = 10
@@ -690,62 +691,10 @@ class BacktestHarness:
 
         markets = [STAT_TO_MARKET[s] for s in self.stats if s in STAT_TO_MARKET]
 
-        # Get lines from snapshot closest to but before inference cutoff
-        # Production inference runs at 6:30 PM ET (~23:30 UTC EST / 22:30 UTC EDT)
-        # Use 23:30 UTC as cutoff to match production behavior
-        query = text("""
-            WITH ranked_lines AS (
-                SELECT
-                    player_id,
-                    game_id,
-                    market_key,
-                    line,
-                    bookmaker,
-                    outcome_label,
-                    odds_american,
-                    snapshot_time,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY player_id, game_id, market_key, line, bookmaker, outcome_label
-                        ORDER BY snapshot_time DESC
-                    ) as rn
-                FROM raw_player_props_combined
-                WHERE game_id IN :game_ids
-                  AND market_key IN :markets
-                  AND bookmaker IN :bookmakers
-                  AND snapshot_time < :game_date::timestamp + interval '23 hours 30 minutes'
-            )
-            SELECT
-                player_id,
-                game_id,
-                market_key,
-                line,
-                bookmaker,
-                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
-                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
-            FROM ranked_lines
-            WHERE rn = 1
-            GROUP BY player_id, game_id, market_key, line, bookmaker
-        """).bindparams(
-            bindparam("game_ids", expanding=True),
-            bindparam("markets", expanding=True),
-            bindparam("bookmakers", expanding=True),
-        )
-
-        try:
-            with self.engine.connect() as conn:
-                return pd.read_sql(
-                    query,
-                    conn,
-                    params={
-                        "game_ids": list(game_ids),
-                        "markets": list(markets),
-                        "bookmakers": list(self.bookmakers),
-                        "game_date": game_date,
-                    },
-                )
-        except Exception as e:
-            logger.warning(f"Error fetching lines for {game_date}: {e}")
-            return pd.DataFrame()
+        # Frozen compact T-60 selection; prices must match the actual source pair.
+        # Missing price evidence is a visible error, not silent no-bet success.
+        return load_compact_pairs(self.engine, game_ids=list(game_ids), markets=markets,
+                                  bookmakers=self.bookmakers, start_date=game_date, end_date=game_date)
 
     def _prefetch_all_lines(
         self, start_date: date, end_date: date, chunk_size: int = 3, *,
@@ -781,129 +730,17 @@ class BacktestHarness:
             return pairs
         markets = [STAT_TO_MARKET[s] for s in self.stats if s in STAT_TO_MARKET]
 
-        # Get all game dates in range first
-        date_query = text("""
-            SELECT DISTINCT game_date
-            FROM player_game_stats
-            WHERE game_date >= :start_date AND game_date <= :end_date
-            ORDER BY game_date
-        """)
-        with self.engine.connect() as conn:
-            date_result = conn.execute(date_query, {"start_date": start_date, "end_date": end_date})
-            all_dates = [row[0] for row in date_result]
-
-        if not all_dates:
-            logger.warning("No game dates found for lines prefetch")
-            return {}
-
-        # Chunk dates to keep individual queries manageable
-        chunks = [all_dates[i : i + chunk_size] for i in range(0, len(all_dates), chunk_size)]
-        logger.info(
-            f"Prefetching lines in {len(chunks)} chunks (chunk_size={chunk_size}) for {len(all_dates)} dates..."
-        )
-
-        query = text("""
-            WITH game_dates AS (
-                SELECT DISTINCT game_id, game_date
-                FROM player_game_stats
-                WHERE game_date >= :chunk_start AND game_date <= :chunk_end
-            ),
-            ranked_lines AS (
-                SELECT
-                    rp.player_id,
-                    gd.game_id,
-                    gd.game_date,
-                    rp.market_key,
-                    rp.line,
-                    rp.bookmaker,
-                    rp.outcome_label,
-                    rp.odds_american,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY rp.player_id, gd.game_id, rp.market_key, rp.line, rp.bookmaker, rp.outcome_label
-                        ORDER BY rp.snapshot_time DESC
-                    ) as rn
-                FROM raw_player_props_combined rp
-                JOIN game_dates gd ON LPAD(rp.game_id, 10, '0') = gd.game_id
-                WHERE rp.market_key IN :markets
-                  AND rp.bookmaker IN :bookmakers
-                  AND rp.snapshot_time < gd.game_date::timestamp + interval '23 hours 30 minutes'
-            )
-            SELECT
-                player_id,
-                game_id,
-                game_date,
-                market_key,
-                line,
-                bookmaker,
-                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
-                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
-            FROM ranked_lines
-            WHERE rn = 1
-            GROUP BY player_id, game_id, game_date, market_key, line, bookmaker
-        """).bindparams(
-            bindparam("markets", expanding=True),
-            bindparam("bookmakers", expanding=True),
-        )
-
+        if chunk_size < 1 or start_date > end_date:
+            raise ValueError("Invalid compact prefetch date window/chunk size")
         result = {}
-        total_lines = 0
-
-        for ci, chunk_dates in enumerate(chunks):
-            chunk_start = chunk_dates[0]
-            chunk_end = chunk_dates[-1]
-
-            try:
-                with self.engine.connect() as conn:
-                    chunk_lines = pd.read_sql(
-                        query,
-                        conn,
-                        params={
-                            "chunk_start": chunk_start,
-                            "chunk_end": chunk_end,
-                            "markets": list(markets),
-                            "bookmakers": list(self.bookmakers),
-                        },
-                    )
-
-                if not chunk_lines.empty:
-                    for gd, group_df in chunk_lines.groupby("game_date"):
-                        if hasattr(gd, "date"):
-                            gd = gd.date()
-                        result[gd] = group_df.drop(columns=["game_date"]).reset_index(drop=True)
-                    total_lines += len(chunk_lines)
-
-                logger.info(
-                    f"  Lines chunk {ci + 1}/{len(chunks)}: "
-                    f"{chunk_start} to {chunk_end} "
-                    f"({len(chunk_dates)} dates) -> {len(chunk_lines)} rows"
-                )
-
-            except Exception:
-                logger.warning(f"Lines chunk {ci + 1} failed ({chunk_start} to {chunk_end}), retrying 1-date-at-a-time...")
-                for single_date in chunk_dates:
-                    try:
-                        with self.engine.connect() as conn:
-                            single_lines = pd.read_sql(
-                                query,
-                                conn,
-                                params={
-                                    "chunk_start": single_date,
-                                    "chunk_end": single_date,
-                                    "markets": list(markets),
-                                    "bookmakers": list(self.bookmakers),
-                                },
-                            )
-                        if not single_lines.empty:
-                            for gd, group_df in single_lines.groupby("game_date"):
-                                if hasattr(gd, "date"):
-                                    gd = gd.date()
-                                result[gd] = group_df.drop(columns=["game_date"]).reset_index(drop=True)
-                            total_lines += len(single_lines)
-                            logger.info(f"    Retry {single_date}: {len(single_lines)} rows")
-                    except Exception as retry_e:
-                        logger.error(f"    Retry {single_date} also failed: {retry_e}")
-
-        logger.info(f"Prefetched lines for {len(result)} dates ({total_lines} total line entries)")
+        for first in pd.date_range(start_date, end_date, freq=f"{chunk_size}D"):
+            last = min((first + pd.Timedelta(days=chunk_size - 1)).date(), end_date)
+            frame = load_compact_pairs(self.engine, markets=markets, bookmakers=self.bookmakers,
+                                       start_date=first.date(), end_date=last)
+            if not frame.empty:
+                for day, group in frame.groupby("game_date"):
+                    result[day] = group.drop(columns=["game_date"]).reset_index(drop=True)
+        logger.info("Prefetched compact T-60 lines for %s dates", len(result))
         return result
 
     def _calculate_edges(

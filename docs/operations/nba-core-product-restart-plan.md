@@ -1,8 +1,19 @@
 # NBA Core Product Restart Plan — 2026–27 Season
 
+## Owner-prioritized next work — November 7, 2026
+
+The **two headline work items** are now:
+
+1. **Paper-betting backend repair:** consistent manual NBA settlement first, then immutable automatic entries, fail-closed pregame eligibility and retained model/quote/evaluation identity. Chase approved first qualifying pregame entry per player/game/stat (no replacement or opposite-side addition), fixed $10 automatic paper stakes and minimal additive provenance. Manual amounts and legacy history stay unchanged.
+2. **Production job recovery:** finish the existing Daily Stats repair and close the four recorded follow-ups: schedule/frontend retrieval verification, props scrape/link failures, local advanced-input/inference readiness, and meaningful edge refresh rather than missing-sample no-ops.
+
+Use the [backend and job-readiness plan](../../.hermes/plans/nba-paper-backend-and-job-readiness-2026-11-07.md) for scope, dependencies and acceptance gates. Policy choices are approved; implementation, migration execution, job launches and deployment remain separately authorized. Do not confuse this paper-betting backend with the concurrent historical backtest-harness repair below, and do not launch duplicate work against that lane.
+
+Frontend cleanup is delivered in `914e2b9a`: Props/Record/History, default My Bets, date filters, NBA/MLB Model History selection, DFS UI removal, awaited save confirmation and honest schedule failure states. Production build/TypeScript, controlled frontend checks and independent reviews passed. This does not certify the backend settlement cycle or prove current inference/source readiness. Historical injury acceptance and training gates remain separate; do not restart completed frontend or injury-recovery tooling.
+
 ## Backtest harness check — November 7, 2026
 
-The [current harness check](nba-backtest-harness-check-2026-11-07.md) ran 175 passing existing checks plus one stale compact-table assertion and reproduced shared drawdown/null-quantile metric defects. Historical policy/artifact chronology guards are present; the compact training-line sync does not certify executable holdout odds. No model fitting/replay or production source repair was performed. Next MVP scope is metric correctness/validity, a genuinely bounded loader-only check, then actual chosen-window source/artifact replay acceptance—not a new modeling architecture or full rescrape.
+The [current harness check and repair](nba-backtest-harness-check-2026-11-07.md) records the completed owner-requested drawdown, valid-quantile calibration and daily-Sharpe fixes plus compact-table replay wiring. Historical prices come from the existing exact-response cache, not fabricated odds or the giant raw table. All 43 affected tests passed; 44 supported-stat quote pairs matched through direct/prefetched/native readers in a real local pilot. Exact-window local/remote compact parity also passed. Full holdout evaluation, richer predictive metrics and a bounded loader-only CLI remain separate; no model fitting or full replay was launched.
 
 ## Props T-60 implementation — November 5, 2026
 

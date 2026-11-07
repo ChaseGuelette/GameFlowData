@@ -11,7 +11,8 @@ param(
     [string[]]$ReportSlot = @('05PM'),
     [switch]$Run,
     [switch]$Execute,
-    [switch]$MirrorLocal
+    [switch]$MirrorLocal,
+    [switch]$FromBeginning
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -34,8 +35,64 @@ $mode = if ($Execute) { 'execute' } else { 'dry' }
 $mirror = if ($MirrorLocal) { 'mirror' } else { 'remote' }
 $summary = New-Object System.Collections.Generic.List[object]
 $warnings = $false
+$progressPath = Join-Path $stateRoot "_launcher\${StartDate}_${EndDate}_${WindowDays}_${mode}_${mirror}.json"
+$resumeAt = $start
 
-for ($cursor = $start; $cursor -le $end; $cursor = $stop.AddDays(1)) {
+function Save-LauncherProgress([datetime]$NextDate) {
+    $directory = Split-Path $progressPath -Parent
+    [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+    $progress = [ordered]@{version=1; start_date=$StartDate; end_date=$EndDate;
+        window_days=$WindowDays; mode=$mode; mirror_local=[bool]$MirrorLocal;
+        report_slots=@($ReportSlot); next_date=$NextDate.ToString('yyyy-MM-dd'); has_gaps=$warnings}
+    $tempPath = "$progressPath.$PID.tmp"
+    [System.IO.File]::WriteAllText($tempPath, ($progress | ConvertTo-Json -Depth 4),
+        (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tempPath -Destination $progressPath -Force
+}
+
+if (-not $FromBeginning) {
+    if (Test-Path -LiteralPath $progressPath) {
+        $saved = Get-Content -LiteralPath $progressPath -Raw | ConvertFrom-Json
+        if ($saved.version -ne 1 -or $saved.start_date -ne $StartDate -or $saved.end_date -ne $EndDate -or
+            $saved.window_days -ne $WindowDays -or $saved.mode -ne $mode -or
+            $saved.mirror_local -ne [bool]$MirrorLocal -or
+            (@($saved.report_slots) -join ',') -cne (@($ReportSlot) -join ',')) {
+            throw 'Launcher checkpoint scope differs; keep the original arguments or use -FromBeginning explicitly.'
+        }
+        $resumeAt = [datetime]::ParseExact($saved.next_date, 'yyyy-MM-dd', $culture)
+        if ($resumeAt -lt $start -or $resumeAt -gt $end.AddDays(1) -or
+            ($resumeAt -ne $end.AddDays(1) -and (($resumeAt - $start).Days % $WindowDays) -ne 0)) {
+            throw 'Invalid launcher checkpoint position.'
+        }
+        $warnings = [bool]$saved.has_gaps
+    } else {
+        # Older runs have per-window states but no launcher cursor. Resume the
+        # furthest existing window, not the first; its unfinished work is kept.
+        $legacyPath = $null
+        for ($probe = $start; $probe -le $end; $probe = $probe.AddDays($WindowDays)) {
+            $probeEnd = $probe.AddDays($WindowDays - 1)
+            if ($probeEnd -gt $end) { $probeEnd = $end }
+            $candidate = Join-Path $stateRoot "$($probe.ToString('yyyy-MM-dd'))_$($probeEnd.ToString('yyyy-MM-dd'))_${mode}_${mirror}.json"
+            if (Test-Path -LiteralPath $candidate) { $resumeAt = $probe; $legacyPath = $candidate }
+        }
+        if ($legacyPath) {
+            $legacy = Get-Content -LiteralPath $legacyPath -Raw | ConvertFrom-Json
+            $legacyMode = if ($Execute) { 'execute' } else { 'dry_run' }
+            if ($legacy.scope.start_date -ne $resumeAt.ToString('yyyy-MM-dd') -or
+                $legacy.scope.mode -ne $legacyMode -or $legacy.scope.mirror_local -ne [bool]$MirrorLocal -or
+                @($legacy.scope.game_ids).Count -ne 0 -or @($legacy.scope.report_urls).Count -ne 0 -or
+                (@($legacy.scope.report_slots) -join ',') -cne (@($ReportSlot) -join ',')) {
+                throw 'Latest window checkpoint scope differs; do not reuse it with changed arguments.'
+            }
+        }
+    }
+}
+if ($Run) {
+    Save-LauncherProgress $resumeAt
+    Write-Host "Resuming at $($resumeAt.ToString('yyyy-MM-dd')); earlier windows are not replayed."
+}
+
+for ($cursor = $resumeAt; $cursor -le $end; $cursor = $stop.AddDays(1)) {
     $stop = $cursor.AddDays($WindowDays - 1)
     if ($stop -gt $end) { $stop = $end }
     $from = $cursor.ToString('yyyy-MM-dd')
@@ -91,10 +148,12 @@ for ($cursor = $start; $cursor -le $end; $cursor = $stop.AddDays(1)) {
     if (-not $finished) {
         throw "Batch ceiling reached for ${from}..${to}; state is resumable at $state. No later window started."
     }
+    Save-LauncherProgress $stop.AddDays(1)
 }
 # This is an accounting summary, never a claim that all injury history is usable.
 $result = [pscustomobject]@{mode=$(if ($Run) {$mode} else {'plan_only'});
     db_execution_requested=[bool]($Run -and $Execute); completeness_claimed=$false;
+    resume_start_date=$resumeAt.ToString('yyyy-MM-dd'); earlier_windows_not_rechecked=($resumeAt -gt $start);
     windows=@($summary.ToArray()); has_gaps=$warnings}
 $result | ConvertTo-Json -Depth 8
 if ($warnings) { exit 4 }

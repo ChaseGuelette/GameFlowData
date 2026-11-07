@@ -329,7 +329,7 @@ class MetricsCalculator:
             return results
 
         # Filter to rows with actual values
-        df = predictions_df[predictions_df["actual"].notna()].copy()
+        df = pd.DataFrame(predictions_df.loc[predictions_df["actual"].notna()]).copy()
 
         if df.empty:
             return results

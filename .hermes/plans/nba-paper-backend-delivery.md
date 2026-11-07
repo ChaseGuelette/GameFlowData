@@ -50,7 +50,7 @@ Run scoped Ruff and syntax checks, review exact diff/new files. Do not run real 
 - [x] isolated branch and offline baseline
 - [x] Slice A implemented and controlled caller path verified
 - [x] Slice B implemented incl producer metadata, prepared additive migration and ledger summaries
-- [ ] existing suite compatibility; named fixture approvals if necessary
+- [x] existing suite compatibility; four fixture updates approved and all 25 tests passed (see follow-up below)
 - [x] populated public caller probes + material failure cases (controlled, not production)
 - [x] independent spec and quality review, fixes and rerun (subsequent main-overlap check recorded below)
 - [x] rollout instructions and exact remaining live gates
@@ -136,7 +136,7 @@ Commands below were run from this worktree, with the exact interpreter and guard
 4. Separately approve a tiny manual-paper + automatic smoke in existing windows. Read back frozen entry terms/evaluation/snapshots; rerun for no-op and concurrent index/CAS checks; verify the actual final result and Performance/History accounting. A read-only standalone preview after permission uses `python src/orchestration/resolve_user_paper_bets.py --dry-run`; it touches the real DB but does not update rows. The wrapper normalizes legacy MLB hypothetical counts into `would_resolve`. Do not run broad jobs/training as part of this handoff.
 5. Rollback: stop placement first (inference `NBA_TRADING_ENABLED=false`, keep edge refresh `--skip-paper`), redeploy the prior approved application revision only with settlement/placement disabled, and retain additive columns/index/snapshots. Do NOT run the old upsert/resolver against accepted new entries. No down migration or ledger deletion is needed for a code rollback. If the migration itself fails, its transaction rolls back; investigate rather than retrying with disabled checks. Historical repair/deletion requires a separate evidenced scope.
 
-Remaining production-only gates: approved migration/readback; deployed artifact + schedule/quote/input readiness; actual PostgreSQL query/CAS/concurrency behavior; authorized real manual/automatic placement-to-final-settlement cycle with dashboard readback. Remaining non-production gate: approved correction of the four existing success fixtures. No production-readiness claim.
+Remaining production-only gates: approved migration/readback; deployed artifact + schedule/quote/input readiness; actual PostgreSQL query/CAS/concurrency behavior; authorized real manual/automatic placement-to-final-settlement cycle with dashboard readback. The four-fixture compatibility gate is closed by the approved follow-up below. No production-readiness claim.
 
 ## Coordinator verification and concurrent-main reconciliation
 
@@ -149,8 +149,14 @@ Remaining production-only gates: approved migration/readback; deployed artifact 
 
 ## Next owner gate
 
-Approve correcting only the mock inputs/adapters in the four named existing tests, preserving all outcome assertions and test count, then rerun the existing suite. Code implementation and independent review are complete; full test-suite acceptance is not. Commit/integration, migration execution, deployment and live paper smoke remain separate approvals. Suggested eventual commit subject: `fix: unify NBA settlement and freeze flat-unit paper entries`.
+The code slices are merged and the existing paper-trader suite now passes. Coordinate the remaining migration/schema and live-rollout gates with the production-job owner; do not restart implementation or reopen the completed fixture repair.
 
 ## Commit/merge authorization
 
 Chase subsequently requested: "Please merge and committ all slices." This authorizes committing and locally merging both reviewed paper-backend slices A/B, including this delivery record and the prepared migration. It does not include unrelated active work, test-fixture edits, push, migration execution or deployment. Preserve the documented 21-pass/4-fail suite result; source publication does not turn that into full acceptance. Integration verification is recorded in the merge commit message and Git ancestry.
+
+## Approved fixture follow-up — November 7, 2026
+
+After wrap-up Chase explicitly authorized the four fixture corrections. Updated only their mock inputs/adapters in `tests/test_paper_trader.py`: coherent quote/model snapshots and eligibility responses for selection; captured ledger, exact-game final evidence and conditional-update responses for settlement. No production behavior changed. AST comparison against HEAD verified all 25 test names and assertion sets are unchanged and only the four approved test setup bodies differ.
+
+Actual main-checkout existing suite: **25 passed in 0.09s**, with zero live connection/model-load/model-fit attempts under the NBA offline guard. Scoped Ruff, syntax and diff checks passed. This supersedes the historical 21-pass/4-fail receipts above and handoff-147's fixture blocker. Fixture/doc changes are local and uncommitted at this follow-up; no push, migration, deployment or live job occurred.
