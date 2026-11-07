@@ -123,6 +123,7 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
         logger.error(f"  Exit code: {e.returncode}")
         if e.stdout:
             logger.error(f"  Stdout head: {e.stdout[:1000]}")
+            logger.error("  Stdout summary tail: %s", e.stdout[-2200:])
         # Log stderr last and from the tail so scheduler/Discord's stderr[-500:]
         # captures the real traceback/DB exception instead of early progress output.
         logger.error(f"  Stderr tail: {e.stderr[-2000:] if e.stderr else 'No error output'}")
@@ -239,8 +240,8 @@ def main():
     parser.add_argument(
         "--linker-batch-size",
         type=int,
-        default=_env_int("NBA_LINKER_BATCH_SIZE", 500),
-        help="Production props-linker batch size (1..5000; default/env: 500)",
+        default=_env_int("NBA_LINKER_BATCH_SIZE", 5000),
+        help="Production props-linker batch size (1..5000; default/env: 5000)",
     )
     parser.add_argument(
         "--linker-max-batches",

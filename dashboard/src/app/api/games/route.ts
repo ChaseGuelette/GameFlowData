@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { TEAM_ABBREV } from '@/lib/constants'
+import { createClient } from '@/lib/supabase/server'
 
 // ---------------------------------------------------------------------------
 // NBA Schedule (CDN)
@@ -67,7 +69,7 @@ async function fetchNbaGames(targetDate: string) {
       console.warn('NBA schedule endpoint request failed', url)
     }
   }
-  if (gameDates === null) return null
+  if (gameDates === null) return fetchPersistedNbaGames(targetDate)
 
   // Parse targetDate (YYYY-MM-DD) to match CDN format (MM/DD/YYYY)
   const [year, month, day] = targetDate.split('-')
@@ -85,6 +87,33 @@ async function fetchNbaGames(targetDate: string) {
       away_team: TRICODE_TO_NAME[g.awayTeam.teamTricode] ?? g.awayTeam.teamTricode,
       commence_time: g.gameDateTimeUTC || null,
     }))
+}
+
+async function fetchPersistedNbaGames(targetDate: string) {
+  // Use the signed-in user's authenticated/RLS client, never a service-role key.
+  // Fetch all date rows before checking freshness: filtering stale rows in SQL
+  // could turn a partially stale slate into an apparently complete one.
+  const supabase = await createClient()
+  const { data, error } = await supabase.from('nba_game_schedule')
+    .select('game_id,home_team_id,away_team_id,commence_time_utc,game_status,postponed_status,source,observed_at,source_updated_at')
+    .eq('game_date', targetDate).order('game_id').limit(31)
+  if (error || !data?.length || data.length > 30) return null
+  const now = Date.now()
+  const fresh = (value: string | null) => {
+    const age = now - Date.parse(value || '')
+    return Number.isFinite(age) && age >= -15 * 60_000 && age <= 90 * 60_000
+  }
+  if (data.some(g => g.source !== 'nba_cdn' || !/^(002|004|005)\d{7}$/.test(g.game_id)
+    || !fresh(g.observed_at) || !fresh(g.source_updated_at))) return null
+  const active = data.filter(g => g.game_status !== 4
+    && (!g.postponed_status || g.postponed_status === 'N'))
+  if (active.some(g => !TEAM_ABBREV[g.home_team_id] || !TEAM_ABBREV[g.away_team_id]
+    || !Number.isFinite(Date.parse(g.commence_time_utc || '')))) return null
+  return active.map(g => ({
+    home_team: TRICODE_TO_NAME[TEAM_ABBREV[g.home_team_id]],
+    away_team: TRICODE_TO_NAME[TEAM_ABBREV[g.away_team_id]],
+    commence_time: g.commence_time_utc,
+  }))
 }
 
 // ---------------------------------------------------------------------------
