@@ -412,6 +412,7 @@ def discover_basic_catchup(engine, max_dates: int) -> tuple[str | None, list[dat
               AND NOT EXISTS (
                   SELECT 1 FROM player_game_stats pgs
                   WHERE pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
+                    AND pgs.season_id = ls.season_id
               )
             UNION
             SELECT DISTINCT pgs.game_date::date AS game_date
@@ -421,6 +422,7 @@ def discover_basic_catchup(engine, max_dates: int) -> tuple[str | None, list[dat
               AND NOT EXISTS (
                   SELECT 1 FROM team_game_stats tgs
                   WHERE tgs.game_id = pgs.game_id AND tgs.team_id = pgs.team_id
+                    AND tgs.season_id = ls.season_id
               )
         )
         SELECT (SELECT season_id FROM latest_season), game_date,
