@@ -45,6 +45,7 @@ PREDICTION_COLS = [
     "bl_confidence", "is_recommended",
     # Sanity check flag — warning reason(s) if prediction looks suspect
     "sanity_flag",
+    "quote_snapshot", "model_snapshot",  # Exact producer evidence; NULL for legacy rows
 ]
 
 
@@ -85,6 +86,7 @@ class PredictionStore:
         rows = []
         for _, row in df.iterrows():
             rows.append(tuple(
+                extras.Json(v) if isinstance(v, dict) else
                 None if (isinstance(v, float) and (np.isnan(v) or np.isinf(v))) or v is pd.NaT else v
                 for v in (row[col] for col in PREDICTION_COLS)
             ))

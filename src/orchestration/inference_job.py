@@ -159,7 +159,11 @@ def main():
         feature_store = FeatureStore(engine)
 
         logger.info("Loading model pipeline...")
+        from src.paper_trading.nba_paper_entry import artifact_snapshot
+
+        artifact = artifact_snapshot(model_path)
         pipeline = PlayerPropsModelPipeline.load_all(str(model_path), feature_store)
+        setattr(pipeline, "paper_artifact", artifact)
 
         logger.info("Initializing Monte Carlo predictor (10,000 samples)...")
         copula_params = load_copula_params(str(model_path))
@@ -172,6 +176,8 @@ def main():
             pipeline, n_samples=10000, copula_params=copula_params,
             combined_calibration_offsets=combined_cal_offsets,
         )
+        if artifact_snapshot(model_path) != artifact:
+            raise RuntimeError("Model artifact changed while loading models/calibration")
 
         # Check upstream data freshness — warn if rolling averages are stale
         data_stale = args.stale_warning  # scheduler may have already flagged this
@@ -257,7 +263,8 @@ def main():
                 else:
                     logger.info("No predictions meet edge threshold for paper bets")
             except Exception as e:
-                logger.warning(f"Paper bet placement failed: {e} (non-fatal)")
+                logger.error(f"Paper bet placement failed: {e}")
+                raise
 
         # Send Discord alert
         if not args.dry_run and not args.skip_discord:

@@ -94,7 +94,7 @@ def resolve_pending_bets(dry_run: bool = False) -> bool:
     """Resolve all pending paper bets using newly available game stats.
 
     This is a separate function (not subprocess) for better error handling.
-    Resolution failure should NOT fail the entire stats job.
+    Resolution errors are reported as failure without undoing completed stats.
     """
     logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: Resolving Pending Paper Bets")
 
@@ -108,6 +108,7 @@ def resolve_pending_bets(dry_run: bool = False) -> bool:
 
         trader = PaperTrader()
         result = trader.resolve_all_pending()
+        logger.info("NBA automatic settlement detail: %s", result)
 
         elapsed = time.time() - start_time
 
@@ -129,13 +130,13 @@ def resolve_pending_bets(dry_run: bool = False) -> bool:
         elapsed = time.time() - start_time
         logger.warning(f"SKIPPED: Bet resolution - paper trading module not found ({elapsed:.1f}s)")
         logger.warning(f"  Import error: {e}")
-        return True  # Don't fail the job for missing optional module
+        return False
 
     except Exception as e:
         elapsed = time.time() - start_time
         logger.error(f"FAILED: Bet resolution ({elapsed:.1f}s)")
         logger.error(f"  Exception: {e}")
-        return True  # Don't fail the job for resolution errors (stats are more important)
+        return False
 
 
 def run_calibration_check(dry_run: bool = False) -> None:
@@ -194,7 +195,7 @@ def run_calibration_check(dry_run: bool = False) -> None:
 def resolve_pending_user_bets(dry_run: bool = False) -> bool:
     """Resolve all pending user bets (from dashboard checkmark feature).
 
-    Non-fatal: failures are logged but don't affect job status.
+    Return False on a real resolver failure; pending evidence is not an error.
     """
     logger.info(f"{'[DRY RUN] ' if dry_run else ''}STARTING: Resolving Pending User Bets")
 
@@ -208,6 +209,7 @@ def resolve_pending_user_bets(dry_run: bool = False) -> bool:
 
         resolver = UserBetResolver()
         result = resolver.resolve_all_pending()
+        logger.info("NBA user settlement detail: %s", result)
 
         elapsed = time.time() - start_time
 
@@ -226,13 +228,13 @@ def resolve_pending_user_bets(dry_run: bool = False) -> bool:
         elapsed = time.time() - start_time
         logger.warning(f"SKIPPED: User bet resolution - module not found ({elapsed:.1f}s)")
         logger.warning(f"  Import error: {e}")
-        return True
+        return False
 
     except Exception as e:
         elapsed = time.time() - start_time
         logger.error(f"FAILED: User bet resolution ({elapsed:.1f}s)")
         logger.error(f"  Exception: {e}")
-        return True  # Non-fatal
+        return False
 
 
 def resolve_pending_user_dfs_entries(dry_run: bool = False) -> bool:
@@ -748,8 +750,10 @@ def main():
             fail(f"Daily stats database planning/verification failed: {type(exc).__name__}: {exc}")
 
     if not args.skip_resolution:
-        resolve_pending_bets(args.dry_run)
-        resolve_pending_user_bets(args.dry_run)
+        paper_ok = resolve_pending_bets(args.dry_run)
+        user_ok = resolve_pending_user_bets(args.dry_run)
+        if not paper_ok or not user_ok:
+            fail("NBA bet settlement failed; inspect resolver error (stats ingestion was not rolled back)")
         resolve_pending_user_dfs_entries(args.dry_run)
         run_calibration_check(args.dry_run)
 

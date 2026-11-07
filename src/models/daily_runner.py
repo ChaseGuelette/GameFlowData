@@ -163,6 +163,16 @@ class DailyPredictionRunner:
         # 9. Compute BL-blended recommendations ("Model Picks")
         predictions_df = self._compute_bl_recommendations(predictions_df, samples_dict)
 
+        from src.paper_trading.nba_paper_entry import annotate_quote_decisions, bind_model_samples, model_snapshot
+
+        artifact = getattr(self.pipeline, "paper_artifact", None)
+        snapshot = model_snapshot(artifact, n_samples=self.predictor.n_samples) if artifact else None
+        predictions_df["model_snapshot"] = [snapshot for _ in range(len(predictions_df))]
+        bind_model_samples(predictions_df, samples_dict)
+        annotate_quote_decisions(predictions_df, samples_dict, {
+            'tau': DEFAULT_BL_TAU, 'z_max': DEFAULT_BL_Z_MAX,
+            'max_weight': DEFAULT_BL_MAX_WEIGHT, 'edge_threshold': DEFAULT_BL_EDGE_THRESHOLD,
+        })
         return predictions_df, samples_dict
 
     def _build_features_df(self, players: list[dict], target_date: date) -> pd.DataFrame:
@@ -859,8 +869,9 @@ class DailyPredictionRunner:
                     line,
                     outcome_label,
                     odds_american,
-                    source_snapshot_time AS quote_snapshot
-                FROM nba_player_props_inference
+                    source_snapshot_time AS quote_time,
+                    to_jsonb(q) AS quote_row
+                FROM nba_player_props_inference q
                 WHERE game_id IN :game_ids
                   AND market_key IN :markets
                   AND player_id IS NOT NULL
@@ -877,17 +888,22 @@ class DailyPredictionRunner:
                     bookmaker,
                     market_key,
                     line,
-                    quote_snapshot,
+                    quote_time,
+                    jsonb_build_object('decision_time', NOW(),
+                        'rows', jsonb_agg(quote_row ORDER BY quote_row->>'outcome_label')) AS quote_snapshot,
                     MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
                     MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds
                 FROM eligible
-                GROUP BY player_id, game_id, bookmaker, market_key, line, quote_snapshot
-                HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
+                GROUP BY player_id, game_id, bookmaker, market_key, line, quote_time
+                HAVING COUNT(*) = 2 AND COUNT(DISTINCT outcome_label) = 2
+                   AND COUNT(DISTINCT quote_row->>'api_game_id') = 1
+                   AND COUNT(DISTINCT quote_row->>'commence_time') = 1
+                   AND MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
                    AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
             ), ranked_lines AS (
                 SELECT *, ROW_NUMBER() OVER (
                     PARTITION BY player_id, game_id, market_key, bookmaker, line
-                    ORDER BY quote_snapshot DESC
+                    ORDER BY quote_time DESC
                 ) AS pair_rn
                 FROM paired
             )
@@ -898,7 +914,8 @@ class DailyPredictionRunner:
                 market_key,
                 line,
                 over_odds,
-                under_odds
+                under_odds,
+                quote_snapshot
             FROM ranked_lines
             WHERE pair_rn = 1
         """).bindparams(
@@ -957,6 +974,8 @@ class DailyPredictionRunner:
         merge_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds"]
         if "bookmaker" in lines_df.columns:
             merge_cols.append("bookmaker")
+        if "quote_snapshot" in lines_df.columns:
+            merge_cols.append("quote_snapshot")
         merged = predictions_df.merge(
             lines_df[merge_cols],
             on=["player_id", "game_id", "stat"],
