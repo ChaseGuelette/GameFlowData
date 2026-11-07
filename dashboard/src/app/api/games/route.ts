@@ -4,7 +4,10 @@ import { NextRequest, NextResponse } from 'next/server'
 // NBA Schedule (CDN)
 // ---------------------------------------------------------------------------
 
-const SCHEDULE_URL = 'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json'
+const SCHEDULE_URLS = [
+  'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json',
+  'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json',
+]
 const CDN_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
   Referer: 'https://www.nba.com/',
@@ -29,6 +32,7 @@ interface CDNGame {
   gameId: string
   gameStatus: number
   gameDateTimeUTC: string
+  postponedStatus?: string
   homeTeam: { teamTricode: string }
   awayTeam: { teamTricode: string }
 }
@@ -39,11 +43,31 @@ interface CDNGameDate {
 }
 
 async function fetchNbaGames(targetDate: string) {
-  const resp = await fetch(SCHEDULE_URL, { headers: CDN_HEADERS, next: { revalidate: 3600 } })
-  if (!resp.ok) return null
-
-  const data = await resp.json()
-  const gameDates: CDNGameDate[] = data?.leagueSchedule?.gameDates ?? []
+  let gameDates: CDNGameDate[] | null = null
+  for (const url of SCHEDULE_URLS) {
+    try {
+      const resp = await fetch(url, {
+        headers: CDN_HEADERS, next: { revalidate: 1800 }, signal: AbortSignal.timeout(15000),
+      })
+      if (!resp.ok) {
+        console.warn('NBA schedule endpoint unavailable', url, resp.status)
+        continue
+      }
+      const data = await resp.json()
+      const dates = data?.leagueSchedule?.gameDates
+      if (!Array.isArray(dates) || dates.length === 0 || !dates.every(d =>
+        typeof d?.gameDate === 'string' && Array.isArray(d.games)
+      )) {
+        console.warn('NBA schedule endpoint returned an invalid payload', url)
+        continue
+      }
+      gameDates = dates
+      break
+    } catch {
+      console.warn('NBA schedule endpoint request failed', url)
+    }
+  }
+  if (gameDates === null) return null
 
   // Parse targetDate (YYYY-MM-DD) to match CDN format (MM/DD/YYYY)
   const [year, month, day] = targetDate.split('-')
@@ -52,9 +76,10 @@ async function fetchNbaGames(targetDate: string) {
   const matchingDate = gameDates.find(d => d.gameDate.startsWith(cdnDatePrefix))
   if (!matchingDate) return []
 
-  // Filter to regular season games (game_id starts with "002") that aren't cancelled
+  // Competitive games only; exclude the Cup final, cancelled and postponed games.
   return matchingDate.games
-    .filter(g => g.gameId.startsWith('002'))
+    .filter(g => typeof g.gameId === 'string' && /^(002|004|005)\d{7}$/.test(g.gameId)
+      && g.gameStatus !== 4 && (!g.postponedStatus || g.postponedStatus === 'N'))
     .map(g => ({
       home_team: TRICODE_TO_NAME[g.homeTeam.teamTricode] ?? g.homeTeam.teamTricode,
       away_team: TRICODE_TO_NAME[g.awayTeam.teamTricode] ?? g.awayTeam.teamTricode,
@@ -99,8 +124,8 @@ async function fetchMlbGames(targetDate: string) {
 
 export async function GET(req: NextRequest) {
   const targetDate = req.nextUrl.searchParams.get('date')
-  if (!targetDate) {
-    return NextResponse.json({ error: 'date parameter required' }, { status: 400 })
+  if (!targetDate || !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+    return NextResponse.json({ error: 'date parameter must be YYYY-MM-DD' }, { status: 400 })
   }
 
   const sport = req.nextUrl.searchParams.get('sport') || 'nba'

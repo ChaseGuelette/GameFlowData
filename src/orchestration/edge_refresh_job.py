@@ -93,7 +93,7 @@ def _odds_to_prob(odds):
 
 
 def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataFrame:
-    """Fetch sharpest prop lines from raw_player_props_combined.
+    """Fetch sharpest prop lines from nba_player_props_inference.
 
     Replicates the query from DailyPredictionRunner._get_current_lines()
     without needing to instantiate the full runner.
@@ -108,7 +108,7 @@ def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataF
     all_game_ids = list(set(game_ids_10digit + game_ids_8digit))
 
     query = text("""
-        WITH ranked_lines AS (
+        WITH eligible AS (
             SELECT
                 player_id,
                 game_id,
@@ -117,16 +117,37 @@ def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataF
                 line,
                 outcome_label,
                 odds_american,
-                snapshot_time,
-                ROW_NUMBER() OVER (
-                    PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
-                    ORDER BY snapshot_time DESC
-                ) as rn
-            FROM raw_player_props_combined
+                source_snapshot_time AS quote_snapshot
+            FROM nba_player_props_inference
             WHERE game_id IN :game_ids
               AND market_key IN :markets
               AND player_id IS NOT NULL
-              AND snapshot_time > now() - interval '24 hours'
+              AND observed_at >= NOW() - interval '48 hours'
+              AND observed_at <= NOW()
+              AND source_snapshot_time <= NOW()
+              AND observed_at < commence_time
+              AND (market_last_update IS NULL OR market_last_update < commence_time)
+              AND (bookmaker_last_update IS NULL OR bookmaker_last_update < commence_time)
+        ), paired AS (
+            SELECT
+                player_id,
+                game_id,
+                bookmaker,
+                market_key,
+                line,
+                quote_snapshot,
+                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
+                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds
+            FROM eligible
+            GROUP BY player_id, game_id, bookmaker, market_key, line, quote_snapshot
+            HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
+               AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
+        ), ranked_lines AS (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY player_id, game_id, market_key, bookmaker, line
+                ORDER BY quote_snapshot DESC
+            ) AS pair_rn
+            FROM paired
         )
         SELECT
             player_id,
@@ -134,13 +155,10 @@ def fetch_fresh_lines(engine, game_ids: list[str], stats: list[str]) -> pd.DataF
             bookmaker,
             market_key,
             line,
-            MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
-            MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
+            over_odds,
+            under_odds
         FROM ranked_lines
-        WHERE rn = 1
-        GROUP BY player_id, game_id, bookmaker, market_key, line
-        HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
-           AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
+        WHERE pair_rn = 1
     """).bindparams(
         bindparam("game_ids", expanding=True),
         bindparam("markets", expanding=True),
@@ -891,7 +909,7 @@ def backfill_game_times(engine, predictions: pd.DataFrame, target_date: date) ->
             time_lookup = {(row[0], row[1]): row[2] for row in result}
 
         if not time_lookup:
-            logger.info("No game times in staging table, trying raw_player_props_combined...")
+            logger.info("No game times in staging table, trying nba_player_props_inference...")
             # Fallback: get times directly by game_id from props table
             missing_game_ids = list(predictions.loc[missing_mask, "game_id"].unique())
             if missing_game_ids:
@@ -900,10 +918,10 @@ def backfill_game_times(engine, predictions: pd.DataFrame, target_date: date) ->
                     FROM unnest(:game_ids) AS g(gid)
                     CROSS JOIN LATERAL (
                         SELECT rp.commence_time
-                        FROM raw_player_props_combined rp
+                        FROM nba_player_props_inference rp
                         WHERE rp.game_id = g.gid
                           AND rp.commence_time IS NOT NULL
-                          AND rp.snapshot_time > NOW() - interval '48 hours'
+                          AND rp.observed_at > NOW() - interval '48 hours'
                         LIMIT 1
                     ) t
                 """)
@@ -919,7 +937,10 @@ def backfill_game_times(engine, predictions: pd.DataFrame, target_date: date) ->
                         if ct is not None:
                             predictions.at[idx, "game_time"] = ct
                             filled += 1
-                    logger.info(f"Backfilled game_time for {filled}/{n_missing} predictions from props table")
+                    logger.info(
+                        f"Backfilled game_time for {filled}/{n_missing} predictions "
+                        "from nba_player_props_inference"
+                    )
                     return predictions
 
             logger.info("No game times found in any source for backfill")
@@ -1026,42 +1047,15 @@ def main():
         engine = create_engine(DATABASE_URL)
         store = PredictionStore(engine)
 
-        # 0. DFS paper trading (market-edge — runs independently of model inference)
-        if not args.dry_run:
-            try:
-                from src.paper_trading.dfs_paper_trader import DfsPaperTrader
-
-                dfs_trader = DfsPaperTrader()
-
-                logger.info("Resolving pending DFS entries from previous days...")
-                dfs_res = dfs_trader.resolve_all_pending(exclude_today=True)
-                if dfs_res["total_resolved"] > 0:
-                    logger.info(
-                        f"Resolved {dfs_res['total_resolved']} DFS entries across "
-                        f"{dfs_res['dates_processed']} days "
-                        f"({dfs_res['total_won']}W {dfs_res['total_lost']}L "
-                        f"{dfs_res['total_partial']}P)"
-                    )
-
-                logger.info("Building DFS entries for today...")
-                entries = dfs_trader.build_entries(target_date)
-                if entries:
-                    count = dfs_trader.place_entries(entries)
-                    logger.info(f"Placed {count} DFS entries for {target_date}")
-                else:
-                    logger.info("No DFS entries meet edge criteria")
-            except Exception as e:
-                logger.warning(f"DFS paper trading step failed: {e} (non-fatal)")
-
         # 1. Load stored MC samples
         logger.info("Loading stored MC samples...")
         samples_dict = store.get_all_samples_for_date(target_date)
 
         if not samples_dict:
-            logger.info(
-                f"EDGE REFRESH NO-OP: No MC samples found for {target_date}. "
-                "Inference must run before edge refresh can recalculate. "
-                "This is expected before the first inference run of the day."
+            logger.warning(
+                f"Edge refresh was nonproductive for {target_date}: required MC samples "
+                "are unavailable, so edge recalculation and paper-bet evaluation are "
+                "dependency-blocked."
             )
             sys.exit(0)
 
@@ -1103,7 +1097,11 @@ def main():
         predictions = store.get_predictions(target_date)
 
         if predictions.empty:
-            logger.warning(f"No predictions found for {target_date}. Exiting gracefully.")
+            logger.warning(
+                f"Edge refresh was nonproductive for {target_date}: required predictions "
+                "are unavailable, so edge recalculation and paper-bet evaluation are "
+                "dependency-blocked."
+            )
             sys.exit(0)
 
         # 2a. Derive combo samples from stored base stat samples

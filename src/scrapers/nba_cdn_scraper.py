@@ -77,6 +77,7 @@ TEAM_ID_TO_ABBREV = {v: k for k, v in TEAM_ABBREV_MAP.items()}
 def fetch_schedule() -> dict:
     """Fetch a valid schedule from the official CDN, with one bounded fallback."""
     last_error = None
+    failures = []
     for endpoint in (SCHEDULE_URL, SCHEDULE_FALLBACK_URL):
         try:
             resp = requests.get(endpoint, headers=CDN_HEADERS, timeout=30)
@@ -88,7 +89,30 @@ def fetch_schedule() -> dict:
             return payload
         except (requests.RequestException, ValueError) as exc:
             last_error = exc
-    raise RuntimeError("NBA schedule unavailable from both official CDN endpoints") from last_error
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            failures.append(f"{endpoint.rsplit('/', 1)[-1]}: {type(exc).__name__} status={status}")
+    # The public NBA CDN can reject requests' TLS client in cloud runtimes.
+    # Try the same official sources with the existing browser-compatible client;
+    # never route this cloud fallback to stats.nba.com or an unverified mirror.
+    try:
+        from curl_cffi import requests as browser_requests
+
+        for endpoint in (SCHEDULE_URL, SCHEDULE_FALLBACK_URL):
+            try:
+                resp = browser_requests.get(endpoint, headers=CDN_HEADERS, impersonate="chrome", timeout=15)
+                resp.raise_for_status()
+                payload = resp.json()
+                schedule = payload.get("leagueSchedule") if isinstance(payload, dict) else None
+                if not isinstance(schedule, dict) or not isinstance(schedule.get("gameDates"), list) or not schedule["gameDates"]:
+                    raise ValueError("NBA CDN returned an empty or invalid schedule")
+                return payload
+            except Exception as exc:
+                last_error = exc
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                failures.append(f"browser/{endpoint.rsplit('/', 1)[-1]}: {type(exc).__name__} status={status}")
+    except ImportError:
+        failures.append("browser transport unavailable")
+    raise RuntimeError("NBA schedule unavailable from official CDN endpoints: " + "; ".join(failures)) from last_error
 
 
 def fetch_boxscore(game_id: str) -> dict | None:

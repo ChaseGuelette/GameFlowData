@@ -406,7 +406,9 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
         timeout: Subprocess timeout in seconds (default 2700 = 45 min).
     """
     if script_name == "daily_stats_job.py" and not extra_args:
-        extra_args = "--basic-only"
+        # Live quotes are owned by lines_job's inference-table linker. Historical
+        # raw-props recovery must not block the daily source/averages producer.
+        extra_args = "--basic-only --skip-linker"
     script_path = PROJECT_ROOT / "src" / "orchestration" / script_name
     cmd = [sys.executable, str(script_path)] + (shlex.split(extra_args) if extra_args else [])
     logger.info(f"Starting job: {script_name}{' ' + extra_args if extra_args else ''}")
@@ -851,25 +853,14 @@ def main():
         name="Daily Stats Retry (9:30 AM ET)",
     )
 
-    # Opt-in refreshes precede the 10:15, 12:15, and 16:15 NBA inference windows.
+    # Keep observations inside the 90-minute serving freshness contract all day,
+    # not just immediately before the three inference windows.
     if env_flag("NBA_SCHEDULE_INGEST_ENABLED", default=False):
         scheduler.add_job(
             run_nba_schedule_ingest,
-            CronTrigger(hour=9, minute=45, timezone=ET),
-            id="nba_schedule_945am",
-            name="NBA Schedule Refresh (9:45 AM ET)",
-        )
-        scheduler.add_job(
-            run_nba_schedule_ingest,
-            CronTrigger(hour=12, minute=5, timezone=ET),
-            id="nba_schedule_1205pm",
-            name="NBA Schedule Refresh (12:05 PM ET)",
-        )
-        scheduler.add_job(
-            run_nba_schedule_ingest,
-            CronTrigger(hour=16, minute=5, timezone=ET),
-            id="nba_schedule_405pm",
-            name="NBA Schedule Refresh (4:05 PM ET)",
+            CronTrigger(hour='8-23', minute='5,35', timezone=ET),
+            id="nba_schedule_every_30",
+            name="NBA Schedule Refresh (every 30 min, 8AM-11PM ET)",
         )
     else:
         logger.info("NBA schedule ingest disabled by NBA_SCHEDULE_INGEST_ENABLED=false")

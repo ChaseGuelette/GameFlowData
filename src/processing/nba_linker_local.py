@@ -1411,7 +1411,32 @@ def _resolve_linker_page(
 
     changed = 0
     if updates and apply_updates:
-        result = conn.execute(text(f"""
+        if source_table == "nba_player_props_inference":
+            # One bounded statement per page, not one round trip per quote.
+            # Preserve every preimage guard and the atomic checkpoint update.
+            result = conn.execute(text("""
+                UPDATE nba_player_props_inference AS target
+                SET player_id = COALESCE(target.player_id, patch.player_id),
+                    game_id = CASE WHEN patch.repair_game THEN patch.game_id ELSE COALESCE(target.game_id, patch.game_id) END,
+                    team_id = CASE WHEN patch.repair_team THEN patch.team_id ELSE COALESCE(target.team_id, patch.team_id) END
+                FROM jsonb_to_recordset(CAST(:updates AS jsonb)) AS patch(
+                    id bigint, player_id bigint, game_id text, team_id bigint,
+                    repair_game boolean, repair_team boolean,
+                    old_player_id bigint, old_game_id text, old_team_id bigint,
+                    api_player_name text, home_team text, away_team text,
+                    commence_time timestamptz
+                )
+                WHERE target.staging_id = patch.id
+                  AND target.player_id IS NOT DISTINCT FROM patch.old_player_id
+                  AND target.game_id IS NOT DISTINCT FROM patch.old_game_id
+                  AND target.team_id IS NOT DISTINCT FROM patch.old_team_id
+                  AND target.api_player_name IS NOT DISTINCT FROM patch.api_player_name
+                  AND target.home_team IS NOT DISTINCT FROM patch.home_team
+                  AND target.away_team IS NOT DISTINCT FROM patch.away_team
+                  AND target.commence_time IS NOT DISTINCT FROM patch.commence_time
+            """), {"updates": json.dumps(updates, default=str)})
+        else:
+            result = conn.execute(text(f"""
             UPDATE {source_table}
             SET player_id = COALESCE(player_id, :player_id),
                 game_id = CASE WHEN :repair_game THEN :game_id ELSE COALESCE(game_id, :game_id) END,
@@ -1424,7 +1449,7 @@ def _resolve_linker_page(
               AND home_team IS NOT DISTINCT FROM :home_team
               AND away_team IS NOT DISTINCT FROM :away_team
               AND commence_time IS NOT DISTINCT FROM :commence_time
-        """), updates)
+            """), updates)
         changed = int(result.rowcount or 0)
         if changed != len(updates):
             raise RuntimeError(
@@ -1786,6 +1811,28 @@ def link_incremental(
             row_limit=batch_size * max_batches,
         )
         context = _load_linker_context(engine, fixture_start, fixture_end)
+        if source_table == "nba_player_props_inference" and not dry_run:
+            # Fixed current-capture windows and legacy resume share exclusivity.
+            # Hold only the session lock; each bounded data page still commits.
+            with engine.connect() as lock_conn:
+                _set_linker_timeouts(lock_conn, local=False)
+                lock_key = source_config["lock_key"]
+                acquired = bool(lock_conn.execute(
+                    text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": lock_key}
+                ).scalar_one())
+                lock_conn.commit()
+                if not acquired:
+                    raise RuntimeError("another nba_inference props linker invocation holds the durable checkpoint lock")
+                try:
+                    return _run_fixed_linker(
+                        engine, context, cursor=fixed_cursor, high_water=fixed_high_water,
+                        batch_size=batch_size, max_batches=max_batches, dry_run=False,
+                        repair_game_conflicts=repair_game_conflicts, source_table=source_table,
+                    )
+                finally:
+                    lock_conn.rollback()
+                    lock_conn.execute(text("SELECT pg_advisory_unlock(:lock_key)"), {"lock_key": lock_key})
+                    lock_conn.commit()
         return _run_fixed_linker(
             engine, context, cursor=fixed_cursor, high_water=fixed_high_water, batch_size=batch_size,
             max_batches=max_batches, dry_run=dry_run,

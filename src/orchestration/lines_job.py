@@ -78,6 +78,7 @@ def _props_source_high_water() -> int | None:
     from src.db.client import get_engine
 
     with get_engine().begin() as conn:
+        conn.execute(text("SET TRANSACTION READ ONLY"))
         conn.execute(text("SET LOCAL statement_timeout = '10s'"))
         conn.execute(text("SET LOCAL lock_timeout = '2s'"))
         value = conn.execute(text("SELECT MAX(staging_id) FROM nba_player_props_inference")).scalar_one()
@@ -136,14 +137,22 @@ def run_command(command: str, description: str, dry_run: bool = False) -> bool:
 def run_step_group(steps: list[tuple[str, str]], dry_run: bool = False) -> bool:
     """Run serial steps while enforcing scraper-to-linker dependency barriers."""
     success = True
+    live_bounds = None
     for command, description in steps:
         before_high_water = None
         if description == "Scraping Player Props (Live)" and not dry_run:
             try:
-                before_high_water = _props_source_high_water()
+                before_high_water = _props_source_high_water() or 0
                 logger.info("Props source high-water before live scrape: %s", before_high_water)
             except Exception as exc:
-                logger.warning("Could not read pre-scrape props high-water: %s", exc)
+                logger.error("Cannot safely bound live scrape linkage: %s", exc)
+                return False
+        if description.startswith("Linking Props") and live_bounds is not None:
+            # Prioritize the exact new capture, without resetting or consuming
+            # the separate durable historical backlog checkpoint.
+            lower, upper = live_bounds
+            command = command.replace("--resume", f"--cursor {lower} --high-water {upper}")
+            logger.info("Linking current capture (%s, %s]; historical checkpoint unchanged", lower, upper)
         if not run_command(command, description, dry_run):
             logger.error(f"Job failed at step: {description}")
             success = False
@@ -152,14 +161,18 @@ def run_step_group(steps: list[tuple[str, str]], dry_run: bool = False) -> bool:
             continue
         if description == "Scraping Player Props (Live)" and not dry_run:
             try:
-                after_high_water = _props_source_high_water()
+                after_high_water = _props_source_high_water() or 0
+                if before_high_water is None or after_high_water < before_high_water:
+                    raise RuntimeError("inference source high-water regressed during scrape")
+                live_bounds = (before_high_water, after_high_water)
                 logger.info(
                     "Props source high-water after live scrape: %s (before=%s)",
                     after_high_water,
                     before_high_water,
                 )
             except Exception as exc:
-                logger.warning("Could not read post-scrape props high-water: %s", exc)
+                logger.error("Cannot safely bound captured props: %s", exc)
+                return False
     return success
 
 

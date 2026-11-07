@@ -1,6 +1,6 @@
 joblib==1.5.3
 nba_api==1.11.3
-curl_cffi==0.14.0; sys_platform == "win32"
+curl_cffi==0.14.0
 numpy==2.4.1
 optuna==4.7.0
 pandas==3.0.0
