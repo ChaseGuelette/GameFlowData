@@ -244,14 +244,14 @@ class DateBatchFeatureLoader:
                     MAX(CASE WHEN sub.market_key = 'player_assists' THEN sub.line END) as prop_line_ast,
                     MAX(CASE WHEN sub.market_key = 'player_threes' THEN sub.line END) as prop_line_threes
                 FROM (
-                    SELECT DISTINCT ON (market_key) market_key, line
-                    FROM raw_player_props_combined
+                    SELECT market_key, line
+                    FROM nba_player_prop_feature_lines
                     WHERE player_id = pgs.player_id
                       AND game_id = pgs.game_id
-                      AND bookmaker IN ('pinnacle', 'draftkings')
-                      AND COALESCE(snapshot_time, inserted_at)::date <= pgs.game_date
-                      AND (commence_time IS NULL OR COALESCE(snapshot_time, inserted_at) < commence_time)
-                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+                      AND game_date = pgs.game_date
+                      AND selection_policy_version = 't60_v1'
+                      AND source_snapshot_time <= decision_time
+                      AND decision_time = commence_time - INTERVAL '60 minutes'
                 ) sub
             ) prop_lines ON TRUE
 

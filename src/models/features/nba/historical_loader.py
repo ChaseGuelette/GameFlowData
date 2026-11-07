@@ -192,8 +192,9 @@ class HistoricalFeatureLoader:
         query = text('''SELECT candidate.game_id
                         FROM unnest(CAST(:game_ids AS text[])) AS candidate(game_id)
                         WHERE EXISTS (
-                            SELECT 1 FROM raw_player_props_combined props
+                            SELECT 1 FROM nba_player_prop_feature_lines props
                             WHERE props.game_id = candidate.game_id AND props.player_id IS NOT NULL
+                              AND props.selection_policy_version = 't60_v1'
                         )''')
         for start in range(0, len(games), 100):
             batch = games[start:start + 100]
@@ -214,7 +215,7 @@ class HistoricalFeatureLoader:
                     missing[['game_id', 'player_id']].itertuples(index=False, name=None)]
         receipt = {
             'policy_id': TRAINING_LINKAGE_POLICY,
-            'source': 'raw_player_props_combined',
+            'source': 'nba_player_prop_feature_lines',
             'candidate_games': len(games), 'candidate_rows': len(population),
             'retained_games': len(linked), 'retained_rows': len(retained),
             'excluded_games': len(games) - len(linked), 'excluded_rows': len(missing),

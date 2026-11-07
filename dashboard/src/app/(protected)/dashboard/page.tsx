@@ -340,7 +340,7 @@ export default function DashboardPage() {
         return
       }
       const { data } = await supabase
-        .from('raw_player_props_combined')
+        .from('nba_player_props_inference')
         .select('player_id, market_key')
         .in('bookmaker', activeBooks)
         .in('game_id', gameIds)

@@ -234,7 +234,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
       }
 
       // Pick the right props table for the sport
-      const propsTable = effectiveSport === 'mlb' ? 'mlb_raw_player_props' : 'raw_player_props_combined'
+      const propsTable = effectiveSport === 'mlb' ? 'mlb_raw_player_props' : 'nba_player_props_inference'
 
       // Get bookmaker lines for this player/stat/game
       let query = supabase

@@ -248,6 +248,9 @@ def upsert_schedule(engine: Any, rows: list[dict[str, Any]]) -> int:
         return 0
     with engine.begin() as conn:
         conn.execute(UPSERT_SQL, rows)
+    from src.processing.nba_injury_game_timing import reconcile_persisted_schedule_timings
+
+    reconcile_persisted_schedule_timings(engine, (row["game_id"] for row in rows))
     return len(rows)
 
 

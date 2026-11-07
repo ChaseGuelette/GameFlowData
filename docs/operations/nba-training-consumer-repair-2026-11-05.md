@@ -37,3 +37,7 @@ Separate real local read-only smoke exercised public injury-row and quantile-inp
 - No training, data repair, archive scan, new index, commit, push or deployment was performed by this repair.
 
 Receipts are in Hermes scratch: `nba_injury_real_local_smoke_receipt.json`, `nba_injury_repair_probe.py`, `nba_injury_imputation_probe.py`, and `nba-raw-season-factcheck-20261105-v2/factcheck_report.md`.
+
+## Subsequent timing MVP
+
+The later [injury timing reconciliation wiki](../understanding/nba-injury-timing-reconciliation.md) records the applied remote/local timing migration and a real official-PDF recovery pilot. Twelve observations for one historical game now pass the public injury consumer, with after-cutoff and missing-cutoff rejection verified. This supersedes the blanket absence of populated historical injury evidence for that pilot only; whole-season coverage, the props fitting blocker and production deployment remain separate. Original repair status above is a dated checkpoint, not current publication state.

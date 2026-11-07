@@ -586,11 +586,11 @@ class DailyPredictionRunner:
                     for row in result
                 }
 
-            # Fallback to raw_player_props_combined if staging has no times
+            # Fallback to the bounded inference sink if staging has no times
             if not time_lookup:
                 logger.info(
                     f"No game times in raw_game_lines_staging for {target_date}, "
-                    "trying raw_player_props_combined..."
+                    "trying nba_player_props_inference..."
                 )
                 time_lookup = self._get_game_times_from_props(games, target_date)
                 if not time_lookup:
@@ -635,7 +635,7 @@ class DailyPredictionRunner:
             return games
 
     def _get_game_times_from_props(self, games: list[dict], target_date: date) -> dict:
-        """Fallback: get game times from raw_player_props_combined via game_id.
+        """Fallback: get game times from nba_player_props_inference via game_id.
 
         Uses LATERAL LIMIT 1 per game_id for fast lookup on the large table.
         commence_time is the same across all snapshots for a given game.
@@ -649,10 +649,10 @@ class DailyPredictionRunner:
             FROM unnest(:game_ids) AS g(gid)
             CROSS JOIN LATERAL (
                 SELECT rp.commence_time
-                FROM raw_player_props_combined rp
+                FROM nba_player_props_inference rp
                 WHERE rp.game_id = g.gid
                   AND rp.commence_time IS NOT NULL
-                  AND rp.snapshot_time > NOW() - interval '48 hours'
+                  AND rp.observed_at > NOW() - interval '48 hours'
                 LIMIT 1
             ) t
         """)
@@ -675,7 +675,7 @@ class DailyPredictionRunner:
                         time_lookup[teams] = ct
 
                 if time_lookup:
-                    logger.info(f"Found {len(time_lookup)} game times from raw_player_props_combined")
+                    logger.info(f"Found {len(time_lookup)} game times from nba_player_props_inference")
                 return time_lookup
         except Exception as e:
             logger.warning(f"Props game time lookup failed: {e}")
@@ -843,18 +843,14 @@ class DailyPredictionRunner:
 
         markets = [STAT_TO_MARKET[s] for s in stats if s in STAT_TO_MARKET]
 
-        # Create both 10-digit and 8-digit versions of game_ids to search
-        # raw_player_props_combined has mixed formats (some 8-digit, some 10-digit)
-        # Searching both avoids LPAD() in WHERE clause which prevents index usage on 26M rows
+        # Keep compatibility with any provider IDs written before canonical linking.
         game_ids_10digit = [g.zfill(10) for g in game_ids]  # Ensure 10-digit
         game_ids_8digit = [g.lstrip('0') for g in game_ids]  # Strip leading zeros
         all_game_ids = list(set(game_ids_10digit + game_ids_8digit))
 
         start_time = time.perf_counter()
-        # Query uses both 8-digit and 10-digit game_ids to match mixed data formats
-        # After index creation on game_id, this should be very fast
         query = text("""
-            WITH ranked_lines AS (
+            WITH eligible AS (
                 SELECT
                     player_id,
                     game_id,
@@ -863,15 +859,37 @@ class DailyPredictionRunner:
                     line,
                     outcome_label,
                     odds_american,
-                    snapshot_time,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY player_id, game_id, market_key, bookmaker, line, outcome_label
-                        ORDER BY snapshot_time DESC
-                    ) as rn
-                FROM raw_player_props_combined
+                    source_snapshot_time AS quote_snapshot
+                FROM nba_player_props_inference
                 WHERE game_id IN :game_ids
                   AND market_key IN :markets
                   AND player_id IS NOT NULL
+                  AND observed_at >= NOW() - interval '48 hours'
+                  AND observed_at <= NOW()
+                  AND source_snapshot_time <= NOW()
+                  AND observed_at < commence_time
+                  AND (market_last_update IS NULL OR market_last_update < commence_time)
+                  AND (bookmaker_last_update IS NULL OR bookmaker_last_update < commence_time)
+            ), paired AS (
+                SELECT
+                    player_id,
+                    game_id,
+                    bookmaker,
+                    market_key,
+                    line,
+                    quote_snapshot,
+                    MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
+                    MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds
+                FROM eligible
+                GROUP BY player_id, game_id, bookmaker, market_key, line, quote_snapshot
+                HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
+                   AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
+            ), ranked_lines AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY player_id, game_id, market_key, bookmaker, line
+                    ORDER BY quote_snapshot DESC
+                ) AS pair_rn
+                FROM paired
             )
             SELECT
                 player_id,
@@ -879,13 +897,10 @@ class DailyPredictionRunner:
                 bookmaker,
                 market_key,
                 line,
-                MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) as over_odds,
-                MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) as under_odds
+                over_odds,
+                under_odds
             FROM ranked_lines
-            WHERE rn = 1
-            GROUP BY player_id, game_id, bookmaker, market_key, line
-            HAVING MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
-               AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
+            WHERE pair_rn = 1
         """).bindparams(
             bindparam("game_ids", expanding=True),
             bindparam("markets", expanding=True),

@@ -94,6 +94,9 @@ NBA_TABLES: dict[str, tuple[str | None, str]] = {
     "team_game_stats":              ("game_date", "incremental"),
     "team_average_game_stats":      ("game_date", "incremental"),
     "team_allowed_by_position":     ("game_date", "incremental"),
+    # Compact canonical rows may be updated on an already-synced game_date; explicit
+    # date windows stage/upsert by the composite PK, while unbounded sync stays small.
+    "nba_player_prop_feature_lines": ("game_date", "full"),
     "raw_player_props_combined":    ("commence_time", "incremental"),
     "raw_game_lines_staging":       ("commence_time", "incremental"),
 }

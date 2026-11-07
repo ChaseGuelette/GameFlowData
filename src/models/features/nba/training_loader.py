@@ -245,7 +245,24 @@ class TrainingFeatureLoader:
                 -- Identifiers
                 pgs.game_id, pgs.player_id, pgs.game_date::date, pgs.season_id,
                 pgs.team_id, tgs.opponent_id,
-                schedule.commence_time_utc,
+                CASE
+                    WHEN schedule.game_id IS NOT NULL THEN
+                        CASE
+                            WHEN schedule.game_date = pgs.game_date
+                             AND schedule.commence_time_utc IS NOT NULL
+                             AND COALESCE(LOWER(TRIM(schedule.postponed_status)), '') IN ('', 'n', '0', 'false')
+                             AND COALESCE(LOWER(schedule.status_text), '') NOT LIKE '%postpon%'
+                             AND COALESCE(LOWER(schedule.status_text), '') NOT LIKE '%cancel%'
+                             AND COALESCE(LOWER(schedule.status_text), '') NOT LIKE '%tbd%'
+                             AND (schedule.commence_time_utc AT TIME ZONE 'America/New_York')::date = pgs.game_date
+                            THEN schedule.commence_time_utc
+                            ELSE NULL
+                        END
+                    WHEN timing.game_date = pgs.game_date
+                     AND timing.status = 'resolved'
+                    THEN timing.game_start_utc
+                    ELSE NULL
+                END AS commence_time_utc,
 
                 -- Target Variables
                 pgs.min as actual_minutes,
@@ -372,6 +389,8 @@ class TrainingFeatureLoader:
                 ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
             LEFT JOIN public.nba_game_schedule schedule
                 ON schedule.game_id = pgs.game_id
+            LEFT JOIN public.nba_injury_game_timing timing
+                ON timing.game_id = pgs.game_id
 
             -- Position
             LEFT JOIN LATERAL (
@@ -457,14 +476,14 @@ class TrainingFeatureLoader:
                     MAX(CASE WHEN sub.market_key = 'player_assists' THEN sub.line END) as prop_line_ast,
                     MAX(CASE WHEN sub.market_key = 'player_threes' THEN sub.line END) as prop_line_threes
                 FROM (
-                    SELECT DISTINCT ON (market_key) market_key, line
-                    FROM raw_player_props_combined
+                    SELECT market_key, line
+                    FROM nba_player_prop_feature_lines
                     WHERE player_id = pgs.player_id
                       AND game_id = pgs.game_id
-                      AND bookmaker IN ('pinnacle', 'draftkings')
-                      AND COALESCE(snapshot_time, inserted_at)::date <= pgs.game_date
-                      AND (commence_time IS NULL OR COALESCE(snapshot_time, inserted_at) < commence_time)
-                    ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+                      AND game_date = pgs.game_date
+                      AND selection_policy_version = 't60_v1'
+                      AND source_snapshot_time <= decision_time
+                      AND decision_time = commence_time - INTERVAL '60 minutes'
                 ) sub
             ) prop_lines ON TRUE
 
@@ -472,6 +491,12 @@ class TrainingFeatureLoader:
               AND pgs.season_id NOT IN :excluded
               AND pgs.min >= 5
               AND pos.position_group IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM nba_player_prop_feature_lines eligible_props
+                  WHERE eligible_props.game_id = pgs.game_id
+                    AND eligible_props.game_date = pgs.game_date
+                    AND eligible_props.selection_policy_version = 't60_v1'
+              )
         """).bindparams(
             bindparam("excluded", expanding=True),
         )

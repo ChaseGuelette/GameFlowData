@@ -4,6 +4,7 @@ curl_cffi==0.14.0; sys_platform == "win32"
 numpy==2.4.1
 optuna==4.7.0
 pandas==3.0.0
+pypdf==5.9.0
 plotly==6.5.2
 pydantic==2.12.4
 psycopg2-binary==2.9.10

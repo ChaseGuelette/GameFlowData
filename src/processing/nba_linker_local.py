@@ -54,6 +54,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.db.client import get_engine  # noqa: E402
 from src.models.features.nba.season import is_competitive_nba_game_id  # noqa: E402
+from src.processing.nba_player_aliases import add_verified_player_aliases  # noqa: E402
 from src.scrapers.nba_cdn_scraper import TEAM_ID_TO_ABBREV, fetch_schedule  # noqa: E402
 from src.scrapers.nba_schedule import parse_schedule, validate_source_freshness  # noqa: E402
 
@@ -1116,9 +1117,31 @@ def _resolve_fuzzy_names(
     return result
 
 
-LINKER_STATE_NAME = "production"
-LINKER_ADVISORY_LOCK_KEY = 629_817_204_113
 LINKER_STATE_TABLE = "public.nba_props_linker_state"
+LINKER_SOURCE_CONFIG = {
+    "raw_player_props_combined": {"state_name": "production", "lock_key": 629_817_204_113},
+    "nba_player_props_inference": {"state_name": "nba_inference", "lock_key": 629_817_204_114},
+}
+
+
+def _linker_state_table(state_name: str) -> str:
+    """Keep inference checkpoints separate from the active legacy job."""
+    tables = {
+        "production": LINKER_STATE_TABLE,
+        "nba_inference": "public.nba_props_inference_linker_state",
+    }
+    if state_name not in tables:
+        raise ValueError(f"unsupported linker checkpoint identity: {state_name!r}")
+    return tables[state_name]
+
+
+def _linker_source_config(source_table: str) -> dict[str, Any]:
+    """Return trusted SQL identifier/checkpoint metadata for a linker source."""
+    try:
+        return LINKER_SOURCE_CONFIG[source_table]
+    except KeyError as exc:
+        allowed = ", ".join(sorted(LINKER_SOURCE_CONFIG))
+        raise ValueError(f"unsupported linker source table {source_table!r}; allowed: {allowed}") from exc
 
 
 def _set_linker_timeouts(conn, *, local: bool = True) -> None:
@@ -1135,14 +1158,18 @@ def _read_linker_records(conn, query: str, params: dict[str, Any] | None = None)
     return [dict(row._mapping) for row in conn.execute(text(query), params or {})]
 
 
-def _window_fixture_dates(engine, cursor: int, high_water: int, *, row_limit: int | None = None) -> tuple[date, date]:
+def _window_fixture_dates(
+    engine, cursor: int, high_water: int, *, source_table: str = "raw_player_props_combined",
+    row_limit: int | None = None,
+) -> tuple[date, date]:
     """Return ET fixture dates for only the next processable PK rows."""
+    _linker_source_config(source_table)
     with engine.begin() as conn:
         _set_linker_timeouts(conn)
-        row = conn.execute(text("""
+        row = conn.execute(text(f"""
             SELECT MIN(commence_time) AS min_time, MAX(commence_time) AS max_time
             FROM (
-                SELECT commence_time FROM raw_player_props_combined
+                SELECT commence_time FROM {source_table}
                 WHERE staging_id > :cursor AND staging_id <= :high_water
                 ORDER BY staging_id LIMIT :row_limit
             ) bounded
@@ -1187,6 +1214,8 @@ def _load_linker_context(
             api_name, player_id = row.get("api_name"), row.get("player_id")
             if isinstance(api_name, str) and pd.notna(player_id):
                 manual[api_name].add(int(player_id))
+
+    add_verified_player_aliases(players, manual)
 
     by_match: defaultdict[tuple[str, str, str], set[str]] = defaultdict(set)
     by_game: defaultdict[str, set[tuple[str, str, str]]] = defaultdict(set)
@@ -1240,8 +1269,9 @@ def _unique_reference(values: set[Any]) -> Any | None:
 
 def _resolve_linker_page(
     conn, rows: list[dict[str, Any]], context: dict[str, Any], *, apply_updates: bool,
-    repair_game_conflicts: bool = False,
+    repair_game_conflicts: bool = False, source_table: str = "raw_player_props_combined",
 ) -> dict[str, Any]:
+    _linker_source_config(source_table)
     proposed = {"player_id": 0, "game_id": 0, "team_id": 0}
     corrected_game_ids = 0
     corrected_team_ids = 0
@@ -1267,6 +1297,8 @@ def _resolve_linker_page(
             player_verified = False
         elif old["player_id"] is not None and not candidates:
             reference_unverified.add(staging_id)
+            if source_table == "nba_player_props_inference":
+                player_verified = False
         if old["player_id"] is None and not player_verified:
             player_id = None
 
@@ -1379,8 +1411,8 @@ def _resolve_linker_page(
 
     changed = 0
     if updates and apply_updates:
-        result = conn.execute(text("""
-            UPDATE raw_player_props_combined
+        result = conn.execute(text(f"""
+            UPDATE {source_table}
             SET player_id = COALESCE(player_id, :player_id),
                 game_id = CASE WHEN :repair_game THEN :game_id ELSE COALESCE(game_id, :game_id) END,
                 team_id = CASE WHEN :repair_team THEN :team_id ELSE COALESCE(team_id, :team_id) END
@@ -1399,6 +1431,10 @@ def _resolve_linker_page(
                 f"stale source or partial linker write: expected {len(updates)} rows, updated {changed}; checkpoint not advanced"
             )
 
+    if source_table == "nba_player_props_inference":
+        # Future games need verified game/player identities, not postgame team stats.
+        unresolved_ids = [int(row["staging_id"]) for row in rows if int(row["staging_id"]) not in team_eligible]
+        reference_unverified.intersection_update(unresolved_ids)
     return {
         "proposed": proposed,
         "corrected_game_ids": corrected_game_ids,
@@ -1419,8 +1455,9 @@ def _summary_json(summary: dict[str, Any]) -> None:
 def _run_fixed_linker(
     engine, context: dict[str, Any], *, cursor: int, high_water: int,
     batch_size: int, max_batches: int, dry_run: bool, mode: str = "fixed_window",
-    repair_game_conflicts: bool = False,
+    repair_game_conflicts: bool = False, source_table: str = "raw_player_props_combined",
 ) -> dict[str, Any]:
+    _linker_source_config(source_table)
     current = cursor
     totals = {"player_id": 0, "game_id": 0, "team_id": 0}
     scanned = changed = batches = corrected_game_ids = 0
@@ -1432,10 +1469,10 @@ def _run_fixed_linker(
     while current < high_water and batches < max_batches:
         with engine.begin() as conn:
             _set_linker_timeouts(conn)
-            rows = _read_linker_records(conn, """
+            rows = _read_linker_records(conn, f"""
                 SELECT staging_id, api_player_name, home_team, away_team, commence_time,
                        player_id, game_id, team_id
-                FROM raw_player_props_combined
+                FROM {source_table}
                 WHERE staging_id > :cursor AND staging_id <= :high_water
                 ORDER BY staging_id
                 LIMIT :batch_size
@@ -1446,6 +1483,7 @@ def _run_fixed_linker(
             result = _resolve_linker_page(
                 conn, rows, context, apply_updates=not dry_run,
                 repair_game_conflicts=repair_game_conflicts,
+                source_table=source_table,
             )
             current = int(rows[-1]["staging_id"])
         batches += 1
@@ -1478,55 +1516,61 @@ def _run_fixed_linker(
         "conflict_count": len(conflict_ids),
         "reference_unverified_count": len(unverified_ids),
         "reference_available": context["schedule_status"].get("reference_available"),
+        "source_table": source_table,
         "dry_run": dry_run,
     }
     _summary_json(summary)
     return summary
 
 
-def _load_resume_state(conn, *, for_update: bool = False) -> dict[str, Any]:
+def _load_resume_state(
+    conn, *, state_name: str = "production", for_update: bool = False,
+) -> dict[str, Any]:
     suffix = " FOR UPDATE" if for_update else ""
     try:
         rows = _read_linker_records(conn, f"""
             SELECT state_name, replay_floor, cursor, high_water, first_unresolved_id, updated_at
-            FROM {LINKER_STATE_TABLE}
+            FROM {_linker_state_table(state_name)}
             WHERE state_name = :state_name{suffix}
-        """, {"state_name": LINKER_STATE_NAME})
+        """, {"state_name": state_name})
     except Exception as exc:
         raise RuntimeError(
-            "production linker state table is unavailable; apply the prepared migration and provision the production row explicitly"
+            "linker state table is unavailable; apply the prepared migration and provision the requested source row explicitly"
         ) from exc
     if not rows:
         raise RuntimeError(
-            "production linker state row is missing; provision state_name='production' explicitly (no automatic initialization)"
+            f"linker state row is missing; provision state_name={state_name!r} explicitly (no automatic initialization)"
         )
     return rows[0]
 
 
 def _run_resume_linker(
     engine, *, batch_size: int, max_batches: int, dry_run: bool,
-    repair_game_conflicts: bool = False,
+    repair_game_conflicts: bool = False, source_table: str = "raw_player_props_combined",
 ) -> dict[str, Any]:
+    source_config = _linker_source_config(source_table)
+    state_name = source_config["state_name"]
+    lock_key = source_config["lock_key"]
     if dry_run:
         # Snapshot the checkpoint without advisory/row locks or state mutation.
         with engine.begin() as conn:
             _set_linker_timeouts(conn)
-            state = _load_resume_state(conn)
+            state = _load_resume_state(conn, state_name=state_name)
             current = int(state["cursor"])
             high_water = state["high_water"]
             if high_water is None:
                 source_high = conn.execute(text(
-                    "SELECT MAX(staging_id) FROM raw_player_props_combined"
+                    f"SELECT MAX(staging_id) FROM {source_table}"
                 )).scalar_one()
                 high_water = max(current, int(source_high) if source_high is not None else current)
-        fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water), row_limit=batch_size * max_batches)
+        fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water), source_table=source_table, row_limit=batch_size * max_batches)
         context = _load_linker_context(engine, fixture_start, fixture_end) if current < int(high_water) else {
             "schedule_status": {"reference_available": None}
         }
         return _run_fixed_linker(
             engine, context, cursor=current, high_water=int(high_water),
             batch_size=batch_size, max_batches=max_batches, dry_run=True, mode="resume_preview",
-            repair_game_conflicts=repair_game_conflicts,
+            repair_game_conflicts=repair_game_conflicts, source_table=source_table,
         )
 
     totals = {"player_id": 0, "game_id": 0, "team_id": 0}
@@ -1540,29 +1584,29 @@ def _run_resume_linker(
     with engine.connect() as conn:
         _set_linker_timeouts(conn, local=False)
         acquired = bool(conn.execute(
-            text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": LINKER_ADVISORY_LOCK_KEY}
+            text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": lock_key}
         ).scalar_one())
         conn.commit()
         if not acquired:
-            raise RuntimeError("another production props linker invocation holds the durable checkpoint lock")
+            raise RuntimeError(f"another {state_name} props linker invocation holds the durable checkpoint lock")
         try:
             with conn.begin():
-                state = _load_resume_state(conn, for_update=True)
+                state = _load_resume_state(conn, state_name=state_name, for_update=True)
                 replay_floor = int(state["replay_floor"])
                 current = int(state["cursor"])
                 high_water = state["high_water"]
                 first_unresolved = state["first_unresolved_id"]
                 if high_water is None:
                     source_high = conn.execute(text(
-                        "SELECT MAX(staging_id) FROM raw_player_props_combined"
+                        f"SELECT MAX(staging_id) FROM {source_table}"
                     )).scalar_one()
                     high_water = max(current, int(source_high) if source_high is not None else current)
                     if not dry_run:
                         conn.execute(text(f"""
-                            UPDATE {LINKER_STATE_TABLE}
+                            UPDATE {_linker_state_table(state_name)}
                             SET high_water = :high_water, first_unresolved_id = NULL, updated_at = NOW()
                             WHERE state_name = :state_name
-                        """), {"high_water": high_water, "state_name": LINKER_STATE_NAME})
+                        """), {"high_water": high_water, "state_name": state_name})
                     first_unresolved = None
                 if int(high_water) <= current and not dry_run:
                     next_cursor = (
@@ -1571,27 +1615,27 @@ def _run_resume_linker(
                         else int(high_water)
                     )
                     conn.execute(text(f"""
-                        UPDATE {LINKER_STATE_TABLE}
+                        UPDATE {_linker_state_table(state_name)}
                         SET cursor = :next_cursor, high_water = NULL,
                             first_unresolved_id = NULL, updated_at = NOW()
                         WHERE state_name = :state_name
-                    """), {"next_cursor": next_cursor, "state_name": LINKER_STATE_NAME})
+                    """), {"next_cursor": next_cursor, "state_name": state_name})
                     completed_cycle = True
 
             if current < int(high_water):
-                fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water), row_limit=batch_size * max_batches)
+                fixture_start, fixture_end = _window_fixture_dates(engine, current, int(high_water), source_table=source_table, row_limit=batch_size * max_batches)
                 context = _load_linker_context(engine, fixture_start, fixture_end)
             else:
                 context = {"schedule_status": {"reference_available": None}}
             while current < int(high_water) and batches < max_batches:
                 with conn.begin():
-                    state = _load_resume_state(conn, for_update=True)
+                    state = _load_resume_state(conn, state_name=state_name, for_update=True)
                     if not dry_run and (int(state["cursor"]) != current or int(state["high_water"]) != int(high_water)):
-                        raise RuntimeError("production linker state changed while lock held; checkpoint not advanced")
-                    rows = _read_linker_records(conn, """
+                        raise RuntimeError(f"{state_name} linker state changed while lock held; checkpoint not advanced")
+                    rows = _read_linker_records(conn, f"""
                         SELECT staging_id, api_player_name, home_team, away_team, commence_time,
                                player_id, game_id, team_id
-                        FROM raw_player_props_combined
+                        FROM {source_table}
                         WHERE staging_id > :cursor AND staging_id <= :high_water
                         ORDER BY staging_id
                         LIMIT :batch_size
@@ -1603,6 +1647,7 @@ def _run_resume_linker(
                         page_result = _resolve_linker_page(
                             conn, rows, context, apply_updates=not dry_run,
                             repair_game_conflicts=repair_game_conflicts,
+                            source_table=source_table,
                         )
                         current = int(rows[-1]["staging_id"])
                         page_unresolved = page_result["first_unresolved_id"]
@@ -1613,22 +1658,22 @@ def _run_resume_linker(
                         if current >= int(high_water):
                             next_cursor = max(replay_floor, int(first_unresolved) - 1) if first_unresolved is not None else int(high_water)
                             conn.execute(text(f"""
-                                UPDATE {LINKER_STATE_TABLE}
+                                UPDATE {_linker_state_table(state_name)}
                                 SET cursor = :next_cursor, high_water = NULL,
                                     first_unresolved_id = NULL, updated_at = NOW()
                                 WHERE state_name = :state_name
-                            """), {"next_cursor": next_cursor, "state_name": LINKER_STATE_NAME})
+                            """), {"next_cursor": next_cursor, "state_name": state_name})
                             completed_cycle = True
                         else:
                             conn.execute(text(f"""
-                                UPDATE {LINKER_STATE_TABLE}
+                                UPDATE {_linker_state_table(state_name)}
                                 SET cursor = :cursor, first_unresolved_id = :first_unresolved_id,
                                     updated_at = NOW()
                                 WHERE state_name = :state_name
                             """), {
                                 "cursor": current,
                                 "first_unresolved_id": first_unresolved,
-                                "state_name": LINKER_STATE_NAME,
+                                "state_name": state_name,
                             })
                 if rows:
                     batches += 1
@@ -1665,16 +1710,17 @@ def _run_resume_linker(
                 "conflict_count": len(conflict_ids),
                 "reference_unverified_count": len(unverified_ids),
                 "reference_available": context["schedule_status"].get("reference_available"),
+                "source_table": source_table,
                 "dry_run": dry_run,
             }
             _summary_json(summary)
             return summary
         finally:
             try:
-                conn.execute(text("SELECT pg_advisory_unlock(:lock_key)"), {"lock_key": LINKER_ADVISORY_LOCK_KEY})
+                conn.execute(text("SELECT pg_advisory_unlock(:lock_key)"), {"lock_key": lock_key})
                 conn.commit()
             except Exception:
-                logging.exception("Failed to release production props linker advisory lock")
+                logging.exception("Failed to release %s props linker advisory lock", state_name)
 
 
 
@@ -1682,7 +1728,7 @@ def link_incremental(
     batch_size: int = 50000, limit: int | None = None, days: int = 30, *,
     dry_run: bool = False, cursor: int | None = None, high_water: int | None = None,
     max_batches: int | None = None, resume: bool = False, local: bool = False,
-    repair_game_conflicts: bool = False,
+    repair_game_conflicts: bool = False, source_table: str = "raw_player_props_combined",
 ) -> dict[str, Any] | None:
     """
     Incremental linker: bounded recent-window smoke with --limit, legacy/unbounded otherwise.
@@ -1696,9 +1742,12 @@ def link_incremental(
         limit: Recent PK-window cap (1..5000); None retains legacy/unbounded behavior
         days: Only process records with commence_time within this many days (default 30)
     """
+    source_config = _linker_source_config(source_table)
+    fixed_requested = cursor is not None or high_water is not None or max_batches is not None
+    if source_table != "raw_player_props_combined" and not (resume or fixed_requested):
+        raise ValueError("alternate linker sources require bounded --resume or fixed-window mode")
     if batch_size <= 0 or (limit is not None and not 1 <= limit <= 5000):
         raise ValueError("batch_size must be positive; bounded --limit must be between 1 and 5000")
-    fixed_requested = cursor is not None or high_water is not None or max_batches is not None
     if repair_game_conflicts and not (resume or fixed_requested):
         raise ValueError("--repair-game-conflicts requires bounded --resume or fixed-window mode")
     if local and (resume or not fixed_requested):
@@ -1724,20 +1773,23 @@ def link_incremental(
         if resume:
             with engine.begin() as conn:
                 _set_linker_timeouts(conn)
-                _load_resume_state(conn)
+                _load_resume_state(conn, state_name=source_config["state_name"])
         if resume:
             return _run_resume_linker(
                 engine, batch_size=batch_size, max_batches=max_batches, dry_run=dry_run,
-                repair_game_conflicts=repair_game_conflicts,
+                repair_game_conflicts=repair_game_conflicts, source_table=source_table,
             )
         assert cursor is not None and high_water is not None
         fixed_cursor, fixed_high_water = cursor, high_water
-        fixture_start, fixture_end = _window_fixture_dates(engine, fixed_cursor, fixed_high_water, row_limit=batch_size * max_batches)
+        fixture_start, fixture_end = _window_fixture_dates(
+            engine, fixed_cursor, fixed_high_water, source_table=source_table,
+            row_limit=batch_size * max_batches,
+        )
         context = _load_linker_context(engine, fixture_start, fixture_end)
         return _run_fixed_linker(
             engine, context, cursor=fixed_cursor, high_water=fixed_high_water, batch_size=batch_size,
             max_batches=max_batches, dry_run=dry_run,
-            repair_game_conflicts=repair_game_conflicts,
+            repair_game_conflicts=repair_game_conflicts, source_table=source_table,
         )
 
     print("Target: canonical DATABASE_URL (local processing, NOT automatic LOCAL_DATABASE_URL selection)")
@@ -2312,6 +2364,12 @@ def main():
     parser.add_argument("--high-water", type=int, default=None, help="Inclusive frozen staging_id for fixed-window mode")
     parser.add_argument("--max-batches", type=int, default=None, help="Positive bounded batch count for fixed-window/resume mode")
     parser.add_argument("--resume", action="store_true", help="Use the pre-provisioned durable production checkpoint")
+    parser.add_argument(
+        "--source-table",
+        choices=sorted(LINKER_SOURCE_CONFIG),
+        default="raw_player_props_combined",
+        help="Validated props source for bounded incremental modes",
+    )
     parser.add_argument("--local", action="store_true", help="Target LOCAL_DATABASE_URL; explicit fixed-window incremental mode only")
     parser.add_argument(
         "--repair-game-conflicts", action="store_true",
@@ -2332,6 +2390,7 @@ def main():
     production_flags = args.resume or args.cursor is not None or args.high_water is not None or args.max_batches is not None
     if args.command != "incremental" and (
         args.dry_run or args.limit is not None or production_flags or args.repair_game_conflicts
+        or args.source_table != "raw_player_props_combined"
     ):
         parser.error("incremental scope flags are only valid with the incremental command")
     if args.command == "incremental":
@@ -2355,6 +2414,8 @@ def main():
             parser.error("--dry-run requires --limit, --resume, or fixed-window bounds")
         if args.repair_game_conflicts and not production_flags:
             parser.error("--repair-game-conflicts requires bounded --resume or fixed-window mode")
+        if args.source_table != "raw_player_props_combined" and not production_flags:
+            parser.error("alternate --source-table values require bounded --resume or fixed-window mode")
 
     if args.command == "download":
         download_tables()
@@ -2381,10 +2442,17 @@ def main():
                 resume=args.resume,
                 local=args.local,
                 repair_game_conflicts=args.repair_game_conflicts,
+                source_table=args.source_table,
             )
         except Exception as exc:
             logging.error("Incremental linker failed: %s", exc, exc_info=True)
             return 1
+        if summary and args.source_table == "nba_player_props_inference" and (
+            summary.get("status") != "complete" or not summary.get("identity_ready")
+            or summary.get("conflict_count", 0) or summary.get("reference_unverified_count", 0)
+        ):
+            logging.warning("Inference window/identities incomplete; defer T-60 materialization until resolved")
+            return 2
         if summary and summary.get("status") == "incomplete":
             if (args.resume and not args.dry_run and summary.get("rows_scanned", 0) > 0
                     and summary.get("batch_identity_ready", summary.get("identity_ready")) and summary.get("conflict_count") == 0

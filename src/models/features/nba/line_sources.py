@@ -55,7 +55,7 @@ def game_lines_query() -> TextClause:
 
 
 def player_prop_lines_query() -> TextClause:
-    """Build the current as-of/pre-game NBA player prop-line feature query."""
+    """Read frozen T-60 features; unavailable early decisions retain zero defaults."""
     return text("""
         SELECT
             MAX(CASE WHEN sub.market_key = 'player_points' THEN sub.line END) as prop_line_pts,
@@ -63,17 +63,18 @@ def player_prop_lines_query() -> TextClause:
             MAX(CASE WHEN sub.market_key = 'player_assists' THEN sub.line END) as prop_line_ast,
             MAX(CASE WHEN sub.market_key = 'player_threes' THEN sub.line END) as prop_line_threes
         FROM (
-            SELECT DISTINCT ON (market_key) market_key, line
-            FROM raw_player_props_combined
+            SELECT market_key, line
+            FROM nba_player_prop_feature_lines
             WHERE player_id = :player_id
               AND game_id = :game_id
-              AND bookmaker IN ('pinnacle', 'draftkings')
+              AND selection_policy_version = 't60_v1'
               AND (
                   :as_of_date IS NULL
-                  OR COALESCE(snapshot_time, inserted_at)::date <= :as_of_date
+                  OR game_date <= :as_of_date
               )
-              AND (commence_time IS NULL OR COALESCE(snapshot_time, inserted_at) < commence_time)
-            ORDER BY market_key, COALESCE(snapshot_time, inserted_at) DESC NULLS LAST
+              AND source_snapshot_time <= decision_time
+              AND decision_time = commence_time - INTERVAL '60 minutes'
+              AND decision_time <= COALESCE(CAST(:as_of_time AS timestamptz), CURRENT_TIMESTAMP)
         ) sub
     """)
 
@@ -109,11 +110,11 @@ def get_game_lines(conn, game_id, as_of_date=None) -> dict[str, float | int]:
     return row_to_game_lines(result)
 
 
-def get_player_prop_lines(conn, player_id, game_id, as_of_date=None) -> dict[str, float | int]:
-    """Fetch per-stat NBA prop-line features using only as-of, pregame quotes."""
+def get_player_prop_lines(conn, player_id, game_id, as_of_date=None, *, as_of_time=None) -> dict[str, float | int]:
+    """Fetch T-60 features without revealing a later decision to an earlier caller."""
     result = conn.execute(
         player_prop_lines_query(),
-        {"player_id": player_id, "game_id": game_id, "as_of_date": as_of_date},
+        {"player_id": player_id, "game_id": game_id, "as_of_date": as_of_date, "as_of_time": as_of_time},
     ).fetchone()
     return row_to_player_prop_lines(result)
 

@@ -1,5 +1,9 @@
 # NBA Core Product Restart Plan — 2026–27 Season
 
+## Props T-60 implementation — November 5, 2026
+
+The owner-approved T-60 props slice is integrated into the main checkout and its four-table remote migration is applied/read back. Use the [T-60 runbook](nba-props-t60-runbook.md) for the separate one-time API backfill, daily inference table/materializer, game-level eligibility, bounded cleanup and validation limitations. The original bulk scraper and old raw/archive tables are unchanged. No paid scrape, broad backfill, local sync, commit/push or deployment was run. Historical source population and the daily production cutover remain pending; do not treat the empty new tables as training-ready data. The [investigation](nba-compact-prop-lines-proposal-2026-11-05.md) retains the original evidence. Concurrent injury work was preserved.
+
 ## Training-policy research — November 3, 2026
 
 Read the [historical model/policy research](nba-training-policy-research-2026-11-03.md) before choosing the next training baseline. It distinguishes old owner decisions from incidental defaults, identifies March train/calibration overlap and a playoff calendar-year/OOS contradiction, and proposes explicit cohort, cold-start, trade and source policies. Proposed windows/policies are not approved. Current recovery and Slice 8 coding completion are reconciled in [the readiness assessment](nba-training-readiness-reconciliation-2026-11-03.md); older operational checkpoints below are historical and must not restart completed work. No new training, DB work or implementation is authorized by this research.

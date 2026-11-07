@@ -27,6 +27,7 @@ from src.models.features.nba.historical_observation_adapters import (
     evaluate_injury_observation,
 )
 from src.models.features.nba.transforms import starter_probability
+from src.scrapers.nba_official_injury_reports import official_observation_publication
 
 if TYPE_CHECKING:
     from src.models.features.nba.historical_loader import RollingSnapshot
@@ -363,7 +364,7 @@ def _provider_observations(
     row: Mapping,
     supported_report_times: Mapping[str, time],
 ) -> tuple[list[dict], Counter]:
-    """Parse explicitly supported provider clocks; retrieval time is provenance only."""
+    """Parse supported provider clocks or validated official publication instants."""
     counts: Counter = Counter()
     observations = row.get("source_observations")
     if isinstance(observations, str):
@@ -381,6 +382,9 @@ def _provider_observations(
             counts["missing_or_invalid_observation"] += 1
             continue
         requested_raw = observation.get("requested_date")
+        if not isinstance(requested_raw, str):
+            counts["missing_or_invalid_observation"] += 1
+            continue
         try:
             requested_date = date.fromisoformat(requested_raw)
         except (TypeError, ValueError):
@@ -390,21 +394,43 @@ def _provider_observations(
         if not isinstance(records, list):
             counts["unsupported_payload"] += 1
             continue
+
+        official_time = None
+        official_at = None
+        if observation.get("source") == "official_nba_pdf":
+            try:
+                official_date, official_time, official_at = official_observation_publication(observation)
+            except (TypeError, ValueError):
+                counts["unsupported_report_time"] += 1
+                continue
+            if official_date != requested_date or str(capture_id) != observation.get("capture_sha256"):
+                counts["unsupported_report_time"] += 1
+                continue
+
         for record in records:
             raw = record.get("raw") if isinstance(record, dict) else None
             if not isinstance(raw, dict):
                 counts["unsupported_payload"] += 1
                 continue
             label = raw.get("reportTime")
-            mapped_time = supported_report_times.get(label) if isinstance(label, str) else None
-            if not isinstance(mapped_time, time) or mapped_time.tzinfo is None:
-                counts["unsupported_report_time"] += 1
-                continue
-            provider_at = datetime.combine(requested_date, mapped_time)
-            if provider_at.utcoffset() is None:
-                counts["unsupported_report_time"] += 1
-                continue
+            if official_at is not None:
+                if label != official_time:
+                    counts["unsupported_report_time"] += 1
+                    continue
+                provider_at = official_at
+            else:
+                mapped_time = supported_report_times.get(label) if isinstance(label, str) else None
+                if not isinstance(mapped_time, time) or mapped_time.tzinfo is None:
+                    counts["unsupported_report_time"] += 1
+                    continue
+                provider_at = datetime.combine(requested_date, mapped_time)
+                if provider_at.utcoffset() is None:
+                    counts["unsupported_report_time"] += 1
+                    continue
             raw_date = raw.get("date")
+            if not isinstance(raw_date, str):
+                counts["unsupported_payload"] += 1
+                continue
             try:
                 payload_date = date.fromisoformat(raw_date)
             except (TypeError, ValueError):

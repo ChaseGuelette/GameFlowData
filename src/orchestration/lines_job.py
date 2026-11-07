@@ -80,7 +80,7 @@ def _props_source_high_water() -> int | None:
     with get_engine().begin() as conn:
         conn.execute(text("SET LOCAL statement_timeout = '10s'"))
         conn.execute(text("SET LOCAL lock_timeout = '2s'"))
-        value = conn.execute(text("SELECT MAX(staging_id) FROM raw_player_props_combined")).scalar_one()
+        value = conn.execute(text("SELECT MAX(staging_id) FROM nba_player_props_inference")).scalar_one()
     return int(value) if value is not None else None
 
 
@@ -147,7 +147,7 @@ def run_step_group(steps: list[tuple[str, str]], dry_run: bool = False) -> bool:
         if not run_command(command, description, dry_run):
             logger.error(f"Job failed at step: {description}")
             success = False
-            if description.startswith(("Scraping Player Props", "Scraping Injuries")):
+            if description.startswith(("Scraping Player Props", "Scraping Injuries", "Linking Props")):
                 return False
             continue
         if description == "Scraping Player Props (Live)" and not dry_run:
@@ -211,7 +211,7 @@ def main():
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Use live API endpoints (writes props to raw_player_props_combined)",
+        help="Use live API endpoints (writes props to nba_player_props_inference)",
     )
     parser.add_argument(
         "--props-only",
@@ -264,20 +264,25 @@ def main():
 
     if args.live:
         group_a.append((
-            f"{exe} src/scrapers/daily_player_props_scraper.py --live --combos --target-table raw_player_props_combined",
+            f"{exe} src/scrapers/daily_player_props_scraper.py --live --combos --target-table nba_player_props_inference",
             "Scraping Player Props (Live)",
         ))
     else:
         group_a.append((
-            f"{exe} src/scrapers/daily_player_props_scraper.py --date {args.date}",
+            f"{exe} src/scrapers/daily_player_props_scraper.py --date {args.date} --target-table nba_player_props_inference",
             "Scraping Player Props (Historical)",
         ))
 
     if not args.skip_linker:
         group_a.append((
             f"{exe} src/processing/nba_linker_local.py incremental --resume --repair-game-conflicts "
-            f"--batch-size {args.linker_batch_size} --max-batches {args.linker_max_batches}",
+            f"--source-table nba_player_props_inference --batch-size {args.linker_batch_size} "
+            f"--max-batches {args.linker_max_batches}",
             "Linking Props (Durable Bounded Resume)",
+        ))
+        group_a.append((
+            f"{exe} scripts/materialize_nba_prop_lines_t60.py --max-events 50 --execute",
+            "Materializing NBA T-60 Feature Lines",
         ))
 
     # Group B: Injury path (injury scraper → injury linker)
