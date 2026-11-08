@@ -1,10 +1,22 @@
 # NBA Core Product Restart Plan — 2026–27 Season
 
+## Feature-family ablation controls delivered — November 8, 2026
+
+Chase explicitly approved the general NBA feature-family setup, not the previous-day injury variant. The [owner-run setup](nba-feature-ablation-setup.md) is implemented and integrated into main, uncommitted: six disjoint families, exact/family include/exclude controls for ordinary full training, per-quantile forced-inclusion guarantees, artifact conformance and lifecycle threading. Independent spec/quality reviews passed after concrete repairs; main-checkout validation passed 108 existing tests, guarded populated/negative probes, five dry-runs, real baseline-artifact compatibility, scoped Ruff/syntax and diff checks. No training, sweep, DB/API operation, deployment, commit or push was launched. This supersedes the controls-only proposed/unimplemented status below. The existing null-cutoff reference still uses the direct training recipes; lifecycle cutoff gates remain unchanged. Concurrent sweep/Railway edits were preserved.
+
+## First no-injury sweep reviewed — November 8, 2026
+
+The [first sweep review](nba-first-sweep-review-2026-11-08.md) reconciles all 95 saved ledgers for October 21–November 2. Every raw/no-BL threshold lost money; the best BL ROI cell with at least 100 total bets returned +4.17% on 271 bets, driven by unders/REB over only 12 betting dates. Historical readiness remains unverified and the window is now discovery data, not untouched finalist evidence. Next proposed training work is a game-line-free control, followed by fixed-parameter short-form, opponent-matchup and prop-market exclusions. Generic family controls still need approval/implementation; no new runs or promotion are authorized. The logged correlation warning does not indicate independent sweep sampling: recorded copula parameters were enabled and global offsets were disabled.
+
+## Feature-family ablation discussion — November 8, 2026
+
+The first no-injury baseline has finalized at `src/models/artifacts/no_injury_baseline/nba_run_20261108_122129`; saved completion/sanity metadata, injury exclusion and incumbent-parameter equality were checked. This is not profitability or promotion certification. See [the ablation proposal](nba-feature-family-ablation-direction-2026-11-08.md) for current training-control gaps, reusable lifecycle stages, actual selected-feature counts and the recommended family experiments. General family controls and further training/replays are proposed, not approved or launched. Preserve the completed baseline and separately owned injury/Railway work.
+
 ## Injury-feature baseline direction — November 8, 2026
 
 Follow-up [RapidAPI clock validation](nba-rapidapi-clock-validation-2026-11-08.md) compared retained raw records with official reports: `reportTime` is not a reliable publication clock, but many statuses match usable earlier reports. A previous-day snapshot experiment is proposed, not approved or implemented. Keep the no-injury training lane independent; do not enable a blanket time-map or restart broad recovery from this research.
 
-Chase proposes leaving historical injury features out of the first baseline while source repair proceeds separately. See [the decision summary](nba-injury-baseline-direction-2026-11-08.md) for the distinction between unsupported publication evidence and late injury news, consistent feature exclusion across artifact stages, and preserving already-placed decisions. Feature exclusion is not yet implemented or verified; no scrape, training run, deployment or promotion is launched by this direction. Existing split/fixed-parameter policy and independent backend/job ownership remain unchanged.
+Chase approved leaving historical injury features out of the first baseline while source repair proceeds separately. See [the decision summary](nba-injury-baseline-direction-2026-11-08.md) for the distinction between unsupported publication evidence and late injury news, consistent feature exclusion across artifact stages, and preserving already-placed decisions. The exclusion is implemented and the owner-launched baseline has finalized; selected lists contain no injury-family features. See the newer ablation discussion above for the exact artifact and verification limits. Existing split/fixed-parameter policy and independent backend/job ownership remain unchanged; no deployment or promotion is authorized.
 
 ## Owner-prioritized next work — November 7, 2026
 

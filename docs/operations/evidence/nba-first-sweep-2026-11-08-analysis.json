@@ -1,0 +1,4863 @@
+{
+  "sweep_dir": "C:\\Users\\Chase\\Projects\\GameFlowData\\backtest_results\\nba_no_injury_holdout_sweep_95_nov2_v1",
+  "counts": {
+    "summary": 95,
+    "manifest": 95,
+    "bets_file_hashes_verified": 95,
+    "ledger_reconciled": 95,
+    "unique_selected_bet_portfolios": 53,
+    "profitable_cells": 30,
+    "cells_100_bets": 44,
+    "profitable_100_bets": 26
+  },
+  "raw_controls": [
+    {
+      "cell_id": "cell_a794416541d4069fa873bf10ea107a9e0a9f10f0eb61e3ae754c201f7d130777",
+      "edge_threshold": 0.03,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 1048,
+      "total_profit": -469.78913081326044,
+      "roi": -0.04483605143770008,
+      "sharpe_ratio": -4.672264702540087,
+      "max_drawdown": 0.3725870846063101
+    },
+    {
+      "cell_id": "cell_1892890f9fe9844f04b7abd24a0cb85a993605df124328c4b342a867c3f1de9e",
+      "edge_threshold": 0.05,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 972,
+      "total_profit": -574.6086016501883,
+      "roi": -0.059117692310409316,
+      "sharpe_ratio": -5.855329037975568,
+      "max_drawdown": 0.4121744149511949
+    },
+    {
+      "cell_id": "cell_51ee3d421931923c4876a2f14fdb07e4e611ef4b69bcf27ddff8b1001481e270",
+      "edge_threshold": 0.07,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 836,
+      "total_profit": -512.2938080755487,
+      "roi": -0.06127916364540056,
+      "sharpe_ratio": -6.932594290237954,
+      "max_drawdown": 0.33395419621709893
+    },
+    {
+      "cell_id": "cell_cbb6b0a26d2a59fae2e9ef5c897c7cc443993a6ad2fc87681ea1f78ad75ef09d",
+      "edge_threshold": 0.1,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 603,
+      "total_profit": -378.3979115636929,
+      "roi": -0.06275255581487445,
+      "sharpe_ratio": -6.766425415687522,
+      "max_drawdown": 0.2426501118725391
+    },
+    {
+      "cell_id": "cell_7caab692d73b35c0bfa84edfe542f0a5ff4750558faa3787f5505ddd3e13bcfb",
+      "edge_threshold": 0.12,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 423,
+      "total_profit": -306.98704340859217,
+      "roi": -0.07257376912732676,
+      "sharpe_ratio": -5.8598645006835275,
+      "max_drawdown": 0.22316777664406676
+    }
+  ],
+  "best_volume_roi": {
+    "cell_id": "cell_a320710db5e257998a6b67bea32c3141e2a698d26c54a4454ee2dca37da1e0cb",
+    "edge_threshold": 0.05,
+    "tau": 0.5,
+    "z_max": 0.5,
+    "max_weight": 0.5,
+    "total_bets": 271,
+    "total_profit": 113.00127071222515,
+    "roi": 0.041697885871669796,
+    "sharpe_ratio": 4.434657258974796,
+    "max_drawdown": 0.03222565611667565
+  },
+  "best_volume_profit": {
+    "cell_id": "cell_34ca124425d0feb618405f0969a7ca0c607083eb58716a9e94d1a5e107033efe",
+    "edge_threshold": 0.07,
+    "tau": 0.75,
+    "z_max": 0.5,
+    "max_weight": 0.75,
+    "total_bets": 300,
+    "total_profit": 122.6498252442092,
+    "roi": 0.04088327508140307,
+    "sharpe_ratio": 4.2363985121743175,
+    "max_drawdown": 0.04548741847803827
+  },
+  "best_any_roi": {
+    "cell_id": "cell_e2f215d02059c5d760d59e8d642b38b86ea4593798628d34972eafd11433560d",
+    "edge_threshold": 0.12,
+    "tau": 0.75,
+    "z_max": 0.5,
+    "max_weight": 0.5,
+    "total_bets": 53,
+    "total_profit": 35.11242417647335,
+    "roi": 0.06624985693674217,
+    "sharpe_ratio": 2.0498559606470277,
+    "max_drawdown": 0.03953994931205617
+  },
+  "raw5_breakdown": {
+    "stat_side": {
+      "ast/over": {
+        "bets": 64,
+        "wins": 24,
+        "losses": 40,
+        "profit": -162.42438029892085,
+        "staked": 640.0,
+        "roi": -0.25378809421706383,
+        "avg_model_prob": 0.55401875,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.375
+      },
+      "ast/under": {
+        "bets": 175,
+        "wins": 90,
+        "losses": 85,
+        "profit": -1.1812744131784445,
+        "staked": 1749.7400506279994,
+        "roi": -0.0006751142335425615,
+        "avg_model_prob": 0.6091337142857143,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.5142857142857142
+      },
+      "pts/over": {
+        "bets": 54,
+        "wins": 23,
+        "losses": 31,
+        "profit": -92.47109945585771,
+        "staked": 540.0,
+        "roi": -0.17124277677010688,
+        "avg_model_prob": 0.5898074074074074,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.42592592592592593
+      },
+      "pts/under": {
+        "bets": 301,
+        "wins": 150,
+        "losses": 151,
+        "profit": -164.09080584826285,
+        "staked": 3010.0,
+        "roi": -0.054515217889788324,
+        "avg_model_prob": 0.6196292358803986,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.4983388704318937
+      },
+      "reb/over": {
+        "bets": 147,
+        "wins": 66,
+        "losses": 81,
+        "profit": -181.69286293938828,
+        "staked": 1470.0,
+        "roi": -0.12360058703359747,
+        "avg_model_prob": 0.5847523809523809,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.4489795918367347
+      },
+      "reb/under": {
+        "bets": 231,
+        "wins": 123,
+        "losses": 108,
+        "profit": 27.25182130541975,
+        "staked": 2310.0,
+        "roi": 0.01179732524044145,
+        "avg_model_prob": 0.6262683982683983,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.5324675324675324
+      }
+    },
+    "side": {
+      "over": {
+        "bets": 265,
+        "wins": 113,
+        "losses": 152,
+        "profit": -436.58834269416684,
+        "staked": 2650.0,
+        "roi": -0.1647503179977988,
+        "avg_model_prob": 0.57836,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.42641509433962266
+      },
+      "under": {
+        "bets": 707,
+        "wins": 363,
+        "losses": 344,
+        "profit": -138.02025895602154,
+        "staked": 7069.740050627999,
+        "roi": -0.019522678057131863,
+        "avg_model_prob": 0.6192005657708628,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.5134370579915134
+      }
+    },
+    "date": {
+      "2026-10-22": {
+        "bets": 12,
+        "wins": 5,
+        "losses": 7,
+        "profit": -25.400666000666,
+        "staked": 120.0,
+        "roi": -0.21167221667221667,
+        "avg_model_prob": 0.64185,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.4166666666666667
+      },
+      "2026-10-23": {
+        "bets": 147,
+        "wins": 70,
+        "losses": 77,
+        "profit": -126.19259971496768,
+        "staked": 1470.0,
+        "roi": -0.08584530592854944,
+        "avg_model_prob": 0.6403646258503402,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.47619047619047616
+      },
+      "2026-10-24": {
+        "bets": 84,
+        "wins": 40,
+        "losses": 44,
+        "profit": -81.81790221310932,
+        "staked": 840.0,
+        "roi": -0.09740226453941586,
+        "avg_model_prob": 0.6244166666666666,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.47619047619047616
+      },
+      "2026-10-25": {
+        "bets": 71,
+        "wins": 35,
+        "losses": 36,
+        "profit": -38.46574224343896,
+        "staked": 710.0,
+        "roi": -0.05417710175132248,
+        "avg_model_prob": 0.609112676056338,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.49295774647887325
+      },
+      "2026-10-26": {
+        "bets": 106,
+        "wins": 49,
+        "losses": 57,
+        "profit": -117.41856943299416,
+        "staked": 1060.0,
+        "roi": -0.11077223531414543,
+        "avg_model_prob": 0.5970169811320755,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.46226415094339623
+      },
+      "2026-10-27": {
+        "bets": 44,
+        "wins": 17,
+        "losses": 27,
+        "profit": -113.79344177633455,
+        "staked": 440.0,
+        "roi": -0.2586214585825785,
+        "avg_model_prob": 0.5972,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.38636363636363635
+      },
+      "2026-10-28": {
+        "bets": 128,
+        "wins": 54,
+        "losses": 74,
+        "profit": -229.92147360719073,
+        "staked": 1280.0,
+        "roi": -0.17962615125561776,
+        "avg_model_prob": 0.6072890625,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.421875
+      },
+      "2026-10-29": {
+        "bets": 25,
+        "wins": 11,
+        "losses": 14,
+        "profit": -17.505596460847684,
+        "staked": 250.0,
+        "roi": -0.07002238584339074,
+        "avg_model_prob": 0.578584,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.44
+      },
+      "2026-10-30": {
+        "bets": 111,
+        "wins": 54,
+        "losses": 57,
+        "profit": -73.83283845284082,
+        "staked": 1110.0,
+        "roi": -0.06651607067823496,
+        "avg_model_prob": 0.5909945945945946,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.4864864864864865
+      },
+      "2026-10-31": {
+        "bets": 75,
+        "wins": 47,
+        "losses": 28,
+        "profit": 139.19746709418135,
+        "staked": 750.0,
+        "roi": 0.1855966227922418,
+        "avg_model_prob": 0.6082693333333333,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.6266666666666667
+      },
+      "2026-11-01": {
+        "bets": 44,
+        "wins": 20,
+        "losses": 24,
+        "profit": -65.1085865637919,
+        "staked": 440.0,
+        "roi": -0.14797406037225433,
+        "avg_model_prob": 0.5895045454545454,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.45454545454545453
+      },
+      "2026-11-02": {
+        "bets": 125,
+        "wins": 74,
+        "losses": 51,
+        "profit": 175.6513477218121,
+        "staked": 1249.7400506279994,
+        "roi": 0.14055030694867032,
+        "avg_model_prob": 0.5967152,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.592
+      }
+    }
+  },
+  "best_breakdown": {
+    "stat_side": {
+      "ast/over": {
+        "bets": 12,
+        "wins": 5,
+        "losses": 7,
+        "profit": -29.96845430197601,
+        "staked": 120.0,
+        "roi": -0.2497371191831334,
+        "avg_model_prob": 0.580087756039293,
+        "avg_posterior_prob": 0.580087756039293,
+        "hit_rate": 0.4166666666666667
+      },
+      "ast/under": {
+        "bets": 43,
+        "wins": 24,
+        "losses": 19,
+        "profit": 15.234308404357428,
+        "staked": 430.0,
+        "roi": 0.035428624196180064,
+        "avg_model_prob": 0.5842749342830273,
+        "avg_posterior_prob": 0.5842749342830273,
+        "hit_rate": 0.5581395348837209
+      },
+      "pts/over": {
+        "bets": 16,
+        "wins": 7,
+        "losses": 9,
+        "profit": -25.69985886730073,
+        "staked": 160.0,
+        "roi": -0.16062411792062956,
+        "avg_model_prob": 0.5788607138286204,
+        "avg_posterior_prob": 0.5788607138286204,
+        "hit_rate": 0.4375
+      },
+      "pts/under": {
+        "bets": 71,
+        "wins": 41,
+        "losses": 30,
+        "profit": 63.25164877764475,
+        "staked": 710.0,
+        "roi": 0.08908682926428839,
+        "avg_model_prob": 0.5926317497465378,
+        "avg_posterior_prob": 0.5926317497465378,
+        "hit_rate": 0.5774647887323944
+      },
+      "reb/over": {
+        "bets": 54,
+        "wins": 27,
+        "losses": 27,
+        "profit": -30.560748545629437,
+        "staked": 540.0,
+        "roi": -0.05659397878820266,
+        "avg_model_prob": 0.5691344112466825,
+        "avg_posterior_prob": 0.5691344112466825,
+        "hit_rate": 0.5
+      },
+      "reb/under": {
+        "bets": 75,
+        "wins": 47,
+        "losses": 28,
+        "profit": 120.74437524512912,
+        "staked": 750.0,
+        "roi": 0.16099250032683882,
+        "avg_model_prob": 0.6022313523704994,
+        "avg_posterior_prob": 0.6022313523704994,
+        "hit_rate": 0.6266666666666667
+      }
+    },
+    "side": {
+      "over": {
+        "bets": 82,
+        "wins": 39,
+        "losses": 43,
+        "profit": -86.22906171490618,
+        "staked": 820.0,
+        "roi": -0.10515739233525144,
+        "avg_model_prob": 0.5726351548908573,
+        "avg_posterior_prob": 0.5726351548908573,
+        "hit_rate": 0.47560975609756095
+      },
+      "under": {
+        "bets": 189,
+        "wins": 112,
+        "losses": 77,
+        "profit": 199.23033242713132,
+        "staked": 1890.0,
+        "roi": 0.10541287430006947,
+        "avg_model_prob": 0.5945398298093217,
+        "avg_posterior_prob": 0.5945398298093217,
+        "hit_rate": 0.5925925925925926
+      }
+    },
+    "date": {
+      "2026-10-22": {
+        "bets": 7,
+        "wins": 4,
+        "losses": 3,
+        "profit": 3.736553369111511,
+        "staked": 70.0,
+        "roi": 0.05337933384445016,
+        "avg_model_prob": 0.6017354753057473,
+        "avg_posterior_prob": 0.6017354753057473,
+        "hit_rate": 0.5714285714285714
+      },
+      "2026-10-23": {
+        "bets": 77,
+        "wins": 44,
+        "losses": 33,
+        "profit": 62.13580826611379,
+        "staked": 770.0,
+        "roi": 0.08069585489105688,
+        "avg_model_prob": 0.5940351569268131,
+        "avg_posterior_prob": 0.5940351569268131,
+        "hit_rate": 0.5714285714285714
+      },
+      "2026-10-24": {
+        "bets": 29,
+        "wins": 14,
+        "losses": 15,
+        "profit": -30.27950218974272,
+        "staked": 290.0,
+        "roi": -0.1044120765163542,
+        "avg_model_prob": 0.5940678812063992,
+        "avg_posterior_prob": 0.5940678812063992,
+        "hit_rate": 0.4827586206896552
+      },
+      "2026-10-25": {
+        "bets": 18,
+        "wins": 8,
+        "losses": 10,
+        "profit": -36.294590117258664,
+        "staked": 180.0,
+        "roi": -0.20163661176254813,
+        "avg_model_prob": 0.596469407223979,
+        "avg_posterior_prob": 0.596469407223979,
+        "hit_rate": 0.4444444444444444
+      },
+      "2026-10-26": {
+        "bets": 24,
+        "wins": 16,
+        "losses": 8,
+        "profit": 59.11205963328382,
+        "staked": 240.0,
+        "roi": 0.24630024847201593,
+        "avg_model_prob": 0.5804454901310091,
+        "avg_posterior_prob": 0.5804454901310091,
+        "hit_rate": 0.6666666666666666
+      },
+      "2026-10-27": {
+        "bets": 11,
+        "wins": 6,
+        "losses": 5,
+        "profit": 4.585712962688607,
+        "staked": 110.0,
+        "roi": 0.04168829966080552,
+        "avg_model_prob": 0.5624497662955287,
+        "avg_posterior_prob": 0.5624497662955287,
+        "hit_rate": 0.5454545454545454
+      },
+      "2026-10-28": {
+        "bets": 37,
+        "wins": 16,
+        "losses": 21,
+        "profit": -63.598072879396746,
+        "staked": 370.0,
+        "roi": -0.17188668345782904,
+        "avg_model_prob": 0.579047182841459,
+        "avg_posterior_prob": 0.579047182841459,
+        "hit_rate": 0.43243243243243246
+      },
+      "2026-10-29": {
+        "bets": 3,
+        "wins": 2,
+        "losses": 1,
+        "profit": 14.4,
+        "staked": 30.0,
+        "roi": 0.48000000000000004,
+        "avg_model_prob": 0.562173050030956,
+        "avg_posterior_prob": 0.562173050030956,
+        "hit_rate": 0.6666666666666666
+      },
+      "2026-10-30": {
+        "bets": 19,
+        "wins": 11,
+        "losses": 8,
+        "profit": 6.266607848538109,
+        "staked": 190.0,
+        "roi": 0.0329821465712532,
+        "avg_model_prob": 0.5728752200923688,
+        "avg_posterior_prob": 0.5728752200923688,
+        "hit_rate": 0.5789473684210527
+      },
+      "2026-10-31": {
+        "bets": 17,
+        "wins": 13,
+        "losses": 4,
+        "profit": 68.78039310372986,
+        "staked": 170.0,
+        "roi": 0.4045905476689992,
+        "avg_model_prob": 0.6040566076762762,
+        "avg_posterior_prob": 0.6040566076762762,
+        "hit_rate": 0.7647058823529411
+      },
+      "2026-11-01": {
+        "bets": 7,
+        "wins": 3,
+        "losses": 4,
+        "profit": -14.694493006993007,
+        "staked": 70.0,
+        "roi": -0.20992132867132868,
+        "avg_model_prob": 0.5628943342008018,
+        "avg_posterior_prob": 0.5628943342008018,
+        "hit_rate": 0.42857142857142855
+      },
+      "2026-11-02": {
+        "bets": 22,
+        "wins": 14,
+        "losses": 8,
+        "profit": 38.850793722150556,
+        "staked": 220.0,
+        "roi": 0.17659451691886616,
+        "avg_model_prob": 0.5947309672823125,
+        "avg_posterior_prob": 0.5947309672823125,
+        "hit_rate": 0.6363636363636364
+      }
+    },
+    "book": {
+      "draftkings": {
+        "bets": 232,
+        "wins": 127,
+        "losses": 105,
+        "profit": 51.44438045996331,
+        "staked": 2320.0,
+        "roi": 0.022174301922397978,
+        "avg_model_prob": 0.5889550900143784,
+        "avg_posterior_prob": 0.5889550900143784,
+        "hit_rate": 0.5474137931034483
+      },
+      "pinnacle": {
+        "bets": 39,
+        "wins": 24,
+        "losses": 15,
+        "profit": 61.55689025226181,
+        "staked": 390.0,
+        "roi": 0.15783818013400464,
+        "avg_model_prob": 0.581705888504521,
+        "avg_posterior_prob": 0.581705888504521,
+        "hit_rate": 0.6153846153846154
+      }
+    }
+  },
+  "paired_raw5_best": {
+    "common": {
+      "bets": 259,
+      "wins": 142,
+      "losses": 117,
+      "profit": 67.37474973349954,
+      "staked": 2590.0,
+      "roi": 0.026013416885521057,
+      "avg_model_prob": 0.5878368032615513,
+      "avg_posterior_prob": 0.5878368032615513,
+      "hit_rate": 0.5482625482625483
+    },
+    "raw_only": {
+      "bets": 713,
+      "wins": 334,
+      "losses": 379,
+      "profit": -641.9833513836879,
+      "staked": 7129.740050627999,
+      "roi": -0.09004302356397145,
+      "avg_model_prob": 0.5790535764375877,
+      "avg_posterior_prob": null,
+      "hit_rate": 0.4684431977559607
+    },
+    "best_only": {
+      "bets": 12,
+      "wins": 9,
+      "losses": 3,
+      "profit": 45.62652097872559,
+      "staked": 120.0,
+      "roi": 0.38022100815604654,
+      "avg_model_prob": 0.5895315408558593,
+      "avg_posterior_prob": 0.5895315408558593,
+      "hit_rate": 0.75
+    }
+  },
+  "side_splits": {
+    "raw5": {
+      "over": {
+        "bets": 265,
+        "wins": 113,
+        "losses": 152,
+        "profit": -436.58834269416684,
+        "staked": 2650.0,
+        "roi": -0.1647503179977988,
+        "avg_model_prob": 0.57836,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.42641509433962266
+      },
+      "under": {
+        "bets": 707,
+        "wins": 363,
+        "losses": 344,
+        "profit": -138.02025895602154,
+        "staked": 7069.740050627999,
+        "roi": -0.019522678057131863,
+        "avg_model_prob": 0.6192005657708628,
+        "avg_posterior_prob": null,
+        "hit_rate": 0.5134370579915134
+      }
+    },
+    "best": {
+      "over": {
+        "bets": 82,
+        "wins": 39,
+        "losses": 43,
+        "profit": -86.22906171490618,
+        "staked": 820.0,
+        "roi": -0.10515739233525144,
+        "avg_model_prob": 0.5726351548908573,
+        "avg_posterior_prob": 0.5726351548908573,
+        "hit_rate": 0.47560975609756095
+      },
+      "under": {
+        "bets": 189,
+        "wins": 112,
+        "losses": 77,
+        "profit": 199.23033242713132,
+        "staked": 1890.0,
+        "roi": 0.10541287430006947,
+        "avg_model_prob": 0.5945398298093217,
+        "avg_posterior_prob": 0.5945398298093217,
+        "hit_rate": 0.5925925925925926
+      }
+    }
+  },
+  "raw5_expectation": {
+    "mean_probability": 0.608066049382716,
+    "actual_hit_rate": 0.4897119341563786,
+    "expected_profit": 1762.4170485419768
+  },
+  "coverage": {
+    "observed": [
+      {
+        "counts": {
+          "eligible": 0,
+          "features": 215,
+          "predictions": 0,
+          "quotes": 419,
+          "sample_bundles": 0
+        },
+        "date": "2026-10-21",
+        "reason": "filtered"
+      },
+      {
+        "counts": {
+          "eligible": 17,
+          "features": 36,
+          "predictions": 119,
+          "quotes": 78,
+          "sample_bundles": 119
+        },
+        "date": "2026-10-22",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 204,
+          "features": 227,
+          "predictions": 1428,
+          "quotes": 429,
+          "sample_bundles": 1428
+        },
+        "date": "2026-10-23",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 125,
+          "features": 143,
+          "predictions": 875,
+          "quotes": 256,
+          "sample_bundles": 875
+        },
+        "date": "2026-10-24",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 117,
+          "features": 137,
+          "predictions": 819,
+          "quotes": 228,
+          "sample_bundles": 819
+        },
+        "date": "2026-10-25",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 153,
+          "features": 165,
+          "predictions": 1071,
+          "quotes": 318,
+          "sample_bundles": 1071
+        },
+        "date": "2026-10-26",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 75,
+          "features": 80,
+          "predictions": 525,
+          "quotes": 144,
+          "sample_bundles": 525
+        },
+        "date": "2026-10-27",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 205,
+          "features": 225,
+          "predictions": 1435,
+          "quotes": 407,
+          "sample_bundles": 1435
+        },
+        "date": "2026-10-28",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 51,
+          "features": 55,
+          "predictions": 357,
+          "quotes": 84,
+          "sample_bundles": 357
+        },
+        "date": "2026-10-29",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 184,
+          "features": 190,
+          "predictions": 1288,
+          "quotes": 364,
+          "sample_bundles": 1288
+        },
+        "date": "2026-10-30",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 118,
+          "features": 131,
+          "predictions": 826,
+          "quotes": 258,
+          "sample_bundles": 826
+        },
+        "date": "2026-10-31",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 72,
+          "features": 74,
+          "predictions": 504,
+          "quotes": 141,
+          "sample_bundles": 504
+        },
+        "date": "2026-11-01",
+        "reason": "acquired"
+      },
+      {
+        "counts": {
+          "eligible": 258,
+          "features": 276,
+          "predictions": 1806,
+          "quotes": 458,
+          "sample_bundles": 1806
+        },
+        "date": "2026-11-02",
+        "reason": "acquired"
+      }
+    ],
+    "predictions_stats": {
+      "ast": 260,
+      "pts": 439,
+      "reb": 420
+    },
+    "predictions_games": 90,
+    "predictions_player_games": 1119,
+    "prediction_date_counts": {
+      "2026-10-22": 15,
+      "2026-10-23": 157,
+      "2026-10-24": 92,
+      "2026-10-25": 83,
+      "2026-10-26": 113,
+      "2026-10-27": 55,
+      "2026-10-28": 148,
+      "2026-10-29": 29,
+      "2026-10-30": 132,
+      "2026-10-31": 86,
+      "2026-11-01": 49,
+      "2026-11-02": 160
+    },
+    "edge_rows_by_stat": {
+      "ast": 1579,
+      "pa": 1579,
+      "pr": 1579,
+      "pra": 1579,
+      "pts": 1579,
+      "ra": 1579,
+      "reb": 1579
+    },
+    "edge_quote_status": {
+      "quoted": 2932,
+      "no_quote": 8121
+    },
+    "edge_sample_status": {
+      "valid": 11053
+    },
+    "combination_rejections": {
+      "": 6316
+    },
+    "quotes_by_stat": {
+      "ast": 784,
+      "pts": 1115,
+      "reb": 1033
+    },
+    "quotes_by_book": {
+      "draftkings": 2437,
+      "pinnacle": 495
+    },
+    "quoted_player_games": 1119,
+    "best_selected_stats": {
+      "ast": 260,
+      "pts": 413,
+      "reb": 446
+    },
+    "best_selected_player_games": 1119
+  },
+  "prediction_comparison": {
+    "raw_keys": 1119,
+    "bl_keys": 1119,
+    "shared_keys": 873,
+    "changed_quantile_or_actual_rows": 0,
+    "examples": []
+  },
+  "holdout_prediction_metrics_raw5": {
+    "pts": {
+      "n": 439,
+      "mae_q50": 5.296670124434879,
+      "bias_q50_pred_minus_actual": -1.3753690994625105,
+      "rmse_q50": 6.811232623729333,
+      "coverage_le": {
+        "10": 0.10250569476082004,
+        "25": 0.22779043280182232,
+        "50": 0.42596810933940776,
+        "75": 0.724373576309795,
+        "90": 0.8929384965831435
+      }
+    },
+    "reb": {
+      "n": 420,
+      "mae_q50": 2.196870335604245,
+      "bias_q50_pred_minus_actual": -0.3365391511352923,
+      "rmse_q50": 2.878943218417289,
+      "coverage_le": {
+        "10": 0.06428571428571428,
+        "25": 0.23333333333333334,
+        "50": 0.5071428571428571,
+        "75": 0.7690476190476191,
+        "90": 0.9071428571428571
+      }
+    },
+    "ast": {
+      "n": 260,
+      "mae_q50": 1.7610136786555448,
+      "bias_q50_pred_minus_actual": -0.4569653343140677,
+      "rmse_q50": 2.3477093795531743,
+      "coverage_le": {
+        "10": 0.1076923076923077,
+        "25": 0.20384615384615384,
+        "50": 0.4807692307692308,
+        "75": 0.7269230769230769,
+        "90": 0.8846153846153846
+      }
+    }
+  },
+  "stake_reductions": {
+    "cell_a794416541d4069fa873bf10ea107a9e0a9f10f0eb61e3ae754c201f7d130777": {
+      "count": 1,
+      "min": 7.932729335786007
+    },
+    "cell_1892890f9fe9844f04b7abd24a0cb85a993605df124328c4b342a867c3f1de9e": {
+      "count": 1,
+      "min": 9.74005062799938
+    }
+  },
+  "bootstrap": {
+    "raw5": {
+      "date_blocks": 12,
+      "iterations": 5000,
+      "roi_ci_95_percentile": [
+        -0.12883917138275455,
+        0.020498991842356304
+      ],
+      "note": "Conditional exploratory date-block bootstrap; no multiple-search correction; short window."
+    },
+    "best": {
+      "date_blocks": 12,
+      "iterations": 5000,
+      "roi_ci_95_percentile": [
+        -0.06608697228052841,
+        0.14486575628380577
+      ],
+      "note": "Conditional exploratory date-block bootstrap; no multiple-search correction; short window."
+    }
+  },
+  "best_without_top_two_dates": {
+    "bets": 177,
+    "wins": 94,
+    "losses": 83,
+    "profit": -17.914930657618534,
+    "staked": 1770.0,
+    "roi": -0.010121429750066968,
+    "avg_model_prob": 0.5836974074641289,
+    "avg_posterior_prob": 0.5836974074641289,
+    "hit_rate": 0.5310734463276836
+  },
+  "model_diagnostics": {
+    "component_worst_gap_pp": {
+      "minutes": 3.971043601975066,
+      "pts": 2.9779145546705243,
+      "reb": 1.8935553946415662,
+      "ast": 1.4047791455467085
+    },
+    "combined_coverage_pct": {
+      "pts": {
+        "0.1": 9.1,
+        "0.25": 19.8,
+        "0.5": 45.45,
+        "0.75": 74.65,
+        "0.9": 90.25
+      },
+      "reb": {
+        "0.1": 7.35,
+        "0.25": 19.6,
+        "0.5": 45.4,
+        "0.75": 74.25,
+        "0.9": 90.10000000000001
+      },
+      "ast": {
+        "0.1": 17.599999999999998,
+        "0.25": 24.75,
+        "0.5": 47.3,
+        "0.75": 73.25,
+        "0.9": 89.9
+      }
+    },
+    "copula_params": {
+      "pts": 0.3356,
+      "reb": -0.0029,
+      "ast": 0.2128
+    },
+    "run_config": {
+      "train_seasons": [
+        "22023",
+        "22024"
+      ],
+      "calibration_season": "22025",
+      "cal_end_date": null,
+      "exclude_injury_features": true,
+      "timestamp": "2026-11-08T12:21:29.837463",
+      "calibration_tolerance": 0.05,
+      "calibration_hard_fail": 0.1,
+      "execution": {
+        "chronology": {
+          "schema_version": 1,
+          "strict_fit_before_calibration": true,
+          "training": {
+            "rows": 46249,
+            "games": 2452,
+            "dates": 323,
+            "start": "2023-10-24",
+            "end": "2025-04-13",
+            "seasons": [
+              "22023",
+              "22024"
+            ],
+            "keys_sha256": "06806f9ff7ed2a135073a064e3680e8df39a457ed1243b49e19f6334d73509d3"
+          },
+          "calibration": {
+            "rows": 23898,
+            "games": 1278,
+            "dates": 210,
+            "start": "2025-10-21",
+            "end": "2026-06-13",
+            "seasons": [
+              "22025"
+            ],
+            "keys_sha256": "67ddc7615e2dc57c210604b7ecef91f4aea559281098f73f5732a9be1875a9a6"
+          },
+          "source_verified": false,
+          "decision_grade": false
+        },
+        "historical_attachment": null,
+        "source_policy": {
+          "source_id": "unknown",
+          "policy_id": "unknown",
+          "watermark": null
+        },
+        "acquisition_limits": null
+      }
+    },
+    "runtime_predictor": {
+      "blowout_config": {
+        "enabled": false,
+        "minutes_reduction": 0.3,
+        "probability": 0.05
+      },
+      "combined_calibration_offsets": null,
+      "copula_params": {
+        "ast": 0.2128,
+        "pts": 0.3356,
+        "reb": -0.0029
+      },
+      "correlation_config": {
+        "ast": {
+          "enabled": true,
+          "minutes_points": [
+            12.5,
+            17.5,
+            22.5,
+            27.5,
+            32.5,
+            37.5,
+            42.5
+          ],
+          "rate_factors": [
+            0.82,
+            0.88,
+            0.93,
+            1.0,
+            1.08,
+            1.14,
+            1.12
+          ]
+        },
+        "pts": {
+          "enabled": true,
+          "minutes_points": [
+            12.5,
+            17.5,
+            22.5,
+            27.5,
+            32.5,
+            37.5,
+            42.5
+          ],
+          "rate_factors": [
+            0.75,
+            0.84,
+            0.94,
+            1.06,
+            1.18,
+            1.3,
+            1.29
+          ]
+        },
+        "reb": {
+          "enabled": true,
+          "minutes_points": [
+            12.5,
+            17.5,
+            22.5,
+            27.5,
+            32.5,
+            37.5,
+            42.5
+          ],
+          "rate_factors": [
+            1.02,
+            1.01,
+            1.0,
+            0.99,
+            0.99,
+            0.98,
+            0.97
+          ]
+        }
+      },
+      "n_samples": 5000,
+      "random_state": 42,
+      "tail_adjustment": {
+        "lower_tail_multiplier": 1.15,
+        "upper_tail_multiplier": 1.0
+      },
+      "use_correlated_sampling": true,
+      "variance_inflation": {
+        "ast": 1.0,
+        "pts": 1.0,
+        "reb": 1.15
+      }
+    }
+  },
+  "summary_counts": {
+    "positive_distinct_portfolios": 17,
+    "positive_distinct_portfolios_at_least_100": 15,
+    "distinct_portfolios_at_least_100": 29
+  },
+  "all_cells": [
+    {
+      "cell_id": "cell_a794416541d4069fa873bf10ea107a9e0a9f10f0eb61e3ae754c201f7d130777",
+      "edge_threshold": 0.03,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 1048,
+      "total_profit": -469.78913081326044,
+      "roi": -0.04483605143770008,
+      "sharpe_ratio": -4.672264702540087,
+      "max_drawdown": 0.3725870846063101,
+      "raw_control": true,
+      "by_stat": {
+        "ast": {
+          "bets": 245,
+          "hit_rate": 0.4775510204081633,
+          "losses": 128,
+          "profit": -165.62011193649244,
+          "roi": -0.06760004568836427,
+          "wins": 117
+        },
+        "pts": {
+          "bets": 395,
+          "hit_rate": 0.5139240506329114,
+          "losses": 192,
+          "profit": -92.43349615024411,
+          "roi": -0.023413138593624275,
+          "wins": 203
+        },
+        "reb": {
+          "bets": 408,
+          "hit_rate": 0.4950980392156863,
+          "losses": 206,
+          "profit": -211.73552272652387,
+          "roi": -0.05189596145257938,
+          "wins": 202
+        }
+      }
+    },
+    {
+      "cell_id": "cell_07c0c2608735be8916006f2646cba59fe3678cc557a336756d1b376bc03b14ee",
+      "edge_threshold": 0.03,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 212,
+      "total_profit": 62.72247664582567,
+      "roi": 0.02958607388954041,
+      "sharpe_ratio": 2.3373873590069465,
+      "max_drawdown": 0.058141329848239415,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 40,
+          "hit_rate": 0.525,
+          "losses": 19,
+          "profit": -15.99419921057807,
+          "roi": -0.039985498026445174,
+          "wins": 21
+        },
+        "pts": {
+          "bets": 74,
+          "hit_rate": 0.527027027027027,
+          "losses": 35,
+          "profit": -2.76906054816531,
+          "roi": -0.0037419737137369055,
+          "wins": 39
+        },
+        "reb": {
+          "bets": 98,
+          "hit_rate": 0.5816326530612245,
+          "losses": 41,
+          "profit": 81.48573640456907,
+          "roi": 0.0831487106169072,
+          "wins": 57
+        }
+      }
+    },
+    {
+      "cell_id": "cell_022288251fcf1403d7e740447d427aaa8121b18e63b42cf3e51895a33d65a7e6",
+      "edge_threshold": 0.03,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 212,
+      "total_profit": 62.72247664582567,
+      "roi": 0.02958607388954041,
+      "sharpe_ratio": 2.3373873590069465,
+      "max_drawdown": 0.058141329848239415,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 40,
+          "hit_rate": 0.525,
+          "losses": 19,
+          "profit": -15.99419921057807,
+          "roi": -0.039985498026445174,
+          "wins": 21
+        },
+        "pts": {
+          "bets": 74,
+          "hit_rate": 0.527027027027027,
+          "losses": 35,
+          "profit": -2.76906054816531,
+          "roi": -0.0037419737137369055,
+          "wins": 39
+        },
+        "reb": {
+          "bets": 98,
+          "hit_rate": 0.5816326530612245,
+          "losses": 41,
+          "profit": 81.48573640456907,
+          "roi": 0.0831487106169072,
+          "wins": 57
+        }
+      }
+    },
+    {
+      "cell_id": "cell_bcbedbe1703c7c1c544baa5f30a4a16ab13c81b23da2084f6326da1074d7544d",
+      "edge_threshold": 0.03,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 123,
+      "total_profit": 11.544463906735341,
+      "roi": 0.009385743013605969,
+      "sharpe_ratio": 0.8263255445119334,
+      "max_drawdown": 0.041944733748223995,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 24,
+          "hit_rate": 0.4166666666666667,
+          "losses": 14,
+          "profit": -60.66890308679686,
+          "roi": -0.2527870961949869,
+          "wins": 10
+        },
+        "pts": {
+          "bets": 42,
+          "hit_rate": 0.5476190476190477,
+          "losses": 19,
+          "profit": 13.64496013373492,
+          "roi": 0.03248800031841648,
+          "wins": 23
+        },
+        "reb": {
+          "bets": 57,
+          "hit_rate": 0.5964912280701754,
+          "losses": 23,
+          "profit": 58.56840685979731,
+          "roi": 0.10275159098210054,
+          "wins": 34
+        }
+      }
+    },
+    {
+      "cell_id": "cell_f2015153c4bcc4e07b71c5503eb75ba2f50564b36990806ca4a878f8e08acf81",
+      "edge_threshold": 0.03,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 123,
+      "total_profit": 11.544463906735341,
+      "roi": 0.009385743013605969,
+      "sharpe_ratio": 0.8263255445119334,
+      "max_drawdown": 0.041944733748223995,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 24,
+          "hit_rate": 0.4166666666666667,
+          "losses": 14,
+          "profit": -60.66890308679686,
+          "roi": -0.2527870961949869,
+          "wins": 10
+        },
+        "pts": {
+          "bets": 42,
+          "hit_rate": 0.5476190476190477,
+          "losses": 19,
+          "profit": 13.64496013373492,
+          "roi": 0.03248800031841648,
+          "wins": 23
+        },
+        "reb": {
+          "bets": 57,
+          "hit_rate": 0.5964912280701754,
+          "losses": 23,
+          "profit": 58.56840685979731,
+          "roi": 0.10275159098210054,
+          "wins": 34
+        }
+      }
+    },
+    {
+      "cell_id": "cell_c6cee6dc1b36c325cc85050b442f111d7859f53ffd2aae0a7b31edb42a9696e0",
+      "edge_threshold": 0.03,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 67,
+      "total_profit": -72.23673315368451,
+      "roi": -0.10781601963236494,
+      "sharpe_ratio": -4.772073910262508,
+      "max_drawdown": 0.05201261344271513,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 12,
+          "hit_rate": 0.3333333333333333,
+          "losses": 8,
+          "profit": -49.14171540809761,
+          "roi": -0.4095142950674801,
+          "wins": 4
+        },
+        "pts": {
+          "bets": 22,
+          "hit_rate": 0.45454545454545453,
+          "losses": 12,
+          "profit": -34.01068420418731,
+          "roi": -0.1545940191099423,
+          "wins": 10
+        },
+        "reb": {
+          "bets": 33,
+          "hit_rate": 0.5454545454545454,
+          "losses": 15,
+          "profit": 10.915666458600413,
+          "roi": 0.03307777714727398,
+          "wins": 18
+        }
+      }
+    },
+    {
+      "cell_id": "cell_e59e2b9072b58dae11b7a9150be347fca5564b47a53d4f398e21213c50ab4f5c",
+      "edge_threshold": 0.03,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 67,
+      "total_profit": -72.23673315368451,
+      "roi": -0.10781601963236494,
+      "sharpe_ratio": -4.772073910262508,
+      "max_drawdown": 0.05201261344271513,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 12,
+          "hit_rate": 0.3333333333333333,
+          "losses": 8,
+          "profit": -49.14171540809761,
+          "roi": -0.4095142950674801,
+          "wins": 4
+        },
+        "pts": {
+          "bets": 22,
+          "hit_rate": 0.45454545454545453,
+          "losses": 12,
+          "profit": -34.01068420418731,
+          "roi": -0.1545940191099423,
+          "wins": 10
+        },
+        "reb": {
+          "bets": 33,
+          "hit_rate": 0.5454545454545454,
+          "losses": 15,
+          "profit": 10.915666458600413,
+          "roi": 0.03307777714727398,
+          "wins": 18
+        }
+      }
+    },
+    {
+      "cell_id": "cell_496dc8941be75f25e42b8b221345b1d961738126da61e47e932a30df752dfb05",
+      "edge_threshold": 0.03,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 457,
+      "total_profit": -118.55143720753273,
+      "roi": -0.02594123352462423,
+      "sharpe_ratio": -4.619735761167893,
+      "max_drawdown": 0.08970260922117392,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 105,
+          "hit_rate": 0.4857142857142857,
+          "losses": 54,
+          "profit": -126.86282110813319,
+          "roi": -0.12082173438869828,
+          "wins": 51
+        },
+        "pts": {
+          "bets": 151,
+          "hit_rate": 0.5165562913907285,
+          "losses": 73,
+          "profit": -36.013349135665365,
+          "roi": -0.02384990008984461,
+          "wins": 78
+        },
+        "reb": {
+          "bets": 201,
+          "hit_rate": 0.5522388059701493,
+          "losses": 90,
+          "profit": 44.32473303626584,
+          "roi": 0.02205210598819196,
+          "wins": 111
+        }
+      }
+    },
+    {
+      "cell_id": "cell_83bb4627a391137e148febaca6a3845ba6c7312f9151aa07a7210cfa1d073e73",
+      "edge_threshold": 0.03,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 457,
+      "total_profit": -118.55143720753273,
+      "roi": -0.02594123352462423,
+      "sharpe_ratio": -4.619735761167893,
+      "max_drawdown": 0.08970260922117392,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 105,
+          "hit_rate": 0.4857142857142857,
+          "losses": 54,
+          "profit": -126.86282110813319,
+          "roi": -0.12082173438869828,
+          "wins": 51
+        },
+        "pts": {
+          "bets": 151,
+          "hit_rate": 0.5165562913907285,
+          "losses": 73,
+          "profit": -36.013349135665365,
+          "roi": -0.02384990008984461,
+          "wins": 78
+        },
+        "reb": {
+          "bets": 201,
+          "hit_rate": 0.5522388059701493,
+          "losses": 90,
+          "profit": 44.32473303626584,
+          "roi": 0.02205210598819196,
+          "wins": 111
+        }
+      }
+    },
+    {
+      "cell_id": "cell_262812a30a40bc0d52af3e9668c7f345689eef0163efa6542307cf4ecf75a814",
+      "edge_threshold": 0.03,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 315,
+      "total_profit": 94.47681822355767,
+      "roi": 0.029992640705891326,
+      "sharpe_ratio": 3.34217156620916,
+      "max_drawdown": 0.04242800533413143,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 67,
+          "hit_rate": 0.4925373134328358,
+          "losses": 34,
+          "profit": -65.56799392633748,
+          "roi": -0.09786267750199623,
+          "wins": 33
+        },
+        "pts": {
+          "bets": 97,
+          "hit_rate": 0.5463917525773195,
+          "losses": 44,
+          "profit": 33.3178812090042,
+          "roi": 0.034348331143303296,
+          "wins": 53
+        },
+        "reb": {
+          "bets": 151,
+          "hit_rate": 0.5827814569536424,
+          "losses": 63,
+          "profit": 126.72693094089098,
+          "roi": 0.08392511982840463,
+          "wins": 88
+        }
+      }
+    },
+    {
+      "cell_id": "cell_8bfc5094e0d34add5ec92a49f66cec282582d97822c27431d297e262fa3b29f2",
+      "edge_threshold": 0.03,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 315,
+      "total_profit": 94.47681822355767,
+      "roi": 0.029992640705891326,
+      "sharpe_ratio": 3.34217156620916,
+      "max_drawdown": 0.04242800533413143,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 67,
+          "hit_rate": 0.4925373134328358,
+          "losses": 34,
+          "profit": -65.56799392633748,
+          "roi": -0.09786267750199623,
+          "wins": 33
+        },
+        "pts": {
+          "bets": 97,
+          "hit_rate": 0.5463917525773195,
+          "losses": 44,
+          "profit": 33.3178812090042,
+          "roi": 0.034348331143303296,
+          "wins": 53
+        },
+        "reb": {
+          "bets": 151,
+          "hit_rate": 0.5827814569536424,
+          "losses": 63,
+          "profit": 126.72693094089098,
+          "roi": 0.08392511982840463,
+          "wins": 88
+        }
+      }
+    },
+    {
+      "cell_id": "cell_fe1a51ce4de3ea233ae061f563f430ba24d69c516d1b1019b2158b8bc502774c",
+      "edge_threshold": 0.03,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 219,
+      "total_profit": 35.77628451682243,
+      "roi": 0.016336202975718004,
+      "sharpe_ratio": 1.496030022424942,
+      "max_drawdown": 0.05613039266141445,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 41,
+          "hit_rate": 0.5121951219512195,
+          "losses": 20,
+          "profit": -31.78586587724474,
+          "roi": -0.07752650213962131,
+          "wins": 21
+        },
+        "pts": {
+          "bets": 74,
+          "hit_rate": 0.527027027027027,
+          "losses": 35,
+          "profit": -2.76906054816531,
+          "roi": -0.0037419737137369055,
+          "wins": 39
+        },
+        "reb": {
+          "bets": 104,
+          "hit_rate": 0.5769230769230769,
+          "losses": 44,
+          "profit": 70.33121094223247,
+          "roi": 0.06762616436753123,
+          "wins": 60
+        }
+      }
+    },
+    {
+      "cell_id": "cell_89414c4e091c88bdff847ad4ce09062d005945f28b2330fd1f77982f96d93b4f",
+      "edge_threshold": 0.03,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 219,
+      "total_profit": 35.77628451682243,
+      "roi": 0.016336202975718004,
+      "sharpe_ratio": 1.496030022424942,
+      "max_drawdown": 0.05613039266141445,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 41,
+          "hit_rate": 0.5121951219512195,
+          "losses": 20,
+          "profit": -31.78586587724474,
+          "roi": -0.07752650213962131,
+          "wins": 21
+        },
+        "pts": {
+          "bets": 74,
+          "hit_rate": 0.527027027027027,
+          "losses": 35,
+          "profit": -2.76906054816531,
+          "roi": -0.0037419737137369055,
+          "wins": 39
+        },
+        "reb": {
+          "bets": 104,
+          "hit_rate": 0.5769230769230769,
+          "losses": 44,
+          "profit": 70.33121094223247,
+          "roi": 0.06762616436753123,
+          "wins": 60
+        }
+      }
+    },
+    {
+      "cell_id": "cell_07d7a2766ae1171a94f6891cc2bbb0563d74111f780400c4e29714287a5e0b6e",
+      "edge_threshold": 0.03,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 602,
+      "total_profit": -190.80110712278986,
+      "roi": -0.03169453606690861,
+      "sharpe_ratio": -4.1874610880355565,
+      "max_drawdown": 0.1526470876955758,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 142,
+          "hit_rate": 0.5070422535211268,
+          "losses": 70,
+          "profit": -98.40959814561238,
+          "roi": -0.06930253390536083,
+          "wins": 72
+        },
+        "pts": {
+          "bets": 208,
+          "hit_rate": 0.5,
+          "losses": 104,
+          "profit": -121.8124271977938,
+          "roi": -0.05856366692201625,
+          "wins": 104
+        },
+        "reb": {
+          "bets": 252,
+          "hit_rate": 0.5436507936507936,
+          "losses": 115,
+          "profit": 29.420918220616244,
+          "roi": 0.01167496754786359,
+          "wins": 137
+        }
+      }
+    },
+    {
+      "cell_id": "cell_17f116a3280b70f574a5d448efc67aded49e0b4ed5902a84f9c1ffe31452055d",
+      "edge_threshold": 0.03,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 606,
+      "total_profit": -101.1997192547936,
+      "roi": -0.016699623639404887,
+      "sharpe_ratio": -1.9499848643097,
+      "max_drawdown": 0.1329916368421289,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 147,
+          "hit_rate": 0.5238095238095238,
+          "losses": 70,
+          "profit": -69.81315897347957,
+          "roi": -0.04749194487991808,
+          "wins": 77
+        },
+        "pts": {
+          "bets": 204,
+          "hit_rate": 0.5,
+          "losses": 102,
+          "profit": -118.16101921701174,
+          "roi": -0.057922068243633204,
+          "wins": 102
+        },
+        "reb": {
+          "bets": 255,
+          "hit_rate": 0.5568627450980392,
+          "losses": 113,
+          "profit": 86.77445893569771,
+          "roi": 0.034029199582626554,
+          "wins": 142
+        }
+      }
+    },
+    {
+      "cell_id": "cell_d596225e33e0c5a99f5bd113e5f9e09c9dfb0f8dcbdfd763ef789f5bf84d225c",
+      "edge_threshold": 0.03,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 457,
+      "total_profit": -118.55143720753273,
+      "roi": -0.02594123352462423,
+      "sharpe_ratio": -4.619735761167893,
+      "max_drawdown": 0.08970260922117392,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 105,
+          "hit_rate": 0.4857142857142857,
+          "losses": 54,
+          "profit": -126.86282110813319,
+          "roi": -0.12082173438869828,
+          "wins": 51
+        },
+        "pts": {
+          "bets": 151,
+          "hit_rate": 0.5165562913907285,
+          "losses": 73,
+          "profit": -36.013349135665365,
+          "roi": -0.02384990008984461,
+          "wins": 78
+        },
+        "reb": {
+          "bets": 201,
+          "hit_rate": 0.5522388059701493,
+          "losses": 90,
+          "profit": 44.32473303626584,
+          "roi": 0.02205210598819196,
+          "wins": 111
+        }
+      }
+    },
+    {
+      "cell_id": "cell_e6d16490996560b39ec5bb6383d24767fc357314025eb308dd9bbdf1fab5e9ed",
+      "edge_threshold": 0.03,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 457,
+      "total_profit": -139.55143720753273,
+      "roi": -0.03053641952024786,
+      "sharpe_ratio": -5.565588154593165,
+      "max_drawdown": 0.09178992942426423,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 104,
+          "hit_rate": 0.4807692307692308,
+          "losses": 54,
+          "profit": -137.8628211081332,
+          "roi": -0.13256040491166654,
+          "wins": 50
+        },
+        "pts": {
+          "bets": 151,
+          "hit_rate": 0.5165562913907285,
+          "losses": 73,
+          "profit": -36.013349135665365,
+          "roi": -0.02384990008984461,
+          "wins": 78
+        },
+        "reb": {
+          "bets": 202,
+          "hit_rate": 0.5495049504950495,
+          "losses": 91,
+          "profit": 34.32473303626584,
+          "roi": 0.016992442097161307,
+          "wins": 111
+        }
+      }
+    },
+    {
+      "cell_id": "cell_f751870d8d6ed18c5e3db39d13345e984409bf2106e3ae225040c203d3e4672c",
+      "edge_threshold": 0.03,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 360,
+      "total_profit": 89.21572461313971,
+      "roi": 0.024782145725872142,
+      "sharpe_ratio": 4.354159465822191,
+      "max_drawdown": 0.030371402510975122,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 80,
+          "hit_rate": 0.4875,
+          "losses": 41,
+          "profit": -93.46806836711352,
+          "roi": -0.1168350854588919,
+          "wins": 39
+        },
+        "pts": {
+          "bets": 110,
+          "hit_rate": 0.5727272727272728,
+          "losses": 47,
+          "profit": 88.12874296077858,
+          "roi": 0.08011703905525326,
+          "wins": 63
+        },
+        "reb": {
+          "bets": 170,
+          "hit_rate": 0.5705882352941176,
+          "losses": 73,
+          "profit": 94.55505001947465,
+          "roi": 0.0556206176585145,
+          "wins": 97
+        }
+      }
+    },
+    {
+      "cell_id": "cell_bfbbf8c326765a858a64f86f64dd31fe11c89159dbd2820d52d16b4ac50d4b5a",
+      "edge_threshold": 0.03,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 360,
+      "total_profit": 89.21572461313971,
+      "roi": 0.024782145725872142,
+      "sharpe_ratio": 4.354159465822191,
+      "max_drawdown": 0.030371402510975122,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 80,
+          "hit_rate": 0.4875,
+          "losses": 41,
+          "profit": -93.46806836711352,
+          "roi": -0.1168350854588919,
+          "wins": 39
+        },
+        "pts": {
+          "bets": 110,
+          "hit_rate": 0.5727272727272728,
+          "losses": 47,
+          "profit": 88.12874296077858,
+          "roi": 0.08011703905525326,
+          "wins": 63
+        },
+        "reb": {
+          "bets": 170,
+          "hit_rate": 0.5705882352941176,
+          "losses": 73,
+          "profit": 94.55505001947465,
+          "roi": 0.0556206176585145,
+          "wins": 97
+        }
+      }
+    },
+    {
+      "cell_id": "cell_1892890f9fe9844f04b7abd24a0cb85a993605df124328c4b342a867c3f1de9e",
+      "edge_threshold": 0.05,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 972,
+      "total_profit": -574.6086016501883,
+      "roi": -0.059117692310409316,
+      "sharpe_ratio": -5.855329037975568,
+      "max_drawdown": 0.4121744149511949,
+      "raw_control": true,
+      "by_stat": {
+        "ast": {
+          "bets": 239,
+          "hit_rate": 0.4769874476987448,
+          "losses": 125,
+          "profit": -163.60565471209932,
+          "roi": -0.06846169509905708,
+          "wins": 114
+        },
+        "pts": {
+          "bets": 355,
+          "hit_rate": 0.48732394366197185,
+          "losses": 182,
+          "profit": -256.5619053041205,
+          "roi": -0.07227095924059733,
+          "wins": 173
+        },
+        "reb": {
+          "bets": 378,
+          "hit_rate": 0.5,
+          "losses": 189,
+          "profit": -154.44104163396852,
+          "roi": -0.0408574184216848,
+          "wins": 189
+        }
+      }
+    },
+    {
+      "cell_id": "cell_9858b0e7e687ac85fcb01c792f835bd27ced2537a9ac1b21b58e9d6ed39656ab",
+      "edge_threshold": 0.05,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 87,
+      "total_profit": -16.542642570720623,
+      "roi": -0.019014531690483474,
+      "sharpe_ratio": -0.7365278877977055,
+      "max_drawdown": 0.04738152317964079,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 16,
+          "hit_rate": 0.375,
+          "losses": 10,
+          "profit": -45.0417154080976,
+          "roi": -0.28151072130061,
+          "wins": 6
+        },
+        "pts": {
+          "bets": 34,
+          "hit_rate": 0.5588235294117647,
+          "losses": 15,
+          "profit": 17.526606499195026,
+          "roi": 0.05154884264469125,
+          "wins": 19
+        },
+        "reb": {
+          "bets": 37,
+          "hit_rate": 0.5405405405405406,
+          "losses": 17,
+          "profit": 10.97246633818196,
+          "roi": 0.02965531442751881,
+          "wins": 20
+        }
+      }
+    },
+    {
+      "cell_id": "cell_b5200882202e1a3ad6cfe22bed00690e862d6d2cd9d5db17660aabec58097b11",
+      "edge_threshold": 0.05,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 87,
+      "total_profit": -16.542642570720623,
+      "roi": -0.019014531690483474,
+      "sharpe_ratio": -0.7365278877977055,
+      "max_drawdown": 0.04738152317964079,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 16,
+          "hit_rate": 0.375,
+          "losses": 10,
+          "profit": -45.0417154080976,
+          "roi": -0.28151072130061,
+          "wins": 6
+        },
+        "pts": {
+          "bets": 34,
+          "hit_rate": 0.5588235294117647,
+          "losses": 15,
+          "profit": 17.526606499195026,
+          "roi": 0.05154884264469125,
+          "wins": 19
+        },
+        "reb": {
+          "bets": 37,
+          "hit_rate": 0.5405405405405406,
+          "losses": 17,
+          "profit": 10.97246633818196,
+          "roi": 0.02965531442751881,
+          "wins": 20
+        }
+      }
+    },
+    {
+      "cell_id": "cell_2de73df7b10f6507b518a20ac84e032ee512ff2426b389bd987436796a1bd67f",
+      "edge_threshold": 0.05,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 47,
+      "total_profit": -38.573102885409675,
+      "roi": -0.08207043167108441,
+      "sharpe_ratio": -3.138592241221485,
+      "max_drawdown": 0.03730552710151384,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 8,
+          "hit_rate": 0.375,
+          "losses": 5,
+          "profit": -28.07028683666904,
+          "roi": -0.35087858545836303,
+          "wins": 3
+        },
+        "pts": {
+          "bets": 14,
+          "hit_rate": 0.42857142857142855,
+          "losses": 8,
+          "profit": -26.927569690242755,
+          "roi": -0.19233978350173397,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 25,
+          "hit_rate": 0.56,
+          "losses": 11,
+          "profit": 16.42475364150212,
+          "roi": 0.06569901456600849,
+          "wins": 14
+        }
+      }
+    },
+    {
+      "cell_id": "cell_e7f6001e9bfd514bd31ff9186658f89c1b9eeb767066800f0e4d350474e665e2",
+      "edge_threshold": 0.05,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 47,
+      "total_profit": -38.573102885409675,
+      "roi": -0.08207043167108441,
+      "sharpe_ratio": -3.138592241221485,
+      "max_drawdown": 0.03730552710151384,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 8,
+          "hit_rate": 0.375,
+          "losses": 5,
+          "profit": -28.07028683666904,
+          "roi": -0.35087858545836303,
+          "wins": 3
+        },
+        "pts": {
+          "bets": 14,
+          "hit_rate": 0.42857142857142855,
+          "losses": 8,
+          "profit": -26.927569690242755,
+          "roi": -0.19233978350173397,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 25,
+          "hit_rate": 0.56,
+          "losses": 11,
+          "profit": 16.42475364150212,
+          "roi": 0.06569901456600849,
+          "wins": 14
+        }
+      }
+    },
+    {
+      "cell_id": "cell_84461940e3bd1bc54b23d0ce085c939b603ef1ce1a4cad2c39f0002936c918eb",
+      "edge_threshold": 0.05,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 22,
+      "total_profit": -14.767468189296322,
+      "roi": -0.06712485540589237,
+      "sharpe_ratio": -1.7486265536209937,
+      "max_drawdown": 0.017496669652700376,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 5,
+          "hit_rate": 0.4,
+          "losses": 3,
+          "profit": -13.251633986928105,
+          "roi": -0.2650326797385621,
+          "wins": 2
+        },
+        "pts": {
+          "bets": 7,
+          "hit_rate": 0.42857142857142855,
+          "losses": 4,
+          "profit": -11.810594447283258,
+          "roi": -0.16872277781833225,
+          "wins": 3
+        },
+        "reb": {
+          "bets": 10,
+          "hit_rate": 0.6,
+          "losses": 4,
+          "profit": 10.294760244915041,
+          "roi": 0.10294760244915041,
+          "wins": 6
+        }
+      }
+    },
+    {
+      "cell_id": "cell_d852014f83b76059a5e0d5e28908838b75778730f7c034a31819bc73f24f7e3f",
+      "edge_threshold": 0.05,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 22,
+      "total_profit": -14.767468189296322,
+      "roi": -0.06712485540589237,
+      "sharpe_ratio": -1.7486265536209937,
+      "max_drawdown": 0.017496669652700376,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 5,
+          "hit_rate": 0.4,
+          "losses": 3,
+          "profit": -13.251633986928105,
+          "roi": -0.2650326797385621,
+          "wins": 2
+        },
+        "pts": {
+          "bets": 7,
+          "hit_rate": 0.42857142857142855,
+          "losses": 4,
+          "profit": -11.810594447283258,
+          "roi": -0.16872277781833225,
+          "wins": 3
+        },
+        "reb": {
+          "bets": 10,
+          "hit_rate": 0.6,
+          "losses": 4,
+          "profit": 10.294760244915041,
+          "roi": 0.10294760244915041,
+          "wins": 6
+        }
+      }
+    },
+    {
+      "cell_id": "cell_a320710db5e257998a6b67bea32c3141e2a698d26c54a4454ee2dca37da1e0cb",
+      "edge_threshold": 0.05,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 271,
+      "total_profit": 113.00127071222515,
+      "roi": 0.041697885871669796,
+      "sharpe_ratio": 4.434657258974796,
+      "max_drawdown": 0.03222565611667565,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 55,
+          "hit_rate": 0.5272727272727272,
+          "losses": 26,
+          "profit": -14.73414589761858,
+          "roi": -0.026789356177488326,
+          "wins": 29
+        },
+        "pts": {
+          "bets": 87,
+          "hit_rate": 0.5517241379310345,
+          "losses": 39,
+          "profit": 37.55178991034403,
+          "roi": 0.04316297690844141,
+          "wins": 48
+        },
+        "reb": {
+          "bets": 129,
+          "hit_rate": 0.5736434108527132,
+          "losses": 55,
+          "profit": 90.18362669949968,
+          "roi": 0.06990978813914704,
+          "wins": 74
+        }
+      }
+    },
+    {
+      "cell_id": "cell_c707fcd26f569024b09366bfb6fe8341e0303ef0885c9ace9b7e605d30d873ed",
+      "edge_threshold": 0.05,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 271,
+      "total_profit": 113.00127071222515,
+      "roi": 0.041697885871669796,
+      "sharpe_ratio": 4.434657258974796,
+      "max_drawdown": 0.03222565611667565,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 55,
+          "hit_rate": 0.5272727272727272,
+          "losses": 26,
+          "profit": -14.73414589761858,
+          "roi": -0.026789356177488326,
+          "wins": 29
+        },
+        "pts": {
+          "bets": 87,
+          "hit_rate": 0.5517241379310345,
+          "losses": 39,
+          "profit": 37.55178991034403,
+          "roi": 0.04316297690844141,
+          "wins": 48
+        },
+        "reb": {
+          "bets": 129,
+          "hit_rate": 0.5736434108527132,
+          "losses": 55,
+          "profit": 90.18362669949968,
+          "roi": 0.06990978813914704,
+          "wins": 74
+        }
+      }
+    },
+    {
+      "cell_id": "cell_680fe4d27377cb488ec4506433061851cd604a35c5c6ed76fa737dea65fa47bb",
+      "edge_threshold": 0.05,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 153,
+      "total_profit": 33.93848126577342,
+      "roi": 0.022182013899198313,
+      "sharpe_ratio": 1.8592677260116188,
+      "max_drawdown": 0.04418087514068159,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 30,
+          "hit_rate": 0.4666666666666667,
+          "losses": 16,
+          "profit": -42.645185138078915,
+          "roi": -0.14215061712692972,
+          "wins": 14
+        },
+        "pts": {
+          "bets": 53,
+          "hit_rate": 0.5471698113207547,
+          "losses": 24,
+          "profit": 14.16428417577665,
+          "roi": 0.026725064482597455,
+          "wins": 29
+        },
+        "reb": {
+          "bets": 70,
+          "hit_rate": 0.5857142857142857,
+          "losses": 29,
+          "profit": 62.41938222807569,
+          "roi": 0.08917054604010813,
+          "wins": 41
+        }
+      }
+    },
+    {
+      "cell_id": "cell_0664179f926b97adedae39c596c7de8905657d58f69f7cefc2b2e8ac695c0fc8",
+      "edge_threshold": 0.05,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 153,
+      "total_profit": 33.93848126577342,
+      "roi": 0.022182013899198313,
+      "sharpe_ratio": 1.8592677260116188,
+      "max_drawdown": 0.04418087514068159,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 30,
+          "hit_rate": 0.4666666666666667,
+          "losses": 16,
+          "profit": -42.645185138078915,
+          "roi": -0.14215061712692972,
+          "wins": 14
+        },
+        "pts": {
+          "bets": 53,
+          "hit_rate": 0.5471698113207547,
+          "losses": 24,
+          "profit": 14.16428417577665,
+          "roi": 0.026725064482597455,
+          "wins": 29
+        },
+        "reb": {
+          "bets": 70,
+          "hit_rate": 0.5857142857142857,
+          "losses": 29,
+          "profit": 62.41938222807569,
+          "roi": 0.08917054604010813,
+          "wins": 41
+        }
+      }
+    },
+    {
+      "cell_id": "cell_1a60f9d2576da9a63154363582cbac6db80dc398cacc24beee96942f66419835",
+      "edge_threshold": 0.05,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 104,
+      "total_profit": -33.50186673987757,
+      "roi": -0.032213333403728436,
+      "sharpe_ratio": -1.782803217987726,
+      "max_drawdown": 0.055241507517149624,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 20,
+          "hit_rate": 0.4,
+          "losses": 12,
+          "profit": -55.462116236319666,
+          "roi": -0.27731058118159835,
+          "wins": 8
+        },
+        "pts": {
+          "bets": 36,
+          "hit_rate": 0.5555555555555556,
+          "losses": 16,
+          "profit": 15.791069309112395,
+          "roi": 0.043864081414201096,
+          "wins": 20
+        },
+        "reb": {
+          "bets": 48,
+          "hit_rate": 0.5416666666666666,
+          "losses": 22,
+          "profit": 6.169180187329722,
+          "roi": 0.012852458723603587,
+          "wins": 26
+        }
+      }
+    },
+    {
+      "cell_id": "cell_dc8c7a7aefc59033a2dd3d17462561863c907cf05510353c2592debfa3a0cb48",
+      "edge_threshold": 0.05,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 104,
+      "total_profit": -33.50186673987757,
+      "roi": -0.032213333403728436,
+      "sharpe_ratio": -1.782803217987726,
+      "max_drawdown": 0.055241507517149624,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 20,
+          "hit_rate": 0.4,
+          "losses": 12,
+          "profit": -55.462116236319666,
+          "roi": -0.27731058118159835,
+          "wins": 8
+        },
+        "pts": {
+          "bets": 36,
+          "hit_rate": 0.5555555555555556,
+          "losses": 16,
+          "profit": 15.791069309112395,
+          "roi": 0.043864081414201096,
+          "wins": 20
+        },
+        "reb": {
+          "bets": 48,
+          "hit_rate": 0.5416666666666666,
+          "losses": 22,
+          "profit": 6.169180187329722,
+          "roi": 0.012852458723603587,
+          "wins": 26
+        }
+      }
+    },
+    {
+      "cell_id": "cell_bed90a551db12455959ccb0c41e9004c2c85f5e41ae7ca95fc05a4165a9b2d1e",
+      "edge_threshold": 0.05,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 396,
+      "total_profit": -72.58793342060324,
+      "roi": -0.01833028621732405,
+      "sharpe_ratio": -2.961594564481175,
+      "max_drawdown": 0.06415038805335166,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 82,
+          "hit_rate": 0.5,
+          "losses": 41,
+          "profit": -62.8711528633879,
+          "roi": -0.07667213763827793,
+          "wins": 41
+        },
+        "pts": {
+          "bets": 135,
+          "hit_rate": 0.5333333333333333,
+          "losses": 63,
+          "profit": 12.012459322611448,
+          "roi": 0.008898118016749222,
+          "wins": 72
+        },
+        "reb": {
+          "bets": 179,
+          "hit_rate": 0.5307262569832403,
+          "losses": 84,
+          "profit": -21.729239879826835,
+          "roi": -0.01213924015632784,
+          "wins": 95
+        }
+      }
+    },
+    {
+      "cell_id": "cell_76b2d66683c87be50c38501bcea77b4d45081f62236bf8de584efa445fa2a628",
+      "edge_threshold": 0.05,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 422,
+      "total_profit": -50.08404771391366,
+      "roi": -0.011868257752112242,
+      "sharpe_ratio": -2.115647465160459,
+      "max_drawdown": 0.04826244717028882,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 96,
+          "hit_rate": 0.5104166666666666,
+          "losses": 47,
+          "profit": -73.20269038917895,
+          "roi": -0.07625280248872808,
+          "wins": 49
+        },
+        "pts": {
+          "bets": 137,
+          "hit_rate": 0.5328467153284672,
+          "losses": 64,
+          "profit": 9.297455089653063,
+          "roi": 0.006786463569089827,
+          "wins": 73
+        },
+        "reb": {
+          "bets": 189,
+          "hit_rate": 0.544973544973545,
+          "losses": 86,
+          "profit": 13.821187585612222,
+          "roi": 0.007312797664345091,
+          "wins": 103
+        }
+      }
+    },
+    {
+      "cell_id": "cell_1f5c5268cd11fd6b5fe05d144af4fb9a37335af1e04667585210c07c13c2e65a",
+      "edge_threshold": 0.05,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 271,
+      "total_profit": 113.00127071222515,
+      "roi": 0.041697885871669796,
+      "sharpe_ratio": 4.434657258974796,
+      "max_drawdown": 0.03222565611667565,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 55,
+          "hit_rate": 0.5272727272727272,
+          "losses": 26,
+          "profit": -14.73414589761858,
+          "roi": -0.026789356177488326,
+          "wins": 29
+        },
+        "pts": {
+          "bets": 87,
+          "hit_rate": 0.5517241379310345,
+          "losses": 39,
+          "profit": 37.55178991034403,
+          "roi": 0.04316297690844141,
+          "wins": 48
+        },
+        "reb": {
+          "bets": 129,
+          "hit_rate": 0.5736434108527132,
+          "losses": 55,
+          "profit": 90.18362669949968,
+          "roi": 0.06990978813914704,
+          "wins": 74
+        }
+      }
+    },
+    {
+      "cell_id": "cell_7a2ad372ebc1d02920d472fe8ea5e4e2f34d3cd01bc90f8390db426b17ac0540",
+      "edge_threshold": 0.05,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 274,
+      "total_profit": 95.00946880491377,
+      "roi": 0.03467498861493203,
+      "sharpe_ratio": 3.8073169595542846,
+      "max_drawdown": 0.03246429832589441,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 55,
+          "hit_rate": 0.509090909090909,
+          "losses": 27,
+          "profit": -35.734145897618575,
+          "roi": -0.0649711743593065,
+          "wins": 28
+        },
+        "pts": {
+          "bets": 87,
+          "hit_rate": 0.5517241379310345,
+          "losses": 39,
+          "profit": 37.55178991034403,
+          "roi": 0.04316297690844141,
+          "wins": 48
+        },
+        "reb": {
+          "bets": 132,
+          "hit_rate": 0.5757575757575758,
+          "losses": 56,
+          "profit": 93.19182479218833,
+          "roi": 0.07059986726680934,
+          "wins": 76
+        }
+      }
+    },
+    {
+      "cell_id": "cell_4a55aef9a8001230c2bbb7ce159fd7d9469995f0044058f91dad330e4a2c7649",
+      "edge_threshold": 0.05,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 183,
+      "total_profit": 43.81285544217287,
+      "roi": 0.02394145106129665,
+      "sharpe_ratio": 2.2275030368875575,
+      "max_drawdown": 0.04038544982354468,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 34,
+          "hit_rate": 0.47058823529411764,
+          "losses": 18,
+          "profit": -49.78897812858006,
+          "roi": -0.14643817096641196,
+          "wins": 16
+        },
+        "pts": {
+          "bets": 65,
+          "hit_rate": 0.5384615384615384,
+          "losses": 30,
+          "profit": 8.343625011888665,
+          "roi": 0.012836346172136408,
+          "wins": 35
+        },
+        "reb": {
+          "bets": 84,
+          "hit_rate": 0.5952380952380952,
+          "losses": 34,
+          "profit": 85.25820855886427,
+          "roi": 0.10149786733198127,
+          "wins": 50
+        }
+      }
+    },
+    {
+      "cell_id": "cell_3b02f66a151919a446f5d167ea946719a9209cd173b0bf54de6518aec97d3c93",
+      "edge_threshold": 0.05,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 183,
+      "total_profit": 43.81285544217287,
+      "roi": 0.02394145106129665,
+      "sharpe_ratio": 2.2275030368875575,
+      "max_drawdown": 0.04038544982354468,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 34,
+          "hit_rate": 0.47058823529411764,
+          "losses": 18,
+          "profit": -49.78897812858006,
+          "roi": -0.14643817096641196,
+          "wins": 16
+        },
+        "pts": {
+          "bets": 65,
+          "hit_rate": 0.5384615384615384,
+          "losses": 30,
+          "profit": 8.343625011888665,
+          "roi": 0.012836346172136408,
+          "wins": 35
+        },
+        "reb": {
+          "bets": 84,
+          "hit_rate": 0.5952380952380952,
+          "losses": 34,
+          "profit": 85.25820855886427,
+          "roi": 0.10149786733198127,
+          "wins": 50
+        }
+      }
+    },
+    {
+      "cell_id": "cell_51ee3d421931923c4876a2f14fdb07e4e611ef4b69bcf27ddff8b1001481e270",
+      "edge_threshold": 0.07,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 836,
+      "total_profit": -512.2938080755487,
+      "roi": -0.06127916364540056,
+      "sharpe_ratio": -6.932594290237954,
+      "max_drawdown": 0.33395419621709893,
+      "raw_control": true,
+      "by_stat": {
+        "ast": {
+          "bets": 212,
+          "hit_rate": 0.4669811320754717,
+          "losses": 113,
+          "profit": -191.56422026053806,
+          "roi": -0.09036048125497079,
+          "wins": 99
+        },
+        "pts": {
+          "bets": 299,
+          "hit_rate": 0.4882943143812709,
+          "losses": 153,
+          "profit": -212.42944151237597,
+          "roi": -0.07104663595731638,
+          "wins": 146
+        },
+        "reb": {
+          "bets": 325,
+          "hit_rate": 0.5015384615384615,
+          "losses": 162,
+          "profit": -108.30014630263457,
+          "roi": -0.03332312193927218,
+          "wins": 163
+        }
+      }
+    },
+    {
+      "cell_id": "cell_e480dffecee102543f423c7f5d5b2f1aa72a91edc81a0518e872af94c179e38d",
+      "edge_threshold": 0.07,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 22,
+      "total_profit": -8.058921180749305,
+      "roi": -0.03663145991249684,
+      "sharpe_ratio": -0.8469759286672519,
+      "max_drawdown": 0.020474383269579333,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 4,
+          "hit_rate": 0.25,
+          "losses": 3,
+          "profit": -20.19607843137255,
+          "roi": -0.5049019607843137,
+          "wins": 1
+        },
+        "pts": {
+          "bets": 7,
+          "hit_rate": 0.42857142857142855,
+          "losses": 4,
+          "profit": -11.810594447283258,
+          "roi": -0.16872277781833225,
+          "wins": 3
+        },
+        "reb": {
+          "bets": 11,
+          "hit_rate": 0.6363636363636364,
+          "losses": 4,
+          "profit": 23.947751697906497,
+          "roi": 0.21770683361733179,
+          "wins": 7
+        }
+      }
+    },
+    {
+      "cell_id": "cell_2100b8b6827ff6925c26c7daf69c32354727dface4db14e8456442cebd647276",
+      "edge_threshold": 0.07,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 22,
+      "total_profit": -8.058921180749305,
+      "roi": -0.03663145991249684,
+      "sharpe_ratio": -0.8469759286672519,
+      "max_drawdown": 0.020474383269579333,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 4,
+          "hit_rate": 0.25,
+          "losses": 3,
+          "profit": -20.19607843137255,
+          "roi": -0.5049019607843137,
+          "wins": 1
+        },
+        "pts": {
+          "bets": 7,
+          "hit_rate": 0.42857142857142855,
+          "losses": 4,
+          "profit": -11.810594447283258,
+          "roi": -0.16872277781833225,
+          "wins": 3
+        },
+        "reb": {
+          "bets": 11,
+          "hit_rate": 0.6363636363636364,
+          "losses": 4,
+          "profit": 23.947751697906497,
+          "roi": 0.21770683361733179,
+          "wins": 7
+        }
+      }
+    },
+    {
+      "cell_id": "cell_0fc4afcab30ee28d0f70ba51f32cbb5c34b0baaa879e6cfc6088ab39b4ba7d66",
+      "edge_threshold": 0.07,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 15,
+      "total_profit": -19.67639690890465,
+      "roi": -0.13117597939269768,
+      "sharpe_ratio": -3.2011529986425926,
+      "max_drawdown": 0.015058388992790533,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 4,
+          "hit_rate": 0.25,
+          "losses": 3,
+          "profit": -20.19607843137255,
+          "roi": -0.5049019607843137,
+          "wins": 1
+        },
+        "pts": {
+          "bets": 3,
+          "hit_rate": 0.3333333333333333,
+          "losses": 2,
+          "profit": -11.228070175438598,
+          "roi": -0.37426900584795325,
+          "wins": 1
+        },
+        "reb": {
+          "bets": 8,
+          "hit_rate": 0.625,
+          "losses": 3,
+          "profit": 11.747751697906494,
+          "roi": 0.14684689622383118,
+          "wins": 5
+        }
+      }
+    },
+    {
+      "cell_id": "cell_2a2ec40008d78b52a1db89ce43e20ffce97e9681f9f91ab3746783154bd0205e",
+      "edge_threshold": 0.07,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 15,
+      "total_profit": -19.67639690890465,
+      "roi": -0.13117597939269768,
+      "sharpe_ratio": -3.2011529986425926,
+      "max_drawdown": 0.015058388992790533,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 4,
+          "hit_rate": 0.25,
+          "losses": 3,
+          "profit": -20.19607843137255,
+          "roi": -0.5049019607843137,
+          "wins": 1
+        },
+        "pts": {
+          "bets": 3,
+          "hit_rate": 0.3333333333333333,
+          "losses": 2,
+          "profit": -11.228070175438598,
+          "roi": -0.37426900584795325,
+          "wins": 1
+        },
+        "reb": {
+          "bets": 8,
+          "hit_rate": 0.625,
+          "losses": 3,
+          "profit": 11.747751697906494,
+          "roi": 0.14684689622383118,
+          "wins": 5
+        }
+      }
+    },
+    {
+      "cell_id": "cell_99d25eede7654cd99dd9e97ef366a247a158f15800ad6f0f8b26f246086c5b00",
+      "edge_threshold": 0.07,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 7,
+      "total_profit": -15.871045294574706,
+      "roi": -0.22672921849392438,
+      "sharpe_ratio": -7.681829624719896,
+      "max_drawdown": 0.013165744203011366,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        },
+        "pts": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        },
+        "reb": {
+          "bets": 5,
+          "hit_rate": 0.6,
+          "losses": 2,
+          "profit": 4.1289547054252935,
+          "roi": 0.08257909410850588,
+          "wins": 3
+        }
+      }
+    },
+    {
+      "cell_id": "cell_1fac072f860e69cb1a470512da8d57b2f97fb76ac9f73081c1e38ed72b158de4",
+      "edge_threshold": 0.07,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 7,
+      "total_profit": -15.871045294574706,
+      "roi": -0.22672921849392438,
+      "sharpe_ratio": -7.681829624719896,
+      "max_drawdown": 0.013165744203011366,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        },
+        "pts": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        },
+        "reb": {
+          "bets": 5,
+          "hit_rate": 0.6,
+          "losses": 2,
+          "profit": 4.1289547054252935,
+          "roi": 0.08257909410850588,
+          "wins": 3
+        }
+      }
+    },
+    {
+      "cell_id": "cell_e8e118d24709bc062601a7a795dbc3d24612ecc87649b7687307ed11a6a24c34",
+      "edge_threshold": 0.07,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 158,
+      "total_profit": 47.06655365363467,
+      "roi": 0.02978895800862954,
+      "sharpe_ratio": 2.2167371683421764,
+      "max_drawdown": 0.04784978558493071,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 31,
+          "hit_rate": 0.45161290322580644,
+          "losses": 17,
+          "profit": -46.85351847141225,
+          "roi": -0.15114038216584597,
+          "wins": 14
+        },
+        "pts": {
+          "bets": 56,
+          "hit_rate": 0.5357142857142857,
+          "losses": 26,
+          "profit": 3.8750327584446893,
+          "roi": 0.006919701354365516,
+          "wins": 30
+        },
+        "reb": {
+          "bets": 71,
+          "hit_rate": 0.6056338028169014,
+          "losses": 28,
+          "profit": 90.04503936660221,
+          "roi": 0.12682399910789044,
+          "wins": 43
+        }
+      }
+    },
+    {
+      "cell_id": "cell_b7ddc12d590315a63977e0130a20e5d3b7a790edf83bc6d4ae4480e5397bc1c8",
+      "edge_threshold": 0.07,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 158,
+      "total_profit": 47.06655365363467,
+      "roi": 0.02978895800862954,
+      "sharpe_ratio": 2.2167371683421764,
+      "max_drawdown": 0.04784978558493071,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 31,
+          "hit_rate": 0.45161290322580644,
+          "losses": 17,
+          "profit": -46.85351847141225,
+          "roi": -0.15114038216584597,
+          "wins": 14
+        },
+        "pts": {
+          "bets": 56,
+          "hit_rate": 0.5357142857142857,
+          "losses": 26,
+          "profit": 3.8750327584446893,
+          "roi": 0.006919701354365516,
+          "wins": 30
+        },
+        "reb": {
+          "bets": 71,
+          "hit_rate": 0.6056338028169014,
+          "losses": 28,
+          "profit": 90.04503936660221,
+          "roi": 0.12682399910789044,
+          "wins": 43
+        }
+      }
+    },
+    {
+      "cell_id": "cell_fca2a29fe2744a4c8f0d823f184b78cdce9819abfeeea1ce9230aa1b2ca44331",
+      "edge_threshold": 0.07,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 92,
+      "total_profit": -95.04094744226924,
+      "roi": -0.10330537765464048,
+      "sharpe_ratio": -4.624884084536345,
+      "max_drawdown": 0.06673779720389145,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 18,
+          "hit_rate": 0.3333333333333333,
+          "losses": 12,
+          "profit": -70.45512322932666,
+          "roi": -0.391417351274037,
+          "wins": 6
+        },
+        "pts": {
+          "bets": 30,
+          "hit_rate": 0.5333333333333333,
+          "losses": 14,
+          "profit": 1.7901353577585581,
+          "roi": 0.005967117859195194,
+          "wins": 16
+        },
+        "reb": {
+          "bets": 44,
+          "hit_rate": 0.5,
+          "losses": 22,
+          "profit": -26.375959570701145,
+          "roi": -0.05994536266068442,
+          "wins": 22
+        }
+      }
+    },
+    {
+      "cell_id": "cell_92094784a5171d17b54d319d7156d0f7744da1b2654b9aac98f6c33b1a27451d",
+      "edge_threshold": 0.07,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 92,
+      "total_profit": -95.04094744226924,
+      "roi": -0.10330537765464048,
+      "sharpe_ratio": -4.624884084536345,
+      "max_drawdown": 0.06673779720389145,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 18,
+          "hit_rate": 0.3333333333333333,
+          "losses": 12,
+          "profit": -70.45512322932666,
+          "roi": -0.391417351274037,
+          "wins": 6
+        },
+        "pts": {
+          "bets": 30,
+          "hit_rate": 0.5333333333333333,
+          "losses": 14,
+          "profit": 1.7901353577585581,
+          "roi": 0.005967117859195194,
+          "wins": 16
+        },
+        "reb": {
+          "bets": 44,
+          "hit_rate": 0.5,
+          "losses": 22,
+          "profit": -26.375959570701145,
+          "roi": -0.05994536266068442,
+          "wins": 22
+        }
+      }
+    },
+    {
+      "cell_id": "cell_54f336cbd8710a2ddf74fcc008759f24d58a3255d84ee403419c5b2442a36f00",
+      "edge_threshold": 0.07,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 50,
+      "total_profit": -49.64453145683825,
+      "roi": -0.0992890629136765,
+      "sharpe_ratio": -3.896837773511063,
+      "max_drawdown": 0.042250624755273074,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 10,
+          "hit_rate": 0.4,
+          "losses": 6,
+          "profit": -29.14171540809761,
+          "roi": -0.2914171540809761,
+          "wins": 4
+        },
+        "pts": {
+          "bets": 15,
+          "hit_rate": 0.4,
+          "losses": 9,
+          "profit": -36.927569690242755,
+          "roi": -0.2461837979349517,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 25,
+          "hit_rate": 0.56,
+          "losses": 11,
+          "profit": 16.42475364150212,
+          "roi": 0.06569901456600849,
+          "wins": 14
+        }
+      }
+    },
+    {
+      "cell_id": "cell_26ba461e825340eed4ab890e363d58e353a7c9d4036b03ba7d648d47cbbc7df4",
+      "edge_threshold": 0.07,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 50,
+      "total_profit": -49.64453145683825,
+      "roi": -0.0992890629136765,
+      "sharpe_ratio": -3.896837773511063,
+      "max_drawdown": 0.042250624755273074,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 10,
+          "hit_rate": 0.4,
+          "losses": 6,
+          "profit": -29.14171540809761,
+          "roi": -0.2914171540809761,
+          "wins": 4
+        },
+        "pts": {
+          "bets": 15,
+          "hit_rate": 0.4,
+          "losses": 9,
+          "profit": -36.927569690242755,
+          "roi": -0.2461837979349517,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 25,
+          "hit_rate": 0.56,
+          "losses": 11,
+          "profit": 16.42475364150212,
+          "roi": 0.06569901456600849,
+          "wins": 14
+        }
+      }
+    },
+    {
+      "cell_id": "cell_aeaa70ee77d92ff6a8d9fdda8506e26014dc32856652381c5e84ccbf7b71f315",
+      "edge_threshold": 0.07,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 242,
+      "total_profit": 58.46800370855861,
+      "roi": 0.024160332110974632,
+      "sharpe_ratio": 2.593647766606922,
+      "max_drawdown": 0.048407595948561186,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 52,
+          "hit_rate": 0.4423076923076923,
+          "losses": 29,
+          "profit": -79.48567085161466,
+          "roi": -0.1528570593300282,
+          "wins": 23
+        },
+        "pts": {
+          "bets": 86,
+          "hit_rate": 0.5465116279069767,
+          "losses": 39,
+          "profit": 31.158483058494774,
+          "roi": 0.03623079425406369,
+          "wins": 47
+        },
+        "reb": {
+          "bets": 104,
+          "hit_rate": 0.5769230769230769,
+          "losses": 44,
+          "profit": 106.79519150167847,
+          "roi": 0.1026876841362293,
+          "wins": 60
+        }
+      }
+    },
+    {
+      "cell_id": "cell_34ca124425d0feb618405f0969a7ca0c607083eb58716a9e94d1a5e107033efe",
+      "edge_threshold": 0.07,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 300,
+      "total_profit": 122.6498252442092,
+      "roi": 0.04088327508140307,
+      "sharpe_ratio": 4.2363985121743175,
+      "max_drawdown": 0.04548741847803827,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 63,
+          "hit_rate": 0.49206349206349204,
+          "losses": 32,
+          "profit": -54.060130149587074,
+          "roi": -0.08580973039616996,
+          "wins": 31
+        },
+        "pts": {
+          "bets": 94,
+          "hit_rate": 0.5531914893617021,
+          "losses": 42,
+          "profit": 44.697191553831814,
+          "roi": 0.047550203780672144,
+          "wins": 52
+        },
+        "reb": {
+          "bets": 143,
+          "hit_rate": 0.5874125874125874,
+          "losses": 59,
+          "profit": 132.01276383996452,
+          "roi": 0.09231661806990527,
+          "wins": 84
+        }
+      }
+    },
+    {
+      "cell_id": "cell_34b49f4f9e240b2cb0c3a26729d74f9895bfd5ca21b6ac49fb88cdff9a8d01a1",
+      "edge_threshold": 0.07,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 158,
+      "total_profit": 47.06655365363467,
+      "roi": 0.02978895800862954,
+      "sharpe_ratio": 2.2167371683421764,
+      "max_drawdown": 0.04784978558493071,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 31,
+          "hit_rate": 0.45161290322580644,
+          "losses": 17,
+          "profit": -46.85351847141225,
+          "roi": -0.15114038216584597,
+          "wins": 14
+        },
+        "pts": {
+          "bets": 56,
+          "hit_rate": 0.5357142857142857,
+          "losses": 26,
+          "profit": 3.8750327584446893,
+          "roi": 0.006919701354365516,
+          "wins": 30
+        },
+        "reb": {
+          "bets": 71,
+          "hit_rate": 0.6056338028169014,
+          "losses": 28,
+          "profit": 90.04503936660221,
+          "roi": 0.12682399910789044,
+          "wins": 43
+        }
+      }
+    },
+    {
+      "cell_id": "cell_1f1f0a5719482aa6ba917840c8095d8d4c4542aea169a292ae15aabe5b1ba512",
+      "edge_threshold": 0.07,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 166,
+      "total_profit": 11.807678113763032,
+      "roi": 0.007113059104676525,
+      "sharpe_ratio": 0.7194995430537235,
+      "max_drawdown": 0.0467915444495177,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 32,
+          "hit_rate": 0.4375,
+          "losses": 18,
+          "profit": -62.6451851380789,
+          "roi": -0.19576620355649657,
+          "wins": 14
+        },
+        "pts": {
+          "bets": 58,
+          "hit_rate": 0.5344827586206896,
+          "losses": 27,
+          "profit": 1.62697074294082,
+          "roi": 0.0028051219705876205,
+          "wins": 31
+        },
+        "reb": {
+          "bets": 76,
+          "hit_rate": 0.5921052631578947,
+          "losses": 31,
+          "profit": 72.82589250890118,
+          "roi": 0.09582354277486997,
+          "wins": 45
+        }
+      }
+    },
+    {
+      "cell_id": "cell_bc0924817864aef39356aafc5189a90ee270af289c01fdf61b9948367caf16b9",
+      "edge_threshold": 0.07,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 111,
+      "total_profit": -10.34605196433851,
+      "roi": -0.0093207675354401,
+      "sharpe_ratio": -0.5485282515568078,
+      "max_drawdown": 0.05216166325639251,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 21,
+          "hit_rate": 0.42857142857142855,
+          "losses": 12,
+          "profit": -46.76646406240663,
+          "roi": -0.22269744791622204,
+          "wins": 9
+        },
+        "pts": {
+          "bets": 39,
+          "hit_rate": 0.5641025641025641,
+          "losses": 17,
+          "profit": 24.121150609925397,
+          "roi": 0.06184910412801384,
+          "wins": 22
+        },
+        "reb": {
+          "bets": 51,
+          "hit_rate": 0.5490196078431373,
+          "losses": 23,
+          "profit": 12.299261488142726,
+          "roi": 0.024116198996358286,
+          "wins": 28
+        }
+      }
+    },
+    {
+      "cell_id": "cell_f4d3d91c42696a78a2cc5eca020e51888da5f7174df111e8e70da5e05b2f59d0",
+      "edge_threshold": 0.07,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 111,
+      "total_profit": -10.34605196433851,
+      "roi": -0.0093207675354401,
+      "sharpe_ratio": -0.5485282515568078,
+      "max_drawdown": 0.05216166325639251,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 21,
+          "hit_rate": 0.42857142857142855,
+          "losses": 12,
+          "profit": -46.76646406240663,
+          "roi": -0.22269744791622204,
+          "wins": 9
+        },
+        "pts": {
+          "bets": 39,
+          "hit_rate": 0.5641025641025641,
+          "losses": 17,
+          "profit": 24.121150609925397,
+          "roi": 0.06184910412801384,
+          "wins": 22
+        },
+        "reb": {
+          "bets": 51,
+          "hit_rate": 0.5490196078431373,
+          "losses": 23,
+          "profit": 12.299261488142726,
+          "roi": 0.024116198996358286,
+          "wins": 28
+        }
+      }
+    },
+    {
+      "cell_id": "cell_cbb6b0a26d2a59fae2e9ef5c897c7cc443993a6ad2fc87681ea1f78ad75ef09d",
+      "edge_threshold": 0.1,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 603,
+      "total_profit": -378.3979115636929,
+      "roi": -0.06275255581487445,
+      "sharpe_ratio": -6.766425415687522,
+      "max_drawdown": 0.2426501118725391,
+      "raw_control": true,
+      "by_stat": {
+        "ast": {
+          "bets": 146,
+          "hit_rate": 0.4657534246575342,
+          "losses": 78,
+          "profit": -130.87022309518505,
+          "roi": -0.08963713910629113,
+          "wins": 68
+        },
+        "pts": {
+          "bets": 206,
+          "hit_rate": 0.5,
+          "losses": 103,
+          "profit": -97.89550091164662,
+          "roi": -0.04752208782118768,
+          "wins": 103
+        },
+        "reb": {
+          "bets": 251,
+          "hit_rate": 0.4900398406374502,
+          "losses": 128,
+          "profit": -149.63218755686125,
+          "roi": -0.05961441735333118,
+          "wins": 123
+        }
+      }
+    },
+    {
+      "cell_id": "cell_4a5ff9193898fa5f32a8dd364e17a6712f7b834cbfb1601dcbdd8ed256fd0de7",
+      "edge_threshold": 0.1,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 2,
+      "total_profit": -20.0,
+      "roi": -1.0,
+      "sharpe_ratio": -5390.193178356419,
+      "max_drawdown": 0.01,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 2,
+          "hit_rate": 0.0,
+          "losses": 2,
+          "profit": -20.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_64bb7f39752017d58d8b17008ef3220f1f0bfe5c78ec03e557157c975f725c97",
+      "edge_threshold": 0.1,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 2,
+      "total_profit": -20.0,
+      "roi": -1.0,
+      "sharpe_ratio": -5390.193178356419,
+      "max_drawdown": 0.01,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 2,
+          "hit_rate": 0.0,
+          "losses": 2,
+          "profit": -20.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_38ebca83bb2a432289904a6c5a63b55bfdc03d74290885bb41cb03145dd62ac0",
+      "edge_threshold": 0.1,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 2,
+      "total_profit": -20.0,
+      "roi": -1.0,
+      "sharpe_ratio": -5390.193178356419,
+      "max_drawdown": 0.01,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 2,
+          "hit_rate": 0.0,
+          "losses": 2,
+          "profit": -20.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_f7cb90cc40f86d37f8832890383b0221ff8e1d1c478bfa02abdd1c8a9ba0afdc",
+      "edge_threshold": 0.1,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 2,
+      "total_profit": -20.0,
+      "roi": -1.0,
+      "sharpe_ratio": -5390.193178356419,
+      "max_drawdown": 0.01,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 2,
+          "hit_rate": 0.0,
+          "losses": 2,
+          "profit": -20.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_0140776f8ee709f7d47b649abe4846cb5109754551ea4eaec3969a7b5816f7d8",
+      "edge_threshold": 0.1,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 1,
+      "total_profit": -10.0,
+      "roi": -1.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.005,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_96514c01dbe6ea0f3def38381cb395e3df3e10a38f345a1131e75121062d7bf4",
+      "edge_threshold": 0.1,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 1,
+      "total_profit": -10.0,
+      "roi": -1.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.005,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_6c5e400549d1cd12508b4a8d0c61ca1615acb1ca52967d26cfc9ba256021541f",
+      "edge_threshold": 0.1,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 81,
+      "total_profit": -25.422093636271512,
+      "roi": -0.03138530078552038,
+      "sharpe_ratio": -1.143772006818444,
+      "max_drawdown": 0.057377061899978585,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 15,
+          "hit_rate": 0.3333333333333333,
+          "losses": 10,
+          "profit": -50.22306255835667,
+          "roi": -0.33482041705571114,
+          "wins": 5
+        },
+        "pts": {
+          "bets": 31,
+          "hit_rate": 0.5483870967741935,
+          "losses": 14,
+          "profit": 11.82850258390323,
+          "roi": 0.038156459948074935,
+          "wins": 17
+        },
+        "reb": {
+          "bets": 35,
+          "hit_rate": 0.5428571428571428,
+          "losses": 16,
+          "profit": 12.97246633818196,
+          "roi": 0.037064189537662745,
+          "wins": 19
+        }
+      }
+    },
+    {
+      "cell_id": "cell_96148a8cfdab13d7ef345ce8163bfdfd4baf037459a498b506ef0006316c6000",
+      "edge_threshold": 0.1,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 81,
+      "total_profit": -25.422093636271512,
+      "roi": -0.03138530078552038,
+      "sharpe_ratio": -1.143772006818444,
+      "max_drawdown": 0.057377061899978585,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 15,
+          "hit_rate": 0.3333333333333333,
+          "losses": 10,
+          "profit": -50.22306255835667,
+          "roi": -0.33482041705571114,
+          "wins": 5
+        },
+        "pts": {
+          "bets": 31,
+          "hit_rate": 0.5483870967741935,
+          "losses": 14,
+          "profit": 11.82850258390323,
+          "roi": 0.038156459948074935,
+          "wins": 17
+        },
+        "reb": {
+          "bets": 35,
+          "hit_rate": 0.5428571428571428,
+          "losses": 16,
+          "profit": 12.97246633818196,
+          "roi": 0.037064189537662745,
+          "wins": 19
+        }
+      }
+    },
+    {
+      "cell_id": "cell_2209213783265c20e72506593255327e699a5d4be6c1f539efeebb77c5710ade",
+      "edge_threshold": 0.1,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 44,
+      "total_profit": -42.450102209581786,
+      "roi": -0.09647750502177678,
+      "sharpe_ratio": -3.2854093631769246,
+      "max_drawdown": 0.04105553366345616,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 7,
+          "hit_rate": 0.2857142857142857,
+          "losses": 5,
+          "profit": -33.251633986928105,
+          "roi": -0.4750233426704015,
+          "wins": 2
+        },
+        "pts": {
+          "bets": 14,
+          "hit_rate": 0.42857142857142855,
+          "losses": 8,
+          "profit": -26.927569690242755,
+          "roi": -0.19233978350173397,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 23,
+          "hit_rate": 0.5652173913043478,
+          "losses": 10,
+          "profit": 17.72910146758908,
+          "roi": 0.07708304985908294,
+          "wins": 13
+        }
+      }
+    },
+    {
+      "cell_id": "cell_e5faf29407d67037004476a06d4cb6b8a8b823bfaef00d9a3bf4330f1a98cb3e",
+      "edge_threshold": 0.1,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 44,
+      "total_profit": -42.450102209581786,
+      "roi": -0.09647750502177678,
+      "sharpe_ratio": -3.2854093631769246,
+      "max_drawdown": 0.04105553366345616,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 7,
+          "hit_rate": 0.2857142857142857,
+          "losses": 5,
+          "profit": -33.251633986928105,
+          "roi": -0.4750233426704015,
+          "wins": 2
+        },
+        "pts": {
+          "bets": 14,
+          "hit_rate": 0.42857142857142855,
+          "losses": 8,
+          "profit": -26.927569690242755,
+          "roi": -0.19233978350173397,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 23,
+          "hit_rate": 0.5652173913043478,
+          "losses": 10,
+          "profit": 17.72910146758908,
+          "roi": 0.07708304985908294,
+          "wins": 13
+        }
+      }
+    },
+    {
+      "cell_id": "cell_2c994f6746ac4d33f170eccdea08ff8ea9dff0b29745431eaae0223266ebe2cf",
+      "edge_threshold": 0.1,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 21,
+      "total_profit": -21.711912633740766,
+      "roi": -0.10339006016067032,
+      "sharpe_ratio": -2.676591020343559,
+      "max_drawdown": 0.017557010405251695,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 4,
+          "hit_rate": 0.25,
+          "losses": 3,
+          "profit": -20.19607843137255,
+          "roi": -0.5049019607843137,
+          "wins": 1
+        },
+        "pts": {
+          "bets": 7,
+          "hit_rate": 0.42857142857142855,
+          "losses": 4,
+          "profit": -11.810594447283258,
+          "roi": -0.16872277781833225,
+          "wins": 3
+        },
+        "reb": {
+          "bets": 10,
+          "hit_rate": 0.6,
+          "losses": 4,
+          "profit": 10.294760244915041,
+          "roi": 0.10294760244915041,
+          "wins": 6
+        }
+      }
+    },
+    {
+      "cell_id": "cell_bad9641db11b95b526839900cb4439d46d815f4ffe61d655519b3e2053ecbe83",
+      "edge_threshold": 0.1,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 21,
+      "total_profit": -21.711912633740766,
+      "roi": -0.10339006016067032,
+      "sharpe_ratio": -2.676591020343559,
+      "max_drawdown": 0.017557010405251695,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 4,
+          "hit_rate": 0.25,
+          "losses": 3,
+          "profit": -20.19607843137255,
+          "roi": -0.5049019607843137,
+          "wins": 1
+        },
+        "pts": {
+          "bets": 7,
+          "hit_rate": 0.42857142857142855,
+          "losses": 4,
+          "profit": -11.810594447283258,
+          "roi": -0.16872277781833225,
+          "wins": 3
+        },
+        "reb": {
+          "bets": 10,
+          "hit_rate": 0.6,
+          "losses": 4,
+          "profit": 10.294760244915041,
+          "roi": 0.10294760244915041,
+          "wins": 6
+        }
+      }
+    },
+    {
+      "cell_id": "cell_21db0145ae83bca6fc2f38d31478748b08bedb19c0347157251397434e833e12",
+      "edge_threshold": 0.1,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 96,
+      "total_profit": -17.450565769022056,
+      "roi": -0.01817767267606464,
+      "sharpe_ratio": -0.6358992294859522,
+      "max_drawdown": 0.06623215287773662,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 20,
+          "hit_rate": 0.35,
+          "losses": 13,
+          "profit": -58.32741038444363,
+          "roi": -0.29163705192221817,
+          "wins": 7
+        },
+        "pts": {
+          "bets": 37,
+          "hit_rate": 0.5405405405405406,
+          "losses": 17,
+          "profit": 11.374296976426596,
+          "roi": 0.03074134317953134,
+          "wins": 20
+        },
+        "reb": {
+          "bets": 39,
+          "hit_rate": 0.5641025641025641,
+          "losses": 17,
+          "profit": 29.50254763899497,
+          "roi": 0.07564755804870504,
+          "wins": 22
+        }
+      }
+    },
+    {
+      "cell_id": "cell_268b2dd4750a5a7daa687ee398b3241df8d3f22963b35800cf4917627c036bbc",
+      "edge_threshold": 0.1,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 174,
+      "total_profit": 53.66746195704176,
+      "roi": 0.0308433689408286,
+      "sharpe_ratio": 2.5797584937507216,
+      "max_drawdown": 0.04278313092408885,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 31,
+          "hit_rate": 0.45161290322580644,
+          "losses": 17,
+          "profit": -46.85351847141225,
+          "roi": -0.15114038216584597,
+          "wins": 14
+        },
+        "pts": {
+          "bets": 65,
+          "hit_rate": 0.5384615384615384,
+          "losses": 30,
+          "profit": 8.343625011888665,
+          "roi": 0.012836346172136408,
+          "wins": 35
+        },
+        "reb": {
+          "bets": 78,
+          "hit_rate": 0.6025641025641025,
+          "losses": 31,
+          "profit": 92.17735541656535,
+          "roi": 0.1181760966879043,
+          "wins": 47
+        }
+      }
+    },
+    {
+      "cell_id": "cell_8daa40ac36705d8b862774ed43324330f432b4ee52b61e51fb129982952baebc",
+      "edge_threshold": 0.1,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 81,
+      "total_profit": -25.422093636271512,
+      "roi": -0.03138530078552038,
+      "sharpe_ratio": -1.143772006818444,
+      "max_drawdown": 0.057377061899978585,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 15,
+          "hit_rate": 0.3333333333333333,
+          "losses": 10,
+          "profit": -50.22306255835667,
+          "roi": -0.33482041705571114,
+          "wins": 5
+        },
+        "pts": {
+          "bets": 31,
+          "hit_rate": 0.5483870967741935,
+          "losses": 14,
+          "profit": 11.82850258390323,
+          "roi": 0.038156459948074935,
+          "wins": 17
+        },
+        "reb": {
+          "bets": 35,
+          "hit_rate": 0.5428571428571428,
+          "losses": 16,
+          "profit": 12.97246633818196,
+          "roi": 0.037064189537662745,
+          "wins": 19
+        }
+      }
+    },
+    {
+      "cell_id": "cell_fec9fb382951fdf7f62eb87af3dc079ebff28ee0d71795d925ffe3222a2865bf",
+      "edge_threshold": 0.1,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 103,
+      "total_profit": -41.501866739877556,
+      "roi": -0.040293074504735495,
+      "sharpe_ratio": -2.2974681984635694,
+      "max_drawdown": 0.05545825832031631,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 20,
+          "hit_rate": 0.4,
+          "losses": 12,
+          "profit": -55.462116236319666,
+          "roi": -0.27731058118159835,
+          "wins": 8
+        },
+        "pts": {
+          "bets": 36,
+          "hit_rate": 0.5555555555555556,
+          "losses": 16,
+          "profit": 15.791069309112395,
+          "roi": 0.043864081414201096,
+          "wins": 20
+        },
+        "reb": {
+          "bets": 47,
+          "hit_rate": 0.5319148936170213,
+          "losses": 22,
+          "profit": -1.8308198126702777,
+          "roi": -0.0038953613035537823,
+          "wins": 25
+        }
+      }
+    },
+    {
+      "cell_id": "cell_5101006d857a3ea827eb3f6b7e1fe2246d810c0678b80725406aa1a169baf24a",
+      "edge_threshold": 0.1,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 51,
+      "total_profit": -56.56141579717996,
+      "roi": -0.11090473685721561,
+      "sharpe_ratio": -5.001323370501893,
+      "max_drawdown": 0.04093367885315683,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 9,
+          "hit_rate": 0.3333333333333333,
+          "losses": 6,
+          "profit": -34.323062558356675,
+          "roi": -0.38136736175951863,
+          "wins": 3
+        },
+        "pts": {
+          "bets": 17,
+          "hit_rate": 0.4117647058823529,
+          "losses": 10,
+          "profit": -38.663106880325394,
+          "roi": -0.22743004047250232,
+          "wins": 7
+        },
+        "reb": {
+          "bets": 25,
+          "hit_rate": 0.56,
+          "losses": 11,
+          "profit": 16.42475364150212,
+          "roi": 0.06569901456600849,
+          "wins": 14
+        }
+      }
+    },
+    {
+      "cell_id": "cell_220dffef48fd07c0c27f0c4b1f813ba2c2678fc3d64ae0ec8618f239dd3e97ca",
+      "edge_threshold": 0.1,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 54,
+      "total_profit": -53.62813066242476,
+      "roi": -0.09931135307856437,
+      "sharpe_ratio": -4.760950378023018,
+      "max_drawdown": 0.03856062050658767,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 10,
+          "hit_rate": 0.4,
+          "losses": 6,
+          "profit": -29.14171540809761,
+          "roi": -0.2914171540809761,
+          "wins": 4
+        },
+        "pts": {
+          "bets": 17,
+          "hit_rate": 0.4117647058823529,
+          "losses": 10,
+          "profit": -38.663106880325394,
+          "roi": -0.22743004047250232,
+          "wins": 7
+        },
+        "reb": {
+          "bets": 27,
+          "hit_rate": 0.5555555555555556,
+          "losses": 12,
+          "profit": 14.176691625998243,
+          "roi": 0.05250626528147498,
+          "wins": 15
+        }
+      }
+    },
+    {
+      "cell_id": "cell_7caab692d73b35c0bfa84edfe542f0a5ff4750558faa3787f5505ddd3e13bcfb",
+      "edge_threshold": 0.12,
+      "tau": null,
+      "z_max": null,
+      "max_weight": null,
+      "total_bets": 423,
+      "total_profit": -306.98704340859217,
+      "roi": -0.07257376912732676,
+      "sharpe_ratio": -5.8598645006835275,
+      "max_drawdown": 0.22316777664406676,
+      "raw_control": true,
+      "by_stat": {
+        "ast": {
+          "bets": 101,
+          "hit_rate": 0.45544554455445546,
+          "losses": 55,
+          "profit": -94.93306661189506,
+          "roi": -0.09399313525930204,
+          "wins": 46
+        },
+        "pts": {
+          "bets": 146,
+          "hit_rate": 0.4931506849315068,
+          "losses": 74,
+          "profit": -89.98391698062478,
+          "roi": -0.061632819849743004,
+          "wins": 72
+        },
+        "reb": {
+          "bets": 176,
+          "hit_rate": 0.48295454545454547,
+          "losses": 91,
+          "profit": -122.07005981607244,
+          "roi": -0.06935798853185934,
+          "wins": 85
+        }
+      }
+    },
+    {
+      "cell_id": "cell_25f403c01cdefefd2b6e720a259c0cff73a9a0521f403e915fb21e7572359591",
+      "edge_threshold": 0.12,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 1,
+      "total_profit": -10.0,
+      "roi": -1.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.005,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_119f381ddad3cc689a2c542d6fb24ae41adc62006deb56912a3d55d6c1c6afcf",
+      "edge_threshold": 0.12,
+      "tau": 0.25,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 1,
+      "total_profit": -10.0,
+      "roi": -1.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.005,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_a31f4527f1655d10524df02694d1e0ace74d10a012cf9972994a68deede9ae81",
+      "edge_threshold": 0.12,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 1,
+      "total_profit": -10.0,
+      "roi": -1.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.005,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_4e06fbc0eed333a06ec4bb17b4844f8b98726e8aad5debc505687dfea1558beb",
+      "edge_threshold": 0.12,
+      "tau": 0.25,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 1,
+      "total_profit": -10.0,
+      "roi": -1.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.005,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_c99322fa36967677663ffcd8fd8fa67c82703e15df9478fdb9cfe37647cbff4e",
+      "edge_threshold": 0.12,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 1,
+      "total_profit": -10.0,
+      "roi": -1.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.005,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_d30571d85faee07ca921ffe56ab485205c1ffc79ca66af6d003b72488122635f",
+      "edge_threshold": 0.12,
+      "tau": 0.25,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 1,
+      "total_profit": -10.0,
+      "roi": -1.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.005,
+      "raw_control": false,
+      "by_stat": {
+        "reb": {
+          "bets": 1,
+          "hit_rate": 0.0,
+          "losses": 1,
+          "profit": -10.0,
+          "roi": -1.0,
+          "wins": 0
+        }
+      }
+    },
+    {
+      "cell_id": "cell_1d800e887af0324e2dc9054db6a8e0e4947483e73dec24806c283150bcca6cc5",
+      "edge_threshold": 0.12,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 45,
+      "total_profit": 10.479876788586147,
+      "roi": 0.02328861508574699,
+      "sharpe_ratio": 0.7505828552178979,
+      "max_drawdown": 0.034921416287724036,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 9,
+          "hit_rate": 0.4444444444444444,
+          "losses": 5,
+          "profit": -13.323062558356675,
+          "roi": -0.14803402842618527,
+          "wins": 4
+        },
+        "pts": {
+          "bets": 15,
+          "hit_rate": 0.4,
+          "losses": 9,
+          "profit": -36.927569690242755,
+          "roi": -0.2461837979349517,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 21,
+          "hit_rate": 0.6666666666666666,
+          "losses": 7,
+          "profit": 60.730509037185584,
+          "roi": 0.2891929001770742,
+          "wins": 14
+        }
+      }
+    },
+    {
+      "cell_id": "cell_9cc91210dde8cde5cb1c2c90323f328d53f57bb9169764ae9f0ce2e3d9c40c3e",
+      "edge_threshold": 0.12,
+      "tau": 0.5,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 45,
+      "total_profit": 10.479876788586147,
+      "roi": 0.02328861508574699,
+      "sharpe_ratio": 0.7505828552178979,
+      "max_drawdown": 0.034921416287724036,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 9,
+          "hit_rate": 0.4444444444444444,
+          "losses": 5,
+          "profit": -13.323062558356675,
+          "roi": -0.14803402842618527,
+          "wins": 4
+        },
+        "pts": {
+          "bets": 15,
+          "hit_rate": 0.4,
+          "losses": 9,
+          "profit": -36.927569690242755,
+          "roi": -0.2461837979349517,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 21,
+          "hit_rate": 0.6666666666666666,
+          "losses": 7,
+          "profit": 60.730509037185584,
+          "roi": 0.2891929001770742,
+          "wins": 14
+        }
+      }
+    },
+    {
+      "cell_id": "cell_2fd7e3d507702b6d350a83071ceb9d1de450ee012dcde957fc581366fd30166f",
+      "edge_threshold": 0.12,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 28,
+      "total_profit": -37.22302374485188,
+      "roi": -0.13293937051732815,
+      "sharpe_ratio": -3.992326276720275,
+      "max_drawdown": 0.023785448992764226,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 5,
+          "hit_rate": 0.4,
+          "losses": 3,
+          "profit": -13.251633986928105,
+          "roi": -0.2650326797385621,
+          "wins": 2
+        },
+        "pts": {
+          "bets": 8,
+          "hit_rate": 0.375,
+          "losses": 5,
+          "profit": -21.810594447283258,
+          "roi": -0.2726324305910407,
+          "wins": 3
+        },
+        "reb": {
+          "bets": 15,
+          "hit_rate": 0.5333333333333333,
+          "losses": 7,
+          "profit": -2.160795310640509,
+          "roi": -0.014405302070936727,
+          "wins": 8
+        }
+      }
+    },
+    {
+      "cell_id": "cell_ec1eb7739bf724a16512ebaf20d2d6ae12a7840b15cd1b3f49ae8aa767c3c6b1",
+      "edge_threshold": 0.12,
+      "tau": 0.5,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 28,
+      "total_profit": -37.22302374485188,
+      "roi": -0.13293937051732815,
+      "sharpe_ratio": -3.992326276720275,
+      "max_drawdown": 0.023785448992764226,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 5,
+          "hit_rate": 0.4,
+          "losses": 3,
+          "profit": -13.251633986928105,
+          "roi": -0.2650326797385621,
+          "wins": 2
+        },
+        "pts": {
+          "bets": 8,
+          "hit_rate": 0.375,
+          "losses": 5,
+          "profit": -21.810594447283258,
+          "roi": -0.2726324305910407,
+          "wins": 3
+        },
+        "reb": {
+          "bets": 15,
+          "hit_rate": 0.5333333333333333,
+          "losses": 7,
+          "profit": -2.160795310640509,
+          "roi": -0.014405302070936727,
+          "wins": 8
+        }
+      }
+    },
+    {
+      "cell_id": "cell_ea792c0bb856c4f2b509bf9738a6b4a33bc174fb94d5903eadb20ed6d1b3e16a",
+      "edge_threshold": 0.12,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 11,
+      "total_profit": -38.3522483020935,
+      "roi": -0.34865680274630456,
+      "sharpe_ratio": -8.886935862082394,
+      "max_drawdown": 0.02434708460265269,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 2,
+          "hit_rate": 0.0,
+          "losses": 2,
+          "profit": -20.0,
+          "roi": -1.0,
+          "wins": 0
+        },
+        "pts": {
+          "bets": 2,
+          "hit_rate": 0.0,
+          "losses": 2,
+          "profit": -20.0,
+          "roi": -1.0,
+          "wins": 0
+        },
+        "reb": {
+          "bets": 7,
+          "hit_rate": 0.5714285714285714,
+          "losses": 3,
+          "profit": 1.6477516979064966,
+          "roi": 0.02353930997009281,
+          "wins": 4
+        }
+      }
+    },
+    {
+      "cell_id": "cell_480a12407477cc45b08c0733b8a0d3df0a424278a7b074b05bcb259f0fa04983",
+      "edge_threshold": 0.12,
+      "tau": 0.5,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 11,
+      "total_profit": -38.3522483020935,
+      "roi": -0.34865680274630456,
+      "sharpe_ratio": -8.886935862082394,
+      "max_drawdown": 0.02434708460265269,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 2,
+          "hit_rate": 0.0,
+          "losses": 2,
+          "profit": -20.0,
+          "roi": -1.0,
+          "wins": 0
+        },
+        "pts": {
+          "bets": 2,
+          "hit_rate": 0.0,
+          "losses": 2,
+          "profit": -20.0,
+          "roi": -1.0,
+          "wins": 0
+        },
+        "reb": {
+          "bets": 7,
+          "hit_rate": 0.5714285714285714,
+          "losses": 3,
+          "profit": 1.6477516979064966,
+          "roi": 0.02353930997009281,
+          "wins": 4
+        }
+      }
+    },
+    {
+      "cell_id": "cell_e2f215d02059c5d760d59e8d642b38b86ea4593798628d34972eafd11433560d",
+      "edge_threshold": 0.12,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.5,
+      "total_bets": 53,
+      "total_profit": 35.11242417647335,
+      "roi": 0.06624985693674217,
+      "sharpe_ratio": 2.0498559606470277,
+      "max_drawdown": 0.03953994931205617,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 12,
+          "hit_rate": 0.4166666666666667,
+          "losses": 7,
+          "profit": -20.123062558356672,
+          "roi": -0.1676921879863056,
+          "wins": 5
+        },
+        "pts": {
+          "bets": 18,
+          "hit_rate": 0.4444444444444444,
+          "losses": 10,
+          "profit": -25.30376016643323,
+          "roi": -0.1405764453690735,
+          "wins": 8
+        },
+        "reb": {
+          "bets": 23,
+          "hit_rate": 0.6956521739130435,
+          "losses": 7,
+          "profit": 80.53924690126324,
+          "roi": 0.3501706387011445,
+          "wins": 16
+        }
+      }
+    },
+    {
+      "cell_id": "cell_c7ebee46978190ecabb39b1228b0a1db02926200719b1cd8e7485f70740882b4",
+      "edge_threshold": 0.12,
+      "tau": 0.75,
+      "z_max": 0.5,
+      "max_weight": 0.75,
+      "total_bets": 132,
+      "total_profit": 29.980309002446432,
+      "roi": 0.02271235530488366,
+      "sharpe_ratio": 1.766512657304997,
+      "max_drawdown": 0.043474625377757994,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 28,
+          "hit_rate": 0.42857142857142855,
+          "losses": 16,
+          "profit": -52.95107944702201,
+          "roi": -0.1891109980250786,
+          "wins": 12
+        },
+        "pts": {
+          "bets": 46,
+          "hit_rate": 0.5434782608695652,
+          "losses": 21,
+          "profit": 11.999763535267295,
+          "roi": 0.02608644246797238,
+          "wins": 25
+        },
+        "reb": {
+          "bets": 58,
+          "hit_rate": 0.603448275862069,
+          "losses": 23,
+          "profit": 70.93162491420115,
+          "roi": 0.12229590502448474,
+          "wins": 35
+        }
+      }
+    },
+    {
+      "cell_id": "cell_45a5782d9f2fe9a73994a7e15cbeee47079ba7060833b0a20769d9352950760e",
+      "edge_threshold": 0.12,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.5,
+      "total_bets": 45,
+      "total_profit": 10.479876788586147,
+      "roi": 0.02328861508574699,
+      "sharpe_ratio": 0.7505828552178979,
+      "max_drawdown": 0.034921416287724036,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 9,
+          "hit_rate": 0.4444444444444444,
+          "losses": 5,
+          "profit": -13.323062558356675,
+          "roi": -0.14803402842618527,
+          "wins": 4
+        },
+        "pts": {
+          "bets": 15,
+          "hit_rate": 0.4,
+          "losses": 9,
+          "profit": -36.927569690242755,
+          "roi": -0.2461837979349517,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 21,
+          "hit_rate": 0.6666666666666666,
+          "losses": 7,
+          "profit": 60.730509037185584,
+          "roi": 0.2891929001770742,
+          "wins": 14
+        }
+      }
+    },
+    {
+      "cell_id": "cell_ca23e229151210de570378d42730ed71d7cfdcd21b2365a2a989b38c64bfb964",
+      "edge_threshold": 0.12,
+      "tau": 0.75,
+      "z_max": 0.75,
+      "max_weight": 0.75,
+      "total_bets": 64,
+      "total_profit": -60.433454465159905,
+      "roi": -0.09442727260181236,
+      "sharpe_ratio": -4.366763358057649,
+      "max_drawdown": 0.04902719131545654,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 11,
+          "hit_rate": 0.36363636363636365,
+          "losses": 7,
+          "profit": -39.14171540809761,
+          "roi": -0.355833776437251,
+          "wins": 4
+        },
+        "pts": {
+          "bets": 21,
+          "hit_rate": 0.47619047619047616,
+          "losses": 11,
+          "profit": -24.010684204187307,
+          "roi": -0.11433659144851098,
+          "wins": 10
+        },
+        "reb": {
+          "bets": 32,
+          "hit_rate": 0.53125,
+          "losses": 15,
+          "profit": 2.718945147124998,
+          "roi": 0.00849670358476562,
+          "wins": 17
+        }
+      }
+    },
+    {
+      "cell_id": "cell_02324cac997f82001181b77f8fdb515f1be962ce2ac97c35430a4ee97c124677",
+      "edge_threshold": 0.12,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.5,
+      "total_bets": 35,
+      "total_profit": -30.539998987811373,
+      "roi": -0.08725713996517535,
+      "sharpe_ratio": -2.5928078572521076,
+      "max_drawdown": 0.03242942025880589,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 5,
+          "hit_rate": 0.4,
+          "losses": 3,
+          "profit": -13.251633986928105,
+          "roi": -0.2650326797385621,
+          "wins": 2
+        },
+        "pts": {
+          "bets": 13,
+          "hit_rate": 0.46153846153846156,
+          "losses": 7,
+          "profit": -16.927569690242755,
+          "roi": -0.13021207454032888,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 17,
+          "hit_rate": 0.5294117647058824,
+          "losses": 8,
+          "profit": -0.36079531064051196,
+          "roi": -0.0021223253567088938,
+          "wins": 9
+        }
+      }
+    },
+    {
+      "cell_id": "cell_189d2d358a3b96e3a5665d584b8c103a9878dfdccdaca762663ec669169f379a",
+      "edge_threshold": 0.12,
+      "tau": 0.75,
+      "z_max": 1.0,
+      "max_weight": 0.75,
+      "total_bets": 38,
+      "total_profit": -45.35865183755231,
+      "roi": -0.1193648732567166,
+      "sharpe_ratio": -4.523025827392146,
+      "max_drawdown": 0.0349685590166531,
+      "raw_control": false,
+      "by_stat": {
+        "ast": {
+          "bets": 6,
+          "hit_rate": 0.5,
+          "losses": 3,
+          "profit": -8.070286836669037,
+          "roi": -0.13450478061115062,
+          "wins": 3
+        },
+        "pts": {
+          "bets": 13,
+          "hit_rate": 0.46153846153846156,
+          "losses": 7,
+          "profit": -16.927569690242755,
+          "roi": -0.13021207454032888,
+          "wins": 6
+        },
+        "reb": {
+          "bets": 19,
+          "hit_rate": 0.47368421052631576,
+          "losses": 10,
+          "profit": -20.360795310640512,
+          "roi": -0.10716208058231848,
+          "wins": 9
+        }
+      }
+    }
+  ],
+  "scope": {
+    "fixed_config": {
+      "allowed_bets": null,
+      "bl_max_weight": [
+        0.5,
+        0.75
+      ],
+      "bl_taus": [
+        0.25,
+        0.5,
+        0.75
+      ],
+      "bl_z_max": [
+        0.5,
+        0.75,
+        1.0
+      ],
+      "bookmakers": [
+        "draftkings",
+        "fanduel",
+        "betmgm",
+        "betrivers",
+        "bovada",
+        "williamhill_us",
+        "betonlineag",
+        "unibet_us",
+        "mybookieag",
+        "pointsbetus",
+        "fanatics",
+        "barstool",
+        "wynnbet",
+        "ballybet",
+        "betopenly",
+        "betparx",
+        "espnbet",
+        "fliff",
+        "hardrockbet",
+        "novig",
+        "prophetx",
+        "rebet",
+        "windcreek",
+        "pinnacle"
+      ],
+      "diagnostic_history": true,
+      "edge_thresholds": [
+        0.03,
+        0.05,
+        0.07,
+        0.1,
+        0.12
+      ],
+      "end": "2026-11-02",
+      "flat_bet_size": 10.0,
+      "local": true,
+      "market_stats": [
+        "pts",
+        "reb",
+        "ast",
+        "pra",
+        "pr",
+        "pa",
+        "ra"
+      ],
+      "max_cells": 95,
+      "min_minutes_avg": 10.0,
+      "model_dir": "src\\models\\artifacts\\no_injury_baseline\\nba_run_20261108_122129",
+      "n_samples": 5000,
+      "output_dir": "backtest_results\\nba_no_injury_holdout_sweep_95_nov2_v1",
+      "seed": 42,
+      "start": "2026-10-21",
+      "starting_bankroll": 2000.0,
+      "stats": [
+        "pts",
+        "reb",
+        "ast"
+      ]
+    },
+    "expected_dates": [
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23",
+      "2026-10-24",
+      "2026-10-25",
+      "2026-10-26",
+      "2026-10-27",
+      "2026-10-28",
+      "2026-10-29",
+      "2026-10-30",
+      "2026-10-31",
+      "2026-11-01",
+      "2026-11-02"
+    ],
+    "historical_readiness": "unverified",
+    "decision_grade": false,
+    "artifact_path": "C:\\Users\\Chase\\Projects\\GameFlowData\\src\\models\\artifacts\\no_injury_baseline\\nba_run_20261108_122129",
+    "artifact_identity": "8e1c8b65b0e0dfc0c87f83d35341fb45ba4d185c428120c877b2366518ee151d",
+    "input_identity": "781fd2031d641bac3b392cc247e1756cc65f8cae63155c4391ef4f549c54a41e",
+    "unresolved": [
+      "historical timing",
+      "source policy",
+      "loader completeness",
+      "query tie ordering"
+    ]
+  },
+  "verification": {
+    "payoff_or_outcome_errors": 0,
+    "quote_after_selected_decision_errors": 0,
+    "missing_checked_timing_fields": 0,
+    "note": "Reconciles saved ledgers/timing fields only, not independent actual/source verification or full historical feature chronology.",
+    "source_files_changed_since_sweep": [
+      "src/backtesting/nba/run_nba_sweep.py",
+      "src/backtesting/nba/sweep_runner.py"
+    ],
+    "artifact_hash_errors": [],
+    "summary_receipt_match": true
+  },
+  "raw5_probability_buckets": {
+    "<0.55": {
+      "bets": 185,
+      "wins": 80,
+      "losses": 105,
+      "profit": -152.4903887591791,
+      "staked": 1850.0,
+      "roi": -0.08242723716712384,
+      "avg_model_prob": 0.5195610810810811,
+      "avg_posterior_prob": null,
+      "hit_rate": 0.43243243243243246
+    },
+    "0.55-0.60": {
+      "bets": 280,
+      "wins": 120,
+      "losses": 160,
+      "profit": -453.9692986449665,
+      "staked": 2800.0,
+      "roi": -0.16213189237320233,
+      "avg_model_prob": 0.5744157142857143,
+      "avg_posterior_prob": null,
+      "hit_rate": 0.42857142857142855
+    },
+    "0.60-0.65": {
+      "bets": 262,
+      "wins": 137,
+      "losses": 125,
+      "profit": -39.09944775626964,
+      "staked": 2619.740050627999,
+      "roi": -0.014924934154019133,
+      "avg_model_prob": 0.622175572519084,
+      "avg_posterior_prob": null,
+      "hit_rate": 0.5229007633587787
+    },
+    "0.65-0.70": {
+      "bets": 151,
+      "wins": 84,
+      "losses": 67,
+      "profit": 15.88915464021784,
+      "staked": 1510.0,
+      "roi": 0.010522618967031681,
+      "avg_model_prob": 0.6713403973509934,
+      "avg_posterior_prob": null,
+      "hit_rate": 0.5562913907284768
+    },
+    "0.70+": {
+      "bets": 94,
+      "wins": 55,
+      "losses": 39,
+      "profit": 55.06137887000903,
+      "staked": 940.0,
+      "roi": 0.05857593496809471,
+      "avg_model_prob": 0.7415170212765957,
+      "avg_posterior_prob": null,
+      "hit_rate": 0.5851063829787234
+    }
+  },
+  "created_utc": "2026-11-08T18:55:46.667848+00:00",
+  "interpretation_notes": {
+    "selection": "One highest-edge stat/side per player-game before threshold filtering. Raw/BL calibration summaries use different selected-stat cohorts; shared-key quantiles/actuals were identical.",
+    "stake": "Flat sizing is min(requested_stake, current available bankroll), not percent-cap sizing. Raw 3% and 5% each had one partially funded bet.",
+    "source_revision": "Current run_nba_sweep.py and sweep_runner.py differ from the recorded hashes. Scoped live diff is logging/progress and safe acquisition-error detail; do not claim current source is byte-identical to the executed snapshot.",
+    "under_slice": "Under-only totals are post-hoc slices of the saved selected bets, not a new policy replay that could choose alternative bets."
+  },
+  "volume_cell_stat_signs": {
+    "pts": {
+      "positive_cells": 29,
+      "cells_with_bets": 44
+    },
+    "reb": {
+      "positive_cells": 37,
+      "cells_with_bets": 44
+    },
+    "ast": {
+      "positive_cells": 0,
+      "cells_with_bets": 44
+    }
+  }
+}

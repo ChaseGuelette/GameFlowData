@@ -1233,6 +1233,13 @@ def main():
     )
 
     # ==============================================================
+    # Disable every MLB schedule together, including retries and CLV capture.
+    if not env_flag("MLB_JOBS_ENABLED", default=True):
+        for job in scheduler.get_jobs():
+            if job.id.startswith("mlb_"):
+                scheduler.remove_job(job.id)
+                logger.info("MLB job disabled by MLB_JOBS_ENABLED=false: %s", job.id)
+
     # Log scheduled jobs
     logger.info("Scheduled jobs:")
     for job in scheduler.get_jobs():

@@ -9,6 +9,7 @@ import copy
 import csv
 import hashlib
 import json
+import logging
 import math
 import os
 from collections.abc import Mapping
@@ -39,6 +40,8 @@ from src.models.nba_artifacts import (
 
 if TYPE_CHECKING:
     from src.models.feature_store import FeatureStore
+
+logger = logging.getLogger(__name__)
 
 KEYS = ["player_id", "game_id", "stat"]
 PREDICTION_COLUMNS = KEYS + ["game_date", "player_name", "team_id", "game_time", "pred_mean", "pred_std", "pred_median", "pred_q10", "pred_q25",
@@ -363,24 +366,31 @@ def acquire_shared_inputs(config: SweepConfig, plan: dict, runtime: Runtime) -> 
                     or store.acquisition_budget.limits != config.acquisition_limits):
                 raise ValueError('Historical runtime acquisition limits mismatch')
         stage = "game_dates"
+        logger.info("Fetching stats-backed game dates...")
         dates = harness._get_game_dates(config.start, config.end)
         if (not isinstance(dates, list) or any(type(value) is not date or not config.start <= value <= config.end
                                               for value in dates) or len(set(dates)) != len(dates)):
             raise ValueError("Invalid acquired game dates")
         dates = sorted(dates)
+        logger.info("Found %d stats-backed game dates", len(dates))
         stage = "features"
+        logger.info("Prefetching features for %s through %s...", config.start, config.end)
         if historical:
             prefetched = store.get_features_for_date_range(
                 config.start, config.end, historical_policy=policy)
         else:
             prefetched = store.get_features_for_date_range(config.start, config.end)
         stage = "quotes"
+        logger.info("Prefetched features for %d dates; loading historical quote pairs...", len(prefetched))
         if historical:
             lines = harness._prefetch_all_lines(config.start, config.end, prefetched_features=prefetched)
         else:
             lines = harness._prefetch_all_lines(config.start, config.end)
-        for mapping in (prefetched, lines):
+        for label, mapping in (("features", prefetched), ("quotes", lines)):
             if not isinstance(mapping, Mapping) or any(type(key) is not date or key not in dates for key in mapping):
+                if isinstance(mapping, Mapping):
+                    extra_dates = sorted(key.isoformat() for key in mapping if type(key) is date and key not in dates)
+                    logger.error("%s acquisition dates absent from stats-backed game dates: %s. Check local source coverage; no dates were discarded.", label, extra_dates)
                 raise ValueError("Unexpected acquisition date keys")
         if historical:
             if any(day not in prefetched or day not in lines for day in dates):
@@ -401,12 +411,14 @@ def acquire_shared_inputs(config: SweepConfig, plan: dict, runtime: Runtime) -> 
                     frame[column] = frame[column].map(
                         lambda value: _historical_payload(value) if isinstance(value, Mapping | tuple | list) else value)
         stage = "actuals"
+        logger.info("Loaded quote pairs for %d dates; fetching actuals and voids...", len(lines))
         actuals = isolated_frame(harness._get_actuals(config.start, config.end))
         stage = "voids"
         voids = isolated_frame(harness._get_voids(config.start, config.end))
         expected_dates = tuple(config.start + timedelta(days=i) for i in range((config.end - config.start).days + 1))
         records = {}
-        for day in expected_dates:
+        for day_index, day in enumerate(expected_dates, start=1):
+            logger.info("Predicting date %d/%d: %s", day_index, len(expected_dates), day)
             stage = "date_assembly"
             frame = isolated_frame(prefetched.get(day, pd.DataFrame()))
             quotes = isolated_frame(lines.get(day, pd.DataFrame(columns=QUOTE_COLUMNS)))
@@ -451,6 +463,8 @@ def acquire_shared_inputs(config: SweepConfig, plan: dict, runtime: Runtime) -> 
                                               "predictions": len(predictions), "quotes": len(quotes),
                                               "sample_bundles": len(samples)},
             }
+            logger.info("%s: %d eligible players, %d predictions, %d quotes (%s)",
+                        day, len(eligible), len(predictions), len(quotes), reason)
         day, stage = None, "bundle_identity"
         evidence = MappingProxyType({
             "artifact": copy.deepcopy(plan["artifact"]), "source": copy.deepcopy(plan["source"]),
@@ -712,9 +726,11 @@ def run_sweep(config: SweepConfig, *, runtime_factory=None, plan: dict | None = 
     try:
         _write_json(root / "sweep_manifest.json", manifest)
         stage = "runtime_bootstrap"
+        logger.info("Loading model artifacts and initializing sweep runtime...")
         runtime = (bootstrap_runtime if runtime_factory is None else runtime_factory)(config, plan)
         stage = "acquisition"
         shared = acquire_shared_inputs(config, plan, runtime)
+        logger.info("Shared inputs acquired; evaluating %d configurations", len(order))
         shared.assert_unchanged(plan)
         if config.historical:
             ledger = json.loads(shared.evidence['quote_ledger_json'])
@@ -741,7 +757,9 @@ def run_sweep(config: SweepConfig, *, runtime_factory=None, plan: dict | None = 
                              for key, value in record["samples"].items()]})
         _write_json(root / "sweep_manifest.json", manifest, replace=True)
         summaries, receipts = {}, []
-        for cell in order:
+        for cell_index, cell in enumerate(order, start=1):
+            logger.info("Configuration %d/%d: edge=%s tau=%s z_max=%s max_weight=%s",
+                        cell_index, len(order), cell.edge_threshold, cell.tau, cell.z_max, cell.max_weight)
             stage = "cell_evaluation"
             manifest["active_cell"] = cell.cell_id
             shared.assert_unchanged(plan)
@@ -760,7 +778,11 @@ def run_sweep(config: SweepConfig, *, runtime_factory=None, plan: dict | None = 
             }
             manifest["completed_cells"] = copy.deepcopy(receipts)
             _write_json(root / "sweep_manifest.json", manifest, replace=True)
+            logger.info("Configuration %d/%d saved: bets=%d profit=$%.2f ROI=%.2f%% Sharpe=%.3f",
+                        cell_index, len(order), result.metrics.total_bets, result.metrics.total_profit,
+                        result.metrics.roi * 100, result.metrics.sharpe_ratio)
         stage = "completion_verification"
+        logger.info("All configurations evaluated; verifying exports and writing summary...")
         shared.assert_unchanged(plan)
         if config.historical:
             ledger = json.loads((root / 'historical_quote_ledger.json').read_text(encoding='utf-8'))
@@ -787,6 +809,7 @@ def run_sweep(config: SweepConfig, *, runtime_factory=None, plan: dict | None = 
             raise SweepFailure("summary_digest_readback")
         stage = "finalize"
         _rename_no_replace(root, final)
+        logger.info("Sweep complete: %s", final)
         return final
     except BaseException as exc:
         manifest["state"] = "failed"

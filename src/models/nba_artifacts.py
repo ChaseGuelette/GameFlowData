@@ -15,6 +15,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.models.nba.feature_controls import is_injury_feature, validate_feature_control_evidence
+
 ARTIFACT_MANIFEST = "artifact_manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
 MODEL_ARTIFACT_TYPE = "nba_training_bundle"
@@ -630,6 +632,30 @@ def _validate_training_metadata(path: Path, manifest: Mapping[str, Any]) -> None
     }
     if any(key not in config or config[key] != value for key, value in comparisons.items()):
         raise ValueError("Declared train/calibration settings differ from run_config.json")
+    manifest_controls = training.get("feature_controls")
+    config_controls = config.get("feature_controls")
+    if manifest_controls != config_controls:
+        raise ValueError("Manifest and run config feature controls differ")
+    declared_no_injury = training.get("exclude_injury_features", False)
+    if type(declared_no_injury) is not bool:
+        raise ValueError("Malformed exclude_injury_features setting")
+    config_no_injury = config.get("exclude_injury_features", False)
+    if type(config_no_injury) is not bool or config_no_injury != declared_no_injury:
+        raise ValueError("Manifest and run config injury controls differ")
+    validate_feature_control_evidence(
+        manifest_controls, manifest["features"]["ordered"], allow_legacy_default=True
+    )
+    if manifest_controls is not None and (
+        manifest_controls["requested"]["exclude_injury_features"] is not declared_no_injury
+    ):
+        raise ValueError("Requested and declared injury controls differ")
+    # Injury exclusion predates general feature-control receipts. Preserve those
+    # artifacts, but verify their declared exclusion against actual saved lists.
+    if declared_no_injury:
+        for selected in manifest["features"]["ordered"].values():
+            lists = selected.values() if isinstance(selected, dict) else (selected,)
+            if any(is_injury_feature(feature) for values in lists for feature in values):
+                raise ValueError("Saved effective features violate injury exclusion")
     if not isinstance(calibration.get("season"), str) or not calibration["season"]:
         raise ValueError("Missing calibration season")
     if "end_date_exclusive" not in calibration:

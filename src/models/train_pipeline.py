@@ -26,6 +26,13 @@ from src.models.features.nba.acquisition import AcquisitionLimits, add_acquisiti
 from src.models.features.nba.contracts import NBA_FEATURE_LISTS, validate_feature_lists
 from src.models.hyperparameter_tuner import QuantileHyperparameterTuner
 from src.models.monte_carlo import MonteCarloPredictor, compute_copula_params_from_data
+from src.models.nba.feature_controls import (
+    FeatureControlSpec,
+    enforce_selected,
+    is_injury_feature,
+    resolve_component,
+    validate_feature_control_evidence,
+)
 from src.models.nba_artifacts import (
     build_diagnostic_manifest,
     build_training_manifest,
@@ -56,10 +63,7 @@ logger = logging.getLogger("TrainingPipeline")
 
 def _is_injury_feature(feature: str) -> bool:
     """Return whether a model feature is derived from injury context."""
-    return (
-        feature.startswith(("team_out_", "opp_out_"))
-        or feature in {"player_is_questionable", "player_is_probable"}
-    )
+    return is_injury_feature(feature)
 
 
 def _iter_selected_features(feature_config: dict):
@@ -90,12 +94,27 @@ class TrainingOrchestrator:
         hyperparams_path: str | None = None,
         feature_tolerance: float = 0.005,
         exclude_injury_features: bool = False,
+        include_feature_families: list[str] | None = None,
+        exclude_feature_families: list[str] | None = None,
+        include_features: list[str] | None = None,
+        exclude_features: list[str] | None = None,
         local: bool = False,
         historical_attachment: dict | None = None,
         acquisition_limits: AcquisitionLimits | None = None,
     ):
         if tune_hyperparams and hyperparams_path is not None:
             raise ValueError('Tuning and supplied fixed hyperparameters conflict')
+        self.feature_control_spec = FeatureControlSpec.create(
+            include_feature_families=include_feature_families,
+            exclude_feature_families=exclude_feature_families,
+            include_features=include_features,
+            exclude_features=exclude_features,
+            exclude_injury_features=exclude_injury_features,
+        )
+        if historical_attachment is not None and (
+            self.feature_control_spec.active or exclude_injury_features
+        ):
+            raise ValueError("Feature controls are supported only for ordinary full training")
         if historical_attachment is not None:
             if local is not True or not isinstance(acquisition_limits, AcquisitionLimits):
                 raise ValueError('Historical training requires local targeting and acquisition limits')
@@ -110,6 +129,7 @@ class TrainingOrchestrator:
             if historical_attachment is not None else FeatureStore(self.engine))
         self.feature_tolerance = feature_tolerance
         self.exclude_injury_features = exclude_injury_features
+        self.feature_control_receipt = self.feature_control_spec.requested_receipt()
 
         # Tuning settings
         self.tune_hyperparams = tune_hyperparams
@@ -176,6 +196,7 @@ class TrainingOrchestrator:
         # 2. Feature Selection (on Training Data ONLY)
         train_df, cal_df = self._gate_populations(train_df, cal_df, train_seasons, calibration_season)
         selected_features = self._run_feature_selection(train_df)
+        self._persist_feature_control_receipt()
 
         # 3. Hyperparameter Tuning (Optional)
         tuned_hyperparams = self._run_hyperparameter_tuning(train_df, selected_features)
@@ -246,6 +267,8 @@ class TrainingOrchestrator:
             reselect_features: Whether to re-run feature selection for
                 retrained components.
         """
+        if self.feature_control_spec.active or self.exclude_injury_features:
+            raise ValueError("Feature controls are supported only for ordinary full training")
         # Save run config
         self._validate_request(train_seasons, calibration_season, cal_end_date)
         config = {
@@ -258,6 +281,8 @@ class TrainingOrchestrator:
             "retrain_minutes": retrain_minutes,
             "reselect_features": reselect_features,
             "force_features": force_features,
+            "exclude_injury_features": False,
+            "feature_controls": self.feature_control_receipt,
             "timestamp": self.timestamp.isoformat(),
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
@@ -461,6 +486,9 @@ class TrainingOrchestrator:
         # selected_features writer; joblib serialization itself stays untouched.
         if effective_features != json.loads(json.dumps(saved_feature_config, allow_nan=False)):
             raise ValueError("Selected features differ from the pipeline configuration actually saved")
+        validate_feature_control_evidence(
+            self.feature_control_receipt, effective_features, allow_legacy_default=False
+        )
         manifest = build_training_manifest(
             self.run_dir,
             mode=mode,
@@ -476,6 +504,7 @@ class TrainingOrchestrator:
                 "tuning_per_quantile": self.tuning_per_quantile,
                 "feature_tolerance": self.feature_tolerance,
                 "exclude_injury_features": self.exclude_injury_features,
+                "feature_controls": self.feature_control_receipt,
             },
             calibration_settings={
                 "season": calibration_season,
@@ -598,12 +627,36 @@ class TrainingOrchestrator:
             "calibration_season": calibration_season,
             "cal_end_date": str(cal_end_date) if cal_end_date else None,
             "exclude_injury_features": self.exclude_injury_features,
+            "feature_controls": self.feature_control_receipt,
             "timestamp": self.timestamp.isoformat(),
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
         }
         with open(self.run_dir / "run_config.json", "w") as f:
             json.dump(config, f, indent=4)
+
+    def _persist_feature_control_receipt(self) -> None:
+        config_path = self.run_dir / "run_config.json"
+        with config_path.open(encoding="utf-8") as handle:
+            config = json.load(handle)
+        config["feature_controls"] = self.feature_control_receipt
+        with config_path.open("w", encoding="utf-8") as handle:
+            json.dump(config, handle, indent=4)
+
+    def _select_component_features(self, selector, frame, target, candidates, *, component, model_name):
+        numeric_columns = frame.select_dtypes(include=[np.number, "bool"]).columns
+        filtered, receipt = resolve_component(
+            self.feature_control_spec, candidates, numeric_columns, component=component
+        )
+        frame.loc[:, filtered] = prepare_quantile_features(frame, filtered)
+        selected = selector.select_features_per_quantile(
+            frame, target, filtered, model_name=model_name, date_column="game_date",
+            allow_missing_features=True,
+        )
+        selected = enforce_selected(selected, receipt, component=component)
+        self.feature_control_receipt["components"][component] = receipt
+        self.feature_control_receipt["availability"] = "resolved_from_training_data"
+        return selected
 
     def _run_hyperparameter_tuning(self, df: pd.DataFrame, feature_config: dict) -> dict | None:
         """
@@ -701,14 +754,10 @@ class TrainingOrchestrator:
         logger.info("Selecting Minutes features (per quantile)...")
         target = "actual_minutes"
         candidates = get_candidate_columns(df, target)
-        if self.exclude_injury_features:
-            candidates = [feature for feature in candidates if not _is_injury_feature(feature)]
         minutes_df: pd.DataFrame = df.loc[df["actual_minutes"] > 0].copy()
-        minutes_df.loc[:, candidates] = prepare_quantile_features(minutes_df, candidates)
-
-        features["minutes_features"] = selector.select_features_per_quantile(
-            minutes_df, target, candidates, model_name="Minutes", date_column='game_date',
-            allow_missing_features=True,
+        features["minutes_features"] = self._select_component_features(
+            selector, minutes_df, target, candidates,
+            component="minutes_features", model_name="Minutes",
         )
 
         # Rate Stats
@@ -719,13 +768,10 @@ class TrainingOrchestrator:
                 (df["actual_minutes"] >= 10) & df[target].notna()
             ].copy()
             candidates = get_candidate_columns(rate_df, target)
-            if self.exclude_injury_features:
-                candidates = [feature for feature in candidates if not _is_injury_feature(feature)]
-            rate_df.loc[:, candidates] = prepare_quantile_features(rate_df, candidates)
-
-            features[f"{stat}_rate_features"] = selector.select_features_per_quantile(
-                rate_df, target, candidates, model_name=f"{stat.upper()} Rate", date_column='game_date',
-                allow_missing_features=True,
+            component = f"{stat}_rate_features"
+            features[component] = self._select_component_features(
+                selector, rate_df, target, candidates,
+                component=component, model_name=f"{stat.upper()} Rate",
             )
 
         if self.exclude_injury_features:
@@ -771,6 +817,9 @@ class TrainingOrchestrator:
         self, df: pd.DataFrame, feature_config: dict, hyperparams: dict | None = None
     ) -> PlayerPropsModelPipeline:
         """Initialize and train the model pipeline with injected features."""
+        validate_feature_control_evidence(
+            self.feature_control_receipt, feature_config, allow_legacy_default=False
+        )
         if self.exclude_injury_features:
             _assert_no_injury_features(feature_config)
         pipeline = PlayerPropsModelPipeline(self.feature_store)
@@ -1349,6 +1398,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exclude the complete injury-derived feature family from ordinary full training",
     )
+    parser.add_argument("--include-feature-families", nargs="+", default=None)
+    parser.add_argument("--exclude-feature-families", nargs="+", default=None)
+    parser.add_argument("--include-features", nargs="+", default=None)
+    parser.add_argument("--exclude-features", nargs="+", default=None)
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
     parser.add_argument('--historical-policy', help='Explicit historical policy JSON; local only')
@@ -1390,6 +1443,13 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
         parser.error("--base-model-dir requires --retrain-stats, --retrain-minutes, or --calibrate-only")
 
     try:
+        feature_control_spec = FeatureControlSpec.create(
+            include_feature_families=_namespace_value(args, "include_feature_families"),
+            exclude_feature_families=_namespace_value(args, "exclude_feature_families"),
+            include_features=_namespace_value(args, "include_features"),
+            exclude_features=_namespace_value(args, "exclude_features"),
+            exclude_injury_features=bool(_namespace_value(args, "exclude_injury_features", False)),
+        )
         validate_seasons(args.train_seasons, args.cal_season)
         if args.tune and args.hyperparams_path is not None:
             raise ValueError('Tuning and supplied fixed hyperparameters conflict')
@@ -1405,6 +1465,10 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
             raise ValueError("--exclude-injury-features is supported only for ordinary full training")
         if args.exclude_injury_features and historical is not None:
             raise ValueError("--exclude-injury-features cannot be combined with historical training")
+        if feature_control_spec.active and (is_partial or is_calibrate_only):
+            raise ValueError("Feature-family controls are supported only for ordinary full training")
+        if feature_control_spec.active and historical is not None:
+            raise ValueError("Feature-family controls cannot be combined with strict historical training")
         if args.diagnostics_output_dir and not is_calibrate_only:
             raise ValueError("--diagnostics-output-dir requires --calibrate-only")
         if args.allow_legacy_artifacts and not args.base_model_dir:
@@ -1487,6 +1551,7 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
         "diagnostics_dir": diagnostics_dir,
         "historical": historical,
         "acquisition_limits": limits,
+        "feature_control_spec": feature_control_spec,
     }
 
 
@@ -1524,9 +1589,7 @@ def _training_plan(args: argparse.Namespace, validated: dict) -> dict:
             "reselect_features": bool(args.reselect_features),
             "force_features": args.force_features or [],
         },
-        "feature_controls": {
-            "exclude_injury_features": bool(args.exclude_injury_features),
-        },
+        "feature_controls": validated["feature_control_spec"].requested_receipt(),
         "tuning": {
             "enabled": bool(args.tune),
             "trials": args.tuning_trials,
@@ -1640,6 +1703,10 @@ def main(argv=None):
             hyperparams_path=args.hyperparams_path,
             feature_tolerance=args.feature_tolerance,
             exclude_injury_features=args.exclude_injury_features,
+            include_feature_families=_namespace_value(args, "include_feature_families"),
+            exclude_feature_families=_namespace_value(args, "exclude_feature_families"),
+            include_features=_namespace_value(args, "include_features"),
+            exclude_features=_namespace_value(args, "exclude_features"),
             local=args.local,
             historical_attachment=validated['historical'],
             acquisition_limits=validated['acquisition_limits'],

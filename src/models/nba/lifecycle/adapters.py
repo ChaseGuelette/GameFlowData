@@ -24,6 +24,14 @@ def build_training_command(resolved: ResolvedConfig, *, artifact_root: Path) -> 
         argv += ["--tune"]
     if resolved.hyperparams_path is not None:
         argv += ["--hyperparams-path", str(resolved.hyperparams_path)]
+    for field in (
+        "include_feature_families", "exclude_feature_families", "include_features", "exclude_features"
+    ):
+        values = getattr(training, field)
+        if values:
+            argv += ["--" + field.replace("_", "-"), *values]
+    if training.exclude_injury_features:
+        argv += ["--exclude-injury-features"]
     return argv + _historical_arguments(resolved)
 
 

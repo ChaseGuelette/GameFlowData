@@ -22,6 +22,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 from collections import defaultdict
 from datetime import date, timedelta
@@ -214,7 +215,11 @@ def resolve_paper_bets(dry_run: bool = False) -> dict:
     from src.paper_trading.user_bet_resolver import UserBetResolver
 
     nba = UserBetResolver(paper_only=True, dry_run=dry_run).resolve_all_pending()
-    mlb = _resolve_mlb_paper_bets(dry_run=dry_run)
+    if os.getenv("MLB_JOBS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}:
+        mlb = _resolve_mlb_paper_bets(dry_run=dry_run)
+    else:
+        logger.info("MLB paper settlement disabled by MLB_JOBS_ENABLED=false")
+        mlb = {}
     if dry_run:
         # The legacy MLB preview reports hypothetical updates as resolved.
         # Normalize only the wrapper's reporting; do not claim committed writes.

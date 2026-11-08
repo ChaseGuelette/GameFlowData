@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 from datetime import date
@@ -115,6 +116,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print(json.dumps(plan, indent=2, sort_keys=True, allow_nan=False))
         return 0
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                        datefmt="%H:%M:%S")
+    logging.getLogger().setLevel(logging.INFO)
+    logging.getLogger(__name__).info(
+        "NBA sweep: %s through %s | %d configurations | $%.2f flat stakes | output=%s",
+        config.start, config.end, plan["cell_count"], config.flat_bet_size, config.output_dir,
+    )
     # No replay CLI import: its eager DB bootstrap and legacy discovery/combined
     # offsets must never be reachable from this command.
     from src.backtesting.nba.sweep_runner import SweepFailure, run_sweep

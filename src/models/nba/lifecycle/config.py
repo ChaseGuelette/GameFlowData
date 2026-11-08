@@ -13,6 +13,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictFloat,
 from yaml.events import AliasEvent
 
 from src.models.features.nba.acquisition import AcquisitionLimits
+from src.models.nba.feature_controls import FeatureControlSpec
 from src.models.nba_artifacts import canonical_json_bytes, canonical_sha256, sha256_file
 from src.models.nba_training_chronology import validate_seasons
 
@@ -110,6 +111,11 @@ class Training(StrictModel):
     hyperparams_path: str | None
     feature_tolerance: Number = Field(ge=0)
     local: bool
+    include_feature_families: list[str] = Field(default_factory=list)
+    exclude_feature_families: list[str] = Field(default_factory=list)
+    include_features: list[str] = Field(default_factory=list)
+    exclude_features: list[str] = Field(default_factory=list)
+    exclude_injury_features: bool = False
 
     @model_validator(mode="after")
     def settings(self):
@@ -121,6 +127,13 @@ class Training(StrictModel):
             raise ValueError("Local execution required; tuning and supplied hyperparameters conflict")
         if self.tuning_timeout is not None and self.tuning_timeout <= 0:
             raise ValueError("Invalid tuning timeout")
+        FeatureControlSpec.create(
+            include_feature_families=self.include_feature_families,
+            exclude_feature_families=self.exclude_feature_families,
+            include_features=self.include_features,
+            exclude_features=self.exclude_features,
+            exclude_injury_features=self.exclude_injury_features,
+        )
         return self
 
 
@@ -214,6 +227,15 @@ class LifecycleConfig(StrictModel):
                 raise ValueError("Train requires complete training settings")
             if self.evaluation.start < self.training.calibration_end:
                 raise ValueError("Evaluation overlaps requested exclusive calibration end")
+            controls = FeatureControlSpec.create(
+                include_feature_families=self.training.include_feature_families,
+                exclude_feature_families=self.training.exclude_feature_families,
+                include_features=self.training.include_features,
+                exclude_features=self.training.exclude_features,
+                exclude_injury_features=self.training.exclude_injury_features,
+            )
+            if self.historical is not None and (controls.active or controls.exclude_injury_features):
+                raise ValueError("Feature controls are unsupported for strict historical lifecycle training")
         return self
 
 

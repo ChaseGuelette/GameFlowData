@@ -19,6 +19,7 @@ from pathlib import Path
 
 import yaml
 
+from src.models.nba.feature_controls import FeatureControlSpec
 from src.models.nba.lifecycle import STAGES
 from src.models.nba.lifecycle.adapters import build_audit_command, build_sweep_command, build_training_command
 from src.models.nba.lifecycle.config import ResolvedConfig, disjoint, exact_date, read_json, repo_root
@@ -30,6 +31,7 @@ LIFECYCLE_FILES = (
     "src/models/nba/__init__.py", "src/models/nba/lifecycle/__init__.py",
     "src/models/nba/lifecycle/config.py", "src/models/nba/lifecycle/adapters.py",
     "src/models/nba/lifecycle/decision.py", "src/models/nba/lifecycle/runner.py",
+    "src/models/nba/feature_controls.py",
     "scripts/run_nba_model_lifecycle.py", "src/models/nba_artifacts.py",
     "src/models/training_preflight.py", "src/backtesting/__init__.py",
     "src/models/train_pipeline.py", "src/backtesting/nba/evidence.py",
@@ -187,10 +189,37 @@ def inspect_artifact(resolved: ResolvedConfig, path: Path) -> dict:
     training = resolved.config.training
     if training is not None:
         need(manifest["mode"] == "full", "training_not_full")
-        same(actual_training, {"train_seasons": training.train_seasons, "tune_hyperparams": training.tune,
-                               "tuning_trials": training.tuning_trials, "tuning_timeout": training.tuning_timeout,
-                               "tuning_per_quantile": False, "feature_tolerance": float(training.feature_tolerance)},
-             "requested_training_metadata_mismatch")
+        requested_controls = FeatureControlSpec.create(
+            include_feature_families=training.include_feature_families,
+            exclude_feature_families=training.exclude_feature_families,
+            include_features=training.include_features,
+            exclude_features=training.exclude_features,
+            exclude_injury_features=training.exclude_injury_features,
+        ).requested_receipt()["requested"]
+        actual_controls = actual_training.get("feature_controls")
+        expected_training = {
+            "train_seasons": training.train_seasons,
+            "tune_hyperparams": training.tune,
+            "tuning_trials": training.tuning_trials,
+            "tuning_timeout": training.tuning_timeout,
+            "tuning_per_quantile": False,
+            "feature_tolerance": float(training.feature_tolerance),
+        }
+        if actual_controls is None:
+            # Existing injury-free artifacts predate general ablation receipts.
+            # Their flag/lists were checked by validate_artifact_bundle above.
+            legacy_no_injury = actual_training.get("exclude_injury_features", False)
+            empty_controls = FeatureControlSpec.create(
+                exclude_injury_features=legacy_no_injury
+            ).requested_receipt()["requested"]
+            same(requested_controls, empty_controls, "actual_feature_control_evidence_missing")
+            if "exclude_injury_features" in actual_training:
+                expected_training["exclude_injury_features"] = legacy_no_injury
+        else:
+            same(actual_controls.get("requested"), requested_controls, "requested_feature_controls_mismatch")
+            expected_training["exclude_injury_features"] = training.exclude_injury_features
+            expected_training["feature_controls"] = actual_controls
+        same(actual_training, expected_training, "requested_training_metadata_mismatch")
         same(manifest["calibration"]["season"], training.calibration_season, "calibration_season_mismatch")
         same(cutoff.isoformat(), training.calibration_end.isoformat(), "calibration_end_mismatch")
         if resolved.historical_attachment is not None:
@@ -214,6 +243,7 @@ def inspect_artifact(resolved: ResolvedConfig, path: Path) -> dict:
                  "saved_hyperparameters_mismatch")
     return {"artifact": inspection.to_plan_dict(), "manifest_file": file_receipt(path / "artifact_manifest.json"),
             "actual_training": actual_training, "actual_calibration": manifest["calibration"],
+            "feature_controls": actual_training.get("feature_controls"),
             "data_provenance": manifest["data_provenance"], "hyperparams_input": resolved.hyperparams_receipt,
             "runtime_setting_application": "unverified_unsigned_manifest",
             "historical_readiness": "unverified",
