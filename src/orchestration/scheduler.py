@@ -7,7 +7,7 @@ All times are in America/New_York (ET). DST transitions are handled
 automatically by APScheduler + pytz.
 
 Schedule (ET):
-    9:00 AM  - daily_stats_job
+    9:00 AM  - daily_stats_job -> opted-in advanced source/derived chain
     9:00 AM  - mlb_roster_scraper_job
     9:00 AM  - mlb_daily_stats_job
     2:20 AM  - mlb_dense_clv_job (disabled unless MLB_DENSE_CLV_ENABLED=true)
@@ -80,6 +80,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # Job display names for alerts
 JOB_NAMES = {
     "daily_stats_job.py": "Daily Stats (Basic Only)",
+    "nba_advanced_stats_job.py": "NBA Advanced Stats and Derived Readiness",
     "nba_schedule_job.py": "NBA Schedule Refresh",
     "lines_job.py": "Lines Scraper",
     "inference_job.py": "Inference",
@@ -103,13 +104,14 @@ DEFERRED_FAILURE_JOBS = {
 
 # Prevent overlapping scheduler launches for jobs that are unsafe to run
 # concurrently. Schedule refreshes must not overlap each other.
-LOCKABLE_JOB_SCRIPTS = {"lines_job.py", "nba_schedule_job.py", "daily_stats_job.py", "inference_job.py"}
+LOCKABLE_JOB_SCRIPTS = {"lines_job.py", "nba_schedule_job.py", "daily_stats_job.py", "inference_job.py", "nba_advanced_stats_job.py"}
 JOB_LOCKS: dict[str, threading.Lock] = {}
 JOB_LOCKS_GUARD = threading.Lock()
 # Both NBA jobs invoke the same durable linker; queue them before launching
 # children rather than racing the database advisory lock after doing other work.
 NBA_LINKER_JOB_SCRIPTS = {"lines_job.py", "daily_stats_job.py"}
 NBA_LINKER_JOB_LOCK = threading.Lock()
+NBA_DAILY_CHAIN_LOCK = threading.Lock()
 
 
 # Updated by run_job() after every execution.
@@ -213,7 +215,7 @@ def check_dependency(upstream_job: str, max_age_hours: float = 8) -> bool:
 
 
 def check_nba_advanced_readiness() -> tuple[bool, str]:
-    """Require a successful local advanced producer through the current source target."""
+    """Require a successful local/cloud advanced producer through the current source target."""
     try:
         from sqlalchemy import text
 
@@ -397,7 +399,7 @@ def _send_job_alert(
         logger.warning(f"Failed to send Discord alert for {script_name}: {e}")
 
 
-def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = False, timeout: int = 2700):
+def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = False, timeout: int = 2700) -> bool:
     """Run a job script as a subprocess and send alert on completion.
 
     Args:
@@ -443,7 +445,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
                 error_message=reason,
                 metrics=None,
             )
-            return
+            return False
 
     try:
         if script_name in NBA_LINKER_JOB_SCRIPTS:
@@ -542,6 +544,7 @@ def run_job(script_name: str, extra_args: str = "", silent_on_success: bool = Fa
         error_message=error_msg,
         metrics=metrics,
     )
+    return success
 
 
 def _validate_environment():
@@ -584,8 +587,55 @@ def _validate_environment():
         )
 
 
+def _job_succeeded_today(script_name: str) -> bool:
+    status = JOB_STATUS.get(script_name, {})
+    ended = status.get("end_time")
+    eastern = ZoneInfo("America/New_York")
+    return (
+        status.get("status") == "success" and isinstance(ended, datetime)
+        and ended.astimezone(eastern).date() == datetime.now(eastern).date()
+    )
+
+
+def run_nba_advanced_stats():
+    """Follow successful basic ingestion with a bounded, explicitly enabled producer."""
+    if not env_flag("NBA_ADVANCED_STATS_ENABLED", default=False):
+        logger.info("NBA advanced stats disabled by NBA_ADVANCED_STATS_ENABLED=false")
+        return
+    if _job_succeeded_today("nba_advanced_stats_job.py"):
+        ready, reason = check_nba_advanced_readiness()
+        if ready:
+            logger.info("NBA advanced chain already complete today: %s", reason)
+            return
+    run_job(
+        "nba_advanced_stats_job.py",
+        extra_args=(
+            "--railway --skip-basic --advanced-limit 30 --max-requests 60 "
+            "--request-timeout 30 --max-retries 2 --http-client curl --no-proxy "
+            "--source-timeout 900 --derived-timeout 1800"
+        ),
+        timeout=3000,
+    )
+
+
+def _run_nba_daily_chain(retry: bool = False):
+    if not NBA_DAILY_CHAIN_LOCK.acquire(blocking=False):
+        logger.info("NBA daily source/advanced chain is already active; skipping duplicate trigger")
+        return
+    try:
+        basic_ok = retry and _job_succeeded_today("daily_stats_job.py")
+        if not basic_ok:
+            basic_ok = run_job("daily_stats_job.py")
+        if basic_ok:
+            run_nba_advanced_stats()
+        else:
+            logger.warning("NBA advanced chain not started: this basic run did not succeed")
+    finally:
+        NBA_DAILY_CHAIN_LOCK.release()
+
+
 def run_daily_stats():
-    run_job("daily_stats_job.py")
+    _run_nba_daily_chain()
 
 
 def run_nba_schedule_ingest():
@@ -597,20 +647,8 @@ def run_nba_schedule_ingest():
 
 
 def run_daily_stats_retry():
-    """Re-run daily stats if the 11 AM run failed or didn't run."""
-    status = JOB_STATUS.get("daily_stats_job.py", {})
-    if status.get("status") == "success":
-        logger.info("Daily stats already succeeded today, skipping 11:30 retry.")
-        return
-    logger.warning("Daily stats failed or did not run at 11 AM — retrying now...")
-    _send_job_alert(
-        "daily_stats_job.py",
-        success=False,
-        duration=0,
-        stdout="",
-        stderr="11 AM daily stats job failed or missing — automatic retry at 11:30 AM ET",
-    )
-    run_job("daily_stats_job.py")
+    """At 9:30 ET, recover missing basic work or a failed advanced follow-up."""
+    _run_nba_daily_chain(retry=True)
 
 
 def run_lines_full():
@@ -629,7 +667,7 @@ def run_lines_props_only():
 
 
 def run_inference(skip_bets: bool = False, skip_discord: bool = False):
-    """Run inference only when basic stats and local advanced readiness are current."""
+    """Run inference only when basic stats and advanced readiness are current."""
     extra_parts = []
     if skip_bets:
         extra_parts.append("--skip-bets")
@@ -662,7 +700,7 @@ def run_inference(skip_bets: bool = False, skip_discord: bool = False):
     if not advanced_ready:
         message = (
             "NBA inference blocked pending current advanced stats: "
-            f"{advanced_reason}. Run scripts\\run_advanced_scraper.bat locally."
+            f"{advanced_reason}. Check the enabled Railway advanced chain or run scripts\\run_advanced_scraper.bat locally."
         )
         logger.error(message)
         _send_job_alert(
@@ -858,6 +896,11 @@ def main():
     # ==============================================================
 
     ET = "America/New_York"
+
+    logger.info(
+        "NBA advanced daily follow-up %s: after 9 AM basic stats; recovery at 9:30 AM ET",
+        "enabled" if env_flag("NBA_ADVANCED_STATS_ENABLED", default=False) else "disabled",
+    )
 
     # 9:00 AM ET - Daily stats
     scheduler.add_job(

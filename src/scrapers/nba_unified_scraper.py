@@ -72,8 +72,8 @@ _runtime_options: dict[str, int] = {}
 PROXY_URL = os.getenv("PROXY_URL")
 
 
-def configure_local_stats_http(client: str):
-    """Use browser-compatible TLS locally without changing the Railway CDN path."""
+def configure_local_stats_http(client: str, max_requests: int | None = None):
+    """Configure stats transport; an optional budget counts actual HTTP GET attempts."""
     from nba_api.stats.library.http import NBAStatsHTTP
 
     if client == "curl":
@@ -104,6 +104,19 @@ def configure_local_stats_http(client: str):
 
         session = Session()
         session.trust_env = False
+    original_get = session.get
+    session.stats_request_count = 0
+
+    def budgeted_get(*args, **kwargs):
+        if max_requests is not None and session.stats_request_count >= max_requests:
+            raise RuntimeError(f"stats.nba.com request budget exhausted ({max_requests})")
+        session.stats_request_count += 1
+        # A redirect must not silently spend another request outside the budget.
+        if max_requests is not None:
+            kwargs["allow_redirects"] = False
+        return original_get(*args, **kwargs)
+
+    session.get = budgeted_get
     NBAStatsHTTP.set_session(session)
     return session
 
@@ -1055,6 +1068,7 @@ def main():
     parser.add_argument("--http-client", choices=["curl", "requests"], default="curl", help="Local stats transport (default: Chrome-compatible curl); unused in CDN-only mode")
     parser.add_argument("--request-timeout", type=int, default=REQUEST_TIMEOUT, help="stats.nba.com request timeout, 1..120 seconds")
     parser.add_argument("--max-retries", type=int, default=MAX_RETRIES, help="Maximum stats.nba.com attempts per game, 1..5")
+    parser.add_argument("--max-requests", type=int, help="Hard cap on stats HTTP GET attempts, including retries")
 
     args = parser.parse_args()
     if not 1 <= args.request_timeout <= 120 or not 1 <= args.max_retries <= 5:
@@ -1064,6 +1078,8 @@ def main():
         parser.error("--season is required outside --cdn-only mode")
     if args.advanced_limit is not None and args.advanced_limit <= 0:
         parser.error("--advanced-limit must be positive")
+    if args.max_requests is not None and args.max_requests <= 0:
+        parser.error("--max-requests must be positive")
     if args.season == "current":
         args.season = current_nba_season_label()
     if args.season:
@@ -1101,7 +1117,7 @@ def main():
 
     try:
         if not args.cdn_only:
-            http_session = configure_local_stats_http(args.http_client)
+            http_session = configure_local_stats_http(args.http_client, args.max_requests)
         print("\nConnecting to database...")
         engine = get_engine()
         print("✓ Database connection verified")
@@ -1169,6 +1185,8 @@ def main():
     print(f"New team game records added:      {new_games} (CDN failed: {cdn_failed})")
     print(f"Traditional stats updated:        {trad_processed} (Failed: {trad_failed})")
     print(f"Advanced stats updated:           {adv_processed} (Failed: {adv_failed})")
+    if http_session is not None:
+        print(f"Stats HTTP requests attempted:    {http_session.stats_request_count}")
     for error in primary_errors:
         print(f"Source error: {error}")
     failed = bool(primary_errors or cdn_failed or trad_failed or adv_failed)
