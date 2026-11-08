@@ -24,6 +24,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 import unicodedata
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
@@ -1154,6 +1155,29 @@ def _set_linker_timeouts(conn, *, local: bool = True) -> None:
         conn.execute(text(f"{prefix} {setting}"))
 
 
+def _acquire_linker_lock(conn, lock_key: int, *, wait_seconds: float = 120.0) -> bool:
+    """Wait briefly for other hosts/processes without an idle transaction."""
+    deadline = time.monotonic() + wait_seconds
+    waiting = False
+    while True:
+        acquired = bool(conn.execute(
+            text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": lock_key}
+        ).scalar_one())
+        conn.commit()
+        if acquired:
+            if waiting:
+                logging.info("Acquired props linker checkpoint lock after contention")
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logging.error("Props linker checkpoint lock remained busy for %.0fs", wait_seconds)
+            return False
+        if not waiting:
+            logging.warning("Props linker checkpoint lock busy; waiting up to %.0fs", wait_seconds)
+            waiting = True
+        time.sleep(min(5.0, remaining))
+
+
 def _read_linker_records(conn, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     return [dict(row._mapping) for row in conn.execute(text(query), params or {})]
 
@@ -1608,10 +1632,7 @@ def _run_resume_linker(
 
     with engine.connect() as conn:
         _set_linker_timeouts(conn, local=False)
-        acquired = bool(conn.execute(
-            text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": lock_key}
-        ).scalar_one())
-        conn.commit()
+        acquired = _acquire_linker_lock(conn, lock_key)
         if not acquired:
             raise RuntimeError(f"another {state_name} props linker invocation holds the durable checkpoint lock")
         try:
@@ -1817,10 +1838,7 @@ def link_incremental(
             with engine.connect() as lock_conn:
                 _set_linker_timeouts(lock_conn, local=False)
                 lock_key = source_config["lock_key"]
-                acquired = bool(lock_conn.execute(
-                    text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": lock_key}
-                ).scalar_one())
-                lock_conn.commit()
+                acquired = _acquire_linker_lock(lock_conn, lock_key)
                 if not acquired:
                     raise RuntimeError("another nba_inference props linker invocation holds the durable checkpoint lock")
                 try:
