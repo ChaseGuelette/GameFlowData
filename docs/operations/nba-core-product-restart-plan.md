@@ -1,5 +1,11 @@
 # NBA Core Product Restart Plan — 2026–27 Season
 
+## Injury-feature baseline direction — November 8, 2026
+
+Follow-up [RapidAPI clock validation](nba-rapidapi-clock-validation-2026-11-08.md) compared retained raw records with official reports: `reportTime` is not a reliable publication clock, but many statuses match usable earlier reports. A previous-day snapshot experiment is proposed, not approved or implemented. Keep the no-injury training lane independent; do not enable a blanket time-map or restart broad recovery from this research.
+
+Chase proposes leaving historical injury features out of the first baseline while source repair proceeds separately. See [the decision summary](nba-injury-baseline-direction-2026-11-08.md) for the distinction between unsupported publication evidence and late injury news, consistent feature exclusion across artifact stages, and preserving already-placed decisions. Feature exclusion is not yet implemented or verified; no scrape, training run, deployment or promotion is launched by this direction. Existing split/fixed-parameter policy and independent backend/job ownership remain unchanged.
+
 ## Owner-prioritized next work — November 7, 2026
 
 The **two headline work items** are now:

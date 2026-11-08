@@ -374,6 +374,12 @@ def _fetch_reports(
         if cached and cached.get("status") == "parsed":
             reports.append(_report_from_dict(cached["report"]))
             continue
+        if cached and cached.get("status") == "error":
+            # A recorded failure is an accounted source gap, not fresh budget
+            # work. Retrying it on every resume can keep a window stuck forever.
+            continue
+        if getattr(args, "cache_only", False):
+            raise RuntimeError("cache-only replay requires a recorded report; no request made")
         if url in attempted_urls:
             continue
         if len(state["request_attempts"]) - request_start_count >= args.max_requests:
@@ -607,6 +613,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     source.add_argument("--report-slot", action="append", default=[])
     parser.add_argument("--state-file", required=True, type=Path)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--cache-only", action="store_true", help="Never download reports; require existing cache entries.")
     parser.add_argument("--max-games", type=int, default=10)
     parser.add_argument("--max-requests", type=int, default=4)
     parser.add_argument("--execute", action="store_true")

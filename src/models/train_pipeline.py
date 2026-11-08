@@ -54,6 +54,28 @@ logging.basicConfig(
 logger = logging.getLogger("TrainingPipeline")
 
 
+def _is_injury_feature(feature: str) -> bool:
+    """Return whether a model feature is derived from injury context."""
+    return (
+        feature.startswith(("team_out_", "opp_out_"))
+        or feature in {"player_is_questionable", "player_is_probable"}
+    )
+
+
+def _iter_selected_features(feature_config: dict):
+    """Yield feature names from flat or per-quantile feature configurations."""
+    for selected in feature_config.values():
+        feature_lists = selected.values() if isinstance(selected, dict) else [selected]
+        for feature_list in feature_lists:
+            yield from feature_list
+
+
+def _assert_no_injury_features(feature_config: dict) -> None:
+    injury_features = sorted({feature for feature in _iter_selected_features(feature_config) if _is_injury_feature(feature)})
+    if injury_features:
+        raise ValueError(f"Injury features reached the training feature configuration: {', '.join(injury_features)}")
+
+
 class TrainingOrchestrator:
     CALIBRATION_TOLERANCE = 0.05
     CALIBRATION_HARD_FAIL = 0.10
@@ -67,6 +89,7 @@ class TrainingOrchestrator:
         tuning_per_quantile: bool = False,
         hyperparams_path: str | None = None,
         feature_tolerance: float = 0.005,
+        exclude_injury_features: bool = False,
         local: bool = False,
         historical_attachment: dict | None = None,
         acquisition_limits: AcquisitionLimits | None = None,
@@ -86,6 +109,7 @@ class TrainingOrchestrator:
             historical_sources=make_sources(self.engine, historical_attachment), acquisition_limits=acquisition_limits)
             if historical_attachment is not None else FeatureStore(self.engine))
         self.feature_tolerance = feature_tolerance
+        self.exclude_injury_features = exclude_injury_features
 
         # Tuning settings
         self.tune_hyperparams = tune_hyperparams
@@ -424,6 +448,8 @@ class TrainingOrchestrator:
             raise ValueError('Training population changed after chronology gate')
         with self.feature_config_path.open(encoding="utf-8") as handle:
             effective_features = json.load(handle)
+        if self.exclude_injury_features:
+            _assert_no_injury_features(effective_features)
         available_stats = [stat for stat in ["pts", "reb", "ast"] if stat in pipeline.rate_models]
         if requested_stats is None:
             if mode == "partial":
@@ -449,6 +475,7 @@ class TrainingOrchestrator:
                 "tuning_timeout": self.tuning_timeout,
                 "tuning_per_quantile": self.tuning_per_quantile,
                 "feature_tolerance": self.feature_tolerance,
+                "exclude_injury_features": self.exclude_injury_features,
             },
             calibration_settings={
                 "season": calibration_season,
@@ -570,6 +597,7 @@ class TrainingOrchestrator:
             "train_seasons": train_seasons,
             "calibration_season": calibration_season,
             "cal_end_date": str(cal_end_date) if cal_end_date else None,
+            "exclude_injury_features": self.exclude_injury_features,
             "timestamp": self.timestamp.isoformat(),
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
@@ -673,6 +701,8 @@ class TrainingOrchestrator:
         logger.info("Selecting Minutes features (per quantile)...")
         target = "actual_minutes"
         candidates = get_candidate_columns(df, target)
+        if self.exclude_injury_features:
+            candidates = [feature for feature in candidates if not _is_injury_feature(feature)]
         minutes_df: pd.DataFrame = df.loc[df["actual_minutes"] > 0].copy()
         minutes_df.loc[:, candidates] = prepare_quantile_features(minutes_df, candidates)
 
@@ -689,6 +719,8 @@ class TrainingOrchestrator:
                 (df["actual_minutes"] >= 10) & df[target].notna()
             ].copy()
             candidates = get_candidate_columns(rate_df, target)
+            if self.exclude_injury_features:
+                candidates = [feature for feature in candidates if not _is_injury_feature(feature)]
             rate_df.loc[:, candidates] = prepare_quantile_features(rate_df, candidates)
 
             features[f"{stat}_rate_features"] = selector.select_features_per_quantile(
@@ -696,6 +728,8 @@ class TrainingOrchestrator:
                 allow_missing_features=True,
             )
 
+        if self.exclude_injury_features:
+            _assert_no_injury_features(features)
         return features
 
     def _run_feature_selection_partial(
@@ -737,6 +771,8 @@ class TrainingOrchestrator:
         self, df: pd.DataFrame, feature_config: dict, hyperparams: dict | None = None
     ) -> PlayerPropsModelPipeline:
         """Initialize and train the model pipeline with injected features."""
+        if self.exclude_injury_features:
+            _assert_no_injury_features(feature_config)
         pipeline = PlayerPropsModelPipeline(self.feature_store)
 
         # Inject features BEFORE training
@@ -1308,6 +1344,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Force-include these features in all quantile lists for all models "
              "(e.g. --force-features player_starter_prob). Applied after loading base model features.",
     )
+    parser.add_argument(
+        "--exclude-injury-features",
+        action="store_true",
+        help="Exclude the complete injury-derived feature family from ordinary full training",
+    )
     parser.add_argument("--local", action="store_true",
                         help="Use local Postgres (LOCAL_DATABASE_URL) instead of Supabase")
     parser.add_argument('--historical-policy', help='Explicit historical policy JSON; local only')
@@ -1360,6 +1401,10 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
             raise ValueError('Acquisition limits require historical policy')
         if historical is not None and is_calibrate_only:
             raise ValueError('Historical calibration-only diagnostics are unsupported; use historical training holdout')
+        if args.exclude_injury_features and (is_partial or is_calibrate_only):
+            raise ValueError("--exclude-injury-features is supported only for ordinary full training")
+        if args.exclude_injury_features and historical is not None:
+            raise ValueError("--exclude-injury-features cannot be combined with historical training")
         if args.diagnostics_output_dir and not is_calibrate_only:
             raise ValueError("--diagnostics-output-dir requires --calibrate-only")
         if args.allow_legacy_artifacts and not args.base_model_dir:
@@ -1479,6 +1524,9 @@ def _training_plan(args: argparse.Namespace, validated: dict) -> dict:
             "reselect_features": bool(args.reselect_features),
             "force_features": args.force_features or [],
         },
+        "feature_controls": {
+            "exclude_injury_features": bool(args.exclude_injury_features),
+        },
         "tuning": {
             "enabled": bool(args.tune),
             "trials": args.tuning_trials,
@@ -1591,6 +1639,7 @@ def main(argv=None):
             tuning_per_quantile=args.tuning_per_quantile,
             hyperparams_path=args.hyperparams_path,
             feature_tolerance=args.feature_tolerance,
+            exclude_injury_features=args.exclude_injury_features,
             local=args.local,
             historical_attachment=validated['historical'],
             acquisition_limits=validated['acquisition_limits'],

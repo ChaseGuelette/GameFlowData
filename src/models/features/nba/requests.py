@@ -59,3 +59,11 @@ class TrainingFeatureRequest:
     historical_evidence: tuple[HistoricalPlayerEvidence, ...] = ()
     controlled_historical_evidence: bool = False
     historical_role: str | None = None
+    row_limit_per_season: int | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+
+    @property
+    def is_bounded(self) -> bool:
+        """Whether this request is an explicitly bounded diagnostic sample."""
+        return self.row_limit_per_season is not None

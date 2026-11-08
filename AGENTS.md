@@ -17,7 +17,7 @@ GameFlowData is Chase's sports analytics, player-prop modeling, trading/alerts, 
 These rules must never be violated:
 
 1. Never deploy global conformal recalibration offsets; this was repeatedly confirmed to hurt ROI.
-2. Never put advanced stats scraping on Railway; `stats.nba.com` blocks datacenter IPs.
+2. Railway daily_stats_job must remain CDN-only. Chase may explicitly authorize a separate, bounded advanced-stats trial on Railway. The trial must preserve the existing local producer, enforce game/request/runtime limits, prevent overlapping runs, and verify persisted advanced-stat completeness before reporting readiness. No automatic betting, model promotion, or recurring advanced schedule is authorized by a trial.; `stats.nba.com` blocks datacenter IPs.
 3. Railway `daily_stats_job` uses CDN-only mode (`--cdn-only`); no `stats.nba.com` calls from Railway.
 4. Never run non-concurrent `CREATE INDEX` on `raw_player_props_combined`.
 5. Probabilities use empirical CDF: `(samples > line).mean()`, never Gaussian CDF.

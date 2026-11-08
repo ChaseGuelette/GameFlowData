@@ -654,6 +654,9 @@ def get_candidate_columns(df: pd.DataFrame, target_col: str) -> list[str]:
         "ast_per_min",
         "threes_per_min",
         "position_group",
+        # Decision clocks are metadata, even when stored as numeric epochs.
+        "commence_time_utc",
+        "injury_cutoff_utc",
         # Removed "is_home" so it can be selected
     ]
 
@@ -665,7 +668,8 @@ def get_candidate_columns(df: pd.DataFrame, target_col: str) -> list[str]:
             continue
         if any(col.endswith(s) for s in excluded_suffixes):
             continue
-        if df[col].dtype == object:
+        # Datetimes/timedeltas and extension strings are not model features.
+        if not pd.api.types.is_numeric_dtype(df[col].dtype):
             continue
 
         candidates.append(col)

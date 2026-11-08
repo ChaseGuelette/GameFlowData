@@ -27,6 +27,18 @@ class TrainingFeatureLoader:
 
     def load(self, request: TrainingFeatureRequest) -> pd.DataFrame:
         """Load a full training dataframe for requested seasons."""
+        if request.row_limit_per_season is not None and request.row_limit_per_season <= 0:
+            raise ValueError("row_limit_per_season must be positive")
+        if request.start_date and request.end_date and request.start_date > request.end_date:
+            raise ValueError("start_date must be on or before end_date")
+        if not request.is_bounded and (request.start_date or request.end_date):
+            raise ValueError("Training date bounds require row_limit_per_season")
+        if request.is_bounded and (
+            request.historical_policy is not None
+            or request.historical_evidence
+            or request.controlled_historical_evidence
+        ):
+            raise ValueError("Bounded training samples do not support strict historical mode")
         if request.historical_policy is not None or request.historical_evidence or request.controlled_historical_evidence:
             from src.models.features.nba.historical_loader import HistoricalFeatureLoader
 
@@ -41,7 +53,14 @@ class TrainingFeatureLoader:
             season_start = time.time()
             print(f"  Loading season {i}/{len(seasons)}: {season} ...")
 
-            df_season = self._load_single_season_training(season)
+            df_season = self._load_single_season_training(
+                season,
+                row_limit=request.row_limit_per_season,
+                start_date=request.start_date,
+                end_date=request.end_date,
+            )
+            if request.is_bounded and df_season.empty:
+                raise ValueError(f"Bounded training sample returned no rows for season {season}")
 
             elapsed = time.time() - season_start
             print(f"  Season {season}: {len(df_season):,} rows in {elapsed:.1f}s")
@@ -221,8 +240,10 @@ class TrainingFeatureLoader:
 
         # Validation
         print(f"Loaded {len(df):,} rows.")
-        if len(df) < 1000:
+        if not request.is_bounded and len(df) < 1000:
             raise ValueError(f"Suspiciously few rows: {len(df)}. Check query/season_ids.")
+        if request.is_bounded and df.empty:
+            raise ValueError("Bounded training sample returned no rows")
 
         if not df["position_group"].notna().all():
             raise ValueError("CRITICAL: Position Group has NULLs. Filter logic failed.")
@@ -235,12 +256,57 @@ class TrainingFeatureLoader:
         return df
 
     def load_single_season(self, season: str, *, historical_policy=None, historical_evidence=(),
-                           controlled_historical_evidence=False) -> pd.DataFrame:
+                           controlled_historical_evidence=False, row_limit=None,
+                           start_date=None, end_date=None) -> pd.DataFrame:
         """Load training features for one season."""
+        if row_limit is not None and row_limit <= 0:
+            raise ValueError("row_limit must be positive")
+        if row_limit is None and (start_date or end_date):
+            raise ValueError("Training date bounds require row_limit")
+        if start_date and end_date and start_date > end_date:
+            raise ValueError("start_date must be on or before end_date")
         if historical_policy is not None or historical_evidence or controlled_historical_evidence:
+            if row_limit is not None:
+                raise ValueError("Bounded training samples do not support strict historical mode")
             return self.load(TrainingFeatureRequest([season], historical_policy, historical_evidence,
                                                    controlled_historical_evidence))
-        query = text("""
+        bounded_prefix = ""
+        bounded_join = ""
+        bounded_params = {}
+        if row_limit is not None:
+            bounded_prefix = """
+            WITH selected_player_games AS MATERIALIZED (
+                SELECT pgs.game_id, pgs.player_id
+                FROM player_game_stats pgs
+                JOIN team_game_stats tgs
+                    ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
+                WHERE pgs.season_id = :season
+                  AND pgs.season_id NOT IN :excluded
+                  AND pgs.min >= 5
+                  AND (:start_date IS NULL OR pgs.game_date >= :start_date)
+                  AND (:end_date IS NULL OR pgs.game_date <= :end_date)
+                  AND EXISTS (
+                      SELECT 1 FROM nba_player_prop_feature_lines eligible_props
+                      WHERE eligible_props.game_id = pgs.game_id
+                        AND eligible_props.game_date = pgs.game_date
+                        AND eligible_props.selection_policy_version = 't60_v1'
+                  )
+                ORDER BY pgs.game_date, pgs.game_id, pgs.player_id
+                LIMIT :row_limit
+            )
+            """
+            bounded_join = """
+            JOIN selected_player_games selected
+                ON selected.game_id = pgs.game_id AND selected.player_id = pgs.player_id
+            """
+            bounded_params = {
+                "row_limit": row_limit,
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+
+        query = text(f"""
+            {bounded_prefix}
             SELECT
                 -- Identifiers
                 pgs.game_id, pgs.player_id, pgs.game_date::date, pgs.season_id,
@@ -385,6 +451,7 @@ class TrainingFeatureLoader:
                 CASE WHEN pgs.matchup LIKE '%vs.%' THEN 1 ELSE 0 END as is_home
 
             FROM player_game_stats pgs
+            {bounded_join}
             JOIN team_game_stats tgs
                 ON pgs.game_id = tgs.game_id AND pgs.team_id = tgs.team_id
             LEFT JOIN public.nba_game_schedule schedule
@@ -501,18 +568,25 @@ class TrainingFeatureLoader:
             bindparam("excluded", expanding=True),
         )
 
+        params = {
+            "season": season,
+            "excluded": list(self.config.excluded_seasons),
+            **bounded_params,
+        }
         with self.engine.connect() as conn:
-            df = pd.read_sql(
-                query,
-                conn,
-                params={"season": season, "excluded": list(self.config.excluded_seasons)},
-            )
+            df = pd.read_sql(query, conn, params=params)
 
         return df
 
     def _load_single_season_training(self, season: str, *, historical_policy=None, historical_evidence=(),
-                                     controlled_historical_evidence=False) -> pd.DataFrame:
+                                     controlled_historical_evidence=False, row_limit=None,
+                                     start_date=None, end_date=None) -> pd.DataFrame:
         if historical_policy is not None or historical_evidence or controlled_historical_evidence:
             return self.load_single_season(season, historical_policy=historical_policy, historical_evidence=historical_evidence,
                                           controlled_historical_evidence=controlled_historical_evidence)
-        return self.load_single_season(season)
+        return self.load_single_season(
+            season,
+            row_limit=row_limit,
+            start_date=start_date,
+            end_date=end_date,
+        )

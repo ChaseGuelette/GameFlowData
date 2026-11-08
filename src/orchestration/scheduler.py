@@ -643,7 +643,7 @@ def run_nba_schedule_ingest():
     if not env_flag("NBA_SCHEDULE_INGEST_ENABLED", default=False):
         logger.info("NBA schedule ingest disabled by NBA_SCHEDULE_INGEST_ENABLED=false")
         return
-    run_job("nba_schedule_job.py", silent_on_success=True, timeout=180)
+    run_job("nba_schedule_job.py", silent_on_success=True, timeout=300)
 
 
 def run_daily_stats_retry():
