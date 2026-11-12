@@ -2,6 +2,19 @@
 
 This cutover keeps `public.nba_player_props_inference` as the recent-quote source, retains permanent `t60_v1` training lines in `public.nba_player_prop_feature_lines`, and leaves both legacy raw tables intact until a separately reviewed destructive migration.
 
+## November 12 scraper follow-up — read before the original cutover steps
+
+The scraper/consumer source is published through `ccb292e1`, and Railway deployment `0bc6d98d-1f50-45ec-8993-c5fc8551ce5d` is successful with native scheduler startup verified. Live captures use eight supported markets, no DFS, half-hour slots and change-only quote history; no new activation environment variable is required. The first native capture/unchanged-capture reduction remains unverified; the successful 11:42 ET edge refresh is consumer evidence, not scraper evidence.
+
+- **Keep the completed backfill.** Handoff 155 records the approved keyset backfill as complete. Historical/backfilled rows keep their original clocks and capture semantics; change-only mode affects new live ingestion only. It does not retroactively deduplicate/delete those rows or reduce the existing retained population. Do not rerun the backfill to enable the new scraper.
+- **RPC cutover is now receipt-aware.** `20261112_nba_change_only_capture.sql` is applied/read back in production. The three non-DFS RPCs now read current quote/pair views backed by inference rows and real capture confirmations. **Do not blindly apply the older full `20261112_nba_props_inference_rpc_cutover.sql` afterward:** it would replace those functions with history-based readers and lose withdrawal/confirmation behavior. Preserve existing signatures and authenticated/service-role grants.
+- **DFS retirement is a confirmed remaining dependency.** Guarded read-only production metadata confirms `get_dfs_lines(date)` still directly reads `raw_player_props_combined`; it does not read the archive. The newer migration intentionally does not drop it. Account for that dependency and obtain approval for a narrow retirement step before removing combined data; do not rerun the three superseded RPC replacements just to retire DFS. The three current-view RPCs no longer directly reference either legacy raw table. Receipt: `logs/receipts/sql_metadata/20261112_nba_rpc_capture_metadata_readback.json`. No function/table drop is authorized by this note.
+- **Keep the existing 21-day pruner and materialization gates.** New `nba_props_live_captures` stores compact observation receipts, not another recent-odds table. Its quote IDs have no blocking FKs: ordinary quote deletion does not automatically protect or clean receipt references. Permanent T-60 lines retain separate capture evidence; confirm evidence preservation before calling end-to-end retention acceptance complete. The 3 AM prune registration is deployed, but a successful scheduled prune has not been verified in this scraper lane.
+- **Receipt cleanup is not yet implemented.** Coordinate bounded receipt retention with the pruning owner; do not add a competing quote pruner or delete the latest empty receipt while its old quotes could reappear through fallback. Source rollback must keep producer/consumers coherent rather than merely reverting to legacy snapshot writes.
+- **Dump/drop gates remain unchanged.** Chase chose to preserve only `raw_player_props_combined`, using `--skip-archive`; `raw_player_props_archive` is intentionally not being dumped. Validate the selected combined-table dump/list/hash/manifest and independently recheck dependencies/counts before separately approved drops. Successful scraper deployment does not prove either dump or deletion completed.
+
+This checkpoint supersedes the three-function replacement instructions in section 1 below. Keep that section as the original migration history, not the next command to run.
+
 ## Safety gates
 
 - Apply database changes only through the normal owner-approved migration process.
@@ -10,7 +23,7 @@ This cutover keeps `public.nba_player_props_inference` as the recent-quote sourc
 - This runbook does not authorize dropping, truncating, or modifying either legacy raw table.
 - The reviewed keyset envelope is operationally bounded, but it is not proof that no legacy row arrived out of order. The complete local dumps preserve the source before any future drop.
 
-## 1. Apply the RPC cutover migration
+## 1. Original RPC cutover migration — superseded by the scraper follow-up above
 
 Migration: `database/migrations/20261112_nba_props_inference_rpc_cutover.sql`
 
@@ -104,9 +117,9 @@ It passes credentials to child processes through PostgreSQL environment variable
 
 Before considering a destructive migration:
 
-1. Confirm both dump files, both restore-list files, and `manifest.json` exist outside the repository.
+1. Confirm every selected dump and its restore-list file, plus `manifest.json`, exist outside the repository. For Chase's approved `--skip-archive` path, this means the combined-table dump/list only; an archive dump is not required.
 2. Recalculate SHA-256 and compare with the manifest.
-3. Run `pg_restore --list` independently on each file and inspect the named table objects.
+3. Run `pg_restore --list` independently on each selected dump and inspect the named table objects.
 4. Recheck local free space and preserve an additional copy if required.
 5. Compare remote table identity, counts, and minimum/maximum `staging_id` with a restored local copy where feasible. Treat estimated size metadata as supporting evidence, not row-count proof.
 6. Record the exact verification date, tool versions, and operator.

@@ -1,6 +1,6 @@
 # NBA compact T-60 prop lines runbook
 
-November 12 change-only ingestion code is delivered locally: [NBA quote-volume scope](nba-inference-quote-volume-reduction-2026-11-12.md). Its separate `20261112_nba_change_only_capture.sql` migration is prepared and verified only in a disposable test database, not applied to production. Preserve separately owned retention changes; this delivery does not authorize cleanup or deployment.
+November 12 change-only ingestion code is delivered locally: [NBA quote-volume scope](nba-inference-quote-volume-reduction-2026-11-12.md). Its separate `20261112_nba_change_only_capture.sql` migration is now applied to canonical production and independently read back, following Chase's explicit approval. The no-environment-variable follow-up is pushed as `ccb292e1`; backend runtime/live capture remains separately verified. Preserve separately owned retention changes; this delivery does not authorize cleanup or deployment.
 
 ### Change-only live confirmation evidence (local code; activation gated)
 
