@@ -253,8 +253,7 @@ def main():
         help="Maximum production props-linker batches per invocation (1..100; default/env: 20)",
     )
     parser.add_argument("--change-only", action="store_true",
-                        default=os.getenv("NBA_PROPS_CHANGE_ONLY_ENABLED", "false").lower() in {"1", "true", "yes"},
-                        help="Explicit opt-in after capture migration and consumer rollout (default off)")
+                        help="Compatibility flag; live inference capture always stores quote changes only")
     args = parser.parse_args()
     if args.change_only and not args.live:
         parser.error("--change-only requires --live")
@@ -287,7 +286,7 @@ def main():
     if args.live:
         group_a.append((
             f"{exe} src/scrapers/daily_player_props_scraper.py --live --live-product-scope "
-            f"--target-table nba_player_props_inference{' --change-only' if args.change_only else ''}",
+            f"--target-table nba_player_props_inference --change-only",
             "Scraping Player Props (Live)",
         ))
     else:
