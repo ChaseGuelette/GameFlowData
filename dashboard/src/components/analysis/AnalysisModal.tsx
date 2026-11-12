@@ -127,6 +127,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
   const [bookmakerLines, setBookmakerLines] = useState<BookmakerLine[]>([])
   const [loading, setLoading] = useState(true)
   const [linesLoading, setLinesLoading] = useState(true)
+  const [linesError, setLinesError] = useState<string | null>(null)
 
   // Cross-device synced preferences
   const { prefs, updatePref } = useUserPreferences()
@@ -226,6 +227,9 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
     async function fetchBookmakerLines() {
       const supabase = createClient()
       const marketKey = STAT_TO_MARKET[prediction.stat]
+      setLinesLoading(true)
+      setLinesError(null)
+      setBookmakerLines([])
 
       // Skip if no game_id
       if (!prediction.game_id) {
@@ -234,21 +238,19 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
       }
 
       if (effectiveSport !== 'mlb') {
-        // Return paired current membership, not independently newest sides.
-        // snapshot_time from this RPC is real serving confirmation. Unchanged
-        // states must not expire relative to another book's economic move.
-        const { data, error } = await supabase.rpc('get_sportsbook_lines_by_games', {
-          p_game_ids: [prediction.game_id],
-        })
-        if (error) console.error('Current NBA lines unavailable:', error)
-        setBookmakerLines((data || [])
-          .filter((r: { player_id: number; market_key: string; bookmaker: string; over_odds: number | null; under_odds: number | null }) =>
-            r.player_id === prediction.player_id && r.market_key === marketKey &&
-            !DFS_BOOKMAKERS.some(book => book === r.bookmaker) && r.bookmaker !== 'fliff' &&
-            r.over_odds != null && r.under_odds != null)
-          .map((r: { bookmaker: string; line: number | string; over_odds: number; under_odds: number }) => ({
-            bookmaker: r.bookmaker, line: Number(r.line), over_odds: r.over_odds, under_odds: r.under_odds,
-          })))
+        if (prediction.executable_offer_status === 'error' || !prediction.executable_offer_status) {
+          setLinesError('Current NBA offer verification is unavailable. No wager can be placed.')
+          setLinesLoading(false)
+          return
+        }
+        setBookmakerLines((prediction.executable_offers ?? []).map(offer => ({
+          bookmaker: offer.bookmaker,
+          line: offer.line,
+          over_odds: offer.over_odds,
+          under_odds: offer.under_odds,
+          snapshot_time: offer.snapshot_time,
+          executable_offer: offer,
+        })))
         setLinesLoading(false)
         return
       }
@@ -334,7 +336,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
 
     fetchHistory()
     fetchBookmakerLines()
-  }, [prediction.player_id, prediction.game_id, prediction.stat, prediction.prop_line])
+  }, [prediction.player_id, prediction.game_id, prediction.stat, prediction.prop_line, prediction.executable_offer_status, prediction.executable_offers, effectiveSport])
 
   // Determine bet direction (with NaN safety)
   const overEdge = Number.isFinite(prediction.over_edge) ? prediction.over_edge : 0
@@ -374,13 +376,33 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
           : null
     : null
 
-  // Process bookmaker lines: compute edge per line, sort by best edge
+  // Process bookmaker lines. NBA values come only from exact saved-sample/BL
+  // recomputation; quantile interpolation remains MLB-only.
   const processedLines = useMemo(() => {
     if (bookmakerLines.length === 0) return []
     const allowed = getAllowedBookmakers(userState)
     return [...bookmakerLines]
       .filter((line) => !allowed || allowed.includes(line.bookmaker))
       .map((line) => {
+        const offer = line.executable_offer
+        if (effectiveSport !== 'mlb' && offer) {
+          const betDirection = offer.selected_direction
+          const relevantOdds = betDirection === 'over' ? offer.over_odds : offer.under_odds
+          const modelProb = betDirection === 'over' ? offer.bl_over_prob : offer.bl_under_prob
+          const impliedProb = betDirection === 'over' ? offer.market_prob_over : offer.market_prob_under
+          return {
+            ...line,
+            modelProb,
+            impliedProb,
+            lineEdge: offer.selected_edge,
+            relevantOdds,
+            betDirection,
+            isRecommended: offer.is_recommended,
+            passesLocalPolicy: offer.passes_local_policy,
+            lineDistance: offer.line_distance,
+            booksum: offer.booksum,
+          }
+        }
         const underProb = estimateUnderProb(
           line.line,
           prediction.q10,
@@ -394,10 +416,30 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         const modelProb = isOverBet ? overProb : underProb
         const impliedProb = americanToImpliedProb(relevantOdds)
         const lineEdge = modelProb - impliedProb
-        return { ...line, modelProb, impliedProb, lineEdge, relevantOdds }
+        return {
+          ...line,
+          modelProb,
+          impliedProb,
+          lineEdge,
+          relevantOdds,
+          betDirection: isOverBet ? 'over' as const : 'under' as const,
+          isRecommended: lineEdge > 0,
+          passesLocalPolicy: lineEdge > 0,
+          lineDistance: Math.abs(line.line - prediction.prop_line),
+          booksum: 0,
+        }
       })
-      .sort((a, b) => b.lineEdge - a.lineEdge)
-  }, [bookmakerLines, prediction.q10, prediction.q25, prediction.q50, prediction.q75, prediction.q90, isOverBet, userState])
+      .sort((a, b) => {
+        if (effectiveSport !== 'mlb') {
+          if (a.isRecommended !== b.isRecommended) return a.isRecommended ? -1 : 1
+          if (a.lineDistance !== b.lineDistance) return a.lineDistance - b.lineDistance
+          if (a.booksum !== b.booksum) return a.booksum - b.booksum
+          if (a.line !== b.line) return a.line - b.line
+          return a.bookmaker.localeCompare(b.bookmaker)
+        }
+        return b.lineEdge - a.lineEdge
+      })
+  }, [bookmakerLines, prediction.q10, prediction.q25, prediction.q50, prediction.q75, prediction.q90, prediction.prop_line, isOverBet, userState, effectiveSport])
 
   // Insights (memoized for reuse in both Model Context and AskChat)
   const insights = useMemo(() => generateInsights(prediction), [prediction])
@@ -418,8 +460,10 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
     setSelectedLineIndex(0)
   }, [processedLines])
 
-  // The line used for bet sizing: user-selected or auto-best
-  const selectedLine = processedLines.length > 0 && processedLines[selectedLineIndex]?.lineEdge > 0
+  // The line used for display/sizing. NBA wager actions remain gated by the
+  // full recomputed policy even when a non-qualifying quote is selected.
+  const selectedLine = processedLines.length > 0 &&
+    (effectiveSport !== 'mlb' || processedLines[selectedLineIndex]?.lineEdge > 0)
     ? processedLines[selectedLineIndex]
     : null
 
@@ -434,11 +478,14 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
     const sizingBookmaker = selectedLine ? selectedLine.bookmaker : null
     const sizingLineVal = selectedLine ? selectedLine.line : prediction.prop_line
 
-    const kellyPct = calculateKelly(sizingModelProb, sizingOdds, kellyFraction)
+    const sizingDirection = selectedLine?.betDirection ?? (isOverBet ? 'over' : 'under')
+    const kellyPct = effectiveSport !== 'mlb' && selectedLine && !selectedLine.isRecommended
+      ? 0
+      : calculateKelly(sizingModelProb, sizingOdds, kellyFraction)
     const recommendedBet = bankroll * kellyPct
 
-    return { sizingOdds, sizingModelProb, sizingBookmaker, sizingLineVal, kellyPct, recommendedBet }
-  }, [selectedLine, isOverBet, prediction.best_over_odds, prediction.best_under_odds, prediction.prop_line, probability, kellyFraction, bankroll])
+    return { sizingOdds, sizingModelProb, sizingBookmaker, sizingLineVal, sizingDirection, kellyPct, recommendedBet }
+  }, [selectedLine, isOverBet, prediction.best_over_odds, prediction.best_under_odds, prediction.prop_line, probability, kellyFraction, bankroll, effectiveSport])
 
   // Sync customStake from recommended bet when sizing changes
   useEffect(() => {
@@ -711,19 +758,22 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
 
                 return displayedLines.map((line, i) => {
                     const hasPositiveEdge = line.lineEdge > 0
+                    const isQualifying = effectiveSport !== 'mlb' ? line.isRecommended : hasPositiveEdge
                     const isBestEdge = i === 0 && hasPositiveEdge
                     const isEasiestLine = line.line === easiestLineValue
                     const isSelected = i === selectedLineIndex
 
                     return (
                     <button
-                      key={i}
+                      key={`${line.bookmaker}:${line.line}`}
                       type="button"
                       onClick={() => setSelectedLineIndex(i)}
                       className={`w-full flex items-center justify-between rounded px-3 py-2 text-left transition-colors ${
                         isSelected
-                          ? 'bg-green-900/40 border border-green-500 ring-1 ring-green-500/30'
-                          : hasPositiveEdge
+                          ? isQualifying
+                            ? 'bg-green-900/40 border border-green-500 ring-1 ring-green-500/30'
+                            : 'bg-slate-700/50 border border-slate-500 ring-1 ring-slate-500/30'
+                          : isQualifying
                             ? 'bg-green-900/20 border border-green-700/40 hover:border-green-600/60'
                             : 'bg-slate-700/30 border border-transparent hover:border-slate-600'
                       }`}
@@ -734,19 +784,19 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                           {line.line}
                         </span>
                         <span className="text-slate-400 text-sm">{formatBookmaker(line.bookmaker)}</span>
-                        {isBestEdge && (
+                        {(effectiveSport !== 'mlb' ? isQualifying : isBestEdge) && (
                           <span className="text-xs bg-green-600/40 text-green-300 px-1.5 py-0.5 rounded font-medium">
-                            BEST EDGE
+                            {effectiveSport !== 'mlb' ? 'QUALIFIES' : 'BEST EDGE'}
                           </span>
                         )}
-                        {isEasiestLine && (
+                        {effectiveSport === 'mlb' && isEasiestLine && (
                           <span className="text-xs bg-blue-600/40 text-blue-300 px-1.5 py-0.5 rounded font-medium">
                             EASIEST
                           </span>
                         )}
                         {isSelected && (
                           <span className="text-xs bg-green-500/30 text-green-300 px-1.5 py-0.5 rounded font-medium">
-                            SIZING
+                            {effectiveSport !== 'mlb' && !isQualifying ? 'VIEWING' : 'SIZING'}
                           </span>
                         )}
                       </div>
@@ -754,11 +804,11 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                         <span className={hasPositiveEdge ? 'text-green-400 font-medium' : 'text-slate-400'}>
                           {line.lineEdge >= 0 ? '+' : ''}{(line.lineEdge * 100).toFixed(1)}%
                         </span>
-                        <span className={isOverBet ? 'text-green-400' : 'text-slate-500'}>
+                        <span className={line.betDirection === 'over' ? 'text-green-400' : 'text-slate-500'}>
                           O {formatOdds(line.over_odds)}
                         </span>
                         <span className="text-slate-600">/</span>
-                        <span className={!isOverBet ? 'text-green-400' : 'text-slate-500'}>
+                        <span className={line.betDirection === 'under' ? 'text-green-400' : 'text-slate-500'}>
                           U {formatOdds(line.under_odds)}
                         </span>
                       </div>
@@ -767,6 +817,8 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                 })
               })()}
             </div>
+          ) : linesError ? (
+            <div className="text-red-300 text-sm" role="alert">{linesError}</div>
           ) : (
             <div className="text-slate-400 text-sm">
               {bookmakerLines.length > 0 && userState
@@ -843,7 +895,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
             </div>
             <div className="text-xs text-slate-500 mt-2">
               Based on {(sizingData.sizingModelProb * 100).toFixed(1)}% model prob at {formatOdds(sizingData.sizingOdds)} odds
-              {sizingData.sizingBookmaker && ` (${formatBookmaker(sizingData.sizingBookmaker)} ${direction} ${sizingData.sizingLineVal})`}
+              {sizingData.sizingBookmaker && ` (${formatBookmaker(sizingData.sizingBookmaker)} ${sizingData.sizingDirection === 'over' ? 'Over' : 'Under'} ${sizingData.sizingLineVal})`}
             </div>
           </div>
         </div>
@@ -905,7 +957,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
           </div>
           {selectedLine && (
             <div className="text-xs text-slate-500 mt-2 text-center">
-              Based on {formatBookmaker(selectedLine.bookmaker)} {direction} {selectedLine.line} @ {formatOdds(selectedLine.relevantOdds)}
+              Based on {formatBookmaker(selectedLine.bookmaker)} {selectedLine.betDirection === 'over' ? 'Over' : 'Under'} {selectedLine.line} @ {formatOdds(selectedLine.relevantOdds)}
             </div>
           )}
         </div>
@@ -918,7 +970,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
           >
             Close
           </button>
-          {onTakeBet && selectedLine && (
+          {onTakeBet && selectedLine && (effectiveSport === 'mlb' || selectedLine.isRecommended) && (
             <div className="flex-1 flex items-center gap-2 justify-end">
               {/* Confidence Stars */}
               <div className="flex items-center gap-0.5 mr-1">
@@ -993,7 +1045,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                       stake,
                       modelProb: selectedLine.modelProb,
                       edge: selectedLine.lineEdge,
-                      direction: isOverBet ? 'over' : 'under',
+                      direction: selectedLine.betDirection,
                       betContext,
                       userConfidence,
                     })
@@ -1052,7 +1104,7 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
                       stake: paperStake,
                       modelProb: selectedLine.modelProb,
                       edge: selectedLine.lineEdge,
-                      direction: isOverBet ? 'over' : 'under',
+                      direction: selectedLine.betDirection,
                       betContext,
                       userConfidence,
                       isPaperTrade: true,

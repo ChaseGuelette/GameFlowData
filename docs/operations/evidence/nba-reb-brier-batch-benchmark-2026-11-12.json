@@ -1,0 +1,62 @@
+{
+  "status": "pass",
+  "inputs": "SYNTHETIC feature/outcome fixture; real existing saved model weights; not a predictive-quality evaluation",
+  "running_owner_job": "not accessed or interrupted; concurrent machine load can affect timings",
+  "training_or_database_access": false,
+  "scores_and_candidate_order_identical": true,
+  "cold_timing_includes_cache_preparation": true,
+  "shared_cache_preparation_seconds": 0.07117210000069463,
+  "warm_batch_size": 16,
+  "numeric_string_player_id_parity": true,
+  "learned_booster_hashes_unchanged": true,
+  "artifact_hashes_unchanged": {
+    "C:\\Users\\Chase\\Projects\\GameFlowData\\src\\models\\artifacts\\nba_feature_ablations\\game_market_free\\nba_run_20261108_150945\\minutes_model.joblib": "5aa730295a055e0c1e1080ad867853522c4d1d8cbd63c6fb8168368a4aa98759",
+    "C:\\Users\\Chase\\Projects\\GameFlowData\\src\\models\\artifacts\\nba_feature_ablations\\game_market_free\\nba_run_20261108_150945\\reb_rate_model.joblib": "d2074aed0fcb657188f3e7c411e39312ab3e561b12f57c9cd2aa3546ee3d0968",
+    "C:\\Users\\Chase\\Projects\\GameFlowData\\src\\models\\artifacts\\nba_rate_pinball_feature_match\\nba_run_20261110_092318\\reb_rate_model.joblib": "5482238fa2d6f500d231ff261124945de8722565591d4ff39938c890baad79e1",
+    "C:\\Users\\Chase\\Projects\\GameFlowData\\src\\models\\artifacts\\nba_feature_ablations\\game_market_free\\nba_run_20261108_150945\\copula_params.json": "3cbdf389b56247e7aff7f019d1796948d3f08a3b3ea0867469d9d1415023afa1"
+  },
+  "reference_source_sha256": "80bde3b42e497b6f0104ce5a7e60247e53d9076eb2a359dd7bdd78b5a5003fa7",
+  "optimized_source_sha256": "5ac3db27a2548be9a6de24f721c6860f0f8fbc4c8a8a3174345fc17d04d78bfb",
+  "records": [
+    {
+      "candidate": "parent_rate",
+      "rows": 32,
+      "samples": 5000,
+      "scalar_seconds": [
+        2.260080399999424,
+        2.2687151999998605
+      ],
+      "optimized_cold_seconds": [
+        0.11744360000011511,
+        0.11749520000012126
+      ],
+      "median_speedup": 19.276490728626893,
+      "exact_score_and_probability_parity": true,
+      "optimized_warm_seconds": [
+        0.10651689999940572,
+        0.10751950000121724
+      ],
+      "warm_speedup": 21.158997254607645
+    },
+    {
+      "candidate": "saved_pinball_rate",
+      "rows": 32,
+      "samples": 5000,
+      "scalar_seconds": [
+        2.2750214999978198,
+        2.2682117000003927
+      ],
+      "optimized_cold_seconds": [
+        0.12156129999857512,
+        0.11878110000179731
+      ],
+      "median_speedup": 18.90316981103281,
+      "exact_score_and_probability_parity": true,
+      "optimized_warm_seconds": [
+        0.10850449999998091,
+        0.10666659999697004
+      ],
+      "warm_speedup": 21.114513984743265
+    }
+  ]
+}

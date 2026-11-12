@@ -9,7 +9,7 @@ import { PlayOfTheDay } from '@/components/predictions/PlayOfTheDay'
 import { AnalysisModal } from '@/components/analysis/AnalysisModal'
 import { SlateModal } from '@/components/predictions/SlateModal'
 import { TonightsGames, type GameInfo } from '@/components/predictions/TonightsGames'
-import { type Prediction } from '@/types/predictions'
+import { type Prediction, type NbaExecutableOfferResult, type NbaExecutableOffersResponse } from '@/types/predictions'
 import { getToday, formatDate, getGameStatus } from '@/lib/utils'
 import { useGameStatus } from '@/lib/hooks/useGameStatus'
 import { SPORTSBOOK_OPTIONS, STATE_SPORTSBOOKS, DFS_BOOKMAKERS } from '@/lib/sportsbook-availability'
@@ -60,6 +60,11 @@ export default function DashboardPage() {
   const [fallbackError, setFallbackError] = useState<string | null>(null)
   const fallbackRequestRef = useRef(0)
   const predictionsRequestRef = useRef(0)
+  const nbaOffersRequestRef = useRef(0)
+  const [nbaOfferResults, setNbaOfferResults] = useState<Map<number, NbaExecutableOfferResult>>(new Map())
+  const [nbaOffersStatus, setNbaOffersStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [nbaOffersError, setNbaOffersError] = useState<string | null>(null)
+  const [nbaOffersRefresh, setNbaOffersRefresh] = useState(0)
 
   const MAX_SLATE_PICKS = 5
 
@@ -347,8 +352,107 @@ export default function DashboardPage() {
     }
   }, [selectedDate, fetchPredictions])
 
-  // Fetch book availability when excludedBooks changes
+  // Revalidate on a bounded interval and immediately when returning to a tab.
+  // Never keep showing the previous proposals while revalidation is in flight.
   useEffect(() => {
+    if (sport !== 'nba') return
+    const refresh = () => {
+      if (!document.hidden) setNbaOffersRefresh(value => value + 1)
+    }
+    const interval = window.setInterval(refresh, 60_000)
+    document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [sport])
+
+  // Resolve NBA cards against current executable quotes and saved empirical samples.
+  // Requests keep all predictions for a game together so best-opportunity policy
+  // is evaluated across the complete player/game set.
+  useEffect(() => {
+    const requestId = ++nbaOffersRequestRef.current
+    if (sport !== 'nba') {
+      setNbaOfferResults(new Map())
+      setNbaOffersStatus('idle')
+      setNbaOffersError(null)
+      return
+    }
+    setSelectedPrediction(null)
+    if (predictions.length === 0) {
+      setNbaOfferResults(new Map())
+      setNbaOffersStatus('ready')
+      setNbaOffersError(null)
+      return
+    }
+
+    const byGame = new Map<string, number[]>()
+    for (const prediction of predictions) {
+      const ids = byGame.get(prediction.game_id) ?? []
+      ids.push(prediction.id)
+      byGame.set(prediction.game_id, ids)
+    }
+    const batches: number[][] = []
+    let current: number[] = []
+    for (const ids of byGame.values()) {
+      if (ids.length > 600) {
+        setNbaOfferResults(new Map())
+        setNbaOffersStatus('error')
+        setNbaOffersError('A game exceeded the executable-offer safety limit')
+        return
+      }
+      if (current.length > 0 && current.length + ids.length > 600) {
+        batches.push(current)
+        current = []
+      }
+      current.push(...ids)
+    }
+    if (current.length > 0) batches.push(current)
+
+    setNbaOfferResults(new Map())
+    setNbaOffersStatus('loading')
+    setNbaOffersError(null)
+    const load = async () => {
+      try {
+        const responses = await Promise.all(batches.map(async predictionIds => {
+          const response = await fetch('/api/nba/executable-offers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              predictionIds,
+              stateCode: userState,
+              excludedBooks: [...excludedBooks],
+            }),
+          })
+          const payload = await response.json() as NbaExecutableOffersResponse | { error?: string }
+          if (!response.ok || !('results' in payload) || !Array.isArray(payload.results)) {
+            throw new Error('error' in payload && payload.error ? payload.error : `Offer lookup failed (${response.status})`)
+          }
+          return payload.results
+        }))
+        if (requestId !== nbaOffersRequestRef.current) return
+        const resultMap = new Map<number, NbaExecutableOfferResult>()
+        for (const result of responses.flat()) resultMap.set(result.prediction_id, result)
+        setNbaOfferResults(resultMap)
+        setNbaOffersStatus('ready')
+      } catch (error) {
+        if (requestId !== nbaOffersRequestRef.current) return
+        setNbaOfferResults(new Map())
+        setNbaOffersStatus('error')
+        setNbaOffersError(error instanceof Error ? error.message : 'Current executable offers are unavailable')
+      }
+    }
+    void load()
+  }, [sport, predictions, userState, excludedBooks, nbaOffersRefresh])
+
+  // Fetch book availability when excludedBooks changes (legacy MLB behavior).
+  useEffect(() => {
+    if (sport === 'nba') {
+      setBookAvailability(null)
+      return
+    }
     if (excludedBooks.size === 0 || predictions.length === 0) {
       setBookAvailability(null)
       return
@@ -380,7 +484,7 @@ export default function DashboardPage() {
       }
     }
     fetchBookAvailability()
-  }, [excludedBooks, predictions, userState])
+  }, [excludedBooks, predictions, userState, sport])
 
   // Clean up excluded books when user state changes (remove stale exclusions)
   useEffect(() => {
@@ -440,20 +544,50 @@ export default function DashboardPage() {
     return []
   })()
 
-  // Enrich predictions with effective edges (BL blending when active)
-  // This ensures PropCard, PlayOfTheDay, and AnalysisModal all show consistent values
-  const enrichedPredictions = predictions.map(p => {
-    if (showModelPicks && p.bl_over_edge != null && p.bl_under_edge != null) {
-      return {
-        ...p,
-        over_edge: p.bl_over_edge,
-        under_edge: p.bl_under_edge,
-        model_prob_over: p.bl_over_prob ?? p.model_prob_over,
-        model_prob_under: p.bl_under_prob ?? p.model_prob_under,
-      }
-    }
-    return p
-  })
+  // Enrich predictions with current executable terms. NBA cards are built only
+  // from exact empirical-sample recomputation; MLB keeps its existing path.
+  const enrichedPredictions: Prediction[] = sport === 'nba'
+    ? predictions.flatMap(p => {
+        const result = nbaOfferResults.get(p.id)
+        const offer = result?.selected_offer
+        if (!result || result.status !== 'ready' || !offer) return []
+        return [{
+          ...p,
+          original_prop_line: p.prop_line,
+          prop_line: offer.line,
+          best_over_odds: offer.over_odds,
+          best_under_odds: offer.under_odds,
+          best_over_book: offer.bookmaker,
+          best_under_book: offer.bookmaker,
+          implied_prob_over: offer.market_prob_over,
+          implied_prob_under: offer.market_prob_under,
+          model_prob_over: showModelPicks ? offer.bl_over_prob : offer.model_prob_over,
+          model_prob_under: showModelPicks ? offer.bl_under_prob : offer.model_prob_under,
+          over_edge: showModelPicks ? offer.bl_over_edge : offer.raw_over_edge,
+          under_edge: showModelPicks ? offer.bl_under_edge : offer.raw_under_edge,
+          bl_over_prob: offer.bl_over_prob,
+          bl_under_prob: offer.bl_under_prob,
+          bl_over_edge: offer.bl_over_edge,
+          bl_under_edge: offer.bl_under_edge,
+          bl_confidence: offer.bl_confidence,
+          is_recommended: offer.is_recommended,
+          executable_offer_status: result.status,
+          executable_offer: offer,
+          executable_offers: result.offers,
+        }]
+      })
+    : predictions.map(p => {
+        if (showModelPicks && p.bl_over_edge != null && p.bl_under_edge != null) {
+          return {
+            ...p,
+            over_edge: p.bl_over_edge,
+            under_edge: p.bl_under_edge,
+            model_prob_over: p.bl_over_prob ?? p.model_prob_over,
+            model_prob_under: p.bl_under_prob ?? p.model_prob_under,
+          }
+        }
+        return p
+      })
 
   // Filter predictions by stat type, matchup, edge threshold, book availability, and Model Picks toggle
   const filteredPredictions = enrichedPredictions.filter(p => {
@@ -497,6 +631,7 @@ export default function DashboardPage() {
   const sortedPredictions = [...filteredPredictions].sort((a, b) =>
     Math.max(b.over_edge, b.under_edge) - Math.max(a.over_edge, a.under_edge)
   )
+  const displayLoading = loading || (sport === 'nba' && nbaOffersStatus === 'loading')
 
   return (
     <main className={`flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 ${slateMode ? 'pb-24' : ''}`}>
@@ -640,7 +775,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Tonight's Games Strip */}
-      {!loading && config.features.scoreboard && (
+      {!displayLoading && config.features.scoreboard && (
         fallbackError && predictions.length === 0 ? (
           <div className="mb-6 rounded-lg border border-red-700 bg-red-900/30 px-4 py-3 text-sm text-red-300">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -662,7 +797,7 @@ export default function DashboardPage() {
       )}
 
       {/* Play of the Day */}
-      {!loading && sortedPredictions.length > 0 && (
+      {!displayLoading && sortedPredictions.length > 0 && (
         <PlayOfTheDay
           prediction={sortedPredictions[0]}
           onAnalyze={setSelectedPrediction}
@@ -671,17 +806,31 @@ export default function DashboardPage() {
       )}
 
       {/* Content */}
-      {loading ? (
+      {displayLoading ? (
         <div className="flex items-center justify-center py-16">
           <div className="flex flex-col items-center gap-3">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
-            <div className="text-slate-400">Loading predictions...</div>
+            <div className="text-slate-400">{loading ? 'Loading predictions...' : 'Verifying current executable offers...'}</div>
+          </div>
+        </div>
+      ) : sport === 'nba' && nbaOffersStatus === 'error' ? (
+        <div className="flex items-center justify-center py-16">
+          <div className="max-w-lg text-center">
+            <p className="text-red-300 text-lg">Current executable offers are unavailable</p>
+            <p className="text-slate-500 text-sm mt-2">{nbaOffersError || 'Quote verification failed. No betting proposals are shown.'}</p>
           </div>
         </div>
       ) : sortedPredictions.length === 0 ? (
         <div className="flex items-center justify-center py-16">
           <div className="text-center">
-            {fallbackLoading ? (
+            {sport === 'nba' && predictions.length > 0 ? (
+              <>
+                <p className="text-slate-400 text-lg">
+                  {showModelPicks ? 'No current executable offers qualify as Model Picks' : 'No current executable offers available'}
+                </p>
+                <p className="text-slate-500 text-sm mt-2">Offers without exact saved-sample recomputation are hidden.</p>
+              </>
+            ) : fallbackLoading ? (
               <p className="text-slate-400 text-lg">Checking the schedule...</p>
             ) : fallbackError ? (
               <>

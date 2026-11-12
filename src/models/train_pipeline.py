@@ -25,7 +25,7 @@ from src.models.feature_store import FeatureStore
 from src.models.features.nba.acquisition import AcquisitionLimits, add_acquisition_arguments, limits_from_values
 from src.models.features.nba.contracts import NBA_FEATURE_LISTS, validate_feature_lists
 from src.models.hyperparameter_tuner import QuantileHyperparameterTuner
-from src.models.monte_carlo import MonteCarloPredictor, compute_copula_params_from_data
+from src.models.monte_carlo import MonteCarloPredictor, compute_copula_params_from_data, load_copula_params
 from src.models.nba.feature_controls import (
     FeatureControlSpec,
     enforce_selected,
@@ -33,6 +33,7 @@ from src.models.nba.feature_controls import (
     resolve_component,
     validate_feature_control_evidence,
 )
+from src.models.nba.final_brier_tuning import tune_final_reb_brier
 from src.models.nba_artifacts import (
     build_diagnostic_manifest,
     build_training_manifest,
@@ -92,6 +93,9 @@ class TrainingOrchestrator:
         tuning_timeout: int | None = None,
         tuning_per_quantile: bool = False,
         tuning_match_final_features: bool = False,
+        tuning_objective: str = "pinball",
+        tuning_samples: int = 5000,
+        tuning_seed: int = 42,
         hyperparams_path: str | None = None,
         feature_tolerance: float = 0.005,
         exclude_injury_features: bool = False,
@@ -109,6 +113,10 @@ class TrainingOrchestrator:
             raise ValueError("tuning_match_final_features requires tuning")
         if tuning_match_final_features and hyperparams_path is not None:
             raise ValueError("tuning_match_final_features cannot be used with fixed hyperparameters")
+        if tuning_objective not in {"pinball", "final_brier"}:
+            raise ValueError("tuning_objective must be 'pinball' or 'final_brier'")
+        if tuning_objective == "final_brier" and not tune_hyperparams:
+            raise ValueError("final_brier requires tuning")
         self.feature_control_spec = FeatureControlSpec.create(
             include_feature_families=include_feature_families,
             exclude_feature_families=exclude_feature_families,
@@ -142,6 +150,9 @@ class TrainingOrchestrator:
         self.tuning_timeout = tuning_timeout
         self.tuning_per_quantile = tuning_per_quantile
         self.tuning_match_final_features = tuning_match_final_features
+        self.tuning_objective = tuning_objective
+        self.tuning_samples = tuning_samples
+        self.tuning_seed = tuning_seed
         self.hyperparams_path = hyperparams_path
         self.tuning_results: dict[str, dict] = {}
 
@@ -176,6 +187,8 @@ class TrainingOrchestrator:
                           Filters cal data to game_date < cal_end_date.
                           Useful for reserving recent games for backtesting.
         """
+        if self.tuning_objective == "final_brier":
+            raise ValueError("final_brier is supported only by partial REB retraining")
         # Save run configuration
         self._validate_request(train_seasons, calibration_season, cal_end_date)
         self._save_run_config(train_seasons, calibration_season, cal_end_date)
@@ -276,6 +289,13 @@ class TrainingOrchestrator:
         """
         if self.feature_control_spec.active or self.exclude_injury_features:
             raise ValueError("Feature controls are supported only for ordinary full training")
+        if self.tuning_objective == "final_brier":
+            if not self.tune_hyperparams or retrain_stats != ["reb"] or retrain_minutes:
+                raise ValueError("final_brier requires tuning exactly the partial REB rate suite")
+            if reselect_features or force_features or self.hyperparams_path or self.tuning_per_quantile:
+                raise ValueError("final_brier forbids feature changes, fixed configs, and per-quantile tuning")
+            if not self.tuning_match_final_features:
+                raise ValueError("final_brier requires exact frozen per-quantile feature lists")
         # Save run config
         self._validate_request(train_seasons, calibration_season, cal_end_date)
         config = {
@@ -287,7 +307,7 @@ class TrainingOrchestrator:
             "retrain_stats": retrain_stats,
             "retrain_minutes": retrain_minutes,
             "reselect_features": reselect_features,
-            "tuning_objective": None,
+            "tuning_objective": self.tuning_objective if self.tune_hyperparams else None,
             "tuning_results": {},
             "tuning_match_final_features_requested": self.tuning_match_final_features,
             "tuning_match_final_features_effective": self.tuning_match_final_features and self.tune_hyperparams,
@@ -370,9 +390,35 @@ class TrainingOrchestrator:
             logger.info(f"Force-included features in all models: {force_features}")
 
         # 3b. Hyperparameter tuning for retrained components
-        hyperparams = self._resolve_hyperparams_partial(
-            train_df, pipeline, retrain_stats, retrain_minutes, base_model_dir
-        )
+        parent_copula_params = None
+        if self.tuning_objective == "final_brier":
+            parent_copula_params = load_copula_params(base_model_dir)
+            result = tune_final_reb_brier(
+                train_df,
+                cal_df,
+                pipeline,
+                parent_model_dir=base_model_dir,
+                copula_params=parent_copula_params,
+                n_trials=self.tuning_trials,
+                timeout=self.tuning_timeout,
+                n_samples=self.tuning_samples,
+                random_state=self.tuning_seed,
+            )
+            hyperparams = {"reb": result.best_params}
+            self.tuning_results = {"reb": result.to_dict()}
+            with self.hyperparams_config_path.open("w", encoding="utf-8") as handle:
+                json.dump(hyperparams, handle, indent=4)
+            with (self.run_dir / "run_config.json").open(encoding="utf-8") as handle:
+                saved_config = json.load(handle)
+            saved_config["tuning_results"] = self.tuning_results
+            saved_config["final_brier_settings"] = result.settings
+            saved_config["external_validation"] = result.validation
+            with (self.run_dir / "run_config.json").open("w", encoding="utf-8") as handle:
+                json.dump(saved_config, handle, indent=4)
+        else:
+            hyperparams = self._resolve_hyperparams_partial(
+                train_df, pipeline, retrain_stats, retrain_minutes, base_model_dir
+            )
 
         # 4. Retrain specified components
         if retrain_minutes:
@@ -388,11 +434,15 @@ class TrainingOrchestrator:
         # 5. Evaluate calibration (all models, not just retrained)
         self._evaluate_calibration(pipeline, cal_df)
 
-        # 6. Recompute copula params from training data
-        copula_params = self._compute_copula_params(train_df)
-
-        # 7. Combined calibration
-        self._evaluate_combined_calibration(pipeline, cal_df, copula_params=copula_params)
+        # 6-7. Final-Brier mode freezes parent dependence and does not create
+        # deployable global combined offsets. Ordinary partial mode is unchanged.
+        if self.tuning_objective == "final_brier":
+            copula_params = parent_copula_params
+            with (self.run_dir / "copula_params.json").open("w", encoding="utf-8") as handle:
+                json.dump(copula_params, handle, indent=4)
+        else:
+            copula_params = self._compute_copula_params(train_df)
+            self._evaluate_combined_calibration(pipeline, cal_df, copula_params=copula_params)
 
         # 8. Correlation analysis
         self._analyze_minutes_rate_correlation(cal_df)
@@ -408,7 +458,10 @@ class TrainingOrchestrator:
             json.dump(feature_config, f, indent=4)
 
         # 10. Sanity check
-        sanity = self._run_sanity_check(pipeline, cal_df)
+        if self.tuning_objective == "final_brier":
+            sanity = self._run_sanity_check(pipeline, cal_df, copula_params=copula_params)
+        else:
+            sanity = self._run_sanity_check(pipeline, cal_df)
 
         # 11. Finalize with parent identity and no replacement semantics.
         self._finalize_training_run(
@@ -515,7 +568,7 @@ class TrainingOrchestrator:
                 "tuning_per_quantile": self.tuning_per_quantile,
                 "tuning_match_final_features_requested": self.tuning_match_final_features,
                 "tuning_match_final_features_effective": self.tuning_match_final_features and self.tune_hyperparams,
-                "tuning_objective": "pinball" if self.tuning_results else None,
+                "tuning_objective": self.tuning_objective if self.tuning_results else None,
                 "tuning_results": self.tuning_results,
                 "feature_tolerance": self.feature_tolerance,
                 "exclude_injury_features": self.exclude_injury_features,
@@ -666,7 +719,7 @@ class TrainingOrchestrator:
             "cal_end_date": str(cal_end_date) if cal_end_date else None,
             "exclude_injury_features": self.exclude_injury_features,
             "feature_controls": self.feature_control_receipt,
-            "tuning_objective": "pinball" if self.tuning_results else None,
+            "tuning_objective": self.tuning_objective if self.tuning_results else None,
             "tuning_results": self.tuning_results,
             "tuning_match_final_features_requested": self.tuning_match_final_features,
             "tuning_match_final_features_effective": self.tuning_match_final_features and self.tune_hyperparams,
@@ -1336,7 +1389,9 @@ class TrainingOrchestrator:
         logger.info(f"Saved copula parameters to {self.run_dir / 'copula_params.json'}")
         return copula_params
 
-    def _run_sanity_check(self, pipeline: PlayerPropsModelPipeline, df: pd.DataFrame) -> dict:
+    def _run_sanity_check(
+        self, pipeline: PlayerPropsModelPipeline, df: pd.DataFrame, copula_params: dict | None = None
+    ) -> dict:
         """Run canonical no-global-offset inference and return explicit evidence."""
         logger.info("\n=== Sanity Check: Single Game Inference ===")
 
@@ -1362,7 +1417,13 @@ class TrainingOrchestrator:
 
             # Deliberately omit combined/global conformal offsets. Embedded per-model
             # calibration and the optional copula path remain unchanged.
-            mc = MonteCarloPredictor(pipeline, n_samples=100)
+            mc = MonteCarloPredictor(
+                pipeline,
+                n_samples=100,
+                random_state=self.tuning_seed,
+                copula_params=copula_params,
+                combined_calibration_offsets=None,
+            )
             preds = mc.predict(player_id, game_id, features, stats=["pts", "reb", "ast"])
 
             checked_stats = []
@@ -1420,6 +1481,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--tuning-timeout", type=int, default=None, help="Max tuning time in seconds (default: no limit)"
     )
     parser.add_argument("--tuning-per-quantile", action="store_true", help="Tune separately for each quantile")
+    parser.add_argument(
+        "--tuning-objective",
+        choices=("pinball", "final_brier"),
+        default="pinball",
+        help="Tuning selection objective (default: pinball; final_brier is opt-in partial REB only)",
+    )
+    parser.add_argument(
+        "--tuning-samples", type=int, default=5000,
+        help="Monte Carlo samples per scored row for final_brier (100-20000; default: 5000)",
+    )
+    parser.add_argument("--tuning-seed", type=int, default=42, help="Deterministic final_brier Optuna/sampler seed")
     parser.add_argument(
         "--tuning-match-final-features",
         action="store_true",
@@ -1551,6 +1623,20 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
             raise ValueError("--tuning-match-final-features requires --tune")
         if tuning_match_final_features and args.hyperparams_path is not None:
             raise ValueError("--tuning-match-final-features cannot be combined with --hyperparams-path")
+        tuning_objective = _namespace_value(args, "tuning_objective", "pinball")
+        if tuning_objective == "final_brier":
+            if not args.tune:
+                raise ValueError("--tuning-objective final_brier requires --tune")
+            if is_calibrate_only or args.retrain_minutes or args.retrain_stats != ["reb"]:
+                raise ValueError("final_brier requires partial mode with exactly --retrain-stats reb")
+            if args.reselect_features or args.force_features:
+                raise ValueError("final_brier freezes parent features; reselect/force options are unsupported")
+            if args.tuning_per_quantile:
+                raise ValueError("final_brier uses one shared configuration across all five REB heads")
+            if not tuning_match_final_features:
+                raise ValueError("final_brier requires --tuning-match-final-features")
+            if args.hyperparams_path is not None:
+                raise ValueError("final_brier cannot use --hyperparams-path")
         historical = load_attachment(_namespace_value(args, 'historical_policy'),
                                      _namespace_value(args, 'historical_source_metadata'),
                                      local=_namespace_value(args, 'local', False))
@@ -1593,6 +1679,13 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
             hyperparams_path, _ = validate_hyperparams_file(args.hyperparams_path)
 
         validate_positive_int(args.tuning_trials, "--tuning-trials")
+        if tuning_objective == "final_brier" and args.tuning_trials > 100:
+            raise ValueError("final_brier --tuning-trials cannot exceed 100")
+        validate_positive_int(args.tuning_samples, "--tuning-samples")
+        if not 100 <= args.tuning_samples <= 20000:
+            raise ValueError("--tuning-samples must be between 100 and 20000")
+        if not isinstance(args.tuning_seed, int) or args.tuning_seed < 0:
+            raise ValueError("--tuning-seed must be a non-negative integer")
         if args.tuning_timeout is not None:
             validate_positive_int(args.tuning_timeout, "--tuning-timeout")
         validate_finite_number(args.feature_tolerance, "--feature-tolerance", minimum=0.0)
@@ -1690,7 +1783,10 @@ def _training_plan(args: argparse.Namespace, validated: dict) -> dict:
         "feature_controls": validated["feature_control_spec"].requested_receipt(),
         "tuning": {
             "enabled": bool(args.tune),
+            "objective": _namespace_value(args, "tuning_objective", "pinball"),
             "trials": args.tuning_trials,
+            "samples": _namespace_value(args, "tuning_samples", 5000),
+            "seed": _namespace_value(args, "tuning_seed", 42),
             "timeout_seconds": args.tuning_timeout,
             "per_quantile": bool(args.tuning_per_quantile),
             "match_final_features_requested": bool(
@@ -1805,6 +1901,9 @@ def main(argv=None):
             tuning_timeout=args.tuning_timeout,
             tuning_per_quantile=args.tuning_per_quantile,
             tuning_match_final_features=args.tuning_match_final_features,
+            tuning_objective=args.tuning_objective,
+            tuning_samples=args.tuning_samples,
+            tuning_seed=args.tuning_seed,
             hyperparams_path=args.hyperparams_path,
             feature_tolerance=args.feature_tolerance,
             exclude_injury_features=args.exclude_injury_features,

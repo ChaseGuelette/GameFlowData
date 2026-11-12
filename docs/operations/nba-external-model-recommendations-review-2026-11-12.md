@@ -62,18 +62,27 @@ The [REB opportunity view](nba-reb-opportunity-view.md) and its concentrated ana
 
 ## Corrections to the suggested experiment sequence
 
+### Current status — remaining development focus is objectives 3 and 4
+
+Chase has directed attention to the remaining sampler and feature-family objectives after the low-minute investigation and learned-blend build. This updates work ordering, not permission to implement or launch either remaining experiment.
+
+- **1 — Investigation complete.** Read [the low-minute investigation](nba-low-minute-exclusion-investigation-2026-11-12.md). Keep numerical thresholds unchanged on present evidence; the exact scored output contains no `<5` outcomes, and its `5–<10` subset is small. Shared rate-eligibility consolidation and explicit cohort reporting are proposed follow-ups, not evidence that lowering a threshold helps or that every code follow-up is implemented. Do not repeat the audit by default.
+- **2 — Tooling complete; empirical comparison remains separate.** [Learned market blending](nba-learned-market-blend.md) is built and engineering-verified. The intended original-baseline fit/later-window comparison has not been established by that delivery. Keep it as an evaluation gate, not an obstacle to developing objective 3 and not proof of improvement.
+- **3 — Bounded runner delivered; owner experiment pending.** [Sampler comparison](nba-sampler-comparison.md) is integrated uncommitted and engineering-verified. It freezes component forecasts/source inputs and compares control, REB widening disabled, and the extra lower-tail multiplier disabled across paired seeds; raw and fixed ordinary BL are scored without refitting. Existing models/defaults remain unchanged. Main-checkout validation passed 92 guarded existing tests, Ruff, Pyright, populated public-CLI acceptance and the real-artifact launch dry-run. The full historical experiment has not run and no improvement is established. Alternative interpolation remains deferred; a denser learned quantile grid would require new heads/retraining outside this frozen-model comparison.
+- **4 — Next signal-development slice.** Use the completed conditional-error analysis plus objective 3 results to select one specific opportunity/reliability hypothesis. Check existing features and historical/as-of variation before acquiring data or fitting a small controlled family. Do not treat already-present workload proxies as new features or add a large bundle by default.
+
 ### Ranked shortlist requested by Chase
 
-Recommendations only; no implementation or run authorization is implied.
+Original shortlist below; current completion/ordering is recorded above. No new implementation or run authorization is implied.
 
 1. **Audit low-minute settled-outcome coverage.** Reconcile acquisition, rate fitting, calibration reporting and replay eligibility against the quoted/settled population. Quantify exclusions and subgroup error before changing any threshold. Deliverable: whether the current reports omit a material failure population and the smallest justified correction.
 2. **Benchmark one learned market-blending weight per stat.** Reuse chronological out-of-sample forecasts and compare market-only, raw, current fixed BL and a regularized learned blend at identical lines. Deliverable: whether model disagreement adds useful information beyond the market; evaluate untouched probability scores and flat-stake outcomes, not just fitted calibration.
 3. **Isolate probability-construction effects with frozen component forecasts.** Examine five-quantile interpolation, tail extrapolation and REB spread widening one at a time; measure seed sensitivity. Treat conditional dependence separately, especially because the REB coefficient is already near zero. Deliverable: whether probability error can improve without refitting boosters.
 4. **Test one error-guided opportunity/reliability feature family.** Use the completed REB conditional-error view to select a concrete pregame hypothesis, check existing fields and historical non-default/as-of coverage, then compare a small family with fixed model settings. Deliverable: incremental underlying forecast and line-probability improvement, not merely a change in which bets are selected.
 
-Start with item 1. Items 2 and 3 address how forecasts become decisions; item 4 targets learned basketball signal. Keep direct-count and neural architectures outside this first shortlist and do not combine interventions in the first comparison.
+Proceed to item 3, then item 4 for the remaining development work. Items 2 and 3 address how forecasts become decisions; item 4 targets learned basketball signal. Keep direct-count and neural architectures outside this shortlist and do not combine interventions in the first comparison.
 
-Do not launch the full proposed menu or combine population correction, newer seasons, new likelihood and learned calibration in the first refit. First finish a bounded population/decision-probability check; then pick one intervention based on which failure it can distinguish. Saved-forecast sampler/blend work can be separated from improving the learned component inputs.
+Do not launch the full proposed menu or combine population correction, newer seasons, new likelihood and learned calibration in the first refit. Reuse the completed population investigation and pick one intervention based on which failure it can distinguish. Saved-forecast sampler/blend work can be separated from improving the learned component inputs.
 
 October 21–November 2 remains development data. Chronological monthly/four-week blocks, game/date-clustered uncertainty and equal opportunity weighting are sound design suggestions, but block duration is not a universal sufficiency threshold. Out-of-sample predictions used to fit a calibrator are its training data, not its untouched test. Do not duplicate one outcome's weight across books/snapshots accidentally.
 

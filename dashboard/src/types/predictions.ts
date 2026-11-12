@@ -55,6 +55,13 @@ export interface Prediction {
   bl_confidence?: number
   is_recommended?: boolean
 
+  // Display-only current NBA offer data. Persisted prediction identity and quote
+  // snapshots remain unchanged; page-level candidates may override display terms.
+  original_prop_line?: number
+  executable_offer_status?: NbaExecutableOfferStatus | 'loading' | 'error'
+  executable_offer?: NbaExecutableOffer
+  executable_offers?: NbaExecutableOffer[]
+
   // Feature columns for insights (optional, may not exist yet)
   feat_rest_days?: number
   feat_is_back_to_back?: boolean
@@ -105,11 +112,62 @@ export interface PlayerGameStats {
   matchup?: string
 }
 
+export interface NbaBlConfig {
+  tau: number
+  z_max: number
+  max_weight: number
+  edge_threshold: number
+}
+
+export interface NbaExecutableOffer {
+  bookmaker: string
+  line: number
+  over_odds: number
+  under_odds: number
+  snapshot_time: string
+  reference_line: number
+  line_distance: number
+  booksum: number
+  model_prob_over: number
+  model_prob_under: number
+  market_prob_over: number
+  market_prob_under: number
+  raw_over_edge: number
+  raw_under_edge: number
+  bl_over_prob: number
+  bl_under_prob: number
+  bl_over_edge: number
+  bl_under_edge: number
+  bl_confidence: number
+  selected_direction: 'over' | 'under'
+  selected_edge: number
+  passes_local_policy: boolean
+  is_recommended: boolean
+}
+
+export type NbaExecutableOfferStatus = 'ready' | 'empty' | 'missing_samples' | 'invalid_config'
+
+export interface NbaExecutableOfferResult {
+  prediction_id: number
+  player_id: number
+  game_id: string
+  stat: string
+  status: NbaExecutableOfferStatus
+  offers: NbaExecutableOffer[]
+  selected_offer: NbaExecutableOffer | null
+}
+
+export interface NbaExecutableOffersResponse {
+  results: NbaExecutableOfferResult[]
+}
+
 export interface BookmakerLine {
   bookmaker: string
   line: number
   over_odds: number
   under_odds: number
+  snapshot_time?: string
+  executable_offer?: NbaExecutableOffer
 }
 
 export interface PaperTradingSummary {
