@@ -19,6 +19,7 @@ import pandas as pd
 from sqlalchemy import bindparam, text
 
 from src.processing.nba_prop_snapshots import parse_odds_event, parse_utc
+from src.processing.nba_quote_capture import EXCLUDED_BOOKS
 
 TABLE = "nba_player_prop_feature_lines"
 CLOCKS = ("decision_time", "commence_time", "source_snapshot_time", "requested_snapshot_time",
@@ -89,6 +90,9 @@ def load_compact_pairs(engine, *, markets, bookmakers, game_ids=None,
     """Read bounded selected lines and return one verified atomic pair per row."""
     if not markets or not bookmakers or game_ids == []:
         return pd.DataFrame()
+    excluded = sorted(set(bookmakers) & set(EXCLUDED_BOOKS))
+    if excluded:
+        raise CompactQuoteError(f"DFS/sweepstakes bookmakers are not supported: {', '.join(excluded)}")
     if game_ids is None and (start_date is None or end_date is None):
         raise ValueError("Compact replay requires explicit games or date bounds")
     root = Path(cache_dir or os.getenv("NBA_PROPS_T60_STATE_DIR") or Path.home() / ".gameflow/nba-props-t60")

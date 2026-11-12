@@ -42,7 +42,7 @@ from src.models.nba_artifacts import (
 BOOKMAKERS = (
     "draftkings", "fanduel", "betmgm", "betrivers", "bovada", "williamhill_us",
     "betonlineag", "unibet_us", "mybookieag", "pointsbetus", "fanatics", "barstool",
-    "wynnbet", "ballybet", "betopenly", "betparx", "espnbet", "fliff", "hardrockbet",
+    "wynnbet", "ballybet", "betopenly", "betparx", "espnbet", "hardrockbet",
     "novig", "prophetx", "rebet", "windcreek", "pinnacle",
 )
 READINESS = {

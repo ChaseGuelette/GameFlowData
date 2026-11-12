@@ -11,7 +11,7 @@ interface BetSourceFilterProps {
 }
 
 const SOURCES: { value: BetSource; label: string; description: string }[] = [
-  { value: 'model', label: 'Model Picks', description: 'BL Edge ≥9% (τ=0.50)' },
+  { value: 'model', label: 'Model Picks', description: 'Recommended model selections' },
   { value: 'my_bets', label: 'My Bets', description: 'Your saved real and paper bets' },
 ]
 

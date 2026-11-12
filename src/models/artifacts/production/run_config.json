@@ -1,12 +1,50 @@
 {
     "train_seasons": [
         "22023",
-        "22024",
-        "22025"
+        "22024"
     ],
     "calibration_season": "22025",
-    "cal_end_date": "2026-03-18",
-    "timestamp": "2026-03-23T21:29:31.469275",
+    "cal_end_date": null,
+    "exclude_injury_features": true,
+    "timestamp": "2026-11-08T12:21:29.837463",
     "calibration_tolerance": 0.05,
-    "calibration_hard_fail": 0.1
+    "calibration_hard_fail": 0.1,
+    "execution": {
+        "chronology": {
+            "schema_version": 1,
+            "strict_fit_before_calibration": true,
+            "training": {
+                "rows": 46249,
+                "games": 2452,
+                "dates": 323,
+                "start": "2023-10-24",
+                "end": "2025-04-13",
+                "seasons": [
+                    "22023",
+                    "22024"
+                ],
+                "keys_sha256": "06806f9ff7ed2a135073a064e3680e8df39a457ed1243b49e19f6334d73509d3"
+            },
+            "calibration": {
+                "rows": 23898,
+                "games": 1278,
+                "dates": 210,
+                "start": "2025-10-21",
+                "end": "2026-06-13",
+                "seasons": [
+                    "22025"
+                ],
+                "keys_sha256": "67ddc7615e2dc57c210604b7ecef91f4aea559281098f73f5732a9be1875a9a6"
+            },
+            "source_verified": false,
+            "decision_grade": false
+        },
+        "historical_attachment": null,
+        "source_policy": {
+            "source_id": "unknown",
+            "policy_id": "unknown",
+            "watermark": null
+        },
+        "acquisition_limits": null
+    }
 }

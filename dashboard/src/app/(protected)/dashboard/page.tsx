@@ -523,7 +523,9 @@ export default function DashboardPage() {
                     <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-400">RBIs ≥12%</span>
                   </>
                 ) : (
-                  <span className="text-green-400 text-sm">BL Edge ≥9%</span>
+                  <span className="text-green-400 text-sm">
+                    BL Edge ≥{(config.modelPicksEdge * 100).toFixed(0)}%
+                  </span>
                 )}
                 <span className="relative group cursor-help">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 hover:text-slate-200 transition-colors">
@@ -552,7 +554,7 @@ export default function DashboardPage() {
                     </span>
                   ) : (
                     <span className="invisible group-hover:visible absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3 rounded-lg bg-slate-800 border border-slate-600 text-xs text-slate-300 leading-relaxed shadow-xl z-50">
-                      Edges shown here are market-anchored (Black-Litterman blended, τ=0.50). The model&apos;s raw probability is blended with the sportsbook&apos;s implied probability, producing more conservative but higher-conviction picks. Raw edges are higher — switch to All Bets to see them.
+                      Edges shown here are market-anchored (Black-Litterman blended, τ={config.modelPicksTau?.toFixed(2)}). The model&apos;s raw probability is blended with the sportsbook&apos;s implied probability, producing more conservative but higher-conviction picks. Raw edges are higher — switch to All Bets to see them.
                     </span>
                   )}
                 </span>

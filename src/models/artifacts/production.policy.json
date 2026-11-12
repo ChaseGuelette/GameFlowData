@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "source_model": "no_injury_baseline\\nba_run_20261108_122129",
+  "model_identity": "8e1c8b65b0e0dfc0c87f83d35341fb45ba4d185c428120c877b2366518ee151d",
+  "direction_policy": "best_then_under",
+  "settings": {
+    "stats": [
+      "pts",
+      "reb",
+      "ast"
+    ],
+    "edge_threshold": 0.07,
+    "bl_tau": 0.75,
+    "bl_z_max": 0.5,
+    "bl_max_weight": 0.75,
+    "min_odds": -200,
+    "max_odds": 200,
+    "fixed_stake": 10.0,
+    "n_samples": 5000,
+    "random_state": 42
+  },
+  "evaluation_run_id": "nba-paper-b88d00535ef26eb17903a300",
+  "sweep_config": "C:\\Users\\Chase\\Projects\\GameFlowData\\backtest_results\\nba_no_injury_holdout_sweep_95_nov2_v1\\cells\\cell_34ca124425d0feb618405f0969a7ca0c607083eb58716a9e94d1a5e107033efe\\config.json"
+}

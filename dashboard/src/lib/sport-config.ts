@@ -105,8 +105,8 @@ export const NBA_CONFIG: SportConfig = {
   comboStats: new Set<StatType>(['pra', 'pr', 'pa', 'ra']),
   teams: NBA_TEAMS,
   teamNameToAbbrev: NBA_TEAM_NAME_TO_ABBREV,
-  modelPicksEdge: 0.09,
-  modelPicksTau: 0.50,
+  modelPicksEdge: 0.07,
+  modelPicksTau: 0.75,
   perStatConfig: {},
   getHeadshotUrl: (playerId: number) =>
     `https://cdn.nba.com/headshots/nba/latest/1040x760/${playerId}.png`,

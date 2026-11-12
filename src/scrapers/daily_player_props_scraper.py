@@ -104,7 +104,7 @@ class DailyPlayerPropsScraper:
             url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
             params = {
                 "apiKey": self.api_key,
-                "regions": "us,us2,us_ex,us_dfs",  # All US regions + DFS platforms
+                "regions": "us,us2,us_ex",
                 "markets": markets_str,
                 "oddsFormat": "american",
                 "dateFormat": "iso",
@@ -114,7 +114,7 @@ class DailyPlayerPropsScraper:
             params = {
                 "apiKey": self.api_key,
                 "date": date_str,
-                "regions": "us,us2,us_ex,us_dfs",  # All US regions + DFS platforms
+                "regions": "us,us2,us_ex",
                 "markets": markets_str,
                 "oddsFormat": "american",
                 "dateFormat": "iso",
@@ -205,7 +205,7 @@ class DailyPlayerPropsScraper:
 
         for book in data.get("bookmakers", []):
             book_key = book["key"]
-            if self.live_product_scope and metadata.get("source_kind") == "live":
+            if table_name == INFERENCE_TABLE:
                 from src.processing.nba_quote_capture import EXCLUDED_BOOKS
                 if book_key in EXCLUDED_BOOKS:
                     continue

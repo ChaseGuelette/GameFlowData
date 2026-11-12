@@ -17,7 +17,9 @@ LIVE_MARKETS = (
     "player_points_rebounds_assists", "player_points_rebounds",
     "player_points_assists", "player_rebounds_assists",
 )
-EXCLUDED_BOOKS = ("prizepicks", "underdog", "pick6", "betr_us_dfs", "fliff")
+EXCLUDED_BOOKS = (
+    "prizepicks", "underdog", "pick6", "betr_us_dfs", "dabble_us_dfs", "fliff",
+)
 LIVE_REGIONS = "us,us2,us_ex"
 CAPTURE_POLICY = "live_change_v1"
 SCOPE = {"markets": sorted(LIVE_MARKETS), "regions": LIVE_REGIONS, "excluded_books": list(EXCLUDED_BOOKS)}
@@ -223,7 +225,7 @@ def current_lines_sql(*, capture_surface):
                 {confirmation} AS confirmation_time
             FROM {relation} q
             WHERE game_id IN :game_ids AND market_key IN :markets AND player_id IS NOT NULL
-              AND bookmaker NOT IN ('prizepicks','underdog','pick6','betr_us_dfs','fliff')
+              AND bookmaker NOT IN ('prizepicks','underdog','pick6','betr_us_dfs','dabble_us_dfs','fliff')
               AND {confirmation} >= NOW() - interval '48 hours' AND {confirmation} <= NOW()
               AND source_snapshot_time <= NOW() AND source_snapshot_time < commence_time
               AND observed_at <= NOW() AND observed_at < commence_time

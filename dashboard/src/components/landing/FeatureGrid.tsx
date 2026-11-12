@@ -11,7 +11,7 @@ const features = [
   },
   {
     title: 'Model Picks',
-    description: 'Curated daily selections with BL Edge ≥9%. Backtested and optimized for consistent returns.',
+    description: 'Curated daily selections using the active model recommendation policy.',
     icon: '🎯',
   },
   {

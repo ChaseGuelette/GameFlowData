@@ -109,7 +109,7 @@ class MLBDailyPropsScraper:
             url = f"https://api.the-odds-api.com/v4/sports/{SPORT_KEY}/events/{event_id}/odds"
             params = {
                 "apiKey": self.api_key,
-                "regions": "us,us2,us_ex,us_dfs",
+                "regions": "us,us2,us_ex",
                 "markets": markets_str,
                 "oddsFormat": "american",
                 "dateFormat": "iso",
@@ -119,7 +119,7 @@ class MLBDailyPropsScraper:
             params = {
                 "apiKey": self.api_key,
                 "date": date_str,
-                "regions": "us,us2,us_ex,us_dfs",
+                "regions": "us,us2,us_ex",
                 "markets": markets_str,
                 "oddsFormat": "american",
                 "dateFormat": "iso",

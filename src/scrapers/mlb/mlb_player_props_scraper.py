@@ -125,7 +125,7 @@ class MLBPropsBackfillScraper:
         params = {
             "apiKey": self.api_key,
             "date": date_str,
-            "regions": "us,us2,us_ex,us_dfs",
+            "regions": "us,us2,us_ex",
             "markets": ",".join(self.markets),
             "oddsFormat": "american",
             "dateFormat": "iso",
