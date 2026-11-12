@@ -50,12 +50,19 @@ SAFE_TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class DailyPlayerPropsScraper:
-    def __init__(self, api_key, db_engine, markets=None):
+    def __init__(self, api_key, db_engine, markets=None, *, change_only=False, live_product_scope=False):
         self.api_key = api_key
         self.engine = db_engine
         self.session = requests.Session()
         self.markets = markets or CORE_MARKETS
+        if markets is None and (change_only or live_product_scope):
+            from src.processing.nba_quote_capture import LIVE_MARKETS
+            self.markets = list(LIVE_MARKETS)
         self.last_response_metadata = None
+        self.change_only = change_only
+        self.live_product_scope = live_product_scope or change_only
+        self.last_capture_metrics = None
+        self.expected_event_id = None
 
     def get_live_events(self):
         """Get list of current/upcoming NBA games."""
@@ -68,6 +75,8 @@ class DailyPlayerPropsScraper:
             return response.json()
         except Exception as e:
             logger.error("Failed to fetch live events (%s)", type(e).__name__)
+            if self.live_product_scope:
+                raise RuntimeError("Live event discovery failed") from e
             return []
 
     def get_historical_events(self, date_str):
@@ -112,6 +121,11 @@ class DailyPlayerPropsScraper:
             }
 
         requested_at = datetime.now(UTC).isoformat()
+        self.last_response_metadata = None
+        self.expected_event_id = event_id
+        if is_live and self.live_product_scope:
+            from src.processing.nba_quote_capture import LIVE_REGIONS
+            params["regions"] = LIVE_REGIONS
         try:
             response = self.session.get(url, params=params, timeout=10)
             if response.status_code == 200:
@@ -151,6 +165,14 @@ class DailyPlayerPropsScraper:
 
     def parse_and_store(self, data, snapshot_ts, table_name, capture_metadata=None):
         """Parse props and insert into specified table."""
+        metadata = capture_metadata or self.last_response_metadata or {}
+        if self.change_only and table_name == INFERENCE_TABLE and metadata.get("source_kind") != "historical":
+            from src.processing.nba_quote_capture import persist_capture
+            self.last_capture_metrics = persist_capture(
+                self.engine, data, metadata, expected_event_id=self.expected_event_id, markets=self.markets,
+            )
+            logger.info("Live capture: %s", self.last_capture_metrics)
+            return self.last_capture_metrics["inserted"]
         if not data or "bookmakers" not in data:
             return 0
 
@@ -183,6 +205,10 @@ class DailyPlayerPropsScraper:
 
         for book in data.get("bookmakers", []):
             book_key = book["key"]
+            if self.live_product_scope and metadata.get("source_kind") == "live":
+                from src.processing.nba_quote_capture import EXCLUDED_BOOKS
+                if book_key in EXCLUDED_BOOKS:
+                    continue
             book_name = book.get("title")
             book_updated = book.get("last_update")
 
@@ -219,7 +245,9 @@ class DailyPlayerPropsScraper:
                     rows.append(row)
 
         if rows:
-            self._batch_insert(rows, table_name)
+            inserted = self._batch_insert(rows, table_name)
+            if table_name == INFERENCE_TABLE:
+                return inserted
 
         return len(rows)
 
@@ -233,7 +261,7 @@ class DailyPlayerPropsScraper:
                 conflict_clause = ""
                 if table_name == INFERENCE_TABLE:
                     extra_columns = ", requested_snapshot_time, source_snapshot_time, source_kind, observed_at"
-                    conflict_clause = " ON CONFLICT DO NOTHING"
+                    conflict_clause = " ON CONFLICT DO NOTHING RETURNING staging_id"
                 query = f"""
                     INSERT INTO {table_name}
                     (api_game_id, api_player_name, bookmaker, market_key,
@@ -241,8 +269,12 @@ class DailyPlayerPropsScraper:
                      snapshot_time, market_last_update, bookmaker_last_update, bookmaker_name{extra_columns})
                     VALUES %s{conflict_clause}
                 """  # nosec
-                extras.execute_values(cur, query, rows)
+                inserted = extras.execute_values(cur, query, rows, fetch=(table_name == INFERENCE_TABLE))
             conn.commit()
+            return len(inserted) if table_name == INFERENCE_TABLE else len(rows)
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -255,23 +287,53 @@ def run_live_scrape(scraper, target_table=INFERENCE_TABLE):
 
     total_creds = 0
     total_rows = 0
+    failures = 0
+    conflicts = 0
+    totals = dict(parsed=0, changed=0, unchanged=0, incomplete=0, withdrawn=0, inserted=0, receipts=0)
     for event in events:
         game_id = event["id"]
+        if scraper.live_product_scope:
+            try:
+                commence = datetime.fromisoformat(str(event.get("commence_time")).replace("Z", "+00:00"))
+                if commence.tzinfo is None:
+                    raise ValueError("Naive commencement")
+                if commence <= datetime.now(UTC):
+                    continue
+            except (TypeError, ValueError):
+                failures += 1
+                logger.error("Skipping event %s with invalid commencement", game_id)
+                continue
         logger.info(f"Fetching props for {event['home_team']} vs {event['away_team']}...")
 
         data, cost = scraper.fetch_props(game_id, is_live=True)
         total_creds += cost
 
-        if data:
+        if data is not None:
             snapshot_ts = (scraper.last_response_metadata or {}).get("observed_at")
             snapshot_ts = snapshot_ts or datetime.now(UTC).isoformat()
-            rows = scraper.parse_and_store(data, snapshot_ts, target_table)
-            total_rows += rows
-            logger.info(f"  Saved {rows} props.")
+            try:
+                rows = scraper.parse_and_store(data, snapshot_ts, target_table)
+                total_rows += rows
+                if scraper.last_capture_metrics:
+                    for key in totals:
+                        totals[key] += scraper.last_capture_metrics[key]
+                logger.info(f"  Saved {rows} props.")
+            except Exception as exc:
+                from src.processing.nba_quote_capture import CaptureError
+                failures += 1
+                if getattr(exc, "pgcode", None) == "23505" or (isinstance(exc, CaptureError) and "Out-of-order" in str(exc)):
+                    conflicts += 1
+                detail = str(exc) if isinstance(exc, CaptureError) else type(exc).__name__
+                logger.error("Capture failed event=%s detail=%s (state not advanced)", game_id, detail)
+        else:
+            failures += 1
 
         time.sleep(0.05)  # Odds API allows 30 req/s; 0.05s = 20 req/s max
 
     logger.info(f"Live scrape complete. Saved {total_rows} rows. Used {total_creds} credits.")
+    logger.info("Live capture totals=%s failed=%s conflicting=%s", totals, failures, conflicts)
+    if failures:
+        raise RuntimeError(f"{failures} live captures failed; failed responses did not confirm state")
 
 
 def run_historical_scrape(scraper, date_str, target_table=INFERENCE_TABLE):
@@ -319,6 +381,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="Scrape live props to nba_player_props_inference")
     parser.add_argument("--date", type=str, help="Scrape historical snapshots to nba_player_props_inference")
+    parser.add_argument("--change-only", action="store_true", help="Enable only after migration and consumer rollout")
+    parser.add_argument("--live-product-scope", action="store_true", help="Eight active markets and non-DFS live scope")
 
     # Market selection
     market_group = parser.add_mutually_exclusive_group()
@@ -341,6 +405,8 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if args.change_only and (not args.live or args.date or args.target_table not in (None, INFERENCE_TABLE)):
+        parser.error("--change-only requires live-only inference target")
 
     # Resolve markets
     if args.markets:
@@ -352,7 +418,11 @@ if __name__ == "__main__":
     else:
         markets = list(CORE_MARKETS)
 
-    scraper = DailyPlayerPropsScraper(API_KEY, engine, markets=markets)
+    if args.live_product_scope or args.change_only:
+        from src.processing.nba_quote_capture import LIVE_MARKETS
+        markets = list(LIVE_MARKETS)
+    scraper = DailyPlayerPropsScraper(API_KEY, engine, markets=markets,
+                                     change_only=args.change_only, live_product_scope=args.live_product_scope)
     logger.info(f"Markets ({len(markets)}): {', '.join(markets)}")
 
     if args.live:

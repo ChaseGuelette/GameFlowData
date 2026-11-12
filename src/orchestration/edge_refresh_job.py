@@ -475,13 +475,13 @@ def recalculate_edges(
     probabilities from stored MC samples, deviggs odds, and recalculates
     raw edges + BL blended edges. Preserves all other columns (quantiles, features).
     """
-    df = predictions_df.copy()
+    df = predictions_df.copy().reset_index(drop=True)
 
     from src.paper_trading.nba_paper_entry import bind_model_samples
 
     bind_model_samples(df, samples_dict, verify=True)
 
-    # Preserve old line columns so we can fall back when fresh lines are missing
+    # Preserve terms only for already-started games, never withdrawn pregame offers.
     line_preserve_cols = ["line", "over_odds", "under_odds", "bookmaker"]
     old_lines = {}
     for c in line_preserve_cols:
@@ -501,14 +501,16 @@ def recalculate_edges(
     # Merge fresh lines
     merge_cols = ["player_id", "game_id", "stat"]
     line_cols = ["player_id", "game_id", "stat", "line", "over_odds", "under_odds", "bookmaker", "quote_snapshot"]
-    available_line_cols = [c for c in line_cols if c in lines_df.columns]
-    df = df.merge(lines_df[available_line_cols], on=merge_cols, how="left")
+    df = df.merge(lines_df.reindex(columns=line_cols), on=merge_cols, how="left")
 
-    # Fill missing lines with previous values (preserves old predictions
-    # when fresh lines aren't available, e.g. after games finish)
+    # An empty authoritative result must clear pregame prices/recommendations.
+    # Unknown starts also fail closed; retain old display terms only after start.
+    starts = df["game_time"] if "game_time" in df.columns else pd.Series(pd.NaT, index=df.index)
+    game_times = pd.to_datetime(starts, errors="coerce", utc=True)
+    started = game_times <= pd.Timestamp.now(tz="UTC")
     for c, old_series in old_lines.items():
         if c in df.columns:
-            df[c] = df[c].fillna(old_series)
+            df[c] = df[c].fillna(old_series.where(started))
 
     # Calculate over_prob from MC samples
     def estimate_over_prob(row):
@@ -1064,11 +1066,10 @@ def main():
         logger.info(f"Fetched {len(fresh_lines)} fresh lines in {time.perf_counter() - t0:.1f}s")
 
         if fresh_lines.empty:
-            logger.warning("No fresh lines found. Exiting gracefully.")
-            sys.exit(0)
+            logger.warning("No current lines found; clearing unavailable pregame offers and recommendations.")
 
         # 5a. Detect prop_line drift and re-infer stale players
-        if not args.skip_reinference and "prop_line" in predictions.columns:
+        if not fresh_lines.empty and not args.skip_reinference and "prop_line" in predictions.columns:
             stale_keys = detect_stale_predictions(predictions, fresh_lines)
 
             if stale_keys:

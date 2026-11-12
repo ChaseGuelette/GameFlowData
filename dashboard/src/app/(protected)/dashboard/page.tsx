@@ -366,14 +366,17 @@ export default function DashboardPage() {
         setBookAvailability(new Set())
         return
       }
-      const { data } = await supabase
-        .from('nba_player_props_inference')
-        .select('player_id, market_key')
-        .in('bookmaker', activeBooks)
-        .in('game_id', gameIds)
-        .not('player_id', 'is', null)
+      // Scoped RPC pairs coherent current states and never revives an empty
+      // receipt. Its signature is also available before the capture migration.
+      const { data, error } = await supabase.rpc('get_sportsbook_lines_by_games', { p_game_ids: gameIds })
       if (data) {
-        setBookAvailability(new Set(data.map(r => `${r.player_id}_${r.market_key}`)))
+        setBookAvailability(new Set(data
+          .filter((r: { bookmaker: string; over_odds: number | null; under_odds: number | null }) =>
+            activeBooks.includes(r.bookmaker) && r.over_odds != null && r.under_odds != null)
+          .map((r: { player_id: number; market_key: string }) => `${r.player_id}_${r.market_key}`)))
+      } else if (error) {
+        console.error('Current book availability unavailable:', error)
+        setBookAvailability(new Set())
       }
     }
     fetchBookAvailability()

@@ -1,6 +1,12 @@
 # NBA compact T-60 prop lines runbook
 
-Current proposed ingestion-volume reduction: [NBA quote-volume scope](nba-inference-quote-volume-reduction-2026-11-12.md). This is a proposal, not authorization for cleanup, source changes or deployment; preserve the separately owned retention changes.
+November 12 change-only ingestion code is delivered locally: [NBA quote-volume scope](nba-inference-quote-volume-reduction-2026-11-12.md). Its separate `20261112_nba_change_only_capture.sql` migration is prepared and verified only in a disposable test database, not applied to production. Preserve separately owned retention changes; this delivery does not authorize cleanup or deployment.
+
+### Change-only live confirmation evidence (local code; activation gated)
+
+The live producer stores changed numeric lines/prices as immutable inference rows and records actual successful reobservations in `nba_props_live_captures`. For live captures, the T-60 loader expands eligible pre-cutoff receipts and the selector ranks by that genuine confirmation clock/provider metadata while retaining original quote clocks and source row ID. New nullable compact evidence fields are `capture_id`, `capture_received_at`, `capture_market_last_update`, and `capture_bookmaker_last_update`; historical rows keep them null. The `t60_v1` numeric-selection/eligibility contract remains unchanged and expanded-response parity was checked; do not use a post-cutoff last-seen update to create earlier availability. No historical compact rows were rewritten.
+
+Apply/read back the new migration and deploy the coordinated consumers before explicitly enabling `NBA_PROPS_CHANGE_ONLY_ENABLED=true`. The basic historical path remains compatible before migration. Disabling the producer flag after receipts exist is not a consumer rollback; preserve authoritative receipts and coordinate rollback with the retention owner. Current materializer safety caps and existing backlog recovery are unchanged.
 
 ## Status and scope
 

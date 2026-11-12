@@ -90,6 +90,9 @@ def load_target_events(conn, *, start_date: date, end_date: date, max_events: in
 def load_event_rows(conn, *, event_id: str, max_rows: int) -> tuple[list[dict], bool]:
     from psycopg2.extras import RealDictCursor
 
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.nba_props_live_captures')")
+        capture_mode = bool(cur.fetchone()[0])
     query = """
         SELECT p.*
         FROM public.nba_player_props_inference p
@@ -102,8 +105,43 @@ def load_event_rows(conn, *, event_id: str, max_rows: int) -> tuple[list[dict], 
         ORDER BY p.api_game_id, p.player_id, p.market_key, p.source_snapshot_time DESC, p.staging_id
         LIMIT %s
     """
+    params = (event_id, max_rows + 1)
+    if capture_mode:
+        # Expand EVERY pre-cutoff receipt, not just final membership. Preserve
+        # the old historical selector population and per-event safety cap.
+        query = """
+            WITH evidence AS (
+                SELECT p.*, c.capture_id, c.received_at AS capture_received_at,
+                    (g.value->>'market_last_update')::timestamptz AS capture_market_last_update,
+                    (g.value->>'bookmaker_last_update')::timestamptz AS capture_bookmaker_last_update
+                FROM public.nba_props_live_captures c
+                CROSS JOIN LATERAL jsonb_array_elements(c.groups) g(value)
+                CROSS JOIN LATERAL jsonb_array_elements_text(g.value->'ids') member(id)
+                JOIN public.nba_player_props_inference p ON p.staging_id=member.id::bigint
+                    AND p.api_game_id=c.api_game_id AND p.commence_time=c.commence_time
+                    AND p.home_team=c.home_team AND p.away_team=c.away_team
+                WHERE c.api_game_id=%s AND c.received_at<=c.commence_time-interval '60 minutes'
+                UNION ALL
+                SELECT p.*, NULL::bigint, NULL::timestamptz, NULL::timestamptz, NULL::timestamptz
+                FROM public.nba_player_props_inference p
+                WHERE p.api_game_id=%s AND NOT EXISTS (
+                    SELECT 1 FROM public.nba_props_live_captures c
+                    WHERE c.api_game_id=p.api_game_id AND c.received_at=p.source_snapshot_time
+                      AND p.source_kind='live'
+                )
+            ) SELECT * FROM evidence p
+            WHERE p.game_id IS NOT NULL AND p.player_id IS NOT NULL
+              AND p.bookmaker IN ('draftkings','pinnacle')
+              AND p.market_key IN ('player_points','player_rebounds','player_assists','player_threes')
+              AND p.observed_at<=p.commence_time-interval '60 minutes'
+              AND p.source_snapshot_time<=p.commence_time-interval '60 minutes'
+            ORDER BY p.api_game_id,p.player_id,p.market_key,
+                COALESCE(p.capture_received_at,p.source_snapshot_time) DESC,p.staging_id
+            LIMIT %s
+        """
+        params = (event_id, event_id, max_rows + 1)
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(query, (event_id, max_rows + 1))
+        cur.execute(query, params)
         rows = [dict(row) for row in cur.fetchall()]
     return rows[:max_rows], len(rows) > max_rows
 

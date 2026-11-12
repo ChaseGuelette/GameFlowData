@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,6 +18,7 @@ QCOLS = tuple(f"q{int(q * 100)}" for q in QUANTILES)
 PCOLS = tuple(f"pred_q{int(q * 100)}" for q in QUANTILES)
 KEYS = ["player_id", "game_id"]
 MODEL_NAME = "reb_direct_total_model.joblib"
+logger = logging.getLogger(__name__)
 OUTCOME_FIELDS = {
     "actual", "actual_reb", "actual_minutes", "pts", "reb", "ast", "min",
     "did_not_play", "market_over", "over_prob", "profit", "stake",
@@ -68,6 +70,27 @@ def _feature_union(run_config: dict) -> list[str]:
     return features
 
 
+def _candidate_union(run_config: dict) -> list[str]:
+    components = run_config.get("feature_controls", {}).get("components", {})
+    groups: list[str] = []
+    for name in ("minutes_features", "reb_rate_features"):
+        candidates = components.get(name, {}).get("effective_candidates")
+        if not isinstance(candidates, list) or any(type(item) is not str for item in candidates):
+            raise BenchmarkError(f"Parent {name} effective candidate evidence is missing")
+        groups.extend(candidates)
+    candidates = sorted(set(groups))
+    forbidden = sorted((set(candidates) & OUTCOME_FIELDS) | (set(candidates) & IDENTITY_FIELDS))
+    if forbidden:
+        raise BenchmarkError(f"Forbidden outcome/identity feature candidates: {forbidden}")
+    if {"line_spread", "line_total"} & set(candidates):
+        raise BenchmarkError("Parent-excluded game market features entered candidate pool")
+    if any(name.startswith(("team_out_", "opp_out_")) for name in candidates) or {
+        "player_is_questionable", "player_is_probable"
+    } & set(candidates):
+        raise BenchmarkError("Parent-excluded injury features entered candidate pool")
+    return candidates
+
+
 def _validate_diagnostic(diagnostic_dir: Path, prepared: dict) -> dict:
     manifest_path = diagnostic_dir / "diagnostic_manifest.json"
     manifest = _json(manifest_path)
@@ -95,11 +118,17 @@ def _validate_diagnostic(diagnostic_dir: Path, prepared: dict) -> dict:
 def prepare_benchmark(
     model_dir: str, sweep_dir: str, diagnostic_dir: str, output_dir: str, *, local: bool,
     max_games: int = 200, max_player_games: int = 2000, max_outcome_rows: int = 10000,
-    max_outcome_games: int = 200, max_training_rows: int = 100000,
+    max_outcome_games: int = 200, max_training_rows: int = 100000, tune: bool = False,
+    tuning_trials: int | None = None, reselect_features: bool = False,
 ) -> dict:
     """Filesystem-only preflight; performs no model load, DB connection, fit, or output creation."""
     from src.diagnostics.nba_error_stages import prepare_diagnostic
 
+    if tuning_trials is not None and not tune:
+        raise BenchmarkError("--tuning-trials requires --tune")
+    if tune and tuning_trials is not None and not 1 <= tuning_trials <= 200:
+        raise BenchmarkError("Bounds: tuning-trials 1..200")
+    effective_trials = 100 if tune and tuning_trials is None else tuning_trials
     if not 1 <= max_training_rows <= 150000:
         raise BenchmarkError("Bounds: max-training-rows 1..150000")
     prepared = prepare_diagnostic(
@@ -114,6 +143,7 @@ def prepare_benchmark(
         raise BenchmarkError("Benchmark output or incomplete output already exists")
     diag_manifest = _validate_diagnostic(diagnostic, prepared)
     run_config = _json(model / "run_config.json")
+    artifact_manifest = _json(model / "artifact_manifest.json")
     hyperparams = _json(model / "best_hyperparams.json")
     train_seasons = run_config.get("train_seasons")
     calibration_season = run_config.get("calibration_season")
@@ -125,6 +155,10 @@ def prepare_benchmark(
     if not isinstance(chronology, dict):
         raise BenchmarkError("Parent chronology receipt missing")
     features = _feature_union(run_config)
+    candidates = _candidate_union(run_config)
+    tolerance = artifact_manifest.get("training", {}).get("feature_tolerance")
+    if reselect_features and (type(tolerance) not in (int, float) or not np.isfinite(tolerance) or tolerance < 0):
+        raise BenchmarkError("Parent feature_tolerance is missing or invalid")
     reb_params = hyperparams.get("reb")
     if not isinstance(reb_params, dict):
         raise BenchmarkError("Parent REB hyperparameters missing")
@@ -138,17 +172,28 @@ def prepare_benchmark(
         "diagnostic_manifest_sha256": file_hash(diagnostic / "diagnostic_manifest.json"),
         "max_training_rows": max_training_rows, "train_seasons": train_seasons,
         "calibration_season": calibration_season, "cal_end_date": None,
-        "evaluation_season": "22026", "feature_count": len(features),
-        "feature_identity": _sha256_json(features), "target": "actual_reb",
+        "evaluation_season": "22026", "feature_count": None if reselect_features else len(features),
+        "feature_identity": None if reselect_features else _sha256_json(features), "target": "actual_reb",
+        "inherited_feature_count": len(features), "inherited_feature_identity": _sha256_json(features),
         "training_min_actual_minutes": 10.0, "evaluation_actual_minutes_filter": None,
         "model_filename": MODEL_NAME, "architecture": "direct_total_reb_quantiles",
         "decision_grade": False, "full_execution": False,
-        "effective_model_config": effective_config.to_dict(),
+        "inherited_initial_model_config": effective_config.to_dict(),
+        "effective_model_config": None if tune else effective_config.to_dict(),
+        "tuning": {"requested": tune, "effective": tune, "objective": "pinball" if tune else None,
+                   "shared_parameters": bool(tune), "requested_trials": tuning_trials,
+                   "effective_trials": effective_trials},
+        "feature_selection": {"requested": reselect_features, "effective": reselect_features,
+                              "candidate_count": len(candidates), "frozen_feature_count": len(features),
+                              "final_selected_features": None if reselect_features else features,
+                              "tolerance": float(tolerance) if reselect_features else None},
         "oracle_arms": [], "oracle_non_executable": False,
     })
     return {
         **prepared, "diagnostic_manifest": diag_manifest, "run_config": run_config,
-        "features": features, "model_config": effective_config, "info": info,
+        "features": features, "feature_candidates": candidates,
+        "feature_tolerance": float(tolerance) if reselect_features else None,
+        "model_config": effective_config, "info": info,
     }
 
 
@@ -193,12 +238,15 @@ def _prediction_frame(suite, frame: pd.DataFrame, features: list[str]) -> pd.Dat
 
 def fit_direct_model(prepared: dict, train: pd.DataFrame, calibration: pd.DataFrame):
     """Fit actual_reb directly, clear this suite's offsets, and score calibration only."""
-    from src.models.nba_training_chronology import population_proof
-    from src.models.quantile_trainer import QuantileModelSuite
+    from src.models.nba_training_chronology import population_proof, temporal_split
+    from src.models.quantile_trainer import QuantileModelSuite, prepare_quantile_features
 
     features = prepared["features"]
-    _require_columns(train, [*features, "actual_reb", "actual_minutes", "game_date"], "Training population")
-    _require_columns(calibration, [*features, "actual_reb", "game_date"], "Calibration population")
+    tuning_requested = bool(prepared.get("info", {}).get("tuning", {}).get("effective", False))
+    reselect = bool(prepared.get("info", {}).get("feature_selection", {}).get("effective", False))
+    candidates = prepared.get("feature_candidates", features) if reselect else features
+    _require_columns(train, [*candidates, "actual_reb", "actual_minutes", "game_date"], "Training population")
+    _require_columns(calibration, [*candidates, "actual_reb", "game_date"], "Calibration population")
     target = cast(pd.Series, pd.to_numeric(train["actual_reb"], errors="coerce"))
     minutes = cast(pd.Series, pd.to_numeric(train["actual_minutes"], errors="coerce"))
     mask = np.isfinite(target) & (target >= 0) & np.isfinite(minutes) & (minutes >= 10)
@@ -206,11 +254,86 @@ def fit_direct_model(prepared: dict, train: pd.DataFrame, calibration: pd.DataFr
     if fit.empty:
         raise BenchmarkError("Direct REB fit cohort is empty")
     fit_target = cast(pd.Series, pd.to_numeric(fit["actual_reb"], errors="raise"))
-    suite = QuantileModelSuite(copy.deepcopy(prepared["model_config"]))
-    per_quantile = {q: list(features) for q in QUANTILES}
+    fit_dates = fit["game_date"].reset_index(drop=True)
+    matrix = prepare_quantile_features(fit, candidates)
+    per_quantile: dict[float, list[str]] = {q: list(features) for q in QUANTILES}
+    selection_boundary = None
+    if reselect:
+        from src.processing.feature_selection import ImprovedFeatureSelector
+
+        split_values = temporal_split(
+            matrix, fit_target, dates=fit_dates, test_size=prepared["model_config"].val_fraction,
+            shuffle=False, random_state=prepared["model_config"].random_state,
+        )
+        inner_X = cast(pd.DataFrame, split_values[0])
+        outer_X = cast(pd.DataFrame, split_values[1])
+        inner_y = cast(pd.Series, split_values[2])
+        inner_dates = fit_dates.iloc[inner_X.index].reset_index(drop=True)
+        selector_frame = inner_X.reset_index(drop=True)
+        selector_frame["actual_reb"] = inner_y.reset_index(drop=True)
+        selector_frame["game_date"] = inner_dates
+        selector = ImprovedFeatureSelector(
+            n_splits=3, quantiles=list(QUANTILES), tolerance=prepared["feature_tolerance"],
+        )
+        selected = selector.select_features_per_quantile(
+            selector_frame, "actual_reb", list(candidates), model_name="Direct REB",
+            date_column="game_date", allow_missing_features=True,
+        )
+        per_quantile = {q: list(selected.get(q, [])) for q in QUANTILES}
+        for q, names in per_quantile.items():
+            if not names or len(names) != len(set(names)) or not set(names) <= set(candidates):
+                raise BenchmarkError(f"Invalid selected features for quantile {q}")
+        selection_boundary = {
+            "inner_training_rows": len(inner_X), "outer_validation_rows": len(outer_X),
+            "inner_training_end": str(pd.to_datetime(inner_dates).max().date()),
+            "outer_validation_start": str(pd.to_datetime(fit_dates.iloc[outer_X.index]).min().date()),
+        }
+    selected_union = sorted({name for names in per_quantile.values() for name in names})
+    matrix = matrix.loc[:, selected_union]
+    final_config = copy.deepcopy(prepared["model_config"])
+    tuning_evidence: dict[str, Any] = {
+        "requested": tuning_requested, "effective": False, "objective": None,
+        "shared_parameters": False, "requested_trials": None, "effective_trials": None, "actual_trials": 0,
+        "complete_trials": 0, "pruned_trials": 0, "best_trial": None,
+        "best_objective_value": None, "winning_coverage_diagnostic": None,
+        "best_params": None, "trials": [], "final_effective_config": final_config.to_dict(),
+    }
+    if tuning_requested:
+        from src.models.hyperparameter_tuner import QuantileHyperparameterTuner
+
+        budget = prepared["info"]["tuning"]["effective_trials"]
+        logger.info("Starting direct REB pinball tuning: %s shared trials across five quantile heads", budget)
+        tuner = QuantileHyperparameterTuner(
+            n_trials=budget, per_quantile=False, objective="pinball",
+            val_fraction=prepared["model_config"].val_fraction,
+            random_state=prepared["model_config"].random_state, storage=None, timeout=None,
+        )
+        final_config = tuner.tune(
+            matrix, fit_target, quantiles=QUANTILES,
+            feature_names=cast(Any, per_quantile), dates=fit_dates,
+        )
+        if tuner.study is None or tuner.result is None:
+            raise BenchmarkError("Tuning completed without study evidence")
+        trials = [{"number": trial.number, "state": trial.state.name,
+                   "value": float(trial.value) if trial.value is not None else None,
+                   "params": trial.params} for trial in tuner.study.trials]
+        tuning_evidence = {
+            "requested": True, "effective": True, "objective": "pinball",
+            "shared_parameters": True,
+            "requested_trials": prepared["info"]["tuning"].get("requested_trials"),
+            "effective_trials": budget, "actual_trials": len(trials),
+            "complete_trials": sum(item["state"] == "COMPLETE" for item in trials),
+            "pruned_trials": sum(item["state"] == "PRUNED" for item in trials),
+            "best_trial": tuner.study.best_trial.number,
+            "best_objective_value": float(tuner.study.best_value),
+            "winning_coverage_diagnostic": float(tuner.result.best_calibration_gap),
+            "best_params": tuner.result.best_params, "trials": trials,
+            "final_effective_config": final_config.to_dict(),
+        }
+        logger.info("Direct REB pinball tuning complete; fitting final suite with winning shared parameters")
+    suite = QuantileModelSuite(final_config)
     fit_metrics = suite.train(
-        fit.loc[:, features], fit_target, per_quantile,
-        dates=fit["game_date"].reset_index(drop=True),
+        matrix, fit_target, per_quantile, dates=fit_dates,
     )
     suite.calibration_offsets = {q: 0.0 for q in QUANTILES}
     cal_target = cast(pd.Series, pd.to_numeric(calibration["actual_reb"], errors="coerce"))
@@ -218,7 +341,7 @@ def fit_direct_model(prepared: dict, train: pd.DataFrame, calibration: pd.DataFr
     cal = calibration.loc[cal_mask].reset_index(drop=True)
     if cal.empty:
         raise BenchmarkError("Direct REB calibration scoring cohort is empty")
-    cal_preds = _prediction_frame(suite, cal, features)
+    cal_preds = _prediction_frame(suite, cal, suite.all_feature_names)
     score_frame = pd.DataFrame({"actual": cal["actual_reb"].to_numpy()})
     for q, qcol in zip(QUANTILES, QCOLS, strict=True):
         score_frame[f"pred_q{int(q * 100)}"] = cal_preds[qcol].to_numpy()
@@ -230,6 +353,19 @@ def fit_direct_model(prepared: dict, train: pd.DataFrame, calibration: pd.DataFr
             "rule": "finite nonnegative actual_reb and actual_minutes >= 10",
         },
         "effective_model_config": suite.config.to_dict(),
+        "tuning": tuning_evidence,
+        "feature_selection": {
+            "requested": reselect, "effective": reselect,
+            "policy": ("selector per-quantile lists from inner-training partition" if reselect else
+                       "sorted union of parent minutes and REB-rate selected features across all quantiles"),
+            "candidate_pool": list(candidates), "candidate_count": len(candidates),
+            "selected_per_quantile": {str(q): per_quantile[q] for q in QUANTILES},
+            "selected_union": suite.all_feature_names, "selected_union_count": len(suite.all_feature_names),
+            "selected_union_identity": _sha256_json(suite.all_feature_names),
+            "selector": ({"implementation": "ImprovedFeatureSelector", "n_splits": 3,
+                          "tolerance": prepared["feature_tolerance"]} if reselect else None),
+            "selection_boundary": selection_boundary,
+        },
         "calibration_offsets_forced_zero": {str(q): suite.calibration_offsets[q] for q in QUANTILES},
     }
     return suite, receipt
@@ -340,7 +476,9 @@ def evaluate_direct(prepared: dict, suite, shared) -> tuple[dict, dict[str, pd.D
     feature_keys = cast(pd.DataFrame, features[KEYS]).sort_values(KEYS).reset_index(drop=True)
     if not saved_keys.equals(feature_keys):
         raise BenchmarkError("Direct benchmark eligibility differs from complete control reference; no intersection accepted")
-    native = _prediction_frame(suite, features, prepared["features"])
+    prediction_features = (suite.all_feature_names if prepared.get("info", {}).get("feature_selection", {}).get("effective")
+                           else prepared["features"])
+    native = _prediction_frame(suite, features, prediction_features)
     sampler = MonteCarloPredictor(None, n_samples=prepared["config"].n_samples, random_state=prepared["config"].seed)
     rows, sample_map = [], {}
     for index, identity in features.iterrows():

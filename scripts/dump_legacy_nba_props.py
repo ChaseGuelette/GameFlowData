@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--pg-dump", type=Path, help="explicit pg_dump executable")
     parser.add_argument("--force", action="store_true", help="replace existing dump/list/manifest files")
+    parser.add_argument("--skip-archive", action="store_true", help="dump only raw_player_props_combined")
     return parser
 
 
@@ -58,10 +59,14 @@ def tool_version(executable: Path) -> str:
     return result.stdout.strip()
 
 
+def selected_tables(args: argparse.Namespace) -> tuple[str, ...]:
+    return TABLES[:1] if args.skip_archive else TABLES
+
+
 def safe_plan(args: argparse.Namespace, pg_dump: Path, pg_restore: Path) -> dict[str, Any]:
     return {
         "mode": "execute" if args.execute else "preflight" if args.preflight else "dry-run",
-        "tables": list(TABLES),
+        "tables": list(selected_tables(args)),
         "format": "PostgreSQL custom",
         "output_directory": str(args.output_dir.expanduser().resolve()),
         "pg_dump": str(pg_dump),
@@ -131,7 +136,7 @@ def manifest_path(output_dir: Path) -> Path:
 
 def ensure_outputs_available(args: argparse.Namespace) -> None:
     paths = [manifest_path(args.output_dir)]
-    for table in TABLES:
+    for table in selected_tables(args):
         paths.extend((dump_path(args.output_dir, table), list_path(args.output_dir, table)))
     existing = [path for path in paths if path.exists()]
     if existing and not args.force:
@@ -149,7 +154,7 @@ def existing_disk_probe(path: Path) -> Path:
     return probe
 
 
-def remote_table_metadata(database_url: str) -> dict[str, dict[str, Any]]:
+def remote_table_metadata(database_url: str, tables: tuple[str, ...]) -> dict[str, dict[str, Any]]:
     import psycopg2
 
     result: dict[str, dict[str, Any]] = {}
@@ -158,7 +163,7 @@ def remote_table_metadata(database_url: str) -> dict[str, dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute("SET LOCAL statement_timeout = '60s'")
             cur.execute("SET LOCAL lock_timeout = '5s'")
-            for table in TABLES:
+            for table in tables:
                 cur.execute(
                     """
                     SELECT pg_relation_size(%s::regclass),
@@ -247,7 +252,8 @@ def main() -> int:
     if parts["port"] == "6543":
         raise RuntimeError("pg_dump requires a direct/session connection; DATABASE_URL uses transaction-pooler port 6543")
     ensure_outputs_available(args)
-    metadata = remote_table_metadata(database_url)
+    tables = selected_tables(args)
+    metadata = remote_table_metadata(database_url, tables)
     disk_probe = existing_disk_probe(args.output_dir)
     free_bytes = shutil.disk_usage(disk_probe).free
     total_remote_bytes = sum(item["total_bytes"] for item in metadata.values())
@@ -271,7 +277,7 @@ def main() -> int:
         "connection_metadata": {"database": parts["dbname"], "port": parts["port"], "sslmode": parts.get("sslmode")},
         "remote_mutation": False,
     }
-    for table in TABLES:
+    for table in tables:
         manifest["tables"].append(run_dump(pg_dump, pg_restore, env, args.output_dir, table, metadata[table]))
         manifest["updated_at"] = datetime.now(UTC).isoformat()
         manifest_path(args.output_dir).write_text(

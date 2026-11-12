@@ -96,6 +96,10 @@ class PropQuote:
     player_id: int | None = None
     team_id: int | None = None
     source_staging_id: int | None = None
+    capture_id: int | None = None
+    capture_received_at: datetime | None = None
+    capture_market_last_update: datetime | None = None
+    capture_bookmaker_last_update: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +124,10 @@ class FeatureLine:
     bookmaker_last_update: datetime | None
     observed_at: datetime
     source_staging_id: int | None = None
+    capture_id: int | None = None
+    capture_received_at: datetime | None = None
+    capture_market_last_update: datetime | None = None
+    capture_bookmaker_last_update: datetime | None = None
 
 
 def parse_utc(value: Any, *, field: str, required: bool = True) -> datetime | None:
@@ -279,6 +287,10 @@ def quote_from_record(row: Mapping[str, Any]) -> PropQuote:
         "player_id": int(row["player_id"]) if row.get("player_id") is not None else None,
         "team_id": int(row["team_id"]) if row.get("team_id") is not None else None,
         "source_staging_id": int(row["staging_id"]) if row.get("staging_id") is not None else None,
+        "capture_id": int(row["capture_id"]) if row.get("capture_id") is not None else None,
+        "capture_received_at": parse_utc(row.get("capture_received_at"), field="capture_received_at", required=False),
+        "capture_market_last_update": parse_utc(row.get("capture_market_last_update"), field="capture_market_last_update", required=False),
+        "capture_bookmaker_last_update": parse_utc(row.get("capture_bookmaker_last_update"), field="capture_bookmaker_last_update", required=False),
     }
     return PropQuote(**kwargs)  # type: ignore[arg-type]
 
@@ -398,8 +410,22 @@ def _eligible(quote: PropQuote, decision: datetime) -> bool:
         quote.observed_at,
         quote.market_last_update,
         quote.bookmaker_last_update,
+        quote.capture_received_at,
+        quote.capture_market_last_update,
+        quote.capture_bookmaker_last_update,
     )
+    if quote.capture_id is not None and (quote.capture_received_at is None or quote.source_kind != "live"
+                                       or quote.capture_received_at < quote.source_snapshot_time):
+        return False
     return all(clock is None or (clock <= decision and clock < quote.commence_time) for clock in clocks)
+
+
+def _selection_clock(quote: PropQuote) -> datetime:
+    return quote.capture_received_at or quote.source_snapshot_time
+
+
+def _selection_market_clock(quote: PropQuote) -> datetime:
+    return (quote.capture_market_last_update if quote.capture_id is not None else quote.market_last_update) or EPOCH_UTC
 
 
 def select_t60_features(quotes: Iterable[PropQuote]) -> tuple[list[FeatureLine], list[str]]:
@@ -421,7 +447,7 @@ def select_t60_features(quotes: Iterable[PropQuote]) -> tuple[list[FeatureLine],
             quote.player_id,
             quote.market_key,
             quote.bookmaker,
-            quote.source_snapshot_time,
+            _selection_clock(quote),
         )
         by_snapshot[key].append(quote)
 
@@ -441,9 +467,9 @@ def select_t60_features(quotes: Iterable[PropQuote]) -> tuple[list[FeatureLine],
     selected: list[FeatureLine] = []
     for (game_id, player_id, market_key), group in sorted(candidates.items()):
         def rank(item: PropQuote) -> tuple[Any, ...]:
-            market_clock = item.market_last_update or EPOCH_UTC
+            market_clock = _selection_market_clock(item)
             staging = item.source_staging_id if item.source_staging_id is not None else 2**63 - 1
-            return (-item.source_snapshot_time.timestamp(), -market_clock.timestamp(), BOOK_PRIORITY[item.bookmaker], staging)
+            return (-_selection_clock(item).timestamp(), -market_clock.timestamp(), BOOK_PRIORITY[item.bookmaker], staging)
 
         winner = min(group, key=rank)
         game_date = winner.commence_time.astimezone(ZoneInfo(ET_TZ)).date()
@@ -471,6 +497,10 @@ def select_t60_features(quotes: Iterable[PropQuote]) -> tuple[list[FeatureLine],
                 bookmaker_last_update=winner.bookmaker_last_update,
                 observed_at=winner.observed_at,
                 source_staging_id=winner.source_staging_id,
+                capture_id=winner.capture_id,
+                capture_received_at=winner.capture_received_at,
+                capture_market_last_update=winner.capture_market_last_update,
+                capture_bookmaker_last_update=winner.capture_bookmaker_last_update,
             )
         )
     return selected, conflicts
@@ -522,6 +552,20 @@ def upsert_feature_lines(conn: Any, features: Sequence[FeatureLine], *, task_id:
         "market_last_update", "bookmaker_last_update", "observed_at", "decision_time",
         "source_kind", "requested_snapshot_time", "team_id", "api_player_name",
     )
+    capture_columns = ("capture_id", "capture_received_at", "capture_market_last_update", "capture_bookmaker_last_update")
+    # Historical-only callers stay compatible before the additive migration.
+    capture_mode = any(feature.capture_id is not None for feature in features)
+    if not capture_mode:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.nba_props_live_captures')")
+            capture_mode = bool(cur.fetchone()[0])
+    if capture_mode:
+        columns += capture_columns
+        compare_columns += capture_columns
+    incoming_clock = "COALESCE(EXCLUDED.capture_received_at, EXCLUDED.source_snapshot_time)" if capture_mode else "EXCLUDED.source_snapshot_time"
+    current_clock = "COALESCE(nba_player_prop_feature_lines.capture_received_at, nba_player_prop_feature_lines.source_snapshot_time)" if capture_mode else "nba_player_prop_feature_lines.source_snapshot_time"
+    incoming_market = "CASE WHEN EXCLUDED.capture_id IS NOT NULL THEN EXCLUDED.capture_market_last_update ELSE EXCLUDED.market_last_update END" if capture_mode else "EXCLUDED.market_last_update"
+    current_market = "CASE WHEN nba_player_prop_feature_lines.capture_id IS NOT NULL THEN nba_player_prop_feature_lines.capture_market_last_update ELSE nba_player_prop_feature_lines.market_last_update END" if capture_mode else "nba_player_prop_feature_lines.market_last_update"
     accepted: list[FeatureLine] = []
     with conn.cursor() as cur:
         for feature in features:
@@ -540,11 +584,13 @@ def upsert_feature_lines(conn: Any, features: Sequence[FeatureLine], *, task_id:
             if current["api_game_id"] != feature.api_game_id or current["commence_time"] != feature.commence_time:
                 raise SnapshotContractError("feature upsert conflicts with canonical event/commence identity")
             current_rank = (
-                current["source_snapshot_time"], current["market_last_update"] or EPOCH_UTC,
+                current.get("capture_received_at") or current["source_snapshot_time"],
+                (current.get("capture_market_last_update") if current.get("capture_id") is not None else current["market_last_update"]) or EPOCH_UTC,
                 -BOOK_PRIORITY.get(str(current["bookmaker"]), 999),
             )
             incoming_rank = (
-                feature.source_snapshot_time, feature.market_last_update or EPOCH_UTC,
+                feature.capture_received_at or feature.source_snapshot_time,
+                (feature.capture_market_last_update if feature.capture_id is not None else feature.market_last_update) or EPOCH_UTC,
                 -BOOK_PRIORITY[feature.bookmaker],
             )
             if incoming_rank < current_rank:
@@ -574,12 +620,12 @@ def upsert_feature_lines(conn: Any, features: Sequence[FeatureLine], *, task_id:
             WHERE nba_player_prop_feature_lines.api_game_id = EXCLUDED.api_game_id
               AND nba_player_prop_feature_lines.commence_time = EXCLUDED.commence_time
               AND (
-                EXCLUDED.source_snapshot_time,
-                COALESCE(EXCLUDED.market_last_update, '-infinity'::timestamptz),
+                {incoming_clock},
+                COALESCE({incoming_market}, '-infinity'::timestamptz),
                 CASE EXCLUDED.bookmaker WHEN 'draftkings' THEN 0 ELSE -1 END
             ) > (
-                nba_player_prop_feature_lines.source_snapshot_time,
-                COALESCE(nba_player_prop_feature_lines.market_last_update, '-infinity'::timestamptz),
+                {current_clock},
+                COALESCE({current_market}, '-infinity'::timestamptz),
                 CASE nba_player_prop_feature_lines.bookmaker WHEN 'draftkings' THEN 0 ELSE -1 END
             )""",
             values,

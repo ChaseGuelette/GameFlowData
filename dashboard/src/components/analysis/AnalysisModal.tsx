@@ -233,8 +233,27 @@ export function AnalysisModal({ prediction, onClose, onTakeBet }: AnalysisModalP
         return
       }
 
-      // Pick the right props table for the sport
-      const propsTable = effectiveSport === 'mlb' ? 'mlb_raw_player_props' : 'nba_player_props_inference'
+      if (effectiveSport !== 'mlb') {
+        // Return paired current membership, not independently newest sides.
+        // snapshot_time from this RPC is real serving confirmation. Unchanged
+        // states must not expire relative to another book's economic move.
+        const { data, error } = await supabase.rpc('get_sportsbook_lines_by_games', {
+          p_game_ids: [prediction.game_id],
+        })
+        if (error) console.error('Current NBA lines unavailable:', error)
+        setBookmakerLines((data || [])
+          .filter((r: { player_id: number; market_key: string; bookmaker: string; over_odds: number | null; under_odds: number | null }) =>
+            r.player_id === prediction.player_id && r.market_key === marketKey &&
+            !DFS_BOOKMAKERS.some(book => book === r.bookmaker) && r.bookmaker !== 'fliff' &&
+            r.over_odds != null && r.under_odds != null)
+          .map((r: { bookmaker: string; line: number | string; over_odds: number; under_odds: number }) => ({
+            bookmaker: r.bookmaker, line: Number(r.line), over_odds: r.over_odds, under_odds: r.under_odds,
+          })))
+        setLinesLoading(false)
+        return
+      }
+
+      const propsTable = 'mlb_raw_player_props'
 
       // Get bookmaker lines for this player/stat/game
       let query = supabase

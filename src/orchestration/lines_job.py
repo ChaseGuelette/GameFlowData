@@ -152,6 +152,9 @@ def run_step_group(steps: list[tuple[str, str]], dry_run: bool = False) -> bool:
             # Prioritize the exact new capture, without resetting or consuming
             # the separate durable historical backlog checkpoint.
             lower, upper = live_bounds
+            if lower == upper:
+                logger.info("No new immutable quotes; skipping bounded linker, retaining materializer step")
+                continue
             command = command.replace("--resume", f"--cursor {lower} --high-water {upper}")
             logger.info("Linking current capture (%s, %s]; historical checkpoint unchanged", lower, upper)
         if not run_command(command, description, dry_run):
@@ -249,7 +252,12 @@ def main():
         default=_env_int("NBA_LINKER_MAX_BATCHES", 20),
         help="Maximum production props-linker batches per invocation (1..100; default/env: 20)",
     )
+    parser.add_argument("--change-only", action="store_true",
+                        default=os.getenv("NBA_PROPS_CHANGE_ONLY_ENABLED", "false").lower() in {"1", "true", "yes"},
+                        help="Explicit opt-in after capture migration and consumer rollout (default off)")
     args = parser.parse_args()
+    if args.change_only and not args.live:
+        parser.error("--change-only requires --live")
     if not 1 <= args.linker_batch_size <= 5000:
         parser.error("--linker-batch-size must be between 1 and 5000")
     if not 1 <= args.linker_max_batches <= 100:
@@ -278,7 +286,8 @@ def main():
 
     if args.live:
         group_a.append((
-            f"{exe} src/scrapers/daily_player_props_scraper.py --live --combos --target-table nba_player_props_inference",
+            f"{exe} src/scrapers/daily_player_props_scraper.py --live --live-product-scope "
+            f"--target-table nba_player_props_inference{' --change-only' if args.change_only else ''}",
             "Scraping Player Props (Live)",
         ))
     else:

@@ -1,6 +1,8 @@
-# NBA inference quote-volume reduction — proposed
+# NBA inference quote-volume reduction — local implementation delivered
 
-**Current checkpoint — review/scoping completed November 12, 2026:** Chase requested unnecessary-market removal, change-only inference writes and thirty-minute line captures. [The implementation scope](../../.hermes/plans/nba-quote-change-only-capture-2026-11-12.md) is proposed, not implemented. Consumer review found that the NBA Combos tab is active: retain PRA/PR/PA/RA unless Chase explicitly chooses to remove that product coverage. Coordinate existing retention work rather than duplicate it. No live DB/provider review, source edits, migration or deployment occurred in this review.
+**Current checkpoint — implementation delivered November 12, 2026:** Chase approved [the implementation scope](../../.hermes/plans/nba-quote-change-only-capture-2026-11-12.md). Source is integrated in main, uncommitted: eight markets preserving active combos; no blocks/steals/double-double/triple-double or DFS capture; coordinated thirty-minute slots; change-only quote states with immutable capture receipts; current dashboard/backend/RPC, paper and T-60 readers updated. Edge refresh no longer restores withdrawn pregame offers, including an entirely empty quote result. Independent reviews, disposable-Postgres writes/permissions/cutoff checks, controlled public-path probes, Ruff/compile and integrated frontend production build passed. Existing suites remain 40 passed/4 unchanged baseline failures, plus 4 passing lines/resilience checks. Production migration/deployment/activation and real-slate volume measurements remain separate gates; no paid scrape, production mutation, deletion or model job occurred.
+
+Suppression defaults off until schema/consumer rollout is verified. Explicit activation: `NBA_PROPS_CHANGE_ONLY_ENABLED=true` (or wrapper `--change-only`). Migration: `database/migrations/20261112_nba_change_only_capture.sql`. Once receipts exist, disabling that flag alone is not a complete rollback because current readers still honor receipt membership. Coordinate receipt retention and rollback; do not delete evidence or duplicate the existing retention lane.
 
 ## Reviewed direction, superseding the initial sequence below
 
@@ -13,7 +15,7 @@
 
 ## Owner goal
 
-Reduce new rows entering `nba_player_props_inference`; do not merely raise processing caps or prune old data. No source changes, paid requests, deletion, migration, schedule change or deployment is authorized by this proposal.
+Reduce new rows entering `nba_player_props_inference`; do not merely raise processing caps or prune old data. Code changes were approved and delivered; paid requests, production migration/deployment, deletion and existing-backlog recovery remain separately gated.
 
 ## Observed causes
 
@@ -40,4 +42,4 @@ The recurring materializer loads all retained qualifying pre-T-60 snapshots, def
 
 ## Acceptance
 
-Compare actual inserted rows per completed capture before/after, not parser input counts (`parse_and_store` currently returns `len(rows)` even with conflict-ignore). Verify required-market and paired-quote coverage, T-60 output, inference/recommendation/paper provenance and no unexpected API-credit increase. Report a measured row reduction on comparable slates; fewer configured market types do not imply a known percentage reduction in rows.
+Compare actual inserted rows per completed capture before/after, not parser input counts (the delivered code now reports actual committed inserts). Verify required-market and paired-quote coverage, T-60 output, inference/recommendation/paper provenance and no unexpected API-credit increase. Report a measured row reduction on comparable slates; fewer configured market types do not imply a known percentage reduction in rows.

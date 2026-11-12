@@ -98,6 +98,13 @@ def valid_snapshot(row):
         if len(quote["rows"]) != 2 or set(sides) != {"Over", "Under"}:
             return False
         over, under = sides["Over"], sides["Under"]
+        capture = quote.get("capture")
+        if capture is not None:
+            if not capture.get("capture_id") or not (_time(over["source_snapshot_time"]) <= _time(capture["confirmed_at"]) <= decision):
+                return False
+            for key in ("market_last_update", "bookmaker_last_update"):
+                if capture.get(key) and _time(capture[key]) > _time(capture["confirmed_at"]):
+                    return False
         for key in ("api_game_id", "game_id", "player_id", "bookmaker", "market_key", "line", "source_snapshot_time", "commence_time"):
             if over[key] != under[key] or over[key] is None:
                 return False
@@ -128,6 +135,42 @@ def eligible_at_boundary(conn, row):
     """
     if not valid_snapshot(row):
         return False
+    from src.processing.nba_quote_capture import has_capture_surface, pair_in_capture
+
+    quotes = row["quote_snapshot"]["rows"]
+    migrated = has_capture_surface(conn)
+    latest = None
+    if migrated:
+        # Same event lock as the writer; hold it through the placement transaction.
+        conn.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                     {"key": "nba-live:" + quotes[0]["api_game_id"]})
+        latest = conn.execute(text("""SELECT capture_id, received_at, groups, commence_time
+            FROM nba_props_live_captures WHERE api_game_id=:api_game_id
+            ORDER BY received_at DESC, capture_id DESC LIMIT 1"""), quotes[0]).fetchone()
+        if latest is not None:
+            if not pair_in_capture(latest[2], quotes):
+                return False
+            confirmed = _time(latest[1])
+            if not (datetime.now(UTC).timestamp() - 48 * 3600 <= confirmed.timestamp() <= datetime.now(UTC).timestamp()):
+                return False
+            capture = row["quote_snapshot"].get("capture")
+            if not capture:
+                return False
+            evidence = conn.execute(text("""SELECT groups FROM nba_props_live_captures
+                WHERE capture_id=:capture_id AND api_game_id=:api_game_id
+                  AND received_at=CAST(:confirmed_at AS timestamptz)
+                  AND received_at<=CAST(:decision_time AS timestamptz)"""),
+                {**capture, "api_game_id": quotes[0]["api_game_id"],
+                 "decision_time": row["quote_snapshot"]["decision_time"]}).fetchone()
+            if evidence is None or not pair_in_capture(evidence[0], quotes):
+                return False
+            group = next(g for g in evidence[0] if g["key"] == [quotes[0]["api_player_name"], quotes[0]["bookmaker"], quotes[0]["market_key"]])
+            for field in ("market_last_update", "bookmaker_last_update"):
+                stored, supplied = group.get(field), capture.get(field)
+                if (stored is None) != (supplied is None) or (stored is not None and _time(stored) != _time(supplied)):
+                    return False
+        elif row["quote_snapshot"].get("capture"):
+            return False
     schedule = conn.execute(text("""
         SELECT commence_time_utc FROM nba_game_schedule
         WHERE game_id = :game_id AND game_date = :game_date
@@ -146,21 +189,22 @@ def eligible_at_boundary(conn, row):
     """), row).fetchone()
     if schedule is None:
         return False
-    quotes = row["quote_snapshot"]["rows"]
     if any(_time(q["commence_time"]) != schedule[0] for q in quotes):
         return False
     actual = conn.execute(text("""
         SELECT to_jsonb(q) AS quote FROM nba_player_props_inference q
         WHERE staging_id = ANY(:ids)
-          AND observed_at >= clock_timestamp() - interval '48 hours'
+          AND (:confirmed OR observed_at >= clock_timestamp() - interval '48 hours')
           AND observed_at <= clock_timestamp() AND source_snapshot_time <= clock_timestamp()
           AND source_snapshot_time < commence_time AND observed_at < commence_time
           AND (market_last_update IS NULL OR market_last_update <= clock_timestamp())
           AND (bookmaker_last_update IS NULL OR bookmaker_last_update <= clock_timestamp())
         ORDER BY staging_id FOR SHARE
-    """), {"ids": [q["staging_id"] for q in quotes]}).fetchall()
+    """), {"ids": [q["staging_id"] for q in quotes], "confirmed": latest is not None}).fetchall()
     if sorted((r[0] for r in actual), key=lambda q: q["staging_id"]) != sorted(quotes, key=lambda q: q["staging_id"]):
         return False
+    if latest is not None:
+        return _time(latest[3]) == schedule[0]
     # An updated quote for the selected book/line must first flow through edge
     # calculation. Do not relabel it as the original prediction's evidence.
     newer = conn.execute(text("""

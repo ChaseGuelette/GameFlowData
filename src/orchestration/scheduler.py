@@ -19,20 +19,20 @@ Schedule (ET):
     9:35 AM  - mlb_lineup_scraper_job
     9:50 AM  - mlb_inference_job (early MLB pass)
 
-    10:00 AM - lines_job --live --props-only (pre-NBA inference)
+    10:00 AM - props capture on the regular half-hour grid (pre-NBA inference)
     10:15 AM - inference_job (early NBA pass)
 
-    9 AM - 11 PM ET every 5 min:
-        :00,:05,...,:55  - lines_job --live --props-only  (silent)
+    9 AM - 11 PM ET capture / stored-edge refresh:
+        :00,:30  - lines_job --live --props-only (full jobs occupy noon/4pm)
         :02,:07,...,:57  - edge_refresh_job               (silent)
 
-    12:01 PM - lines_job --live (full)
+    12:00 PM - lines_job --live (full; props fallback when disabled)
     12:05 PM - mlb_lineup_scraper_job (before noon inference — catches early-posting lineups)
     12:15 PM - inference_job (full MC)
     12:15 PM - mlb_inference_job (noon MLB pass)
     12:45 PM - mlb_lineup_scraper_job (catches late-posting afternoon lineups)
 
-    4:01 PM  - lines_job --live --parallel (full)
+    4:00 PM  - lines_job --live --parallel (full; props fallback when disabled)
     4:15 PM  - inference_job (full MC)
 
     "silent" = Discord alerts only on failure.
@@ -940,13 +940,7 @@ def main():
 
     # --- Early window: 10 AM NBA inference ---
 
-    # 10:00 AM ET - Early props scrape (feed 10:15 AM NBA inference)
-    scheduler.add_job(
-        run_lines_props_only,
-        CronTrigger(hour=10, minute=0, timezone=ET),
-        id="lines_props_10am",
-        name="Lines Props Only (10 AM ET, pre-inference)",
-    )
+    # The regular half-hour grid supplies 10:00; no duplicate early capture.
 
     # 10:15 AM ET - Early NBA inference
     scheduler.add_job(
@@ -968,17 +962,12 @@ def main():
 
     nba_full_lines_enabled = env_flag("NBA_FULL_LINES_ENABLED", default=True)
 
-    # 12:01 PM ET - Full lines scrape (live). Offset from props_every_5 to
-    # avoid intentional lines_job.py collisions at exact :00 minutes.
-    if nba_full_lines_enabled:
-        scheduler.add_job(
-            run_lines_full,
-            CronTrigger(hour=12, minute=1, timezone=ET),
-            id="lines_noon_full",
-            name="Lines Full (12:01 PM ET)",
-        )
-    else:
-        logger.info("NBA full lines disabled by NBA_FULL_LINES_ENABLED=false")
+    scheduler.add_job(
+        run_lines_full if nba_full_lines_enabled else run_lines_props_only_silent,
+        CronTrigger(hour=12, minute=0, timezone=ET),
+        id="lines_noon_full",
+        name="Lines Noon Slot (12 PM ET; full or props fallback)",
+    )
 
     # 12:15 PM ET - Full inference
     scheduler.add_job(
@@ -988,13 +977,19 @@ def main():
         name="Inference (12:15 PM ET)",
     )
 
-    # --- Every 5 min props-only + edge refresh: 9 AM - 11 PM ET ---
+    # --- Half-hour props grid; edge refresh remains every five minutes ---
 
     scheduler.add_job(
         run_lines_props_only_silent,
-        CronTrigger(hour='9-23', minute='*/5', timezone=ET),
-        id="props_every_5",
-        name="Props Only (every 5 min, 9AM-11PM ET)",
+        CronTrigger(hour='9-23', minute=30, timezone=ET),
+        id="props_half_hour",
+        name="Props Only (:30, 9AM-11PM ET)",
+    )
+    scheduler.add_job(
+        run_lines_props_only_silent,
+        CronTrigger(hour='9-11,13-15,17-23', minute=0, timezone=ET),
+        id="props_on_hour",
+        name="Props Only (:00 excluding full slots, 9AM-11PM ET)",
     )
 
     scheduler.add_job(
@@ -1006,18 +1001,12 @@ def main():
 
     # --- Second window: 4 PM full scrape + inference ---
 
-    # 4:01 PM ET - Full lines scrape (live, parallel). Offset from
-    # props_every_5 to avoid intentional lines_job.py collisions at exact :00
-    # minutes.
-    if nba_full_lines_enabled:
-        scheduler.add_job(
-            run_lines_full_parallel,
-            CronTrigger(hour=16, minute=1, timezone=ET),
-            id="lines_4pm_full",
-            name="Lines Full Parallel (4:01 PM ET)",
-        )
-    else:
-        logger.info("NBA full lines disabled by NBA_FULL_LINES_ENABLED=false")
+    scheduler.add_job(
+        run_lines_full_parallel if nba_full_lines_enabled else run_lines_props_only_silent,
+        CronTrigger(hour=16, minute=0, timezone=ET),
+        id="lines_4pm_full",
+        name="Lines 4 PM Slot (full parallel or props fallback)",
+    )
 
     # 4:15 PM ET - Full inference (skip bets — already placed at noon)
     scheduler.add_job(

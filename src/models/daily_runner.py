@@ -838,8 +838,8 @@ class DailyPredictionRunner:
         """Fetch the most recent prop lines, then select the sharpest
         (lowest-vig) line per player/game/market for edge calculation.
 
-        Uses ROW_NUMBER over snapshot_time to get only the latest snapshot
-        per player/game/market/bookmaker/line, consistent with the backtest harness.
+        Receipt membership is authoritative after migration; an empty receipt
+        never falls back to withdrawn history. Pair rows retain original clocks.
         """
         game_ids = [g["game_id"] for g in games]
 
@@ -854,71 +854,11 @@ class DailyPredictionRunner:
         all_game_ids = list(set(game_ids_10digit + game_ids_8digit))
 
         start_time = time.perf_counter()
-        query = text("""
-            WITH eligible AS (
-                SELECT
-                    player_id,
-                    game_id,
-                    bookmaker,
-                    market_key,
-                    line,
-                    outcome_label,
-                    odds_american,
-                    source_snapshot_time AS quote_time,
-                    to_jsonb(q) AS quote_row
-                FROM nba_player_props_inference q
-                WHERE game_id IN :game_ids
-                  AND market_key IN :markets
-                  AND player_id IS NOT NULL
-                  AND observed_at >= NOW() - interval '48 hours'
-                  AND observed_at <= NOW()
-                  AND source_snapshot_time <= NOW()
-                  AND observed_at < commence_time
-                  AND (market_last_update IS NULL OR market_last_update < commence_time)
-                  AND (bookmaker_last_update IS NULL OR bookmaker_last_update < commence_time)
-            ), paired AS (
-                SELECT
-                    player_id,
-                    game_id,
-                    bookmaker,
-                    market_key,
-                    line,
-                    quote_time,
-                    jsonb_build_object('decision_time', NOW(),
-                        'rows', jsonb_agg(quote_row ORDER BY quote_row->>'outcome_label')) AS quote_snapshot,
-                    MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) AS over_odds,
-                    MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) AS under_odds
-                FROM eligible
-                GROUP BY player_id, game_id, bookmaker, market_key, line, quote_time
-                HAVING COUNT(*) = 2 AND COUNT(DISTINCT outcome_label) = 2
-                   AND COUNT(DISTINCT quote_row->>'api_game_id') = 1
-                   AND COUNT(DISTINCT quote_row->>'commence_time') = 1
-                   AND MAX(CASE WHEN outcome_label = 'Over' THEN odds_american END) IS NOT NULL
-                   AND MAX(CASE WHEN outcome_label = 'Under' THEN odds_american END) IS NOT NULL
-            ), ranked_lines AS (
-                SELECT *, ROW_NUMBER() OVER (
-                    PARTITION BY player_id, game_id, market_key, bookmaker, line
-                    ORDER BY quote_time DESC
-                ) AS pair_rn
-                FROM paired
-            )
-            SELECT
-                player_id,
-                LPAD(game_id, 10, '0') as game_id,
-                bookmaker,
-                market_key,
-                line,
-                over_odds,
-                under_odds,
-                quote_snapshot
-            FROM ranked_lines
-            WHERE pair_rn = 1
-        """).bindparams(
-            bindparam("game_ids", expanding=True),
-            bindparam("markets", expanding=True),
-        )
-
+        from src.processing.nba_quote_capture import current_lines_sql, has_capture_surface
         with self.engine.connect() as conn:
+            query = text(current_lines_sql(capture_surface=has_capture_surface(conn))).bindparams(
+                bindparam("game_ids", expanding=True), bindparam("markets", expanding=True),
+            )
             all_lines = pd.read_sql(query, conn, params={"game_ids": all_game_ids, "markets": list(markets)})
 
         elapsed = time.perf_counter() - start_time

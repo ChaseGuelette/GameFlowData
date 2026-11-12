@@ -26,6 +26,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-outcome-games", type=int, default=200, help="Cap evaluation outcome games")
     parser.add_argument("--max-training-rows", type=int, default=100000,
                         help="Independent cap for each loaded train/cal population (1..150000)")
+    parser.add_argument("--tune", action="store_true",
+                        help="Opt in to fresh shared-parameter pinball tuning")
+    parser.add_argument("--tuning-trials", type=int, default=None,
+                        help="Shared Optuna trial budget (1..200; default 100 with --tune)")
+    parser.add_argument("--reselect-features", action="store_true",
+                        help="Opt in to per-quantile feature reselection on inner training rows")
     parser.add_argument("--dry-run", action="store_true",
                         help="Filesystem/config preflight only; no connection, model load, fit, or output")
     return parser
@@ -100,14 +106,20 @@ def execute(prepared: dict) -> Path:
         manifest["stage"] = stage
         _write_json(incomplete / "benchmark_manifest.json", manifest)
         suite, fit_receipt = fit_direct_model(prepared, train, calibration)
+        actual_features = suite.all_feature_names
+        feature_evidence = fit_receipt["feature_selection"]
         model_path = incomplete / info["model_filename"]
         suite.save(str(model_path))
         if any(value != 0.0 for value in suite.calibration_offsets.values()):
             raise BenchmarkError("Direct suite offsets were not cleared before save")
         _write_json(incomplete / "fit_calibration_scores.json", fit_receipt)
+        if fit_receipt["tuning"]["effective"]:
+            _write_json(incomplete / "tuning_results.json", fit_receipt["tuning"])
         _write_json(incomplete / "effective_config.json", {
-            "model": suite.config.to_dict(), "features": prepared["features"],
-            "feature_policy": "sorted union of parent minutes and REB-rate features across all quantiles",
+            "model": suite.config.to_dict(), "features": actual_features,
+            "features_per_quantile": feature_evidence["selected_per_quantile"],
+            "feature_policy": feature_evidence["policy"],
+            "tuning": fit_receipt["tuning"],
             "target": "actual_reb", "fit_rule": "actual_minutes >= 10; finite nonnegative actual_reb",
             "calibration_use": "evaluation_only", "sampler": {
                 "implementation": "MonteCarloPredictor._inverse_transform_sample", "n_samples": cfg.n_samples,
@@ -163,6 +175,9 @@ def execute(prepared: dict) -> Path:
             model_sha256=file_hash(model_path), canonical_input_identity=shared.identity,
             baseline_reproduced=True, source_artifact_unchanged=True, decision_grade=False,
             live_data_checked=True, model_deserialized=runtime.model_deserialized,
+            effective_model_config=suite.config.to_dict(),
+            feature_count=len(actual_features), feature_identity=feature_evidence["selected_union_identity"],
+            feature_selection=feature_evidence, tuning=fit_receipt["tuning"],
         )
         manifest["files"] = manifest_inventory(incomplete, exclude={"benchmark_manifest.json"})
         _write_json(incomplete / "benchmark_manifest.json", manifest)
@@ -190,7 +205,8 @@ def main(argv: list[str] | None = None) -> int:
             args.model_dir, args.sweep_dir, args.diagnostic_dir, args.output_dir, local=args.local,
             max_games=args.max_games, max_player_games=args.max_player_games,
             max_outcome_rows=args.max_outcome_rows, max_outcome_games=args.max_outcome_games,
-            max_training_rows=args.max_training_rows,
+            max_training_rows=args.max_training_rows, tune=args.tune,
+            tuning_trials=args.tuning_trials, reselect_features=args.reselect_features,
         )
     except (BenchmarkError, OSError, ValueError, KeyError) as exc:
         reason = str(exc) if isinstance(exc, BenchmarkError) else f"Preflight failed: {type(exc).__name__}"

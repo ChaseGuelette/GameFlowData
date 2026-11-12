@@ -2,8 +2,8 @@
 
 ## Kick off immediately
 
-- **You:** the first benchmark run is complete; do not repeat training. Rebounds-only sweep/analysis support is now approved and being implemented separately.
-- **This chat:** preserve the completed benchmark and implement the separate saved-window direct/control betting comparison; then continue error-guided improvements to the existing minutes/rate architecture.
+- **You:** the first benchmark run is complete; do not repeat fixed training. [Rebounds-only sweep/analysis commands](nba-direct-reb-sweep.md) are now implemented and verified. [Optional retune/reselection commands](nba-direct-reb-retune.md) are separate owner-run experiments.
+- **This chat:** preserve the completed benchmark and return to error-guided improvements to the existing minutes/rate architecture; review new owner-run results when available.
 - **Other chat:** no additional benchmark writer needed. Production and paper-policy work are separate.
 
 ## Completed owner run — November 12, 2026
@@ -12,7 +12,7 @@
 
 The training command below is retained as provenance, not a request to rerun against the occupied output directory. The separate sweep extension must not refit the model or overwrite these outputs.
 
-Chase subsequently approved an optional pinball retune and independent optional feature reselection. [The opt-in plan](../../.hermes/plans/nba-direct-reb-retune-2026-11-12.md) is in implementation: tuning defaults to100 shared trials when enabled; reselection uses the parent's62 allowed pregame candidates on an inner-training partition, preserving injury/game-line exclusions. The default remains fixed55features/no tuning. New variants require separate output directories; their commands are not ready until verification passes.
+The optional pinball retune and independent feature-reselection flag are integrated into main, uncommitted. [Verified owner commands](nba-direct-reb-retune.md) use 100 shared trials when tuning is enabled; reselection uses the parent's 62 allowed pregame candidates on an inner-training partition, preserving injury/game-line exclusions. Default behavior remains 55 fixed features/no tuning. Both exact command dry-runs, all four controlled modes, existing 25 tests, Ruff and Pyright passed. Full retuning remains owner-launched; use separate output directories to preserve the completed fixed benchmark.
 
 ### Exploratory paired-date uncertainty
 

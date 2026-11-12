@@ -86,6 +86,13 @@ Owner-launched dumps:
 python scripts/dump_legacy_nba_props.py --execute
 ```
 
+To preserve only `raw_player_props_combined` and deliberately skip the disposable archive table, include `--skip-archive` in both preflight and execution:
+
+```powershell
+python scripts/dump_legacy_nba_props.py --preflight --skip-archive
+python scripts/dump_legacy_nba_props.py --execute --skip-archive
+```
+
 Use `--force` only after independently deciding that existing dump, restore-list, and manifest files may be replaced. The helper creates separate custom-format dumps for:
 
 - `public.raw_player_props_combined`
