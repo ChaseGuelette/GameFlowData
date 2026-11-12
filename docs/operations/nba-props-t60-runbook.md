@@ -1,5 +1,7 @@
 # NBA compact T-60 prop lines runbook
 
+Current proposed ingestion-volume reduction: [NBA quote-volume scope](nba-inference-quote-volume-reduction-2026-11-12.md). This is a proposal, not authorization for cleanup, source changes or deployment; preserve the separately owned retention changes.
+
 ## Status and scope
 
 Implemented and integrated into the main checkout; remote migration committed and read back on November 5, 2026. The historical backfill has not been launched. These changes do **not** activate a production cutover: Railway/Vercel remain on deployed code until the owner publishes/deploys this slice. The original `src/scrapers/player_prop_scraper.py` and existing raw/archive tables are unchanged. Compact lines are numeric features, not executable paired odds history.

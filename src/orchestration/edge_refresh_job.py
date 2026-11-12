@@ -39,8 +39,8 @@ from sqlalchemy import create_engine, text  # noqa: E402
 
 from src.config.combo_config import MARKET_TO_STAT  # noqa: E402
 from src.models.black_litterman import BlackLittermanBlender, BLConfig  # noqa: E402
-from src.models.daily_runner import should_skip_recommendation  # noqa: E402
 from src.models.monte_carlo import derive_combo_samples  # noqa: E402
+from src.models.nba_paper_policy import NBA_PAPER_POLICY, apply_recommendation_policy  # noqa: E402
 from src.models.prediction_store import PredictionStore  # noqa: E402
 
 # Drift detection: re-infer when prop_line moves >= threshold from inference time
@@ -65,19 +65,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("EdgeRefreshJob")
 
-# BL constants — must match daily_runner.py exactly
-# Regular season: tau=0.5, z_max=1.0, mw=0.5, edge=0.09
-# Playoffs:       tau=0.9, z_max=1.0, mw=0.8, edge=0.15
-_PLAYOFF_MODE = os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes")
-
-DEFAULT_BL_TAU = 0.9 if _PLAYOFF_MODE else 0.5
-DEFAULT_BL_Z_MAX = 1.0 if _PLAYOFF_MODE else 1.0
-DEFAULT_BL_MAX_WEIGHT = 0.8 if _PLAYOFF_MODE else 0.5
-DEFAULT_BL_EDGE_THRESHOLD = 0.15 if _PLAYOFF_MODE else 0.09
-
-# Sanity check thresholds (must match daily_runner.py)
-MAX_Q50_DIVERGENCE = 0.30
-L5_ABOVE_LINE_MARGIN = 0.0
+DEFAULT_BL_TAU = NBA_PAPER_POLICY.bl_tau
+DEFAULT_BL_Z_MAX = NBA_PAPER_POLICY.bl_z_max
+DEFAULT_BL_MAX_WEIGHT = NBA_PAPER_POLICY.bl_max_weight
+DEFAULT_BL_EDGE_THRESHOLD = NBA_PAPER_POLICY.edge_threshold
 
 # STAT_TO_MARKET and MARKET_TO_STAT imported from src.config.combo_config
 
@@ -175,7 +166,6 @@ def _get_cached_pipeline_and_predictor():
 
     from src.models.monte_carlo import (
         MonteCarloPredictor,
-        load_combined_calibration_offsets,
         load_copula_params,
     )
     from src.models.quantile_trainer import PlayerPropsModelPipeline
@@ -208,12 +198,12 @@ def _get_cached_pipeline_and_predictor():
     setattr(pipeline, "paper_artifact", artifact)
 
     copula_params = load_copula_params(str(model_path))
-    cal_offsets = load_combined_calibration_offsets(str(model_path))
     predictor = MonteCarloPredictor(
         pipeline,
-        n_samples=10000,
+        n_samples=NBA_PAPER_POLICY.n_samples,
+        random_state=NBA_PAPER_POLICY.random_state,
         copula_params=copula_params,
-        combined_calibration_offsets=cal_offsets,
+        combined_calibration_offsets=None,
     )
     if artifact_snapshot(model_path) != artifact:
         raise RuntimeError("Model artifact changed while loading models/calibration")
@@ -566,6 +556,7 @@ def recalculate_edges(
     df["bl_under_edge"] = None
     df["bl_confidence"] = None
     df["is_recommended"] = False
+    df["sanity_flag"] = None
 
     bl_config = BLConfig(tau=DEFAULT_BL_TAU, z_max=DEFAULT_BL_Z_MAX, max_weight=DEFAULT_BL_MAX_WEIGHT)
     blender = BlackLittermanBlender(config=bl_config)
@@ -603,30 +594,10 @@ def recalculate_edges(
             df.at[idx, "bl_over_edge"] = bl_over_edge
             df.at[idx, "bl_under_edge"] = bl_under_edge
 
-            max_bl_edge = max(bl_over_edge, bl_under_edge)
-            if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
-                rec_direction = "under" if bl_under_edge > bl_over_edge else "over"
-                stat = row.get("stat")
-                line_val = row.get("line")
-                feat_l5 = row.get("feat_player_avg_stat_l5")
-                pred_q50 = row.get("pred_q50")
-
-                skip, reason = should_skip_recommendation(
-                    stat=stat,
-                    direction=rec_direction,
-                    line=line_val if pd.notna(line_val) else None,
-                    feat_l5=feat_l5 if pd.notna(feat_l5) else None,
-                    pred_q50=pred_q50 if pd.notna(pred_q50) else None,
-                )
-                if skip:
-                    logger.debug(
-                        f"SKIP {row.get('player_name', '?')} {stat} {rec_direction}: {reason}"
-                    )
-                else:
-                    df.at[idx, "is_recommended"] = True
-                    recommended_count += 1
-
         bl_computed += 1
+
+    apply_recommendation_policy(df)
+    recommended_count = sum(bool(value) for value in df["is_recommended"].tolist())
 
     logger.info(
         f"BL blending: {bl_computed} computed, "
@@ -987,8 +958,7 @@ def main():
     logger.info(f"Target Date: {target_date} | Stats: {args.stats}")
     logger.info(
         f"BL Config: tau={DEFAULT_BL_TAU}, z_max={DEFAULT_BL_Z_MAX}, "
-        f"mw={DEFAULT_BL_MAX_WEIGHT}, edge={DEFAULT_BL_EDGE_THRESHOLD} "
-        f"({'PLAYOFF' if _PLAYOFF_MODE else 'regular season'})"
+        f"mw={DEFAULT_BL_MAX_WEIGHT}, edge={DEFAULT_BL_EDGE_THRESHOLD}"
     )
     logger.info("=" * 60)
 

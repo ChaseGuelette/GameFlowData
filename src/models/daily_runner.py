@@ -1,7 +1,6 @@
 # production/daily_runner.py
 
 import logging
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, date, datetime, timedelta
@@ -14,20 +13,16 @@ from src.config.combo_config import MARKET_TO_STAT, STAT_TO_MARKET
 from src.models.black_litterman import BlackLittermanBlender, BLConfig
 from src.models.features.nba.season import is_competitive_nba_game_id
 from src.models.monte_carlo import derive_combo_samples
+from src.models.nba_paper_policy import NBA_PAPER_POLICY, apply_recommendation_policy
 from src.scrapers.nba_cdn_scraper import fetch_schedule
 from src.scrapers.nba_schedule import NBA_TIMEZONE, parse_schedule, validate_source_freshness
 
 logger = logging.getLogger(__name__)
 
-# BL config switches based on NBA_PLAYOFF_MODE env var
-# Regular season: tau=0.5, z_max=1.0, mw=0.5, edge=0.09  (61.5% hit, 7.72% ROI)
-# Playoffs:       tau=0.9, z_max=1.0, mw=0.8, edge=0.15  (61.8% hit, +12.4% ROI raw, +16.7% filtered)
-_PLAYOFF_MODE = os.getenv("NBA_PLAYOFF_MODE", "").lower() in ("true", "1", "yes")
-
-DEFAULT_BL_TAU = 0.9 if _PLAYOFF_MODE else 0.5
-DEFAULT_BL_Z_MAX = 1.0 if _PLAYOFF_MODE else 1.0
-DEFAULT_BL_MAX_WEIGHT = 0.8 if _PLAYOFF_MODE else 0.5
-DEFAULT_BL_EDGE_THRESHOLD = 0.15 if _PLAYOFF_MODE else 0.09
+DEFAULT_BL_TAU = NBA_PAPER_POLICY.bl_tau
+DEFAULT_BL_Z_MAX = NBA_PAPER_POLICY.bl_z_max
+DEFAULT_BL_MAX_WEIGHT = NBA_PAPER_POLICY.bl_max_weight
+DEFAULT_BL_EDGE_THRESHOLD = NBA_PAPER_POLICY.edge_threshold
 
 # Q50 vs L5 sanity check: reject under recs where Q50 is 30%+ below player L5 avg
 MAX_Q50_DIVERGENCE = 0.30
@@ -1041,9 +1036,7 @@ class DailyPredictionRunner:
     ) -> pd.DataFrame:
         """Compute Black-Litterman blended probabilities and mark recommended picks.
 
-        Uses the optimal BL config from backtest sweeps. Config is selected
-        based on NBA_PLAYOFF_MODE env var (regular season: tau=0.5/z_max=1.0/edge=9%;
-        playoffs: tau=0.9/z_max=0.25/mw=0.8/edge=12%).
+        Uses the promoted paper-policy BL configuration.
 
         Args:
             predictions_df: DataFrame with raw model predictions and edges.
@@ -1109,66 +1102,14 @@ class DailyPredictionRunner:
                 predictions_df.at[idx, "bl_over_edge"] = bl_over_edge
                 predictions_df.at[idx, "bl_under_edge"] = bl_under_edge
 
-                # Mark as recommended if max BL edge meets threshold
-                max_bl_edge = max(bl_over_edge, bl_under_edge)
-                if max_bl_edge >= DEFAULT_BL_EDGE_THRESHOLD:
-                    rec_direction = "under" if bl_under_edge > bl_over_edge else "over"
-                    stat = row["stat"]
-                    line = row.get("line")
-                    feat_l5 = row.get("feat_player_avg_stat_l5")
-                    pred_q50 = row.get("pred_q50")
-
-                    skip, reason = should_skip_recommendation(
-                        stat=stat,
-                        direction=rec_direction,
-                        line=line if pd.notna(line) else None,
-                        feat_l5=feat_l5 if pd.notna(feat_l5) else None,
-                        pred_q50=pred_q50 if pd.notna(pred_q50) else None,
-                    )
-                    if skip:
-                        logger.debug(
-                            f"SKIP {row.get('player_name', '?')} {stat} {rec_direction}: {reason}"
-                        )
-                    else:
-                        predictions_df.at[idx, "is_recommended"] = True
-                        recommended_count += 1
-
             bl_computed += 1
+
+        apply_recommendation_policy(predictions_df)
+        recommended_count = sum(bool(value) for value in predictions_df["is_recommended"].tolist())
 
         logger.info(
             f"Computed BL blending for {bl_computed} predictions, "
             f"{recommended_count} marked as recommended (edge >= {DEFAULT_BL_EDGE_THRESHOLD*100:.0f}%)"
         )
-
-        # Set sanity_flag on ALL under-leaning predictions for dashboard warnings
-        flagged_count = 0
-        for idx, row in predictions_df.iterrows():
-            under_edge = row.get("under_edge", 0) or 0
-            over_edge = row.get("over_edge", 0) or 0
-            if under_edge <= over_edge:
-                continue  # Not under-leaning
-
-            feat_l5 = row.get("feat_player_avg_stat_l5")
-            pred_q50 = row.get("pred_q50")
-            line = row.get("line")
-            flags = []
-
-            # Flag 1: Q50 divergence
-            if pd.notna(feat_l5) and pd.notna(pred_q50) and feat_l5 > 0:
-                divergence = (feat_l5 - pred_q50) / feat_l5
-                if divergence > MAX_Q50_DIVERGENCE:
-                    flags.append(f"q50_divergence:{divergence:.0%}")
-
-            # Flag 2: L5 above line
-            if pd.notna(feat_l5) and feat_l5 > 0 and pd.notna(line) and line > 0:
-                if feat_l5 >= line * (1 + L5_ABOVE_LINE_MARGIN):
-                    flags.append(f"l5_above_line:{feat_l5:.1f}>{line:.1f}")
-
-            if flags:
-                predictions_df.at[idx, "sanity_flag"] = "|".join(flags)
-                flagged_count += 1
-
-        if flagged_count:
-            logger.info(f"Sanity-flagged {flagged_count} under-leaning predictions")
 
         return predictions_df

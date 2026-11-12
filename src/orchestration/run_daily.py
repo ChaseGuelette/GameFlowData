@@ -11,7 +11,8 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.db.client import get_engine
 from src.models.daily_runner import DailyPredictionRunner
 from src.models.feature_store import FeatureStore
-from src.models.monte_carlo import MonteCarloPredictor, load_combined_calibration_offsets, load_copula_params
+from src.models.monte_carlo import MonteCarloPredictor, load_copula_params
+from src.models.nba_paper_policy import NBA_PAPER_POLICY
 from src.models.prediction_store import PredictionStore
 from src.models.quantile_trainer import PlayerPropsModelPipeline
 
@@ -154,12 +155,10 @@ def main():
             copula_params = load_copula_params(str(model_path))
             if copula_params:
                 logger.info("Loaded Gaussian copula params from model artifacts")
-            combined_cal_offsets = load_combined_calibration_offsets(str(model_path))
-            if combined_cal_offsets:
-                logger.info(f"Loaded combined calibration offsets for: {list(combined_cal_offsets.keys())}")
             predictor = MonteCarloPredictor(
-                pipeline, n_samples=10000, copula_params=copula_params,
-                combined_calibration_offsets=combined_cal_offsets,
+                pipeline, n_samples=NBA_PAPER_POLICY.n_samples,
+                random_state=NBA_PAPER_POLICY.random_state, copula_params=copula_params,
+                combined_calibration_offsets=None,
             )
 
             runner = DailyPredictionRunner(engine, feature_store, pipeline, predictor)

@@ -9,9 +9,10 @@ from sqlalchemy import text
 
 from src.config.combo_config import STAT_TO_MARKET
 from src.models.nba_artifacts import validate_artifact_bundle
+from src.models.nba_paper_policy import EVALUATION_RUN_ID as EVALUATION_RUN_ID
+from src.models.nba_paper_policy import NBA_PAPER_POLICY, PROMOTED_POLICY
 
-EVALUATION_RUN_ID = "nba-paper-flat10-v1-20261107"
-FIXED_STAKE = 10.0
+FIXED_STAKE = NBA_PAPER_POLICY.fixed_stake
 
 
 def artifact_snapshot(model_path):
@@ -20,7 +21,7 @@ def artifact_snapshot(model_path):
     return validate_artifact_bundle(model_path, allow_legacy=True).to_plan_dict()
 
 
-def model_snapshot(artifact, *, n_samples=10000):
+def model_snapshot(artifact, *, n_samples=NBA_PAPER_POLICY.n_samples):
     return {"artifact": artifact, "n_samples": n_samples,
             "produced_at": datetime.now(UTC).isoformat()}
 
@@ -86,6 +87,10 @@ def valid_snapshot(row):
     if not _valid_model(model) or not model.get('sample_sha256'):
         return False
     if quote.get('probability_source') != 'empirical_samples' or not quote.get('sample_count'):
+        return False
+    if quote.get("bl_config") != NBA_PAPER_POLICY.bl_config():
+        return False
+    if PROMOTED_POLICY and model.get("artifact", {}).get("identity") != PROMOTED_POLICY["model_identity"]:
         return False
     try:
         decision = _time(quote["decision_time"])

@@ -10,9 +10,9 @@ to market priors, improving edge calibration.
 Configuration via environment variables:
     PAPER_TRADING_BANKROLL: Starting bankroll (default: 10000)
     PAPER_TRADING_KELLY_FRACTION: Kelly fraction (default: 0.125)
-    PAPER_TRADING_EDGE_THRESHOLD: Edge threshold (default: 0.09)
+    PAPER_TRADING_EDGE_THRESHOLD: Diagnostic threshold; placement uses promoted policy
     PAPER_TRADING_MAX_BET_PCT: Max bet as % of bankroll (default: None = no cap)
-    PAPER_TRADING_BL_TAU: Black-Litterman tau (default: 0.5)
+    PAPER_TRADING_BL_TAU: Diagnostic only; BL is applied by prediction producers
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.db.client import get_engine
+from src.models.nba_paper_policy import NBA_PAPER_POLICY, apply_recommendation_policy, is_placeable_selection
 from src.paper_trading.nba_paper_entry import (
     EVALUATION_RUN_ID,
     FIXED_STAKE,
@@ -41,8 +42,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Supported stat types (base + combo)
-SUPPORTED_STATS = {"pts", "reb", "ast", "pra", "pr", "pa", "ra"}
+# This forward paper policy covers the three evaluated base stats.
+SUPPORTED_STATS = set(NBA_PAPER_POLICY.stats)
 
 
 def _get_env_float(name: str, default: float) -> float:
@@ -74,9 +75,9 @@ def _get_env_float_or_none(name: str, default: float | None) -> float | None:
 # Default configuration (can be overridden via environment variables)
 DEFAULT_BANKROLL = _get_env_float("PAPER_TRADING_BANKROLL", 10000.0)
 DEFAULT_KELLY_FRACTION = _get_env_float("PAPER_TRADING_KELLY_FRACTION", 0.125)
-DEFAULT_EDGE_THRESHOLD = _get_env_float("PAPER_TRADING_EDGE_THRESHOLD", 0.09)
+DEFAULT_EDGE_THRESHOLD = _get_env_float("PAPER_TRADING_EDGE_THRESHOLD", NBA_PAPER_POLICY.edge_threshold)
 DEFAULT_MAX_BET_PCT = _get_env_float_or_none("PAPER_TRADING_MAX_BET_PCT", None)
-DEFAULT_BL_TAU = _get_env_float_or_none("PAPER_TRADING_BL_TAU", 0.5)
+DEFAULT_BL_TAU = _get_env_float_or_none("PAPER_TRADING_BL_TAU", NBA_PAPER_POLICY.bl_tau)
 
 
 @dataclass
@@ -108,7 +109,7 @@ class PaperTrader:
     max_odds: int = 200  # Don't bet long shots
     stat_config: StatConfigSet | None = None  # Per-stat edge thresholds
     bl_tau: float | None = field(default_factory=lambda: DEFAULT_BL_TAU)  # Kept for compat
-    bl_z_max: float = 1.0  # Kept for compat
+    bl_z_max: float = NBA_PAPER_POLICY.bl_z_max  # Kept for compat
 
     def __post_init__(self):
         self.engine = get_engine()
@@ -182,7 +183,7 @@ class PaperTrader:
         return float(result[0])
 
     def select_bets(self, game_date: date) -> list[dict[str, Any]]:
-        """Select existing BL recommendations with their actual producer evidence."""
+        """Reapply the promoted policy before freezing producer evidence."""
         with self.engine.connect() as conn:
             df = pd.read_sql(text("""
                 SELECT id AS prediction_id, player_id, player_name, game_id, stat,
@@ -190,18 +191,19 @@ class PaperTrader:
                     bl_over_edge, bl_under_edge, implied_over, implied_under,
                     quote_snapshot, model_snapshot
                 FROM daily_predictions
-                WHERE prediction_date = :game_date AND is_recommended = true
+                WHERE prediction_date = :game_date
                   AND line IS NOT NULL AND bl_over_edge IS NOT NULL AND bl_under_edge IS NOT NULL
                 ORDER BY player_name, stat
             """), conn, params={"game_date": game_date})
+        apply_recommendation_policy(df)
         bets = []
-        for record in df.to_dict("records"):
+        for record in df.loc[df["is_recommended"].eq(True)].to_dict(orient="records"):
             row: dict[str, Any] = {str(k): (None if isinstance(v, float) and pd.isna(v) else v) for k, v in record.items()}
             row["game_date"] = game_date.isoformat()
             if row.get("stat") not in SUPPORTED_STATS or not valid_snapshot(row):
                 logger.info("Paper candidate %s blocked: missing/conflicting producer evidence", row.get("prediction_id"))
                 continue
-            direction = "over" if row["bl_over_edge"] >= row["bl_under_edge"] else "under"
+            direction = "under"
             values = [row.get(k) for k in (f"bl_{direction}_prob", f"implied_{direction}", f"bl_{direction}_edge")]
             if any(v is None or not pd.notna(v) for v in values):
                 continue
@@ -233,16 +235,16 @@ class PaperTrader:
                 snapshot = bet.get("entry_snapshot") or {}
                 row = snapshot.get("prediction") or {}
                 side = bet.get("bet_direction")
-                if (bet.get("evaluation_run_id") != EVALUATION_RUN_ID or side not in ("over", "under")
-                        or bet.get("stake") != FIXED_STAKE or not valid_snapshot(row)):
+                if (bet.get("evaluation_run_id") != EVALUATION_RUN_ID
+                        or bet.get("stake") != FIXED_STAKE or not valid_snapshot(row)
+                        or not is_placeable_selection(row, direction=side, edge=bet.get("edge"))):
                     continue
                 frozen = {"game_id": row["game_id"], "player_id": row["player_id"],
                           "prediction_id": row["prediction_id"], "stat_type": row["stat"],
                           "line": row["line"], "odds_at_bet": row[f"{side}_odds"],
                           "model_prob": row[f"bl_{side}_prob"], "implied_prob": row[f"implied_{side}"],
                           "edge": row[f"bl_{side}_edge"]}
-                expected_side = "over" if row["bl_over_edge"] >= row["bl_under_edge"] else "under"
-                if (side != expected_side or str(bet["game_date"]) != row["game_date"]
+                if (str(bet["game_date"]) != row["game_date"]
                         or any(bet.get(k) != v for k, v in frozen.items())):
                     continue
                 inserted += int(insert_bet(conn, bet))

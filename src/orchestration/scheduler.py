@@ -91,7 +91,7 @@ JOB_NAMES = {
     "mlb_dense_clv_job.py": "MLB Dense CLV Snapshots",
     "mlb_inference_job.py": "MLB Inference",
     "mlb_edge_refresh_job.py": "MLB Edge Refresh",
-    "archive_old_props_job.py": "Archive Old Props",
+    "archive_old_props_job.py": "Prune NBA Inference Props",
     "resolve_user_paper_bets.py": "User Paper Bet Resolution",
 }
 
@@ -856,8 +856,8 @@ def run_mlb_edge_refresh():
 
 # ---- Maintenance Jobs ----
 
-def run_archive_old_props():
-    """Archive rows older than 30 days from raw_player_props_combined."""
+def run_prune_old_props():
+    """Prune inference quotes older than 21 days when materialization is safe."""
     run_job("archive_old_props_job.py", silent_on_success=True)
 
 
@@ -1031,12 +1031,12 @@ def main():
     # Maintenance Jobs
     # ==============================================================
 
-    # 3:00 AM ET - Archive old props (rows > 30 days)
+    # 3:00 AM ET - Prune expired NBA inference props after materialization
     scheduler.add_job(
-        run_archive_old_props,
+        run_prune_old_props,
         CronTrigger(hour=3, minute=0, timezone=ET),
-        id="archive_old_props",
-        name="Archive Old Props (3 AM ET)",
+        id="prune_nba_inference_props",
+        name="Prune NBA Inference Props (3 AM ET)",
     )
 
     # ==============================================================

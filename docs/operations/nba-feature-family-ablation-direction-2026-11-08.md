@@ -1,17 +1,21 @@
 # NBA feature-family ablations — November 8, 2026
 
+## First wave completed and reviewed
+
+All four owner-launched models and their sweeps are complete. Use [the four-ablation review](nba-four-ablation-review-2026-11-08.md) for current results and proposed next work. Keep prop inputs; retain the game-line-free control and no-short-form lean challenger; matchup removal is not a general improvement. A later untouched comparison or one combined short-form/matchup exclusion is proposed, not launched. The original first-wave design below is historical and must not trigger duplicate training or reimplementation of delivered controls.
+
 ## First-sweep evidence update
 
 Read [the first sweep review](nba-first-sweep-review-2026-11-08.md) before launching this proposal. Raw settings all lost money; a BL candidate is exploratory over 12 betting dates, with overs and AST weak. The updated recommended order is the game-line-free control, then separate short-form, opponent-matchup and prop-market exclusions against that common control. These are hypotheses, not proven harmful families. Preserve fixed parameters and compare the same raw controls plus one fixed BL cell; do not optimize a new grid per variant. This update supersedes only the earlier proposed priority order, not the family definitions or approval gates below.
 
 ## Kick off immediately
 
-The reusable NBA lifecycle exists; general training-time family controls are the missing piece. This is a discussion proposal, not implementation or run approval.
+General training-time family controls are delivered and the first wave is analyzed. The retained implementation/design discussion below records the original proposal; it is not a current implementation queue or authorization for additional runs.
 
-- This chat: source/artifact review and proposed experiment scope only. Next gate: Chase chooses the first families and approves a bounded implementation slice.
+- This chat: completed direct artifact/sweep analysis. Next gate: Chase selects later-window validation or the single optional combined-removal experiment from the latest review.
 - You: retain the completed baseline and choose the experiment scope; launch approved long training/replay jobs yourself.
 - Other chat: no additional writer needed yet. Preserve separately owned injury and Railway work.
-- Read first: this page, `.hermes/plans/nba-first-no-injury-training.md`, then the exact baseline artifact metadata. No broad readiness audit or new seasonal-sampling gate is proposed.
+- Read first: the four-ablation review, `nba-feature-ablation-setup.md`, then exact completed artifact metadata. No broad readiness audit or new seasonal-sampling gate is proposed.
 
 ## Verified baseline
 

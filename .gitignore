@@ -69,6 +69,7 @@ tmpclaude-*
 # .claude
 #Gemini Files
 .gemini/
+.hermes/
 
 
 #testing outputs
@@ -89,8 +90,10 @@ node_modules/
 src/models/artifacts/*
 !src/models/artifacts/production/
 !src/models/artifacts/production/**
+!src/models/artifacts/production.policy.json
 !src/models/artifacts/production_playoffs/
 !src/models/artifacts/production_playoffs/**
+!src/models/artifacts/production_playoffs.policy.json
 src/models/mlb/artifacts/*
 !src/models/mlb/artifacts/production/
 !src/models/mlb/artifacts/production/**

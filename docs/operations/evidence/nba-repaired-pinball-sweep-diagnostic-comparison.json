@@ -1,0 +1,1040 @@
+{
+  "verification": {
+    "sweeps": {
+      "control": {
+        "state": "complete",
+        "cell_count": 10,
+        "verified_file_hashes": 51,
+        "unique_portfolios": 10,
+        "ledger_verified": true,
+        "summary": [
+          {
+            "edge": 0.03,
+            "raw": true,
+            "bets": 1002,
+            "profit": -758.7491453633945,
+            "stake": 9999.813688841587,
+            "roi_pct": -7.58763281969997,
+            "partial_stakes": 3,
+            "drawdown_pct": 47.51005780550638,
+            "sharpe": -7.591299550454492
+          },
+          {
+            "edge": 0.03,
+            "raw": false,
+            "bets": 437,
+            "profit": -137.54026565541145,
+            "stake": 4370.0,
+            "roi_pct": -3.147374500123832,
+            "partial_stakes": 0,
+            "drawdown_pct": 8.158293213788788,
+            "sharpe": -5.427018040075049
+          },
+          {
+            "edge": 0.05,
+            "raw": true,
+            "bets": 944,
+            "profit": -765.239569386279,
+            "stake": 9432.233937402314,
+            "roi_pct": -8.113025763195074,
+            "partial_stakes": 1,
+            "drawdown_pct": 48.76654962089679,
+            "sharpe": -7.640010601379874
+          },
+          {
+            "edge": 0.05,
+            "raw": false,
+            "bets": 262,
+            "profit": 65.15191565534184,
+            "stake": 2620.0,
+            "roi_pct": 2.4867143379901466,
+            "partial_stakes": 0,
+            "drawdown_pct": 4.743990084633785,
+            "sharpe": 2.622942904894847
+          },
+          {
+            "edge": 0.07,
+            "raw": true,
+            "bets": 830,
+            "profit": -707.055626079074,
+            "stake": 8300.0,
+            "roi_pct": -8.518742482880409,
+            "partial_stakes": 0,
+            "drawdown_pct": 43.54601645706127,
+            "sharpe": -8.524558348993065
+          },
+          {
+            "edge": 0.07,
+            "raw": false,
+            "bets": 161,
+            "profit": 18.835231763686384,
+            "stake": 1610.0,
+            "roi_pct": 1.1698901716575394,
+            "partial_stakes": 0,
+            "drawdown_pct": 5.247844712756988,
+            "sharpe": 1.0056074949763176
+          },
+          {
+            "edge": 0.1,
+            "raw": true,
+            "bets": 572,
+            "profit": -286.16199062034565,
+            "stake": 5720.0,
+            "roi_pct": -5.0028320038521965,
+            "partial_stakes": 0,
+            "drawdown_pct": 21.56980059785519,
+            "sharpe": -5.225704593207233
+          },
+          {
+            "edge": 0.1,
+            "raw": false,
+            "bets": 73,
+            "profit": -80.83964105813853,
+            "stake": 730.0,
+            "roi_pct": -11.073923432621715,
+            "partial_stakes": 0,
+            "drawdown_pct": 6.43405429947398,
+            "sharpe": -4.137175743512496
+          },
+          {
+            "edge": 0.12,
+            "raw": true,
+            "bets": 412,
+            "profit": -235.84394421054952,
+            "stake": 4120.0,
+            "roi_pct": -5.7243675779259595,
+            "partial_stakes": 0,
+            "drawdown_pct": 18.057798278950607,
+            "sharpe": -5.22277706662442
+          },
+          {
+            "edge": 0.12,
+            "raw": false,
+            "bets": 43,
+            "profit": -3.864567655858301,
+            "stake": 430.0,
+            "roi_pct": -0.8987366641530933,
+            "partial_stakes": 0,
+            "drawdown_pct": 3.968732581858603,
+            "sharpe": -0.09697049674886819
+          }
+        ]
+      },
+      "candidate": {
+        "state": "complete",
+        "cell_count": 10,
+        "verified_file_hashes": 51,
+        "unique_portfolios": 10,
+        "ledger_verified": true,
+        "summary": [
+          {
+            "edge": 0.03,
+            "raw": true,
+            "bets": 1026,
+            "profit": -649.8664090001648,
+            "stake": 10258.776281900718,
+            "roi_pct": -6.33473614340052,
+            "partial_stakes": 1,
+            "drawdown_pct": 41.77233862850733,
+            "sharpe": -6.5532683274853545
+          },
+          {
+            "edge": 0.03,
+            "raw": false,
+            "bets": 392,
+            "profit": -52.65389281814126,
+            "stake": 3920.0,
+            "roi_pct": -1.3432115514831953,
+            "partial_stakes": 0,
+            "drawdown_pct": 8.504300396715275,
+            "sharpe": -1.4944244670314994
+          },
+          {
+            "edge": 0.05,
+            "raw": true,
+            "bets": 954,
+            "profit": -552.6625607836668,
+            "stake": 9535.542038520489,
+            "roi_pct": -5.795816939939961,
+            "partial_stakes": 1,
+            "drawdown_pct": 38.870183787803704,
+            "sharpe": -5.04284320029863
+          },
+          {
+            "edge": 0.05,
+            "raw": false,
+            "bets": 223,
+            "profit": 9.395692323942017,
+            "stake": 2230.0,
+            "roi_pct": 0.42133149434717565,
+            "partial_stakes": 0,
+            "drawdown_pct": 4.488682199533675,
+            "sharpe": 0.5539824923476635
+          },
+          {
+            "edge": 0.07,
+            "raw": true,
+            "bets": 803,
+            "profit": -395.5593601958328,
+            "stake": 8030.0,
+            "roi_pct": -4.92601942958696,
+            "partial_stakes": 0,
+            "drawdown_pct": 29.16941877226103,
+            "sharpe": -5.37561754517114
+          },
+          {
+            "edge": 0.07,
+            "raw": false,
+            "bets": 141,
+            "profit": -22.409471218980066,
+            "stake": 1410.0,
+            "roi_pct": -1.5893241999276642,
+            "partial_stakes": 0,
+            "drawdown_pct": 6.750475909666574,
+            "sharpe": -0.7034915711724504
+          },
+          {
+            "edge": 0.1,
+            "raw": true,
+            "bets": 525,
+            "profit": -277.85561832508847,
+            "stake": 5250.0,
+            "roi_pct": -5.292487968096923,
+            "partial_stakes": 0,
+            "drawdown_pct": 21.099243087780795,
+            "sharpe": -5.0915808251987045
+          },
+          {
+            "edge": 0.1,
+            "raw": false,
+            "bets": 65,
+            "profit": -26.773818598975247,
+            "stake": 650.0,
+            "roi_pct": -4.1190490152269605,
+            "partial_stakes": 0,
+            "drawdown_pct": 5.3526303063632446,
+            "sharpe": -1.3335910126209336
+          },
+          {
+            "edge": 0.12,
+            "raw": true,
+            "bets": 372,
+            "profit": -330.2701346350215,
+            "stake": 3720.0,
+            "roi_pct": -8.878229425672622,
+            "partial_stakes": 0,
+            "drawdown_pct": 18.40877179349045,
+            "sharpe": -10.715993755660868
+          },
+          {
+            "edge": 0.12,
+            "raw": false,
+            "bets": 32,
+            "profit": 23.321604996558218,
+            "stake": 320.0,
+            "roi_pct": 7.288001561424442,
+            "partial_stakes": 0,
+            "drawdown_pct": 1.4402443422831233,
+            "sharpe": 2.5199064235937656
+          }
+        ]
+      }
+    },
+    "diagnostics": {
+      "control": {
+        "state": "complete",
+        "hashes_verified": 5,
+        "baseline_reproduced": true,
+        "rng_reproduced": true,
+        "counts": {
+          "eligible_player_games": 1579,
+          "missing_actual_minutes": 0,
+          "missing_or_invalid_stat_actuals": 0,
+          "nonpositive_actual_minutes": 0,
+          "oracle_valid_player_games": 1579
+        }
+      },
+      "candidate": {
+        "state": "complete",
+        "hashes_verified": 5,
+        "baseline_reproduced": true,
+        "rng_reproduced": true,
+        "counts": {
+          "eligible_player_games": 1579,
+          "missing_actual_minutes": 0,
+          "missing_or_invalid_stat_actuals": 0,
+          "nonpositive_actual_minutes": 0,
+          "oracle_valid_player_games": 1579
+        }
+      }
+    },
+    "parity": {
+      "fixed_config_equal": true,
+      "predictor_settings_equal": true,
+      "dependency_versions_equal": true,
+      "observed_dates_counts_equal": true,
+      "unchanged_input_digests": {
+        "actuals": true,
+        "voids": true,
+        "ordered_features": true,
+        "predictor_settings": true,
+        "rng_state_after": true
+      },
+      "source_file_changes": [
+        "src/models/quantile_trainer.py"
+      ],
+      "quote_keys_prices_timing_equal": true,
+      "quote_rows_compared": 11053
+    }
+  },
+  "diagnostic_comparison": {
+    "component_changes": {
+      "ast_rate": {
+        "n": 1579,
+        "control_mae": 0.05573027157755516,
+        "candidate_mae": 0.055767134504500576,
+        "control_pinball": 0.0193288267860568,
+        "candidate_pinball": 0.019339275752193553,
+        "pinball_change_pct": 0.05405897756967093,
+        "mae_change_pct": 0.0661452490754888
+      },
+      "minutes": {
+        "n": 1579,
+        "control_mae": 4.2761976563379385,
+        "candidate_mae": 4.2761976563379385,
+        "control_pinball": 1.5151250576897464,
+        "candidate_pinball": 1.5151250576897464,
+        "pinball_change_pct": 0.0,
+        "mae_change_pct": 0.0
+      },
+      "pts_rate": {
+        "n": 1579,
+        "control_mae": 0.16820650240519888,
+        "candidate_mae": 0.16871637021275163,
+        "control_pinball": 0.05827507808576895,
+        "candidate_pinball": 0.05845072382186358,
+        "pinball_change_pct": 0.3014079806741954,
+        "mae_change_pct": 0.3031201530631078
+      },
+      "reb_rate": {
+        "n": 1579,
+        "control_mae": 0.07840575124253554,
+        "candidate_mae": 0.07812363662054563,
+        "control_pinball": 0.027359247780087182,
+        "candidate_pinball": 0.027225316215710477,
+        "pinball_change_pct": -0.4895294105058845,
+        "mae_change_pct": -0.3598136839697452
+      }
+    },
+    "total_changes": {
+      "ast": {
+        "control_mae": 1.3904069453447796,
+        "candidate_mae": 1.3872489776399228,
+        "pinball_change_pct": -0.2457589881048161,
+        "mae_change_pct": -0.22712542651127654
+      },
+      "pts": {
+        "control_mae": 4.709172664638714,
+        "candidate_mae": 4.712805434124649,
+        "pinball_change_pct": 0.03867402782362639,
+        "mae_change_pct": 0.07714241427614343
+      },
+      "reb": {
+        "control_mae": 1.9407350301322914,
+        "candidate_mae": 1.9342725308858137,
+        "pinball_change_pct": -0.5651867842085934,
+        "mae_change_pct": -0.33299235321357923
+      }
+    },
+    "quoted_scores": {
+      "ast": {
+        "n": 784,
+        "dates": 12,
+        "control_brier": 0.25079093051020385,
+        "candidate_brier": 0.2505475515306123,
+        "market_brier": 0.24298412698250998,
+        "candidate_minus_control": -0.00024337897959153532,
+        "mean_absolute_probability_change_pp": 1.5832142857142857,
+        "paired_date_bootstrap_delta_95pct": [
+          -0.001733321185702354,
+          0.0011201049859214138
+        ]
+      },
+      "ALL": {
+        "n": 2932,
+        "dates": 12,
+        "control_brier": 0.2539562361118689,
+        "candidate_brier": 0.25374067290586544,
+        "market_brier": 0.24624317788086464,
+        "candidate_minus_control": -0.00021556320600346623,
+        "mean_absolute_probability_change_pp": 1.2627762619372438,
+        "paired_date_bootstrap_delta_95pct": [
+          -0.0009931703263621216,
+          0.0005853855487168027
+        ]
+      },
+      "pts": {
+        "n": 1115,
+        "dates": 12,
+        "control_brier": 0.25663298134529106,
+        "candidate_brier": 0.2571877974887893,
+        "market_brier": 0.24975632582084822,
+        "candidate_minus_control": 0.0005548161434982268,
+        "mean_absolute_probability_change_pp": 1.1579910313901347,
+        "paired_date_bootstrap_delta_95pct": [
+          -7.867605121413873e-05,
+          0.0013519863538189179
+        ]
+      },
+      "reb": {
+        "n": 1033,
+        "dates": 12,
+        "control_brier": 0.25346933258470433,
+        "candidate_brier": 0.25244334787996137,
+        "market_brier": 0.244924626042747,
+        "candidate_minus_control": -0.001025984704742966,
+        "mean_absolute_probability_change_pp": 1.1326815101645695,
+        "paired_date_bootstrap_delta_95pct": [
+          -0.0019386159468015407,
+          -0.00020501157697478228
+        ]
+      }
+    },
+    "selection": {
+      "control": {
+        "bl": {
+          "all_quoted": {
+            "n": 2932,
+            "brier": 0.24676415267513774,
+            "market_brier": 0.24624317788086358,
+            "gap": 0.0005209747942741538
+          },
+          "selected_before_threshold": {
+            "n": 1119,
+            "brier": 0.24543549595384098,
+            "market_brier": 0.24471669852726882,
+            "gap": 0.0007187974265721597
+          },
+          "after_policy_and_cash": {
+            "n": 262,
+            "brier": 0.24660392454205265,
+            "market_brier": 0.2448424460656327,
+            "gap": 0.001761478476419942
+          }
+        },
+        "raw": {
+          "all_quoted": {
+            "n": 2932,
+            "brier": 0.253956236111869,
+            "market_brier": 0.24624317788086358,
+            "gap": 0.007713058231005432
+          },
+          "selected_before_threshold": {
+            "n": 1119,
+            "brier": 0.2585541369436997,
+            "market_brier": 0.24318081344214873,
+            "gap": 0.01537332350155099
+          },
+          "after_policy_and_cash": {
+            "n": 944,
+            "brier": 0.26131530834745764,
+            "market_brier": 0.24284586114517473,
+            "gap": 0.018469447202282913
+          }
+        }
+      },
+      "candidate": {
+        "bl": {
+          "all_quoted": {
+            "n": 2932,
+            "brier": 0.24674604807627612,
+            "market_brier": 0.24624317788086358,
+            "gap": 0.0005028701954125359
+          },
+          "selected_before_threshold": {
+            "n": 1119,
+            "brier": 0.24593194626038511,
+            "market_brier": 0.2449507680571466,
+            "gap": 0.0009811782032385086
+          },
+          "after_policy_and_cash": {
+            "n": 223,
+            "brier": 0.24956878496633783,
+            "market_brier": 0.24489563622208113,
+            "gap": 0.0046731487442567
+          }
+        },
+        "raw": {
+          "all_quoted": {
+            "n": 2932,
+            "brier": 0.2537406729058663,
+            "market_brier": 0.24624317788086358,
+            "gap": 0.007497495025002743
+          },
+          "selected_before_threshold": {
+            "n": 1119,
+            "brier": 0.2581579156032171,
+            "market_brier": 0.24474035182351628,
+            "gap": 0.013417563779700825
+          },
+          "after_policy_and_cash": {
+            "n": 954,
+            "brier": 0.25972525635220123,
+            "market_brier": 0.24430002397896755,
+            "gap": 0.015425232373233677
+          }
+        }
+      }
+    },
+    "component_cohort_and_actuals_equal": true,
+    "quote_cohort_labels_market_equal": true,
+    "oracle_candidate_relative_pinball_reductions": {
+      "ast": {
+        "actual_minutes": 4.874339722096377,
+        "actual_rates": 68.10113884517577,
+        "both_actual": 100.0
+      },
+      "pts": {
+        "actual_minutes": 14.534901538951516,
+        "actual_rates": 60.05796249072233,
+        "both_actual": 100.00000000000001
+      },
+      "reb": {
+        "actual_minutes": 7.456738368292393,
+        "actual_rates": 57.37040092727571,
+        "both_actual": 100.00000000000001
+      }
+    }
+  },
+  "paired_bets": {
+    "raw_05": {
+      "portfolios": {
+        "common_control": {
+          "n": 808,
+          "stake": 8072.233937402313,
+          "profit": -721.5101539626539,
+          "roi_pct": -8.938172004896574
+        },
+        "common_candidate": {
+          "n": 808,
+          "stake": 8080.0,
+          "profit": -712.9674851051985,
+          "roi_pct": -8.8238550136782
+        },
+        "control_only": {
+          "n": 136,
+          "stake": 1360.0,
+          "profit": -43.72941542362505,
+          "roi_pct": -3.215398192913607
+        },
+        "candidate_only": {
+          "n": 146,
+          "stake": 1455.5420385204884,
+          "profit": 160.3049243215318,
+          "roi_pct": 11.01341768764553
+        }
+      },
+      "slices": {
+        "control": {
+          "stat": {
+            "pts": {
+              "n": 321,
+              "stake": 3210.0,
+              "profit": -242.54105512904115,
+              "roi_pct": -7.555796109938977
+            },
+            "reb": {
+              "n": 392,
+              "stake": 3912.233937402313,
+              "profit": -278.05457400681576,
+              "roi_pct": -7.107309492628178
+            },
+            "ast": {
+              "n": 231,
+              "stake": 2310.0,
+              "profit": -244.64394025042205,
+              "roi_pct": -10.590646764087534
+            }
+          },
+          "side": {
+            "over": {
+              "n": 297,
+              "stake": 2970.0,
+              "profit": -537.832763215237,
+              "roi_pct": -18.10884724630428
+            },
+            "under": {
+              "n": 647,
+              "stake": 6462.233937402313,
+              "profit": -227.40680617104192,
+              "roi_pct": -3.5190122854397137
+            }
+          },
+          "by_date": {
+            "2026-10-22": {
+              "n": 12,
+              "stake": 120.0,
+              "profit": -25.400666000666,
+              "roi_pct": -21.167221667221668
+            },
+            "2026-10-23": {
+              "n": 148,
+              "stake": 1480.0,
+              "profit": -156.75688335682864,
+              "roi_pct": -10.591681307893827
+            },
+            "2026-10-24": {
+              "n": 84,
+              "stake": 840.0,
+              "profit": -137.53504012805098,
+              "roi_pct": -16.373219062863214
+            },
+            "2026-10-25": {
+              "n": 71,
+              "stake": 710.0,
+              "profit": -30.27537146314012,
+              "roi_pct": -4.264136825794384
+            },
+            "2026-10-26": {
+              "n": 106,
+              "stake": 1060.0,
+              "profit": -193.49089052287889,
+              "roi_pct": -18.25385759649801
+            },
+            "2026-10-27": {
+              "n": 43,
+              "stake": 430.0,
+              "profit": -120.55270103559381,
+              "roi_pct": -28.03551186874275
+            },
+            "2026-10-28": {
+              "n": 126,
+              "stake": 1260.0,
+              "profit": -196.3629508689627,
+              "roi_pct": -15.584361180076407
+            },
+            "2026-10-29": {
+              "n": 23,
+              "stake": 230.0,
+              "profit": -15.175200377180573,
+              "roi_pct": -6.597913207469814
+            },
+            "2026-10-30": {
+              "n": 110,
+              "stake": 1100.0,
+              "profit": -99.78128866463399,
+              "roi_pct": -9.071026242239453
+            },
+            "2026-10-31": {
+              "n": 74,
+              "stake": 740.0,
+              "profit": 105.9212854870632,
+              "roi_pct": 14.313687227981513
+            },
+            "2026-11-01": {
+              "n": 40,
+              "stake": 400.0,
+              "profit": -68.35635566681354,
+              "roi_pct": -17.089088916703385
+            },
+            "2026-11-02": {
+              "n": 107,
+              "stake": 1062.2339374023134,
+              "profit": 172.52649321140714,
+              "roi_pct": 16.2418547493709
+            }
+          }
+        },
+        "candidate": {
+          "stat": {
+            "pts": {
+              "n": 316,
+              "stake": 3155.5420385204884,
+              "profit": -221.69680567572888,
+              "roi_pct": -7.025633091539288
+            },
+            "reb": {
+              "n": 383,
+              "stake": 3830.0,
+              "profit": -118.58662760887259,
+              "roi_pct": -3.0962565955319215
+            },
+            "ast": {
+              "n": 255,
+              "stake": 2550.0,
+              "profit": -212.3791274990653,
+              "roi_pct": -8.328593235257463
+            }
+          },
+          "side": {
+            "over": {
+              "n": 300,
+              "stake": 3000.0,
+              "profit": -498.1211886204839,
+              "roi_pct": -16.604039620682794
+            },
+            "under": {
+              "n": 654,
+              "stake": 6535.542038520489,
+              "profit": -54.54137216318287,
+              "roi_pct": -0.8345347920909388
+            }
+          },
+          "by_date": {
+            "2026-10-22": {
+              "n": 13,
+              "stake": 130.0,
+              "profit": -35.400666000666,
+              "roi_pct": -27.231281538973846
+            },
+            "2026-10-23": {
+              "n": 147,
+              "stake": 1470.0,
+              "profit": -15.314779483650403,
+              "roi_pct": -1.04182173358166
+            },
+            "2026-10-24": {
+              "n": 85,
+              "stake": 850.0,
+              "profit": -113.42383602364258,
+              "roi_pct": -13.343980708663834
+            },
+            "2026-10-25": {
+              "n": 69,
+              "stake": 690.0,
+              "profit": 53.97924001224019,
+              "roi_pct": 7.823078262643506
+            },
+            "2026-10-26": {
+              "n": 106,
+              "stake": 1060.0,
+              "profit": -133.9819988276535,
+              "roi_pct": -12.639811210155992
+            },
+            "2026-10-27": {
+              "n": 45,
+              "stake": 450.0,
+              "profit": -158.8741883822791,
+              "roi_pct": -35.30537519606202
+            },
+            "2026-10-28": {
+              "n": 124,
+              "stake": 1240.0,
+              "profit": -168.56460221836363,
+              "roi_pct": -13.593919533739001
+            },
+            "2026-10-29": {
+              "n": 22,
+              "stake": 220.0,
+              "profit": -31.778365204349456,
+              "roi_pct": -14.44471145652248
+            },
+            "2026-10-30": {
+              "n": 109,
+              "stake": 1090.0,
+              "profit": -174.04447962770953,
+              "roi_pct": -15.967383452083444
+            },
+            "2026-10-31": {
+              "n": 70,
+              "stake": 700.0,
+              "profit": 137.66032004716988,
+              "roi_pct": 19.665760006738555
+            },
+            "2026-11-01": {
+              "n": 39,
+              "stake": 390.0,
+              "profit": -114.71460577060546,
+              "roi_pct": -29.414001479642426
+            },
+            "2026-11-02": {
+              "n": 125,
+              "stake": 1245.5420385204884,
+              "profit": 201.79540069584283,
+              "roi_pct": 16.201412273129264
+            }
+          }
+        }
+      },
+      "paired_profit_delta": {
+        "candidate_minus_control": 212.57700860261215,
+        "date_blocks": 12,
+        "exploratory_95pct_interval": [
+          -171.2666588106044,
+          618.8606480318565
+        ],
+        "leave_one_date_out_delta_range": [
+          71.13490472943391,
+          286.8401995656877
+        ]
+      }
+    },
+    "bl_05": {
+      "portfolios": {
+        "common_control": {
+          "n": 206,
+          "stake": 2060.0,
+          "profit": 54.52245742006612,
+          "roi_pct": 2.646721233983792
+        },
+        "common_candidate": {
+          "n": 206,
+          "stake": 2060.0,
+          "profit": 54.52245742006612,
+          "roi_pct": 2.646721233983792
+        },
+        "control_only": {
+          "n": 56,
+          "stake": 560.0,
+          "profit": 10.62945823527572,
+          "roi_pct": 1.8981175420135215
+        },
+        "candidate_only": {
+          "n": 17,
+          "stake": 170.0,
+          "profit": -45.1267650961241,
+          "roi_pct": -26.545155938896528
+        }
+      },
+      "slices": {
+        "control": {
+          "stat": {
+            "pts": {
+              "n": 82,
+              "stake": 820.0,
+              "profit": 32.63320519803195,
+              "roi_pct": 3.9796591704917015
+            },
+            "reb": {
+              "n": 130,
+              "stake": 1300.0,
+              "profit": 97.10233197697046,
+              "roi_pct": 7.4694101520746505
+            },
+            "ast": {
+              "n": 50,
+              "stake": 500.0,
+              "profit": -64.58362151966058,
+              "roi_pct": -12.916724303932117
+            }
+          },
+          "side": {
+            "over": {
+              "n": 92,
+              "stake": 920.0,
+              "profit": -90.01753675306198,
+              "roi_pct": -9.784514864463258
+            },
+            "under": {
+              "n": 170,
+              "stake": 1700.0,
+              "profit": 155.16945240840383,
+              "roi_pct": 9.127614847553167
+            }
+          },
+          "by_date": {
+            "2026-10-22": {
+              "n": 7,
+              "stake": 70.0,
+              "profit": 3.736553369111511,
+              "roi_pct": 5.337933384445016
+            },
+            "2026-10-23": {
+              "n": 78,
+              "stake": 780.0,
+              "profit": 72.19534313679176,
+              "roi_pct": 9.25581322266561
+            },
+            "2026-10-24": {
+              "n": 31,
+              "stake": 310.0,
+              "profit": -32.405486441711226,
+              "roi_pct": -10.453382723132654
+            },
+            "2026-10-25": {
+              "n": 16,
+              "stake": 160.0,
+              "profit": -16.294590117258664,
+              "roi_pct": -10.184118823286665
+            },
+            "2026-10-26": {
+              "n": 24,
+              "stake": 240.0,
+              "profit": 55.40771180719686,
+              "roi_pct": 23.086546586332027
+            },
+            "2026-10-27": {
+              "n": 9,
+              "stake": 90.0,
+              "profit": -16.56384455943529,
+              "roi_pct": -18.404271732705876
+            },
+            "2026-10-28": {
+              "n": 37,
+              "stake": 370.0,
+              "profit": -82.23636832564432,
+              "roi_pct": -22.226045493417384
+            },
+            "2026-10-29": {
+              "n": 3,
+              "stake": 30.0,
+              "profit": 14.4,
+              "roi_pct": 48.0
+            },
+            "2026-10-30": {
+              "n": 14,
+              "stake": 140.0,
+              "profit": 2.9960092865326615,
+              "roi_pct": 2.1400066332376153
+            },
+            "2026-10-31": {
+              "n": 18,
+              "stake": 180.0,
+              "profit": 58.780393103729864,
+              "roi_pct": 32.65577394651659
+            },
+            "2026-11-01": {
+              "n": 3,
+              "stake": 30.0,
+              "profit": 4.8055069930069925,
+              "roi_pct": 16.018356643356643
+            },
+            "2026-11-02": {
+              "n": 22,
+              "stake": 220.0,
+              "profit": 0.33068740302168553,
+              "roi_pct": 0.15031245591894796
+            }
+          }
+        },
+        "candidate": {
+          "stat": {
+            "pts": {
+              "n": 81,
+              "stake": 810.0,
+              "profit": -0.7539153763158275,
+              "roi_pct": -0.09307597238467007
+            },
+            "reb": {
+              "n": 109,
+              "stake": 1090.0,
+              "profit": 69.5867160264367,
+              "roi_pct": 6.384102387746487
+            },
+            "ast": {
+              "n": 33,
+              "stake": 330.0,
+              "profit": -59.437108326178866,
+              "roi_pct": -18.01124494732693
+            }
+          },
+          "side": {
+            "over": {
+              "n": 79,
+              "stake": 790.0,
+              "profit": -153.84112469865084,
+              "roi_pct": -19.473560088436816
+            },
+            "under": {
+              "n": 144,
+              "stake": 1440.0,
+              "profit": 163.23681702259285,
+              "roi_pct": 11.335890071013392
+            }
+          },
+          "by_date": {
+            "2026-10-22": {
+              "n": 6,
+              "stake": 60.0,
+              "profit": 13.736553369111512,
+              "roi_pct": 22.894255615185852
+            },
+            "2026-10-23": {
+              "n": 67,
+              "stake": 670.0,
+              "profit": 7.055009474378016,
+              "roi_pct": 1.0529864887131368
+            },
+            "2026-10-24": {
+              "n": 23,
+              "stake": 230.0,
+              "profit": -23.38912880712333,
+              "roi_pct": -10.16918643787971
+            },
+            "2026-10-25": {
+              "n": 17,
+              "stake": 170.0,
+              "profit": -42.42955944241204,
+              "roi_pct": -24.958564377889438
+            },
+            "2026-10-26": {
+              "n": 21,
+              "stake": 210.0,
+              "profit": 67.06997981606995,
+              "roi_pct": 31.938085626699973
+            },
+            "2026-10-27": {
+              "n": 8,
+              "stake": 80.0,
+              "profit": -24.256152251742982,
+              "roi_pct": -30.32019031467873
+            },
+            "2026-10-28": {
+              "n": 28,
+              "stake": 280.0,
+              "profit": -66.5069254211024,
+              "roi_pct": -23.752473364679428
+            },
+            "2026-10-29": {
+              "n": 3,
+              "stake": 30.0,
+              "profit": 14.4,
+              "roi_pct": 48.0
+            },
+            "2026-10-30": {
+              "n": 14,
+              "stake": 140.0,
+              "profit": 3.701169399358279,
+              "roi_pct": 2.6436924281130567
+            },
+            "2026-10-31": {
+              "n": 16,
+              "stake": 160.0,
+              "profit": 59.0716552396522,
+              "roi_pct": 36.91978452478263
+            },
+            "2026-11-01": {
+              "n": 2,
+              "stake": 20.0,
+              "profit": 14.805506993006993,
+              "roi_pct": 74.02753496503496
+            },
+            "2026-11-02": {
+              "n": 18,
+              "stake": 180.0,
+              "profit": -13.862416045254179,
+              "roi_pct": -7.701342247363432
+            }
+          }
+        }
+      },
+      "paired_profit_delta": {
+        "candidate_minus_control": -55.75622333139983,
+        "date_blocks": 12,
+        "exploratory_95pct_interval": [
+          -226.31958061974422,
+          71.75222693410072
+        ],
+        "leave_one_date_out_delta_range": [
+          -71.48566623594175,
+          9.384110331013922
+        ]
+      }
+    }
+  },
+  "notes": [
+    "Discovery window October 21-November 2, 2026; 12 dates with predictions.",
+    "Bootstrap uses 5000 paired date-block resamples, seed 42; exploratory, not independent confirmation or multiple-selection corrected.",
+    "All original artifacts and exports unchanged; analysis reads saved files only."
+  ]
+}

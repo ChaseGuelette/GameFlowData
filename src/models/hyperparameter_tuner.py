@@ -1,8 +1,8 @@
 """
 Optuna-Based Hyperparameter Tuning for Quantile Regression Models
 
-Optimizes for calibration performance (minimizes maximum calibration gap)
-rather than raw quantile loss. Supports per-quantile or shared hyperparameters.
+Supports mean pinball loss or the legacy maximum calibration gap objective,
+with per-quantile or shared hyperparameters. NBA callers select pinball loss.
 
 Usage:
     # Standalone
@@ -33,6 +33,9 @@ from src.models.nba_training_chronology import temporal_split
 from .quantile_trainer import QuantileModelConfig
 
 logger = logging.getLogger(__name__)
+
+ESTIMATOR_CONTRACT_ATTR = "estimator_contract"
+ESTIMATOR_CONTRACT = "xgb_quantile_eval_set_early_stopping_v1"
 
 
 # Default search space bounds
@@ -65,14 +68,17 @@ class TuningResult:
     quantiles: tuple[float, ...]
     per_quantile: bool = False
     per_quantile_params: dict | None = None  # Only set if per_quantile=True
+    objective_name: str = "calibration_gap"
+    best_objective_value: float | None = None
+    per_quantile_objective_values: dict[float, float] | None = None
 
 
 class QuantileHyperparameterTuner:
     """
     Optuna-based hyperparameter tuner for quantile regression models.
 
-    Optimizes for calibration (minimizes worst calibration gap across quantiles)
-    using temporal train/validation splits.
+    Minimizes the selected objective using temporal train/validation splits.
+    Calibration gaps remain diagnostics when optimizing pinball loss.
     """
 
     def __init__(
@@ -87,8 +93,12 @@ class QuantileHyperparameterTuner:
         storage: str | None = None,
         random_state: int = 42,
         search_space: dict | None = None,
+        objective: str = "calibration_gap",
     ):
         """Initialize the tuner."""
+        if objective not in {"calibration_gap", "pinball"}:
+            raise ValueError("objective must be 'calibration_gap' or 'pinball'")
+        self.objective_name = objective
 
         self.n_trials = n_trials
         self.timeout = timeout
@@ -160,6 +170,79 @@ class QuantileHyperparameterTuner:
         coverage = (y_true <= y_pred).mean()
         return abs(coverage - quantile)
 
+    def _calculate_pinball_loss(self, y_true: np.ndarray, y_pred: np.ndarray, quantile: float) -> float:
+        """Mean asymmetric quantile error in the target's units."""
+        residuals = np.asarray(y_true, dtype=float) - np.asarray(y_pred, dtype=float)
+        loss = float(np.maximum(quantile * residuals, (quantile - 1) * residuals).mean())
+        if not np.isfinite(loss):
+            raise ValueError("Non-finite validation pinball loss")
+        return loss
+
+    def _validate_study_objective(self, study: optuna.Study) -> None:
+        """Prevent resumed studies from comparing incompatible objective values."""
+        recorded = study.user_attrs.get("objective_name")
+        if recorded is None and study.trials:
+            # Studies written before objective metadata always minimized coverage gap.
+            recorded = "calibration_gap"
+        if recorded is not None and recorded != self.objective_name:
+            raise ValueError(
+                f"Study {study.study_name!r} uses {recorded!r}, not {self.objective_name!r}; use a new study name"
+            )
+
+        estimator_contract = study.user_attrs.get(ESTIMATOR_CONTRACT_ATTR)
+        if study.trials and estimator_contract != ESTIMATOR_CONTRACT:
+            raise ValueError(
+                f"Study {study.study_name!r} uses an incompatible estimator contract; use a new study name"
+            )
+        study.set_user_attr("objective_name", self.objective_name)
+        study.set_user_attr(ESTIMATOR_CONTRACT_ATTR, ESTIMATOR_CONTRACT)
+
+    def _best_calibration_gap(self, study: optuna.Study) -> float:
+        if self.objective_name == "calibration_gap":
+            return float(study.best_value)
+        return float(study.best_trial.user_attrs["calibration_gap"])
+
+    def _resolve_feature_names(
+        self,
+        X: pd.DataFrame,
+        quantiles: tuple[float, ...],
+        feature_names: list[str] | dict[float | str, list[str]] | None,
+    ) -> dict[float, list[str]]:
+        """Validate and normalize flat or per-quantile ordered feature lists."""
+        if feature_names is None:
+            shared = list(X.columns)
+            return {q: shared for q in quantiles}
+
+        if not isinstance(feature_names, dict):
+            shared = list(feature_names)
+            if not shared:
+                raise ValueError("Tuning feature list cannot be empty")
+            missing = [name for name in shared if name not in X.columns]
+            if missing:
+                raise ValueError(f"Tuning features are absent from X: {missing}")
+            return {q: shared for q in quantiles}
+
+        normalized: dict[float, list[str]] = {}
+        for raw_quantile, names in feature_names.items():
+            try:
+                quantile = float(raw_quantile)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid tuning feature-map quantile key: {raw_quantile!r}") from exc
+            if quantile in normalized:
+                raise ValueError(f"Duplicate tuning feature-map quantile key after normalization: {raw_quantile!r}")
+            normalized[quantile] = list(names)
+
+        resolved: dict[float, list[str]] = {}
+        for quantile in quantiles:
+            names = normalized.get(float(quantile))
+            if not names:
+                raise ValueError(f"Missing or empty tuning feature list for quantile {quantile}")
+            missing = [name for name in names if name not in X.columns]
+            if missing:
+                raise ValueError(f"Tuning features for quantile {quantile} are absent from X: {missing}")
+            resolved[quantile] = names
+        return resolved
+
     def _create_objective(
         self,
         X_train: pd.DataFrame,
@@ -167,17 +250,18 @@ class QuantileHyperparameterTuner:
         X_val: pd.DataFrame,
         y_val: pd.Series,
         quantiles: tuple[float, ...],
-        feature_names: list[str],
+        feature_names_per_quantile: dict[float, list[str]],
     ) -> Callable[[optuna.Trial], float]:
         """Create objective function for shared hyperparameters across quantiles."""
 
         def objective(trial: optuna.Trial) -> float:
             params = self._sample_params(trial)
-            params.pop("early_stopping_rounds")
 
             gaps = []
+            losses = []
 
             for i, q in enumerate(quantiles):
+                feature_names = feature_names_per_quantile[q]
                 model = xgb.XGBRegressor(
                     objective="reg:quantileerror",
                     quantile_alpha=q,
@@ -196,15 +280,18 @@ class QuantileHyperparameterTuner:
                 val_preds = model.predict(X_val[feature_names])
                 gap = self._calculate_calibration_gap(y_val.values, val_preds, q)
                 gaps.append(gap)
+                if self.objective_name == "pinball":
+                    losses.append(self._calculate_pinball_loss(y_val.values, val_preds, q))
+                score = float(np.mean(losses)) if self.objective_name == "pinball" else float(max(gaps))
 
-                # Report intermediate value for pruning
+                # Pruning and final trial selection must use the same objective.
                 if self.pruning:
-                    trial.report(max(gaps), i)
+                    trial.report(score, i)
                     if trial.should_prune():
                         raise optuna.TrialPruned()
 
-            # Return worst gap (Optuna minimizes)
-            return max(gaps)
+            trial.set_user_attr("calibration_gap", float(max(gaps)))
+            return score
 
         return objective
 
@@ -221,7 +308,6 @@ class QuantileHyperparameterTuner:
 
         def objective(trial: optuna.Trial) -> float:
             params = self._sample_params(trial)
-            params.pop("early_stopping_rounds")
 
             model = xgb.XGBRegressor(
                 objective="reg:quantileerror",
@@ -240,8 +326,15 @@ class QuantileHyperparameterTuner:
 
             val_preds = model.predict(X_val[feature_names])
             gap = self._calculate_calibration_gap(y_val.values, val_preds, quantile)
-
-            return gap
+            trial.set_user_attr("calibration_gap", float(gap))
+            if self.objective_name == "pinball":
+                loss = self._calculate_pinball_loss(y_val.values, val_preds, quantile)
+                if self.pruning:
+                    trial.report(loss, 0)
+                    if trial.should_prune():
+                        raise optuna.TrialPruned()
+                return loss
+            return float(gap)
 
         return objective
 
@@ -250,16 +343,17 @@ class QuantileHyperparameterTuner:
         X: pd.DataFrame,
         y: pd.Series,
         quantiles: tuple[float, ...] = (0.10, 0.25, 0.50, 0.75, 0.90),
-        feature_names: list[str] | None = None,
+        feature_names: list[str] | dict[float | str, list[str]] | None = None,
         *, dates=None,
     ) -> QuantileModelConfig:
         """Run hyperparameter tuning study."""
 
-        feature_names = feature_names or list(X.columns)
+        feature_names_per_quantile = self._resolve_feature_names(X, quantiles, feature_names)
 
         logger.info(f"Starting hyperparameter tuning with {self.n_trials} trials")
+        logger.info(f"Optimization objective: {self.objective_name}")
         logger.info(f"Quantiles: {quantiles}")
-        logger.info(f"Features: {len(feature_names)}")
+        logger.info(f"Features by quantile: { {q: len(names) for q, names in feature_names_per_quantile.items()} }")
         logger.info(f"Samples: {len(X):,}")
 
         # Temporal train/val split (no shuffle to preserve time order)
@@ -281,9 +375,12 @@ class QuantileHyperparameterTuner:
             direction="minimize",
             load_if_exists=True,
         )
+        self._validate_study_objective(self.study)
 
         # Create objective
-        objective = self._create_objective(X_train, y_train, X_val, y_val, quantiles, feature_names)
+        objective = self._create_objective(
+            X_train, y_train, X_val, y_val, quantiles, feature_names_per_quantile
+        )
 
         # Run optimization
         optuna.logging.set_verbosity(optuna.logging.INFO)
@@ -291,10 +388,11 @@ class QuantileHyperparameterTuner:
 
         # Extract best parameters
         best_params = self.study.best_params
-        best_gap = self.study.best_value
+        best_gap = self._best_calibration_gap(self.study)
 
         logger.info(f"Best trial: {self.study.best_trial.number}")
-        logger.info(f"Best calibration gap: {best_gap:.4f}")
+        logger.info(f"Best {self.objective_name}: {self.study.best_value:.6f}")
+        logger.info(f"Selected trial calibration gap: {best_gap:.4f}")
         logger.info(f"Best parameters: {best_params}")
 
         # Create result
@@ -306,6 +404,8 @@ class QuantileHyperparameterTuner:
             timestamp=datetime.now().isoformat(),
             quantiles=quantiles,
             per_quantile=False,
+            objective_name=self.objective_name,
+            best_objective_value=float(self.study.best_value),
         )
 
         # Convert to QuantileModelConfig
@@ -316,14 +416,15 @@ class QuantileHyperparameterTuner:
         X: pd.DataFrame,
         y: pd.Series,
         quantiles: tuple[float, ...] = (0.10, 0.25, 0.50, 0.75, 0.90),
-        feature_names: list[str] | None = None,
+        feature_names: list[str] | dict[float | str, list[str]] | None = None,
         *, dates=None,
     ) -> dict[float, QuantileModelConfig]:
         """Run separate tuning study for each quantile."""
 
-        feature_names = feature_names or list(X.columns)
+        feature_names_per_quantile = self._resolve_feature_names(X, quantiles, feature_names)
 
         logger.info("Starting per-quantile hyperparameter tuning")
+        logger.info(f"Optimization objective: {self.objective_name}")
         logger.info(f"Quantiles: {quantiles}")
         logger.info(f"Trials per quantile: {self.n_trials}")
 
@@ -334,9 +435,11 @@ class QuantileHyperparameterTuner:
 
         configs = {}
         per_quantile_params = {}
+        self.studies_per_quantile = {}
 
         for q in quantiles:
             logger.info(f"\n--- Tuning quantile {q:.2f} ---")
+            q_feature_names = feature_names_per_quantile[q]
 
             study_name = f"{self.study_name}_q{int(q * 100):02d}"
             sampler = TPESampler(seed=self.random_state)
@@ -350,8 +453,11 @@ class QuantileHyperparameterTuner:
                 direction="minimize",
                 load_if_exists=True,
             )
+            self._validate_study_objective(study)
 
-            objective = self._create_single_quantile_objective(X_train, y_train, X_val, y_val, q, feature_names)
+            objective = self._create_single_quantile_objective(
+                X_train, y_train, X_val, y_val, q, q_feature_names
+            )
 
             optuna.logging.set_verbosity(optuna.logging.INFO)
             study.optimize(objective, n_trials=self.n_trials, timeout=self.timeout, show_progress_bar=True)
@@ -359,20 +465,27 @@ class QuantileHyperparameterTuner:
             self.studies_per_quantile[q] = study
             per_quantile_params[q] = study.best_params
 
-            logger.info(f"Q{q:.2f} best gap: {study.best_value:.4f}")
+            logger.info(f"Q{q:.2f} best {self.objective_name}: {study.best_value:.6f}")
 
             configs[q] = self._params_to_config(study.best_params, (q,))
 
         # Store result
+        objective_values = {q: float(study.best_value) for q, study in self.studies_per_quantile.items()}
         self.result = TuningResult(
             best_params={},
-            best_calibration_gap=max(s.best_value for s in self.studies_per_quantile.values()),
-            n_trials=len(quantiles) * self.n_trials,
+            best_calibration_gap=max(self._best_calibration_gap(s) for s in self.studies_per_quantile.values()),
+            n_trials=sum(len(s.trials) for s in self.studies_per_quantile.values()),
             study_name=self.study_name,
             timestamp=datetime.now().isoformat(),
             quantiles=quantiles,
             per_quantile=True,
             per_quantile_params=per_quantile_params,
+            objective_name=self.objective_name,
+            best_objective_value=(
+                float(np.mean(list(objective_values.values())))
+                if self.objective_name == "pinball" else max(objective_values.values())
+            ),
+            per_quantile_objective_values=objective_values,
         )
 
         return configs
@@ -388,6 +501,10 @@ class QuantileHyperparameterTuner:
             colsample_bytree=params.get("colsample_bytree", 0.8),
             min_child_weight=params.get("min_child_weight", 3),
             early_stopping_rounds=params.get("early_stopping_rounds", 50),
+            val_fraction=self.val_fraction,
+            random_state=self.random_state,
+            reg_alpha=params.get("reg_alpha", 0.0),
+            reg_lambda=params.get("reg_lambda", 1.0),
         )
 
     def get_trials_dataframe(self) -> pd.DataFrame:
@@ -419,11 +536,16 @@ class QuantileHyperparameterTuner:
         output = {
             "best_params": self.result.best_params,
             "best_calibration_gap": self.result.best_calibration_gap,
+            "objective_name": self.result.objective_name,
+            "best_objective_value": self.result.best_objective_value,
+            "per_quantile_objective_values": self.result.per_quantile_objective_values,
             "n_trials": self.result.n_trials,
             "study_name": self.result.study_name,
             "timestamp": self.result.timestamp,
             "quantiles": list(self.result.quantiles),
             "per_quantile": self.result.per_quantile,
+            "val_fraction": self.val_fraction,
+            "random_state": self.random_state,
         }
 
         if self.result.per_quantile and self.result.per_quantile_params:
@@ -442,6 +564,8 @@ class QuantileHyperparameterTuner:
             data = json.load(f)
 
         quantiles = tuple(data["quantiles"])
+        val_fraction = data.get("val_fraction", 0.15)
+        random_state = data.get("random_state", 42)
 
         if data.get("per_quantile", False):
             # Return dict of configs per quantile
@@ -457,6 +581,10 @@ class QuantileHyperparameterTuner:
                     colsample_bytree=params.get("colsample_bytree", 0.8),
                     min_child_weight=params.get("min_child_weight", 3),
                     early_stopping_rounds=params.get("early_stopping_rounds", 50),
+                    val_fraction=val_fraction,
+                    random_state=random_state,
+                    reg_alpha=params.get("reg_alpha", 0.0),
+                    reg_lambda=params.get("reg_lambda", 1.0),
                 )
             return configs
         else:
@@ -471,6 +599,10 @@ class QuantileHyperparameterTuner:
                 colsample_bytree=params.get("colsample_bytree", 0.8),
                 min_child_weight=params.get("min_child_weight", 3),
                 early_stopping_rounds=params.get("early_stopping_rounds", 50),
+                val_fraction=val_fraction,
+                random_state=random_state,
+                reg_alpha=params.get("reg_alpha", 0.0),
+                reg_lambda=params.get("reg_lambda", 1.0),
             )
 
 

@@ -91,6 +91,7 @@ class TrainingOrchestrator:
         tuning_trials: int = 50,
         tuning_timeout: int | None = None,
         tuning_per_quantile: bool = False,
+        tuning_match_final_features: bool = False,
         hyperparams_path: str | None = None,
         feature_tolerance: float = 0.005,
         exclude_injury_features: bool = False,
@@ -104,6 +105,10 @@ class TrainingOrchestrator:
     ):
         if tune_hyperparams and hyperparams_path is not None:
             raise ValueError('Tuning and supplied fixed hyperparameters conflict')
+        if tuning_match_final_features and not tune_hyperparams:
+            raise ValueError("tuning_match_final_features requires tuning")
+        if tuning_match_final_features and hyperparams_path is not None:
+            raise ValueError("tuning_match_final_features cannot be used with fixed hyperparameters")
         self.feature_control_spec = FeatureControlSpec.create(
             include_feature_families=include_feature_families,
             exclude_feature_families=exclude_feature_families,
@@ -136,7 +141,9 @@ class TrainingOrchestrator:
         self.tuning_trials = tuning_trials
         self.tuning_timeout = tuning_timeout
         self.tuning_per_quantile = tuning_per_quantile
+        self.tuning_match_final_features = tuning_match_final_features
         self.hyperparams_path = hyperparams_path
+        self.tuning_results: dict[str, dict] = {}
 
         # Create timestamped run directory with _incomplete suffix
         # This prevents the inference job from picking up a partially-trained model
@@ -280,6 +287,10 @@ class TrainingOrchestrator:
             "retrain_stats": retrain_stats,
             "retrain_minutes": retrain_minutes,
             "reselect_features": reselect_features,
+            "tuning_objective": None,
+            "tuning_results": {},
+            "tuning_match_final_features_requested": self.tuning_match_final_features,
+            "tuning_match_final_features_effective": self.tuning_match_final_features and self.tune_hyperparams,
             "force_features": force_features,
             "exclude_injury_features": False,
             "feature_controls": self.feature_control_receipt,
@@ -502,6 +513,10 @@ class TrainingOrchestrator:
                 "tuning_trials": self.tuning_trials,
                 "tuning_timeout": self.tuning_timeout,
                 "tuning_per_quantile": self.tuning_per_quantile,
+                "tuning_match_final_features_requested": self.tuning_match_final_features,
+                "tuning_match_final_features_effective": self.tuning_match_final_features and self.tune_hyperparams,
+                "tuning_objective": "pinball" if self.tuning_results else None,
+                "tuning_results": self.tuning_results,
                 "feature_tolerance": self.feature_tolerance,
                 "exclude_injury_features": self.exclude_injury_features,
                 "feature_controls": self.feature_control_receipt,
@@ -559,6 +574,7 @@ class TrainingOrchestrator:
                 per_quantile=self.tuning_per_quantile,
                 pruning=True,
                 val_fraction=0.15,
+                objective="pinball",
             )
 
             hyperparams = {}
@@ -574,11 +590,22 @@ class TrainingOrchestrator:
                 X = prepare_quantile_features(minutes_df, all_features)
                 y = minutes_df["actual_minutes"]
                 if self.tuning_per_quantile:
-                    configs = tuner.tune_per_quantile(X, y, dates=minutes_df['game_date'])
+                    configs = tuner.tune_per_quantile(
+                        X,
+                        y,
+                        feature_names=minutes_features if self.tuning_match_final_features else None,
+                        dates=minutes_df['game_date'],
+                    )
                     hyperparams["minutes"] = {str(q): cfg.to_dict() for q, cfg in configs.items()}
                 else:
-                    config = tuner.tune(X, y, dates=minutes_df['game_date'])
+                    config = tuner.tune(
+                        X,
+                        y,
+                        feature_names=minutes_features if self.tuning_match_final_features else None,
+                        dates=minutes_df['game_date'],
+                    )
                     hyperparams["minutes"] = config.to_dict()
+                self._record_tuning_result("minutes", tuner)
 
             if retrain_stats:
                 for stat in retrain_stats:
@@ -595,11 +622,22 @@ class TrainingOrchestrator:
                     X = prepare_quantile_features(rate_df, all_features)
                     y = rate_df[target]
                     if self.tuning_per_quantile:
-                        configs = tuner.tune_per_quantile(X, y, dates=rate_df['game_date'])
+                        configs = tuner.tune_per_quantile(
+                            X,
+                            y,
+                            feature_names=rate_features if self.tuning_match_final_features else None,
+                            dates=rate_df['game_date'],
+                        )
                         hyperparams[stat] = {str(q): cfg.to_dict() for q, cfg in configs.items()}
                     else:
-                        config = tuner.tune(X, y, dates=rate_df['game_date'])
+                        config = tuner.tune(
+                            X,
+                            y,
+                            feature_names=rate_features if self.tuning_match_final_features else None,
+                            dates=rate_df['game_date'],
+                        )
                         hyperparams[stat] = config.to_dict()
+                    self._record_tuning_result(stat, tuner)
 
             with open(self.hyperparams_config_path, "w") as f:
                 json.dump(hyperparams, f, indent=4)
@@ -628,12 +666,37 @@ class TrainingOrchestrator:
             "cal_end_date": str(cal_end_date) if cal_end_date else None,
             "exclude_injury_features": self.exclude_injury_features,
             "feature_controls": self.feature_control_receipt,
+            "tuning_objective": "pinball" if self.tuning_results else None,
+            "tuning_results": self.tuning_results,
+            "tuning_match_final_features_requested": self.tuning_match_final_features,
+            "tuning_match_final_features_effective": self.tuning_match_final_features and self.tune_hyperparams,
             "timestamp": self.timestamp.isoformat(),
             "calibration_tolerance": self.CALIBRATION_TOLERANCE,
             "calibration_hard_fail": self.CALIBRATION_HARD_FAIL,
         }
         with open(self.run_dir / "run_config.json", "w") as f:
             json.dump(config, f, indent=4)
+
+    def _record_tuning_result(self, component: str, tuner: QuantileHyperparameterTuner) -> None:
+        """Persist objective values separately from deployable hyperparameters."""
+        result = tuner.result
+        if result is None:
+            raise ValueError("Cannot record tuning metrics without a completed tuning result")
+        self.tuning_results[component] = {
+            "objective_name": result.objective_name,
+            "best_objective_value": result.best_objective_value,
+            "best_calibration_gap": result.best_calibration_gap,
+            "per_quantile_objective_values": result.per_quantile_objective_values,
+            "match_final_features": self.tuning_match_final_features,
+        }
+        config_path = self.run_dir / "run_config.json"
+        if config_path.exists():
+            with config_path.open(encoding="utf-8") as handle:
+                config = json.load(handle)
+            config["tuning_objective"] = result.objective_name
+            config["tuning_results"] = self.tuning_results
+            with config_path.open("w", encoding="utf-8") as handle:
+                json.dump(config, handle, indent=4)
 
     def _persist_feature_control_receipt(self) -> None:
         config_path = self.run_dir / "run_config.json"
@@ -688,6 +751,7 @@ class TrainingOrchestrator:
             per_quantile=self.tuning_per_quantile,
             pruning=True,
             val_fraction=0.15,
+            objective="pinball",
         )
 
         hyperparams = {}
@@ -707,11 +771,22 @@ class TrainingOrchestrator:
         y_minutes = minutes_df["actual_minutes"]
 
         if self.tuning_per_quantile:
-            minutes_configs = tuner.tune_per_quantile(X_minutes, y_minutes, dates=minutes_df['game_date'])
+            minutes_configs = tuner.tune_per_quantile(
+                X_minutes,
+                y_minutes,
+                feature_names=minutes_features if self.tuning_match_final_features else None,
+                dates=minutes_df['game_date'],
+            )
             hyperparams["minutes"] = {str(q): cfg.to_dict() for q, cfg in minutes_configs.items()}
         else:
-            minutes_config = tuner.tune(X_minutes, y_minutes, dates=minutes_df['game_date'])
+            minutes_config = tuner.tune(
+                X_minutes,
+                y_minutes,
+                feature_names=minutes_features if self.tuning_match_final_features else None,
+                dates=minutes_df['game_date'],
+            )
             hyperparams["minutes"] = minutes_config.to_dict()
+        self._record_tuning_result("minutes", tuner)
 
         # Tune Rate Models
         for stat in ["pts", "reb", "ast"]:
@@ -731,11 +806,22 @@ class TrainingOrchestrator:
             y_rate = rate_df[target]
 
             if self.tuning_per_quantile:
-                rate_configs = tuner.tune_per_quantile(X_rate, y_rate, dates=rate_df['game_date'])
+                rate_configs = tuner.tune_per_quantile(
+                    X_rate,
+                    y_rate,
+                    feature_names=rate_features if self.tuning_match_final_features else None,
+                    dates=rate_df['game_date'],
+                )
                 hyperparams[stat] = {str(q): cfg.to_dict() for q, cfg in rate_configs.items()}
             else:
-                rate_config = tuner.tune(X_rate, y_rate, dates=rate_df['game_date'])
+                rate_config = tuner.tune(
+                    X_rate,
+                    y_rate,
+                    feature_names=rate_features if self.tuning_match_final_features else None,
+                    dates=rate_df['game_date'],
+                )
                 hyperparams[stat] = rate_config.to_dict()
+            self._record_tuning_result(stat, tuner)
 
         # Save hyperparameters
         with open(self.hyperparams_config_path, "w") as f:
@@ -1335,6 +1421,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--tuning-per-quantile", action="store_true", help="Tune separately for each quantile")
     parser.add_argument(
+        "--tuning-match-final-features",
+        action="store_true",
+        help="Opt in to tuning each quantile on its final selected ordered feature list",
+    )
+    parser.add_argument(
         "--hyperparams-path", type=str, default=None, help="Path to existing hyperparams JSON to load (skips tuning)"
     )
 
@@ -1453,6 +1544,13 @@ def _validate_training_args(parser: argparse.ArgumentParser, args: argparse.Name
         validate_seasons(args.train_seasons, args.cal_season)
         if args.tune and args.hyperparams_path is not None:
             raise ValueError('Tuning and supplied fixed hyperparameters conflict')
+        tuning_match_final_features = bool(_namespace_value(args, "tuning_match_final_features", False))
+        if tuning_match_final_features and is_calibrate_only:
+            raise ValueError("--tuning-match-final-features cannot be combined with --calibrate-only")
+        if tuning_match_final_features and not args.tune:
+            raise ValueError("--tuning-match-final-features requires --tune")
+        if tuning_match_final_features and args.hyperparams_path is not None:
+            raise ValueError("--tuning-match-final-features cannot be combined with --hyperparams-path")
         historical = load_attachment(_namespace_value(args, 'historical_policy'),
                                      _namespace_value(args, 'historical_source_metadata'),
                                      local=_namespace_value(args, 'local', False))
@@ -1595,6 +1693,12 @@ def _training_plan(args: argparse.Namespace, validated: dict) -> dict:
             "trials": args.tuning_trials,
             "timeout_seconds": args.tuning_timeout,
             "per_quantile": bool(args.tuning_per_quantile),
+            "match_final_features_requested": bool(
+                _namespace_value(args, "tuning_match_final_features", False)
+            ),
+            "match_final_features_effective": bool(
+                args.tune and _namespace_value(args, "tuning_match_final_features", False)
+            ),
             "hyperparams_path": str(validated["hyperparams_path"]) if validated["hyperparams_path"] else None,
             "feature_tolerance": args.feature_tolerance,
         },
@@ -1700,6 +1804,7 @@ def main(argv=None):
             tuning_trials=args.tuning_trials,
             tuning_timeout=args.tuning_timeout,
             tuning_per_quantile=args.tuning_per_quantile,
+            tuning_match_final_features=args.tuning_match_final_features,
             hyperparams_path=args.hyperparams_path,
             feature_tolerance=args.feature_tolerance,
             exclude_injury_features=args.exclude_injury_features,

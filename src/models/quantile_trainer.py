@@ -40,6 +40,10 @@ class QuantileModelConfig:
     val_fraction: float = 0.15
     random_state: int = 42
 
+    # Preserve legacy defaults and existing positional constructor arguments.
+    reg_alpha: float = 0.0
+    reg_lambda: float = 1.0
+
     def to_dict(self) -> dict:
         """Convert config to dictionary."""
         return asdict(self)
@@ -172,6 +176,8 @@ class QuantileModelSuite:
                 subsample=self.config.subsample,
                 colsample_bytree=self.config.colsample_bytree,
                 min_child_weight=self.config.min_child_weight,
+                reg_alpha=self.config.reg_alpha,
+                reg_lambda=self.config.reg_lambda,
                 random_state=self.config.random_state,
                 early_stopping_rounds=self.config.early_stopping_rounds,
                 n_jobs=-1,
@@ -266,6 +272,8 @@ class QuantileModelSuite:
                     subsample=self.config.subsample,
                     colsample_bytree=self.config.colsample_bytree,
                     min_child_weight=self.config.min_child_weight,
+                    reg_alpha=self.config.reg_alpha,
+                    reg_lambda=self.config.reg_lambda,
                     random_state=self.config.random_state,
                     n_jobs=-1,
                 )

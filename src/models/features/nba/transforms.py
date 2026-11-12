@@ -17,7 +17,9 @@ def _value(row: Mapping[str, Any], key: str, default: float = 0.0) -> Any:
 
 def safe_ratio(numerator: float | int | None, denominator: float | int | None, *, default: float = 1.0) -> float:
     """Legacy safe division: missing numerator becomes 0, bad denominator returns default."""
-    den = 0 if denominator is None else denominator
+    # PostgreSQL NUMERIC NaN arrives as Decimal('NaN'), whose ordered
+    # comparisons raise. Preserve missingness using the float-path semantics.
+    den = 0 if denominator is None else float(denominator)
     if den <= 0:
         return default
     num = 0 if numerator is None else numerator
@@ -32,7 +34,7 @@ def starter_probability(games_started_l5: float | int | None) -> float:
 
 def rest_schedule_features(stored_rest_days: float | int | None, games_last_7d: float | int | None) -> dict[str, float | int]:
     """Return legacy rest/schedule features and defaults."""
-    rest = min(stored_rest_days, 7) if stored_rest_days is not None else 3
+    rest = min(float(stored_rest_days), 7) if stored_rest_days is not None else 3
     return {
         "rest_days": rest,
         "is_back_to_back": 1 if rest == 1 else 0,
